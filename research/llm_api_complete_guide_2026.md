@@ -143,6 +143,18 @@ def extract_gemini_usage(resp: dict) -> dict:
     """Extract token usage from Gemini response."""
     return resp.get("usageMetadata", {})
 
+def extract_openai_responses_usage(resp: dict) -> dict:
+    """Extract token usage from OpenAI Responses API response.
+    Returns unified dict with input_tokens, output_tokens, total_tokens.
+    """
+    usage = resp.get("usage", {})
+    return {
+        "input_tokens": usage.get("input_tokens", 0),
+        "output_tokens": usage.get("output_tokens", 0),
+        "total_tokens": usage.get("total_tokens", 0),
+        "raw": usage
+    }
+
 # ============================================================================
 # Unified Text Extraction (auto-detect provider)
 # ============================================================================
@@ -176,7 +188,18 @@ def extract_usage(resp: dict) -> dict:
     Auto-detect provider and extract usage.
     Returns unified dict with keys: input_tokens, output_tokens, total_tokens
     """
-    # OpenAI
+    # OpenAI Responses API (uses input_tokens/output_tokens)
+    if "output" in resp and "usage" in resp:
+        usage = resp["usage"]
+        if "input_tokens" in usage or "output_tokens" in usage:
+            return {
+                "input_tokens": usage.get("input_tokens", 0),
+                "output_tokens": usage.get("output_tokens", 0),
+                "total_tokens": usage.get("total_tokens", 0),
+                "raw": usage
+            }
+    
+    # OpenAI Chat Completions (uses prompt_tokens/completion_tokens)
     if "usage" in resp:
         usage = resp["usage"]
         return {
@@ -245,7 +268,7 @@ def extract_usage(resp: dict) -> dict:
     "seed": 42,                         # For deterministic outputs
     
     # REASONING (o-series models)
-    "reasoning_effort": "medium",       # none|minimal|low|medium|high|xhigh
+    "reasoning_effort": "medium",       # none|low|medium|high|xhigh
     
     # OUTPUT FORMAT
     "response_format": {
@@ -772,9 +795,12 @@ def extract_usage(resp: dict) -> dict:
 #### gpt-5.2
 
 **Released:** December 2025  
-**Context:** Up to 256K tokens  
+**Context:** 400K tokens (128K max output)  
 **Best for:** Maximum intelligence, complex reasoning  
-**Pricing:** Premium tier
+**Pricing:**
+- GPT-5.2 Instant: $1.75 input / $14 output per 1M tokens
+- GPT-5.2 Thinking: Higher tier (reasoning)
+- GPT-5.2 Pro: Highest tier (max quality)
 
 ```python
 import os
@@ -798,10 +824,36 @@ print(f"Text: {extract_openai_responses_text(resp)}")
 print(f"Usage: {extract_openai_responses_usage(resp)}")
 ```
 
+#### gpt-5.2-codex
+
+**Released:** January 2026  
+**Context:** 400K tokens with context compaction  
+**Best for:** Agentic coding, long-horizon software engineering  
+**Pricing:** Same as GPT-5.2 Thinking tier  
+**Features:** Context compaction, stronger Windows support, enhanced cybersecurity  
+**Benchmarks:** SWE-Bench Pro 56.4%, Terminal-Bench 2.0 64.0%; state-of-the-art for long-horizon coding
+
+```python
+url = "https://api.openai.com/v1/responses"
+headers = {
+    "Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}",
+    "Content-Type": "application/json"
+}
+payload = {
+    "model": "gpt-5.2-codex",
+    "input": "Refactor this legacy codebase to use modern async/await patterns.",
+    "max_output_tokens": 4096,
+    "reasoning": {"effort": "high"}
+}
+resp = post_json(url, headers, payload)
+print(extract_openai_responses_text(resp))
+print(extract_openai_responses_usage(resp))
+```
+
 #### gpt-5.1
 
 **Released:** November 2025  
-**Context:** Up to 256K tokens  
+**Context:** 400K tokens (128K max output)  
 **Note:** Superseded by GPT-5.2 (slightly more expensive)
 
 ```python
@@ -820,7 +872,7 @@ payload = {
 #### gpt-5-mini
 
 **Released:** 2025  
-**Context:** Up to 256K tokens  
+**Context:** 400K tokens (128K max output)  
 **Best for:** Fast reasoning at lower cost  
 **Pricing:** More affordable than GPT-5
 
@@ -1173,15 +1225,37 @@ payload = {
 #### claude-opus-4-6-20260205
 
 **Released:** February 2026  
-**Best for:** Newest flagship  
-**Note:** Most recent Opus variant
+**Pricing:** $5 input / $25 output per 1M tokens (same as 4.5)  
+**Context:** 200K (1M with beta header); 128K max output  
+**Best for:** Newest flagship, agentic tasks  
+**Features:** Adaptive Thinking (effort-based), Agent Teams  
+**Note:** Opus 4.6 uses **Adaptive Thinking** (5 effort levels: none, minimal, low, medium, high), not Extended Thinking (`thinking.budget_tokens`). Use `thinking.type = "adaptive"` and `thinking.effort`.
+
+**Adaptive Thinking levels:** `none` (no reasoning), `minimal`, `low`, `medium` (recommended), `high` (max depth)
 
 ```python
+import os
+
+url = "https://api.anthropic.com/v1/messages"
+headers = {
+    "x-api-key": os.environ["ANTHROPIC_API_KEY"],
+    "anthropic-version": "2023-06-01",
+    "Content-Type": "application/json"
+}
 payload = {
     "model": "claude-opus-4-6-20260205",
     "max_tokens": 8192,
-    "messages": [...]
+    "thinking": {
+        "type": "adaptive",
+        "effort": "high"  # none|minimal|low|medium|high
+    },
+    "messages": [
+        {"role": "user", "content": "Design a fault-tolerant API for real-time notifications."}
+    ]
 }
+resp = post_json(url, headers, payload)
+print(extract_anthropic_text(resp))
+print(extract_anthropic_usage(resp))
 ```
 
 #### claude-opus-4-1-20250805
@@ -1469,7 +1543,7 @@ payload = {
 
 #### gemini-3-pro-preview
 
-**Pricing:** $2.00 input / $8.00 output per 1M tokens  
+**Pricing:** $2.00 input / $12.00 output per 1M tokens (standard); >200K context: $4 input / $18 output per 1M  
 **Context:** 1M tokens  
 **Best for:** Most powerful reasoning & multimodal  
 **Features:** Adaptive thinking, grounding
@@ -1673,7 +1747,7 @@ payload = {
 **License:** Apache 2.0 (Open-source)  
 **Training:** 3000 H200 GPUs
 
-#### mistral-large-3-2512
+#### mistral-large-3-25-12
 
 **Architecture:** MoE (675B total, 41B active)  
 **Pricing:** $0.50 input / $1.50 output per 1M tokens  
@@ -1689,7 +1763,7 @@ headers = {
     "Content-Type": "application/json"
 }
 payload = {
-    "model": "mistral-large-3-2512",
+    "model": "mistral-large-3-25-12",
     "messages": [
         {"role": "system", "content": "You are an expert analyst."},
         {"role": "user", "content": "Analyze market trends in AI."}
@@ -1705,7 +1779,7 @@ print(f"Usage: {extract_openai_usage(resp)}")
 
 #### mistral-large-latest
 
-**Alias for:** mistral-large-3-2512
+**Alias for:** mistral-large-3-25-12
 
 ---
 
@@ -1917,7 +1991,7 @@ payload = {
 
 - **Company:** AI hardware infrastructure provider
 - **Product:** LPU (Language Processing Unit) - custom inference chip
-- **Acquisition:** Acquired by NVIDIA for ~$20B in December 2025
+- **Strategic deal:** NVIDIA licensing and acqui-hire of Groq (~$20B, December 2025); Groq continues to operate
 - **Speed:** 10x faster inference than GPUs (up to 400+ tokens/sec)
 - **Architecture:** SRAM-based, deterministic execution
 - **Use case:** Ultra-low latency applications (<300ms)
@@ -2062,7 +2136,8 @@ payload = {
 ### Extended Thinking (Anthropic)
 
 **Models:** Claude Opus 4.5, Sonnet 4.5, Haiku 4.5  
-**Minimum:** 1024 tokens  
+**Note:** Claude Opus 4.6 uses **Adaptive Thinking** instead (see [Claude Opus 4.6](#claude-opus-4-6-20260205)): use `thinking.type = "adaptive"` and `thinking.effort` (none|minimal|low|medium|high), not `budget_tokens`.  
+**Minimum:** 1024 tokens (for 4.5 Extended Thinking)  
 **Pricing:** Billed as output tokens  
 **Recommended:** Start at 1024, increase incrementally
 
@@ -2103,7 +2178,7 @@ for block in resp["content"]:
 payload = {
     "model": "o3",
     "messages": [...],
-    "reasoning_effort": "high"  # none|minimal|low|medium|high|xhigh
+    "reasoning_effort": "high"  # none|low|medium|high|xhigh
 }
 
 # xAI Grok
@@ -2683,9 +2758,10 @@ print()
 
 | Model | Input (per 1M) | Output (per 1M) | Context |
 |-------|----------------|-----------------|---------|
-| GPT-5.2 | Premium | Premium | 256K |
-| GPT-5.1 | Premium | Premium | 256K |
-| GPT-5 mini | Mid | Mid | 256K |
+| GPT-5.2 (Instant) | $1.75 | $14.00 | 400K |
+| GPT-5.2 Thinking / Pro | Higher | Higher | 400K |
+| GPT-5.1 | Premium | Premium | 400K |
+| GPT-5 mini | Mid | Mid | 400K |
 | GPT-4.1 | $2.50 | $10.00 | 1M |
 | GPT-4.1 mini | Lower | Lower | 1M |
 | GPT-4.1 nano | Lowest | Lowest | 1M |
@@ -2703,7 +2779,7 @@ print()
 | Claude Opus 4.5 | $5 | $25 | 200K / 1M† |
 | Claude Sonnet 4.5 | $3 | $15 | 200K / 1M† |
 | Claude Haiku 4.5 | $1 | $5 | 200K / 1M† |
-| Claude Opus 4.6 | TBA | TBA | 200K / 1M† |
+| Claude Opus 4.6 | $5 | $25 | 200K / 1M† |
 
 † 1M context with `context-1m-2025-08-07` beta header  
 **Long context pricing:** >200K tokens at $6 input / $22.50 output per 1M
@@ -2723,7 +2799,7 @@ print()
 
 | Model | Input | Output | Context |
 |-------|-------|--------|---------|
-| Gemini 3 Pro | $2.00 | $8.00 | 1M |
+| Gemini 3 Pro | $2.00 | $12.00 | 1M |
 | Gemini 3 Flash | $0.10 | $0.40 | 1M |
 | Gemini 2.5 Pro | $1.25 | $5.00 | 2M |
 | Gemini 2.5 Flash | $0.075 | $0.30 | 1M |
@@ -2974,6 +3050,21 @@ pip install requests
 ---
 
 ## Changelog
+
+**February 8, 2026 (consolidated fixes):**
+- Gemini 3 Pro: output pricing $8 → $12 per 1M; added >200K tier note ($4/$18)
+- GPT-5.2: detailed pricing (Instant $1.75/$14, Thinking/Pro tiers); pricing table updated
+- GPT-5.2-Codex: new section with code example, benchmarks (SWE-Bench Pro, Terminal-Bench 2.0)
+- Claude Opus 4.6: expanded section ($5/$25, 128K max output, Adaptive Thinking, Agent Teams); full example with `thinking.type = "adaptive"` and `effort`; 5 effort levels documented
+- Pricing table: Claude Opus 4.6 TBA → $5 | $25
+- Extended Thinking: added note for Opus 4.6 using Adaptive Thinking (`thinking.type = "adaptive"`, `effort`)
+
+**February 8, 2026 (fact-check fixes):**
+- GPT-5.2/5.1/5-mini context corrected: 256K to 400K (128K max output)
+- Added `extract_openai_responses_usage()`; unified `extract_usage()` now handles Responses API
+- OpenAI `reasoning_effort`: removed invalid "minimal" (valid: none|low|medium|high|xhigh)
+- Mistral model ID: `mistral-large-3-2512` to official `mistral-large-3-25-12`
+- Groq: clarified as NVIDIA licensing/acqui-hire (Groq continues to operate)
 
 **February 8, 2026:**
 - Initial comprehensive guide
