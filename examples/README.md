@@ -5,8 +5,8 @@ Runnable examples showcasing every major feature of the toolkit.
 ## Prerequisites
 
 ```bash
-# Install the package in editable mode
-uv pip install -e .
+# Install all dependencies
+uv sync --dev
 ```
 
 ## Environment Variables
@@ -42,11 +42,7 @@ Set API keys for the providers you want to use:
 ## Running
 
 ```bash
-# Run any example directly
-python examples/01_hello_world.py
-
-# Or from the examples directory
-cd examples && python 01_hello_world.py
+uv run python examples/01_hello_world.py
 ```
 
 > **Cost note:** These examples make real API calls and will incur charges
