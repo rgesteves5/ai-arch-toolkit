@@ -59,7 +59,10 @@ while dag has unfinished tasks:
     ready = tasks with all dependencies met
     results = parallel_execute(ready)
     update(dag, results)
-answer = joiner_llm(all_results)         # or trigger re-plan
+if joiner_llm("sufficient?", all_results) != FINISH:
+    dag = replan_llm(task, all_results)  # plan additional tool calls
+    repeat DAG execution                 # execute new DAG
+answer = joiner_llm(all_results)         # synthesize final answer
 ```
 
 **Tradeoffs:** Excellent for tasks with parallelizable sub-steps. More complex to implement. Re-planning adds robustness but also complexity.
@@ -150,18 +153,19 @@ answer = planner_llm("Synthesize: " + all_results)
 
 ## 8. Self-Discovery
 
-*Select relevant reasoning strategies, structure them into a plan, then execute.*
+*Select relevant reasoning strategies, adapt them to the task, operationalize into a structured plan, then solve.*
 
-Before solving the problem, the LLM selects which reasoning modules are relevant from a library (e.g., "break into subtasks", "think step by step", "use analogies", "consider edge cases"). It then composes them into a structured reasoning plan tailored to the specific problem. Finally, it executes that plan.
+Before solving the problem, the LLM selects which reasoning modules are relevant from a library (e.g., "break into subtasks", "think step by step", "use analogies", "consider edge cases"). It then adapts those modules to the specific task, operationalizes them into a structured reasoning plan (JSON), and finally follows the plan to produce an answer.
 
 ```
 modules = ["decompose", "analogize", "step-by-step", "verify", ...]
 selected = llm("Which modules help with: " + task, modules)
-plan = llm("Structure a reasoning plan using: " + selected)
-answer = llm("Execute this plan on: " + task, plan)
+adapted = llm("Rephrase these for the specific task: " + selected)
+plan = llm("Operationalize into a structured plan: " + adapted)
+answer = llm("Follow this plan to solve: " + task, plan)
 ```
 
-**Tradeoffs:** Adaptive to problem type. Relatively cheap (3 LLM calls). Less explored for tool-heavy tasks.
+**Tradeoffs:** Adaptive to problem type. Relatively cheap (4 LLM calls). Less explored for tool-heavy tasks.
 
 ---
 
@@ -176,7 +180,7 @@ answer = llm("Execute this plan on: " + task, plan)
 | **LATS** | Hard reasoning | 10–50× | No | Very High | ~300 lines |
 | **ToT** | Creative/math | K×depth | No | Medium | ~150 lines |
 | **Plan+Execute** | Structured work | Few | Optional | Medium | ~120 lines |
-| **Self-Discovery** | Novel problems | 3 | No | Medium | ~60 lines |
+| **Self-Discovery** | Novel problems | 4 | No | Medium | ~60 lines |
 
 ---
 
