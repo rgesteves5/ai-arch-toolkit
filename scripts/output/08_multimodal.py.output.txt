@@ -1,0 +1,74 @@
+=== EXAMPLE RUN REPORT ===
+example_script: examples/08_multimodal.py
+command: .venv/bin/python /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/scripts/_example_trace_runner.py examples/08_multimodal.py
+status: SUCCESS
+exit_code: 0
+duration_seconds: 5.037
+interpretation: Command completed without process errors.
+
+=== OUTPUT NOTES ===
+- Trace lines are present. Each [CALL NNN] START/END pair maps output to a specific SDK call.
+- Full model text is included between *_BEGIN and *_END trace markers for each call.
+
+=== STDOUT ===
+[TRACE] Runtime tracing enabled for ai-arch-toolkit clients.
+[TRACE] Executing example: /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/examples/08_multimodal.py
+[TRACE] [CALL 001] START Client.chat provider=gemini model=gemini-2.0-flash messages=1(sequence)
+[TRACE] [CALL 001] RESPONSE_TEXT_BEGIN chars=2018
+Here is a detailed description of the image:
+
+**Overall Impression:**
+
+The image showcases a black Labrador puppy sitting on a weathered wooden surface. The photograph is taken from a high angle, looking down at the puppy, which draws attention to its expressive eyes. The color palette is predominantly muted, with earthy tones and a slightly vintage feel.
+
+**Subject:**
+
+*   **Puppy:** The central focus is a young black Labrador puppy. It appears to be small, likely a few months old. Its coat is short, shiny, and black. The puppy's most captivating feature is its eyes. They are large, round, and appear to be a light brown or hazel color, creating a striking contrast with its black fur. It's looking directly up at the camera with an endearing expression. Its ears are floppy and hang down on either side of its head.
+*   **Pose:** The puppy is in a seated position, with its front paws visible and placed slightly apart. Its tail is partially visible and curled slightly upward.
+
+**Background and Setting:**
+
+*   **Wooden Surface:** The puppy is sitting on what seems to be a wooden deck or floor. The wood has a textured, weathered appearance with visible grains and knots. The color of the wood is a mix of browns and grays, which complements the puppy's black coat.
+
+**Lighting and Composition:**
+
+*   **Lighting:** The lighting appears to be soft and diffused, creating minimal harsh shadows. This type of lighting helps to highlight the puppy's features without creating stark contrasts.
+*   **Composition:** The high-angle shot creates a sense of vulnerability and emphasizes the puppy's small size. The subject is centered in the frame, which keeps the focus on the puppy. The texture of the wood provides a visually interesting backdrop without being distracting.
+
+**Overall Mood:**
+
+The image evokes a sense of warmth, tenderness, and affection. The puppy's expressive eyes and the muted color palette create an inviting and endearing image. It feels intimate and emphasizes the cuteness of the puppy.
+[TRACE] [CALL 001] RESPONSE_TEXT_END
+[TRACE] [CALL 001] END   Client.chat duration=3.923s result=response(text_chars=2018, thinking_chars=0, tool_calls=0, stop_reason=STOP)
+Description: Here is a detailed description of the image:
+
+**Overall Impression:**
+
+The image showcases a black Labrador puppy sitting on a weathered wooden surface. The photograph is taken from a high angle, looking down at the puppy, which draws attention to its expressive eyes. The color palette is predominantly muted, with earthy tones and a slightly vintage feel.
+
+**Subject:**
+
+*   **Puppy:** The central focus is a young black Labrador puppy. It appears to be small, likely a few months old. Its coat is short, shiny, and black. The puppy's most captivating feature is its eyes. They are large, round, and appear to be a light brown or hazel color, creating a striking contrast with its black fur. It's looking directly up at the camera with an endearing expression. Its ears are floppy and hang down on either side of its head.
+*   **Pose:** The puppy is in a seated position, with its front paws visible and placed slightly apart. Its tail is partially visible and curled slightly upward.
+
+**Background and Setting:**
+
+*   **Wooden Surface:** The puppy is sitting on what seems to be a wooden deck or floor. The wood has a textured, weathered appearance with visible grains and knots. The color of the wood is a mix of browns and grays, which complements the puppy's black coat.
+
+**Lighting and Composition:**
+
+*   **Lighting:** The lighting appears to be soft and diffused, creating minimal harsh shadows. This type of lighting helps to highlight the puppy's features without creating stark contrasts.
+*   **Composition:** The high-angle shot creates a sense of vulnerability and emphasizes the puppy's small size. The subject is centered in the frame, which keeps the focus on the puppy. The texture of the wood provides a visually interesting backdrop without being distracting.
+
+**Overall Mood:**
+
+The image evokes a sense of warmth, tenderness, and affection. The puppy's expressive eyes and the muted color palette create an inviting and endearing image. It feels intimate and emphasizes the cuteness of the puppy.
+[TRACE] Example execution completed.
+[TRACE] CALL_SUMMARY total_calls=1 completed_calls=1 failed_calls=0
+
+=== STDERR ===
+<empty>
+
+=== OUTPUT VALIDATION ===
+PASS
+

@@ -1,0 +1,47 @@
+=== EXAMPLE RUN REPORT ===
+example_script: examples/24_custom_middleware.py
+command: .venv/bin/python /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/scripts/_example_trace_runner.py examples/24_custom_middleware.py
+status: SUCCESS
+exit_code: 0
+duration_seconds: 5.988
+interpretation: Command completed without process errors.
+
+=== OUTPUT NOTES ===
+- Trace lines are present. Each [CALL NNN] START/END pair maps output to a specific SDK call.
+- Full model text is included between *_BEGIN and *_END trace markers for each call.
+
+=== STDOUT ===
+[TRACE] Runtime tracing enabled for ai-arch-toolkit clients.
+[TRACE] Executing example: /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/examples/24_custom_middleware.py
+=== Normal provider-backed call ===
+[TRACE] [CALL 001] START Client.chat provider=openai model=gpt-5-nano messages=1(prompt str, chars=49)
+[TRACE] [CALL 001] RESPONSE_TEXT_BEGIN chars=492
+ACID is a set of guarantees for database transactions: Atomicity ensures a transaction is all-or-nothing, so either every operation succeeds or none do; Consistency ensures the database moves from one valid state to another, preserving integrity constraints; Isolation ensures concurrent transactions don’t interfere and appear to run serially; Durability guarantees that once a transaction is committed, its effects survive permanent failures.
+
+[middleware mode=provider request_id=285a34b6]
+[TRACE] [CALL 001] RESPONSE_TEXT_END
+[TRACE] [CALL 001] END   Client.chat duration=5.820s result=response(text_chars=492, thinking_chars=0, tool_calls=0, stop_reason=stop)
+ACID is a set of guarantees for database transactions: Atomicity ensures a transaction is all-or-nothing, so either every operation succeeds or none do; Consistency ensures the database moves from one valid state to another, preserving integrity constraints; Isolation ensures concurrent transactions don’t interfere and appear to run serially; Durability guarantees that once a transaction is committed, its effects survive permanent failures.
+
+[middleware mode=provider request_id=285a34b6]
+
+=== Middleware short-circuit call ===
+[TRACE] [CALL 002] START Client.chat provider=openai model=gpt-5-nano messages=1(prompt str, chars=66)
+[TRACE] [CALL 002] RESPONSE_TEXT_BEGIN chars=141
+[local middleware response] This response should come from middleware, not the provider.
+
+[middleware mode=short-circuit request_id=c6919836]
+[TRACE] [CALL 002] RESPONSE_TEXT_END
+[TRACE] [CALL 002] END   Client.chat duration=0.000s result=response(text_chars=141, thinking_chars=0, tool_calls=0, stop_reason=n/a)
+[local middleware response] This response should come from middleware, not the provider.
+
+[middleware mode=short-circuit request_id=c6919836]
+[TRACE] Example execution completed.
+[TRACE] CALL_SUMMARY total_calls=2 completed_calls=2 failed_calls=0
+
+=== STDERR ===
+<empty>
+
+=== OUTPUT VALIDATION ===
+PASS
+

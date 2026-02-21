@@ -19,4 +19,18 @@ uv run pytest
 uv run python examples/01_hello_world.py
 ```
 
-See [docs/uv-guide.md](docs/uv-guide.md) for detailed development workflow.
+See [docs/uv-guide.md](docs/uv-guide.md) for detailed development workflow,
+including how to load environment variables from `.env`.
+
+## Documentation
+
+```bash
+uv sync --group docs
+uv run mkdocs serve
+```
+
+For API docs generation:
+
+```bash
+uv run pdoc ai_arch_toolkit -o site/api
+```

@@ -1,0 +1,31 @@
+=== EXAMPLE RUN REPORT ===
+example_script: examples/18_tokens_and_memory.py
+command: .venv/bin/python /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/scripts/_example_trace_runner.py examples/18_tokens_and_memory.py
+status: SUCCESS
+exit_code: 0
+duration_seconds: 0.136
+interpretation: Command completed without process errors.
+
+=== OUTPUT NOTES ===
+- No interpretation hints detected.
+
+=== STDOUT ===
+[TRACE] Runtime tracing enabled for ai-arch-toolkit clients.
+[TRACE] Executing example: /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/examples/18_tokens_and_memory.py
+Text: Large language models process text in tokens.
+Estimated tokens: 11
+
+ConversationMemory items: 3
+ConversationMemory token estimate: 33
+
+SlidingWindowMemory items after trim: 1
+  1. user: CCCCCCCCCCCCCCCCCCCC
+[TRACE] Example execution completed.
+[TRACE] CALL_SUMMARY total_calls=0 completed_calls=0 failed_calls=0
+
+=== STDERR ===
+<empty>
+
+=== OUTPUT VALIDATION ===
+PASS
+

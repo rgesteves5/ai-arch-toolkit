@@ -1,0 +1,56 @@
+=== EXAMPLE RUN REPORT ===
+example_script: examples/16_fallback_client.py
+command: .venv/bin/python /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/scripts/_example_trace_runner.py examples/16_fallback_client.py
+status: SUCCESS
+exit_code: 0
+duration_seconds: 17.282
+interpretation: Command completed without process errors.
+
+=== OUTPUT NOTES ===
+- Trace lines are present. Each [CALL NNN] START/END pair maps output to a specific SDK call.
+- Full model text is included between *_BEGIN and *_END trace markers for each call.
+
+=== STDOUT ===
+[TRACE] Runtime tracing enabled for ai-arch-toolkit clients.
+[TRACE] Executing example: /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/examples/16_fallback_client.py
+[TRACE] [CALL 001] START Client.chat provider=openai model=gpt-5-nano messages=1(prompt str, chars=45)
+[TRACE] [CALL 001] RESPONSE_TEXT_BEGIN chars=172
+Entropy is a measure of the uncertainty or randomness of a system, equal to the logarithm of the number of microscopic configurations compatible with its macroscopic state.
+[TRACE] [CALL 001] RESPONSE_TEXT_END
+[TRACE] [CALL 001] END   Client.chat duration=9.202s result=response(text_chars=172, thinking_chars=0, tool_calls=0, stop_reason=stop)
+Sync: Entropy is a measure of the uncertainty or randomness of a system, equal to the logarithm of the number of microscopic configurations compatible with its macroscopic state.
+[TRACE] [CALL 002] START AsyncClient.chat provider=openai model=gpt-5-nano messages=1(prompt str, chars=45)
+[TRACE] [CALL 002] RESPONSE_TEXT_BEGIN chars=513
+One practical use: updating a diagnosis as new test results arrive.
+
+Example: estimating the probability a patient has a disease after a positive test.
+
+- Prior probability of disease P(D) = 0.10
+- Test sensitivity P(+|D) = 0.95
+- Test false positive rate P(+|not D) = 0.05
+
+Posterior: P(D|+) = [0.95 × 0.10] / [0.95 × 0.10 + 0.05 × 0.90] ≈ 0.679
+
+So after a positive test, Bayesian updating raises the estimated probability of disease to about 68%. This approach naturally combines prior knowledge with new data.
+[TRACE] [CALL 002] RESPONSE_TEXT_END
+[TRACE] [CALL 002] END   AsyncClient.chat duration=7.901s result=response(text_chars=513, thinking_chars=0, tool_calls=0, stop_reason=stop)
+Async: One practical use: updating a diagnosis as new test results arrive.
+
+Example: estimating the probability a patient has a disease after a positive test.
+
+- Prior probability of disease P(D) = 0.10
+- Test sensitivity P(+|D) = 0.95
+- Test false positive rate P(+|not D) = 0.05
+
+Posterior: P(D|+) = [0.95 × 0.10] / [0.95 × 0.10 + 0.05 × 0.90] ≈ 0.679
+
+So after a positive test, Bayesian updating raises the estimated probability of disease to about 68%. This approach naturally combines prior knowledge with new data.
+[TRACE] Example execution completed.
+[TRACE] CALL_SUMMARY total_calls=2 completed_calls=2 failed_calls=0
+
+=== STDERR ===
+<empty>
+
+=== OUTPUT VALIDATION ===
+PASS
+

@@ -14,7 +14,9 @@ from ai_arch_toolkit import Client, ImagePart, Message, TextPart
 IMAGE_URL = "https://picsum.photos/id/237/300/200.jpg"
 
 # Download and base64-encode the image
-img_bytes = requests.get(IMAGE_URL, timeout=10).content
+resp = requests.get(IMAGE_URL, timeout=10)
+resp.raise_for_status()
+img_bytes = resp.content
 image_b64 = base64.b64encode(img_bytes).decode()
 
 client = Client("gemini", model="gemini-2.0-flash")

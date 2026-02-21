@@ -1,0 +1,50 @@
+=== EXAMPLE RUN REPORT ===
+example_script: examples/06_tool_registry.py
+command: .venv/bin/python /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/scripts/_example_trace_runner.py examples/06_tool_registry.py
+status: SUCCESS
+exit_code: 0
+duration_seconds: 4.069
+interpretation: Command completed without process errors.
+
+=== OUTPUT NOTES ===
+- This output contains assistant replies only. The example likely uses hardcoded user prompts and only prints model responses.
+- Trace lines are present. Each [CALL NNN] START/END pair maps output to a specific SDK call.
+- Full model text is included between *_BEGIN and *_END trace markers for each call.
+
+=== STDOUT ===
+[TRACE] Runtime tracing enabled for ai-arch-toolkit clients.
+[TRACE] Executing example: /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/examples/06_tool_registry.py
+Registered tools:
+  calculate: Evaluate a mathematical expression.
+  unit_convert: Convert between common units.
+
+[TRACE] [CALL 001] START Client.chat provider=xai model=grok-4-1-fast-reasoning messages=1(sequence)
+[TRACE] [CALL 001] RESPONSE_TEXT_BEGIN chars=0
+<empty>
+[TRACE] [CALL 001] RESPONSE_TEXT_END
+[TRACE] [CALL 001] RESPONSE_TOOL_CALLS count=2
+[TRACE] [CALL 001] RESPONSE_TOOL_CALL_1 id=call_90822256 name=calculate arguments={'expression': '42 * 17'}
+[TRACE] [CALL 001] RESPONSE_TOOL_CALL_2 id=call_85143809 name=unit_convert arguments={'value': 100, 'from_unit': 'km', 'to_unit': 'miles'}
+[TRACE] [CALL 001] END   Client.chat duration=2.424s result=response(text_chars=0, thinking_chars=0, tool_calls=2, stop_reason=tool_calls)
+[Tool: calculate({'expression': '42 * 17'}) → 714]
+[Tool: unit_convert({'value': 100, 'from_unit': 'km', 'to_unit': 'miles'}) → 62.14 miles]
+[TRACE] [CALL 002] START Client.chat provider=xai model=grok-4-1-fast-reasoning messages=4(sequence)
+[TRACE] [CALL 002] RESPONSE_TEXT_BEGIN chars=43
+**42 × 17 = 714**
+
+**100 km = 62.14 miles**
+[TRACE] [CALL 002] RESPONSE_TEXT_END
+[TRACE] [CALL 002] END   Client.chat duration=1.487s result=response(text_chars=43, thinking_chars=0, tool_calls=0, stop_reason=stop)
+
+Assistant: **42 × 17 = 714**
+
+**100 km = 62.14 miles**
+[TRACE] Example execution completed.
+[TRACE] CALL_SUMMARY total_calls=2 completed_calls=2 failed_calls=0
+
+=== STDERR ===
+<empty>
+
+=== OUTPUT VALIDATION ===
+PASS
+

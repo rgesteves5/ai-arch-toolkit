@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 from ai_arch_toolkit.llm._client import Client
+from ai_arch_toolkit.llm._middleware import Request
 from ai_arch_toolkit.llm._types import Message, Response, StreamEvent, ToolCall, Usage
 
 
@@ -88,3 +91,79 @@ def test_stream_events(mock_create: MagicMock) -> None:
     assert events[2].type == "usage"
     assert events[2].usage.input_tokens == 10
     assert events[3].type == "done"
+
+
+@patch("ai_arch_toolkit.llm._client.create_provider")
+def test_chat_forwards_timeout(mock_create: MagicMock) -> None:
+    mock_create.return_value = _mock_provider()
+    client = Client("openai", model="gpt-4o", api_key="sk-test")
+
+    client.chat("Hello!", timeout=17)
+
+    provider = mock_create.return_value
+    call_kwargs = provider.complete.call_args[1]
+    assert call_kwargs["timeout"] == 17
+
+
+@patch("ai_arch_toolkit.llm._client.create_provider")
+def test_stream_forwards_timeout(mock_create: MagicMock) -> None:
+    mock_create.return_value = _mock_provider()
+    client = Client("openai", model="gpt-4o", api_key="sk-test")
+
+    _ = list(client.stream("Hello!", timeout=21))
+
+    provider = mock_create.return_value
+    call_kwargs = provider.stream.call_args[1]
+    assert call_kwargs["timeout"] == 21
+
+
+class _SyncRecorderMiddleware:
+    def __init__(self, events: list[str]) -> None:
+        self._events = events
+
+    def before(self, request: Request) -> Request:
+        self._events.append(f"before:{request.operation}")
+        request.kwargs["middleware_marker"] = "sync"
+        return request
+
+    def after(self, request: Request, result: Any) -> Any:
+        self._events.append(f"after:{request.operation}")
+        if request.operation == "chat":
+            return Response(text=f"{result.text}!", usage=result.usage)
+        if request.operation == "stream":
+            return _upper_stream(result)
+        return result
+
+
+def _upper_stream(stream: Iterator[str]) -> Iterator[str]:
+    for chunk in stream:
+        yield chunk.upper()
+
+
+@patch("ai_arch_toolkit.llm._client.create_provider")
+def test_chat_runs_middleware_before_and_after(mock_create: MagicMock) -> None:
+    mock_create.return_value = _mock_provider()
+    events: list[str] = []
+    middleware = _SyncRecorderMiddleware(events)
+    client = Client("openai", model="gpt-4o", api_key="sk-test", middleware=[middleware])
+
+    resp = client.chat("Hello!")
+
+    assert resp.text == "Hi!!"
+    assert events == ["before:chat", "after:chat"]
+    provider = mock_create.return_value
+    call_kwargs = provider.complete.call_args[1]
+    assert call_kwargs["middleware_marker"] == "sync"
+
+
+@patch("ai_arch_toolkit.llm._client.create_provider")
+def test_stream_can_be_transformed_by_middleware(mock_create: MagicMock) -> None:
+    mock_create.return_value = _mock_provider()
+    events: list[str] = []
+    middleware = _SyncRecorderMiddleware(events)
+    client = Client("openai", model="gpt-4o", api_key="sk-test", middleware=[middleware])
+
+    chunks = list(client.stream("Tell me a story"))
+
+    assert chunks == ["HELLO", " WORLD"]
+    assert events == ["before:stream", "after:stream"]

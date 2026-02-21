@@ -212,3 +212,23 @@ def test_stream_ndjson_retries_before_yield(mock_sleep: MagicMock, mock_post: Ma
     chunks = list(stream_ndjson("https://example.com", {}, {}, retry=config))
     assert chunks == ['{"text": "hello"}']
     assert mock_post.call_count == 2
+
+
+def test_post_json_uses_provided_session() -> None:
+    session = MagicMock()
+    session.post.return_value = MockResponse(json_data={"result": "ok"})
+
+    result = post_json("https://example.com", {}, {}, session=session)
+
+    assert result == {"result": "ok"}
+    session.post.assert_called_once()
+
+
+def test_stream_sse_uses_provided_session() -> None:
+    session = MagicMock()
+    session.post.return_value = MockResponse(lines=['data: {"text":"ok"}'])
+
+    chunks = list(stream_sse("https://example.com", {}, {}, session=session))
+
+    assert chunks == ['{"text":"ok"}']
+    session.post.assert_called_once()

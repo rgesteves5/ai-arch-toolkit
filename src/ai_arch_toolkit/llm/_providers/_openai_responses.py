@@ -231,7 +231,14 @@ class OpenAIResponsesProvider(BaseProvider):
         payload = self._build_payload(
             messages, system=system, tools=tools, json_schema=json_schema, **kwargs
         )
-        raw = post_json(self._url, self._headers, payload, timeout=timeout, retry=self._retry)
+        raw = post_json(
+            self._url,
+            self._headers,
+            payload,
+            timeout=timeout,
+            retry=self._retry,
+            session=self._session,
+        )
         return _parse_response(raw)
 
     def stream(
@@ -245,7 +252,12 @@ class OpenAIResponsesProvider(BaseProvider):
         payload = self._build_payload(messages, system=system, **kwargs)
         payload["stream"] = True
         for data in stream_sse(
-            self._url, self._headers, payload, timeout=timeout, retry=self._retry
+            self._url,
+            self._headers,
+            payload,
+            timeout=timeout,
+            retry=self._retry,
+            session=self._session,
         ):
             try:
                 event = json.loads(data)
@@ -271,7 +283,12 @@ class OpenAIResponsesProvider(BaseProvider):
         fn_acc: dict[str, dict[str, str]] = {}
 
         for data in stream_sse(
-            self._url, self._headers, payload, timeout=timeout, retry=self._retry
+            self._url,
+            self._headers,
+            payload,
+            timeout=timeout,
+            retry=self._retry,
+            session=self._session,
         ):
             try:
                 event = json.loads(data)
@@ -334,7 +351,12 @@ class OpenAIResponsesProvider(BaseProvider):
             messages, system=system, tools=tools, json_schema=json_schema, **kwargs
         )
         raw = await async_post_json(
-            self._url, self._headers, payload, timeout=timeout, retry=self._retry
+            self._url,
+            self._headers,
+            payload,
+            timeout=timeout,
+            retry=self._retry,
+            client=self._async_client,
         )
         return _parse_response(raw)
 
@@ -349,7 +371,12 @@ class OpenAIResponsesProvider(BaseProvider):
         payload = self._build_payload(messages, system=system, **kwargs)
         payload["stream"] = True
         async for data in async_stream_sse(
-            self._url, self._headers, payload, timeout=timeout, retry=self._retry
+            self._url,
+            self._headers,
+            payload,
+            timeout=timeout,
+            retry=self._retry,
+            client=self._async_client,
         ):
             try:
                 event = json.loads(data)
@@ -375,7 +402,12 @@ class OpenAIResponsesProvider(BaseProvider):
         fn_acc: dict[str, dict[str, str]] = {}
 
         async for data in async_stream_sse(
-            self._url, self._headers, payload, timeout=timeout, retry=self._retry
+            self._url,
+            self._headers,
+            payload,
+            timeout=timeout,
+            retry=self._retry,
+            client=self._async_client,
         ):
             try:
                 event = json.loads(data)

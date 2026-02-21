@@ -1,0 +1,36 @@
+=== EXAMPLE RUN REPORT ===
+example_script: examples/22_retry_and_timeout_controls.py
+command: .venv/bin/python /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/scripts/_example_trace_runner.py examples/22_retry_and_timeout_controls.py
+status: SUCCESS
+exit_code: 0
+duration_seconds: 3.897
+interpretation: Command completed without process errors.
+
+=== OUTPUT NOTES ===
+- Trace lines are present. Each [CALL NNN] START/END pair maps output to a specific SDK call.
+- Full model text is included between *_BEGIN and *_END trace markers for each call.
+
+=== STDOUT ===
+[TRACE] Runtime tracing enabled for ai-arch-toolkit clients.
+[TRACE] Executing example: /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/examples/22_retry_and_timeout_controls.py
+=== Request with retry policy + explicit timeout ===
+[TRACE] [CALL 001] START Client.chat provider=openai model=gpt-5-nano messages=1(prompt str, chars=54)
+[TRACE] [CALL 001] RESPONSE_TEXT_BEGIN chars=159
+HTTP retries are the automatic resending of a previously issued HTTP request after a transient failure (like a timeout or server error) to improve reliability.
+[TRACE] [CALL 001] RESPONSE_TEXT_END
+[TRACE] [CALL 001] END   Client.chat duration=3.718s result=response(text_chars=159, thinking_chars=0, tool_calls=0, stop_reason=stop)
+Response: HTTP retries are the automatic resending of a previously issued HTTP request after a transient failure (like a timeout or server error) to improve reliability.
+
+=== Intentional tiny timeout to demonstrate timeout handling ===
+[TRACE] [CALL 002] START Client.chat provider=openai model=gpt-5-nano messages=1(prompt str, chars=54)
+[TRACE] [CALL 002] FAIL  Client.chat duration=0.002s error=ReadTimeout: HTTPSConnectionPool(host='api.openai.com', port=443): Read timed out. (read timeout=0.001)
+Timeout-like failure (ReadTimeout): HTTPSConnectionPool(host='api.openai.com', port=443): Read timed out. (read timeout=0.001)
+[TRACE] Example execution completed.
+[TRACE] CALL_SUMMARY total_calls=2 completed_calls=1 failed_calls=1
+
+=== STDERR ===
+<empty>
+
+=== OUTPUT VALIDATION ===
+PASS
+

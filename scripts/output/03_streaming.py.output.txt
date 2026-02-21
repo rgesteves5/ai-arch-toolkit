@@ -1,0 +1,65 @@
+=== EXAMPLE RUN REPORT ===
+example_script: examples/03_streaming.py
+command: .venv/bin/python /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/scripts/_example_trace_runner.py examples/03_streaming.py
+status: SUCCESS
+exit_code: 0
+duration_seconds: 9.605
+interpretation: Command completed without process errors.
+
+=== OUTPUT NOTES ===
+- Trace lines are present. Each [CALL NNN] START/END pair maps output to a specific SDK call.
+- Full model text is included between *_BEGIN and *_END trace markers for each call.
+
+=== STDOUT ===
+[TRACE] Runtime tracing enabled for ai-arch-toolkit clients.
+[TRACE] Executing example: /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/examples/03_streaming.py
+=== stream() ===
+[TRACE] [CALL 001] START Client.stream provider=gemini model=gemini-2.0-flash messages=1(prompt str, chars=42)
+Photosynthesis is the process by which plants, algae, and some bacteria convert light energy into chemical energy in the form of sugars.  Using sunlight, chlorophyll, water, and carbon dioxide, they create glucose (sugar) as food and release oxygen as a byproduct.  This process is essential for life on Earth, as it produces the oxygen we breathe and forms the base of most food chains.
+[TRACE] [CALL 001] STREAM_TEXT_BEGIN chars=388
+Photosynthesis is the process by which plants, algae, and some bacteria convert light energy into chemical energy in the form of sugars.  Using sunlight, chlorophyll, water, and carbon dioxide, they create glucose (sugar) as food and release oxygen as a byproduct.  This process is essential for life on Earth, as it produces the oxygen we breathe and forms the base of most food chains.
+
+[TRACE] [CALL 001] STREAM_TEXT_END
+[TRACE] [CALL 001] END   Client.stream duration=5.533s stream_items=6 text_chars=388
+
+
+=== stream_events() ===
+[TRACE] [CALL 002] START Client.stream_events provider=gemini model=gemini-2.0-flash messages=1(prompt str, chars=35)
+The
+
+[Tokens — in: 10, out: 0]
+ sky appears blue
+
+[Tokens — in: 10, out: 0]
+ due to a phenomenon called Rayleigh scattering.  Sunlight, which contains all colors of the
+
+[Tokens — in: 10, out: 0]
+ rainbow, enters the Earth's atmosphere and collides with tiny air molecules,
+
+[Tokens — in: 10, out: 0]
+ primarily nitrogen and oxygen.  This collision causes the sunlight to scatter in different directions. Blue and violet light have shorter wavelengths and are scattered more effectively than other colors with
+
+[Tokens — in: 10, out: 0]
+ longer wavelengths, such as red and orange. Because our eyes are more sensitive to blue than violet, we perceive the sky as blue. At sunrise and sunset, when
+
+[Tokens — in: 10, out: 0]
+ sunlight has to travel through more of the atmosphere, blue light is scattered away, leaving the longer wavelengths like red and orange to dominate, creating the vibrant colors we often see.
+
+
+[Tokens — in: 9, out: 140]
+[Stream complete]
+[TRACE] [CALL 002] STREAM_EVENTS_TEXT_BEGIN chars=747
+The sky appears blue due to a phenomenon called Rayleigh scattering.  Sunlight, which contains all colors of the rainbow, enters the Earth's atmosphere and collides with tiny air molecules, primarily nitrogen and oxygen.  This collision causes the sunlight to scatter in different directions. Blue and violet light have shorter wavelengths and are scattered more effectively than other colors with longer wavelengths, such as red and orange. Because our eyes are more sensitive to blue than violet, we perceive the sky as blue. At sunrise and sunset, when sunlight has to travel through more of the atmosphere, blue light is scattered away, leaving the longer wavelengths like red and orange to dominate, creating the vibrant colors we often see.
+
+[TRACE] [CALL 002] STREAM_EVENTS_TEXT_END
+[TRACE] [CALL 002] STREAM_EVENTS_COUNTS {'text': 7, 'usage': 7, 'done': 1}
+[TRACE] [CALL 002] END   Client.stream_events duration=3.910s stream_items=15 text_chars=747
+[TRACE] Example execution completed.
+[TRACE] CALL_SUMMARY total_calls=2 completed_calls=2 failed_calls=0
+
+=== STDERR ===
+<empty>
+
+=== OUTPUT VALIDATION ===
+PASS
+

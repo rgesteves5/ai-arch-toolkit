@@ -1,0 +1,244 @@
+=== EXAMPLE RUN REPORT ===
+example_script: examples/13_self_discovery_agent.py
+command: .venv/bin/python /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/scripts/_example_trace_runner.py examples/13_self_discovery_agent.py
+status: SUCCESS
+exit_code: 0
+duration_seconds: 14.166
+interpretation: Command completed without process errors.
+
+=== OUTPUT NOTES ===
+- Trace lines are present. Each [CALL NNN] START/END pair maps output to a specific SDK call.
+- Full model text is included between *_BEGIN and *_END trace markers for each call.
+
+=== STDOUT ===
+[TRACE] Runtime tracing enabled for ai-arch-toolkit clients.
+[TRACE] Executing example: /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/examples/13_self_discovery_agent.py
+Solving with Self-Discovery...
+
+  Phase: SELECT
+[TRACE] [CALL 001] START Client.chat provider=anthropic model=claude-haiku-4-5 messages=1(sequence)
+[TRACE] [CALL 001] RESPONSE_TEXT_BEGIN chars=72
+Set Theory and Venn Diagrams
+Arithmetic Reasoning
+Percentage Calculation
+[TRACE] [CALL 001] RESPONSE_TEXT_END
+[TRACE] [CALL 001] END   Client.chat duration=1.331s result=response(text_chars=72, thinking_chars=0, tool_calls=0, stop_reason=end_turn)
+  Phase: ADAPT
+[TRACE] [CALL 002] START Client.chat provider=anthropic model=claude-haiku-4-5 messages=1(sequence)
+[TRACE] [CALL 002] RESPONSE_TEXT_BEGIN chars=1482
+# Adapted Reasoning Modules for Language Proficiency Problem
+
+## 1. Set Theory and Venn Diagrams
+**Adapted for this task:**
+
+Create two overlapping sets where:
+- **Set E** = English speakers (60 total)
+- **Set S** = Spanish speakers (50 total)
+- **Intersection (E ∩ S)** = Both languages (20)
+
+**Actionable steps:**
+1. Find English-only speakers: 60 - 20 = 40
+2. Find Spanish-only speakers: 50 - 20 = 30
+3. Find total who speak at least one language: 40 + 30 + 20 = 90
+4. Find neither: 100 - 90 = **10 employees**
+
+## 2. Arithmetic Reasoning
+**Adapted for this task:**
+
+Use logical subtraction and addition to account for all employee groups without double-counting.
+
+**Actionable steps:**
+1. Recognize that simply adding 60 + 50 = 110 would double-count the bilingual employees
+2. Apply the inclusion-exclusion principle: Total speaking ≥1 language = E + S - (E ∩ S)
+3. Calculate: 60 + 50 - 20 = 90
+4. Subtract from total: 100 - 90 = **10 employees speak neither**
+
+## 3. Percentage Calculation
+**Adapted for this task:**
+
+Determine what proportion of Spanish speakers also possess English proficiency.
+
+**Actionable steps:**
+1. Identify the subset: bilingual employees = 20
+2. Identify the reference group: all Spanish speakers = 50
+3. Apply formula: (Bilingual / Total Spanish speakers) × 100
+4. Calculate: (20 / 50) × 100 = **40% of Spanish speakers also speak English**
+
+---
+
+## Summary Answers
+- **Neither language:** 10 employees
+- **Spanish speakers who speak English:** 40%
+[TRACE] [CALL 002] RESPONSE_TEXT_END
+[TRACE] [CALL 002] END   Client.chat duration=4.176s result=response(text_chars=1482, thinking_chars=0, tool_calls=0, stop_reason=end_turn)
+  Phase: IMPLEMENT
+[TRACE] [CALL 003] START Client.chat provider=anthropic model=claude-haiku-4-5 messages=1(sequence)
+[TRACE] [CALL 003] RESPONSE_TEXT_BEGIN chars=2373
+# Structured Step-by-Step Reasoning Plan
+
+```json
+{
+  "step_1_identify_sets": {
+    "description": "Define the given sets and their properties",
+    "action": "Create Set E (English speakers = 60) and Set S (Spanish speakers = 50), with intersection E ∩ S (both languages = 20). Total employees = 100"
+  },
+  
+  "step_2_apply_inclusion_exclusion": {
+    "description": "Calculate total employees speaking at least one language without double-counting",
+    "formula": "Total(≥1 language) = E + S - (E ∩ S)",
+    "calculation": "60 + 50 - 20 = 90"
+  },
+  
+  "step_3_find_english_only": {
+    "description": "Calculate employees who speak only English",
+    "action": "Subtract bilingual employees from total English speakers",
+    "calculation": "60 - 20 = 40 employees"
+  },
+  
+  "step_4_find_spanish_only": {
+    "description": "Calculate employees who speak only Spanish",
+    "action": "Subtract bilingual employees from total Spanish speakers",
+    "calculation": "50 - 20 = 30 employees"
+  },
+  
+  "step_5_verify_coverage": {
+    "description": "Verify all single-language and bilingual groups account correctly",
+    "calculation": "English-only (40) + Spanish-only (30) + Both (20) = 90 employees"
+  },
+  
+  "step_6_find_neither_language": {
+    "description": "Calculate employees speaking neither language",
+    "action": "Subtract those speaking at least one language from total",
+    "calculation": "100 - 90 = 10 employees",
+    "answer": "10 employees speak neither language"
+  },
+  
+  "step_7_identify_bilingual_subset": {
+    "description": "Identify the bilingual employees relevant to percentage calculation",
+    "action": "Note bilingual employees = 20"
+  },
+  
+  "step_8_identify_reference_group": {
+    "description": "Identify the reference population for percentage",
+    "action": "All Spanish speakers (both Spanish-only and bilingual) = 50"
+  },
+  
+  "step_9_calculate_percentage": {
+    "description": "Calculate what percentage of Spanish speakers also speak English",
+    "formula": "(Bilingual / Total Spanish speakers) × 100",
+    "calculation": "(20 / 50) × 100 = 40%",
+    "answer": "40% of Spanish speakers also speak English"
+  }
+}
+```
+
+## Summary of Answers
+
+| Question | Answer |
+|----------|--------|
+| **Employees speaking neither language** | **10 employees** |
+| **Percentage of Spanish speakers who also speak English** | **40%** |
+[TRACE] [CALL 003] RESPONSE_TEXT_END
+[TRACE] [CALL 003] END   Client.chat duration=5.889s result=response(text_chars=2373, thinking_chars=0, tool_calls=0, stop_reason=end_turn)
+  Phase: SOLVE
+[TRACE] [CALL 004] START Client.chat provider=anthropic model=claude-haiku-4-5 messages=1(sequence)
+[TRACE] [CALL 004] RESPONSE_TEXT_BEGIN chars=1183
+# Solution Using Structured Reasoning
+
+## Step 1: Identify the Sets
+- **Set E (English speakers):** 60 employees
+- **Set S (Spanish speakers):** 50 employees
+- **Intersection E ∩ S (Both languages):** 20 employees
+- **Total employees:** 100
+
+## Step 2: Apply Inclusion-Exclusion Principle
+To find employees speaking **at least one language** without double-counting:
+
+**Formula:** Total(≥1 language) = E + S - (E ∩ S)
+
+**Calculation:** 60 + 50 - 20 = **90 employees**
+
+## Step 3: Find English-Only Speakers
+60 - 20 = **40 employees speak only English**
+
+## Step 4: Find Spanish-Only Speakers
+50 - 20 = **30 employees speak only Spanish**
+
+## Step 5: Verify Coverage
+40 (English-only) + 30 (Spanish-only) + 20 (Both) = 90 ✓
+
+## Step 6: Find Employees Speaking Neither Language
+100 - 90 = **10 employees**
+
+## Step 7-9: Calculate Percentage of Spanish Speakers Who Also Speak English
+- Bilingual employees: 20
+- Total Spanish speakers: 50
+- **Percentage:** (20 ÷ 50) × 100 = **40%**
+
+---
+
+## Final Answers
+
+| Question | Answer |
+|----------|--------|
+| **Employees speaking neither language** | **10 employees** |
+| **Percentage of Spanish speakers who also speak English** | **40%** |
+[TRACE] [CALL 004] RESPONSE_TEXT_END
+[TRACE] [CALL 004] END   Client.chat duration=2.604s result=response(text_chars=1183, thinking_chars=0, tool_calls=0, stop_reason=end_turn)
+
+Answer:
+# Solution Using Structured Reasoning
+
+## Step 1: Identify the Sets
+- **Set E (English speakers):** 60 employees
+- **Set S (Spanish speakers):** 50 employees
+- **Intersection E ∩ S (Both languages):** 20 employees
+- **Total employees:** 100
+
+## Step 2: Apply Inclusion-Exclusion Principle
+To find employees speaking **at least one language** without double-counting:
+
+**Formula:** Total(≥1 language) = E + S - (E ∩ S)
+
+**Calculation:** 60 + 50 - 20 = **90 employees**
+
+## Step 3: Find English-Only Speakers
+60 - 20 = **40 employees speak only English**
+
+## Step 4: Find Spanish-Only Speakers
+50 - 20 = **30 employees speak only Spanish**
+
+## Step 5: Verify Coverage
+40 (English-only) + 30 (Spanish-only) + 20 (Both) = 90 ✓
+
+## Step 6: Find Employees Speaking Neither Language
+100 - 90 = **10 employees**
+
+## Step 7-9: Calculate Percentage of Spanish Speakers Who Also Speak English
+- Bilingual employees: 20
+- Total Spanish speakers: 50
+- **Percentage:** (20 ÷ 50) × 100 = **40%**
+
+---
+
+## Final Answers
+
+| Question | Answer |
+|----------|--------|
+| **Employees speaking neither language** | **10 employees** |
+| **Percentage of Spanish speakers who also speak English** | **40%** |
+
+Phases completed: 4
+  SELECT: Set Theory and Venn Diagrams Arithmetic Reasoning Percentage Calculation...
+  ADAPT: # Adapted Reasoning Modules for Language Proficiency Problem  ## 1. Set Theory and Venn Diagrams **A...
+  IMPLEMENT: # Structured Step-by-Step Reasoning Plan  ```json {   "step_1_identify_sets": {     "description": "...
+  SOLVE: # Solution Using Structured Reasoning  ## Step 1: Identify the Sets - **Set E (English speakers):** ...
+[TRACE] Example execution completed.
+[TRACE] CALL_SUMMARY total_calls=4 completed_calls=4 failed_calls=0
+
+=== STDERR ===
+<empty>
+
+=== OUTPUT VALIDATION ===
+PASS
+

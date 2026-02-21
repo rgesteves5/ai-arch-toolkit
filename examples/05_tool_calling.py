@@ -32,7 +32,9 @@ response = client.chat(messages, tools=[weather_tool])
 
 if response.tool_calls:
     tc = response.tool_calls[0]
-    city = tc.arguments["city"].lower()
+    city = str(tc.arguments.get("city", "")).lower()
+    if not city:
+        raise ValueError("Model called get_weather without a 'city' argument.")
     weather = WEATHER_DATA.get(city, "Unknown city")
     print(f"[Tool called: {tc.name}(city={city!r}) → {weather}]")
 

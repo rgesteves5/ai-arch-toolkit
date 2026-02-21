@@ -9,7 +9,7 @@ defaults to max_tokens=4096, so pass a larger max_tokens when using
 big thinking budgets.
 """
 
-from ai_arch_toolkit import Client, ThinkingConfig
+from ai_arch_toolkit import APIError, Client, ThinkingConfig
 
 client = Client("anthropic", model="claude-haiku-4-5")
 
@@ -36,3 +36,17 @@ resp2 = client.chat(
 if resp2.thinking:
     print(f"[Thinking ({len(resp2.thinking)} chars)]: {resp2.thinking[:200]}...")
 print("\nAnswer:", resp2.text)
+
+# --- Adaptive effort mode (for models that support effort levels) ---
+print("\n=== Adaptive Thinking (effort='high') ===")
+try:
+    resp3 = client.chat(
+        "Give me a concise but rigorous argument for why compilers matter.",
+        thinking=ThinkingConfig(effort="high"),
+    )
+except APIError as exc:
+    print(f"Adaptive effort not supported by this model/account: {exc}")
+else:
+    if resp3.thinking:
+        print(f"[Thinking ({len(resp3.thinking)} chars)]: {resp3.thinking[:200]}...")
+    print("\nAnswer:", resp3.text)

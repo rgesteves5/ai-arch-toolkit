@@ -6,6 +6,9 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
+import httpx
+import requests
+
 from ai_arch_toolkit.llm._http import RetryConfig
 from ai_arch_toolkit.llm._types import ConversationItem, JsonSchema, Response, StreamEvent, Tool
 
@@ -15,6 +18,8 @@ class BaseProvider(ABC):
 
     def __init__(self, *, retry: RetryConfig | None = None) -> None:
         self._retry = retry
+        self._session: requests.Session | None = None
+        self._async_client: httpx.AsyncClient | None = None
 
     @abstractmethod
     def complete(

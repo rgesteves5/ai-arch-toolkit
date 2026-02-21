@@ -78,3 +78,13 @@ async def test_async_post_json_retries(
     assert result == {"result": "ok"}
     assert mock_async_client.post.call_count == 2
     mock_sleep.assert_called_once()
+
+
+async def test_async_post_json_uses_provided_client() -> None:
+    client = AsyncMock()
+    client.post.return_value = _mock_httpx_response(json_data={"result": "ok"})
+
+    result = await async_post_json("https://example.com", {}, {}, client=client)
+
+    assert result == {"result": "ok"}
+    client.post.assert_called_once()

@@ -1,0 +1,73 @@
+=== EXAMPLE RUN REPORT ===
+example_script: examples/14_async_client.py
+command: .venv/bin/python /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/scripts/_example_trace_runner.py examples/14_async_client.py
+status: SUCCESS
+exit_code: 0
+duration_seconds: 6.546
+interpretation: Command completed without process errors.
+
+=== OUTPUT NOTES ===
+- Trace lines are present. Each [CALL NNN] START/END pair maps output to a specific SDK call.
+- Full model text is included between *_BEGIN and *_END trace markers for each call.
+
+=== STDOUT ===
+[TRACE] Runtime tracing enabled for ai-arch-toolkit clients.
+[TRACE] Executing example: /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/examples/14_async_client.py
+=== Async Chat ===
+[TRACE] [CALL 001] START AsyncClient.chat provider=openai model=gpt-5-nano messages=1(prompt str, chars=33)
+[TRACE] [CALL 001] RESPONSE_TEXT_BEGIN chars=4
+four
+[TRACE] [CALL 001] RESPONSE_TEXT_END
+[TRACE] [CALL 001] END   AsyncClient.chat duration=2.490s result=response(text_chars=4, thinking_chars=0, tool_calls=0, stop_reason=stop)
+Answer: four
+
+=== Async Streaming ===
+[TRACE] [CALL 002] START AsyncClient.stream provider=openai model=gpt-5-nano messages=1(prompt str, chars=39)
+1
+2
+3
+4
+5[TRACE] [CALL 002] STREAM_TEXT_BEGIN chars=9
+1
+2
+3
+4
+5
+[TRACE] [CALL 002] STREAM_TEXT_END
+[TRACE] [CALL 002] END   AsyncClient.stream duration=1.652s stream_items=9 text_chars=9
+
+
+=== Parallel Requests (3 concurrent) ===
+[TRACE] [CALL 003] START AsyncClient.chat provider=openai model=gpt-5-nano messages=1(prompt str, chars=36)
+[TRACE] [CALL 004] START AsyncClient.chat provider=openai model=gpt-5-nano messages=1(prompt str, chars=30)
+[TRACE] [CALL 005] START AsyncClient.chat provider=openai model=gpt-5-nano messages=1(prompt str, chars=26)
+[TRACE] [CALL 004] RESPONSE_TEXT_BEGIN chars=6
+Python
+[TRACE] [CALL 004] RESPONSE_TEXT_END
+[TRACE] [CALL 004] END   AsyncClient.chat duration=1.590s result=response(text_chars=6, thinking_chars=0, tool_calls=0, stop_reason=stop)
+[TRACE] [CALL 003] RESPONSE_TEXT_BEGIN chars=5
+Mars.
+[TRACE] [CALL 003] RESPONSE_TEXT_END
+[TRACE] [CALL 003] END   AsyncClient.chat duration=2.010s result=response(text_chars=5, thinking_chars=0, tool_calls=0, stop_reason=stop)
+[TRACE] [CALL 005] RESPONSE_TEXT_BEGIN chars=9
+Hydrogen.
+[TRACE] [CALL 005] RESPONSE_TEXT_END
+[TRACE] [CALL 005] END   AsyncClient.chat duration=2.233s result=response(text_chars=9, thinking_chars=0, tool_calls=0, stop_reason=stop)
+  Q: Name one planet in our solar system.
+  A: Mars.
+
+  Q: Name one programming language.
+  A: Python
+
+  Q: Name one chemical element.
+  A: Hydrogen.
+
+[TRACE] Example execution completed.
+[TRACE] CALL_SUMMARY total_calls=5 completed_calls=5 failed_calls=0
+
+=== STDERR ===
+<empty>
+
+=== OUTPUT VALIDATION ===
+PASS
+

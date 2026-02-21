@@ -12,6 +12,7 @@ from ai_arch_toolkit.agents._base import (
     AgentResult,
     AgentStep,
     BaseAgent,
+    LATSResult,
     _accumulate_usage,
     _fire_event,
 )
@@ -100,6 +101,16 @@ class LATSAgent(BaseAgent):
 
     def run(self, task: str, **kwargs: Any) -> AgentResult:
         """Run the LATS MCTS loop."""
+        stream = kwargs.pop("stream", False)
+        cancellation_token = self._resolve_cancellation_token(
+            kwargs.pop("cancellation_token", None)
+        )
+        if stream:
+            return self.run_stream(
+                task,
+                cancellation_token=cancellation_token,
+                **kwargs,
+            )
         c = kwargs.pop("exploration_weight", math.sqrt(2))
         num_expansions = kwargs.pop("num_expansions", 3)
         evaluator = kwargs.pop("evaluator", None)
@@ -108,13 +119,34 @@ class LATSAgent(BaseAgent):
         total_usage = Usage()
         all_steps: list[AgentStep] = []
         start = time.monotonic()
+        budget = self._new_budget_manager()
 
         root = _TreeNode(state="(start)", depth=0)
         best_terminal: _TreeNode | None = None
 
         for iteration in range(1, max_iters + 1):
+            if self._is_cancelled(cancellation_token):
+                return self._finalize_result(
+                    LATSResult(
+                        answer="[cancelled]",
+                        steps=tuple(all_steps),
+                        total_usage=total_usage,
+                        stop_reason="cancelled",
+                    ),
+                    result_type=LATSResult,
+                )
             if self._check_timeout(start):
                 break
+            if budget.exhausted_reason() is not None:
+                return self._finalize_result(
+                    LATSResult(
+                        answer="[token budget exceeded]",
+                        steps=tuple(all_steps),
+                        total_usage=total_usage,
+                        stop_reason="budget_exhausted",
+                    ),
+                    result_type=LATSResult,
+                )
             _fire_event(
                 self.config,
                 "step_start",
@@ -144,10 +176,13 @@ class LATSAgent(BaseAgent):
                 **kwargs,
             )
             total_usage = _accumulate_usage(total_usage, expand_resp.usage)
+            expand_cost = self._observe_response(budget, expand_resp, step_number=iteration)
             all_steps.append(
                 AgentStep(
                     step_number=iteration,
                     response=expand_resp,
+                    usage=expand_resp.usage,
+                    cost_usd=expand_cost,
                 )
             )
             candidates = parse_numbered_items(expand_resp.text, num_expansions)
@@ -162,6 +197,7 @@ class LATSAgent(BaseAgent):
                     **kwargs,
                 )
                 total_usage = _accumulate_usage(total_usage, eval_resp.usage)
+                self._observe_response(budget, eval_resp, step_number=iteration)
                 score = parse_score(eval_resp.text)
                 scored.append((cand, score))
 
@@ -191,10 +227,16 @@ class LATSAgent(BaseAgent):
                 max_iterations=3,
                 system=best_child.state,
                 max_tokens=self.config.max_tokens,
+                planner_repair_retries=self.config.planner_repair_retries,
             )
             inner = ReActAgent(self.client, self.tools, config=inner_config)
-            inner_result = inner.run(task, **kwargs)
+            inner_result = inner.run(
+                task,
+                cancellation_token=cancellation_token,
+                **kwargs,
+            )
             total_usage = _accumulate_usage(total_usage, inner_result.total_usage)
+            budget.observe_usage(inner_result.total_usage)
             all_steps.extend(inner_result.steps)
 
             # Evaluate simulation result
@@ -227,6 +269,7 @@ class LATSAgent(BaseAgent):
                     **kwargs,
                 )
                 total_usage = _accumulate_usage(total_usage, reflect_resp.usage)
+                self._observe_response(budget, reflect_resp, step_number=iteration)
                 best_child.reflection = reflect_resp.text
                 _backpropagate(best_child, sim_score)
                 _fire_event(
@@ -248,14 +291,33 @@ class LATSAgent(BaseAgent):
             answer = "[timeout exceeded]"
         else:
             answer = "[no solution found]"
-        return AgentResult(
-            answer=answer,
-            steps=tuple(all_steps),
-            total_usage=total_usage,
+        stop_reason = "completed"
+        if answer == "[timeout exceeded]":
+            stop_reason = "timeout"
+        elif answer == "[token budget exceeded]":
+            stop_reason = "budget_exhausted"
+        return self._finalize_result(
+            LATSResult(
+                answer=answer,
+                steps=tuple(all_steps),
+                total_usage=total_usage,
+                stop_reason=stop_reason,
+            ),
+            result_type=LATSResult,
         )
 
     async def async_run(self, task: str, **kwargs: Any) -> AgentResult:
         """Run the LATS MCTS loop asynchronously."""
+        stream = kwargs.pop("stream", False)
+        cancellation_token = self._resolve_cancellation_token(
+            kwargs.pop("cancellation_token", None)
+        )
+        if stream:
+            return self.async_run_stream(
+                task,
+                cancellation_token=cancellation_token,
+                **kwargs,
+            )
         c = kwargs.pop("exploration_weight", math.sqrt(2))
         num_expansions = kwargs.pop("num_expansions", 3)
         evaluator = kwargs.pop("evaluator", None)
@@ -264,13 +326,34 @@ class LATSAgent(BaseAgent):
         total_usage = Usage()
         all_steps: list[AgentStep] = []
         start = time.monotonic()
+        budget = self._new_budget_manager()
 
         root = _TreeNode(state="(start)", depth=0)
         best_terminal: _TreeNode | None = None
 
         for iteration in range(1, max_iters + 1):
+            if self._is_cancelled(cancellation_token):
+                return self._finalize_result(
+                    LATSResult(
+                        answer="[cancelled]",
+                        steps=tuple(all_steps),
+                        total_usage=total_usage,
+                        stop_reason="cancelled",
+                    ),
+                    result_type=LATSResult,
+                )
             if self._check_timeout(start):
                 break
+            if budget.exhausted_reason() is not None:
+                return self._finalize_result(
+                    LATSResult(
+                        answer="[token budget exceeded]",
+                        steps=tuple(all_steps),
+                        total_usage=total_usage,
+                        stop_reason="budget_exhausted",
+                    ),
+                    result_type=LATSResult,
+                )
             _fire_event(
                 self.config,
                 "step_start",
@@ -300,10 +383,13 @@ class LATSAgent(BaseAgent):
                 **kwargs,
             )
             total_usage = _accumulate_usage(total_usage, expand_resp.usage)
+            expand_cost = self._observe_response(budget, expand_resp, step_number=iteration)
             all_steps.append(
                 AgentStep(
                     step_number=iteration,
                     response=expand_resp,
+                    usage=expand_resp.usage,
+                    cost_usd=expand_cost,
                 )
             )
             candidates = parse_numbered_items(expand_resp.text, num_expansions)
@@ -318,6 +404,7 @@ class LATSAgent(BaseAgent):
                     **kwargs,
                 )
                 total_usage = _accumulate_usage(total_usage, eval_resp.usage)
+                self._observe_response(budget, eval_resp, step_number=iteration)
                 score = parse_score(eval_resp.text)
                 scored.append((cand, score))
 
@@ -346,10 +433,16 @@ class LATSAgent(BaseAgent):
                 max_iterations=3,
                 system=best_child.state,
                 max_tokens=self.config.max_tokens,
+                planner_repair_retries=self.config.planner_repair_retries,
             )
             inner = ReActAgent(self.client, self.tools, config=inner_config)
-            inner_result = await inner.async_run(task, **kwargs)
+            inner_result = await inner.async_run(
+                task,
+                cancellation_token=cancellation_token,
+                **kwargs,
+            )
             total_usage = _accumulate_usage(total_usage, inner_result.total_usage)
+            budget.observe_usage(inner_result.total_usage)
             all_steps.extend(inner_result.steps)
 
             sim_score = (
@@ -380,6 +473,7 @@ class LATSAgent(BaseAgent):
                     **kwargs,
                 )
                 total_usage = _accumulate_usage(total_usage, reflect_resp.usage)
+                self._observe_response(budget, reflect_resp, step_number=iteration)
                 best_child.reflection = reflect_resp.text
                 _backpropagate(best_child, sim_score)
                 _fire_event(
@@ -401,10 +495,19 @@ class LATSAgent(BaseAgent):
             answer = "[timeout exceeded]"
         else:
             answer = "[no solution found]"
-        return AgentResult(
-            answer=answer,
-            steps=tuple(all_steps),
-            total_usage=total_usage,
+        stop_reason = "completed"
+        if answer == "[timeout exceeded]":
+            stop_reason = "timeout"
+        elif answer == "[token budget exceeded]":
+            stop_reason = "budget_exhausted"
+        return self._finalize_result(
+            LATSResult(
+                answer=answer,
+                steps=tuple(all_steps),
+                total_usage=total_usage,
+                stop_reason=stop_reason,
+            ),
+            result_type=LATSResult,
         )
 
 

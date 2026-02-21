@@ -1,0 +1,245 @@
+=== EXAMPLE RUN REPORT ===
+example_script: examples/11_plan_execute_agent.py
+command: .venv/bin/python /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/scripts/_example_trace_runner.py examples/11_plan_execute_agent.py
+status: SUCCESS
+exit_code: 0
+duration_seconds: 27.031
+interpretation: Command completed without process errors.
+
+=== OUTPUT NOTES ===
+- Trace lines are present. Each [CALL NNN] START/END pair maps output to a specific SDK call.
+- Full model text is included between *_BEGIN and *_END trace markers for each call.
+
+=== STDOUT ===
+[TRACE] Runtime tracing enabled for ai-arch-toolkit clients.
+[TRACE] Executing example: /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/examples/11_plan_execute_agent.py
+  Executing step 1...
+[TRACE] [CALL 001] START Client.chat provider=gemini model=gemini-2.0-flash messages=1(sequence)
+[TRACE] [CALL 001] RESPONSE_TEXT_BEGIN chars=685
+```json
+[
+  "Find the equatorial diameter of Mars.",
+  "Find the equatorial diameter of Jupiter.",
+  "Compare the two diameters by dividing Jupiter's diameter by Mars' diameter.",
+  "State how many times larger Jupiter's diameter is than Mars' diameter.",
+  "Find the volume of Mars, assuming it's a perfect sphere (4/3 * pi * (radius_Mars)^3).",
+  "Find the volume of Jupiter, assuming it's a perfect sphere (4/3 * pi * (radius_Jupiter)^3).",
+  "Compare the two volumes by dividing Jupiter's volume by Mars' volume.",
+  "State how many times larger Jupiter's volume is than Mars' volume.",
+  "Summarize the size comparison of Mars and Jupiter based on both diameter and volume."
+]
+```
+[TRACE] [CALL 001] RESPONSE_TEXT_END
+[TRACE] [CALL 001] END   Client.chat duration=3.222s result=response(text_chars=685, thinking_chars=0, tool_calls=0, stop_reason=STOP)
+[Plan created]
+  Executing step 2...
+[TRACE] [CALL 002] START Client.chat provider=gemini model=gemini-2.0-flash messages=1(sequence)
+[TRACE] [CALL 002] RESPONSE_TEXT_BEGIN chars=0
+<empty>
+[TRACE] [CALL 002] RESPONSE_TEXT_END
+[TRACE] [CALL 002] RESPONSE_TOOL_CALLS count=1
+[TRACE] [CALL 002] RESPONSE_TOOL_CALL_1 id= name=lookup arguments={'topic': 'equatorial diameter of Mars'}
+[TRACE] [CALL 002] END   Client.chat duration=0.611s result=response(text_chars=0, thinking_chars=0, tool_calls=1, stop_reason=STOP)
+[TRACE] [CALL 003] START Client.chat provider=gemini model=gemini-2.0-flash messages=3(sequence)
+[TRACE] [CALL 003] RESPONSE_TEXT_BEGIN chars=44
+The equatorial diameter of Mars is 6,779 km.
+[TRACE] [CALL 003] RESPONSE_TEXT_END
+[TRACE] [CALL 003] END   Client.chat duration=0.461s result=response(text_chars=44, thinking_chars=0, tool_calls=0, stop_reason=STOP)
+  Executing step 3...
+[TRACE] [CALL 004] START Client.chat provider=gemini model=gemini-2.0-flash messages=1(sequence)
+[TRACE] [CALL 004] RESPONSE_TEXT_BEGIN chars=0
+<empty>
+[TRACE] [CALL 004] RESPONSE_TEXT_END
+[TRACE] [CALL 004] RESPONSE_TOOL_CALLS count=1
+[TRACE] [CALL 004] RESPONSE_TOOL_CALL_1 id= name=lookup arguments={'topic': 'equatorial diameter of Jupiter'}
+[TRACE] [CALL 004] END   Client.chat duration=0.474s result=response(text_chars=0, thinking_chars=0, tool_calls=1, stop_reason=STOP)
+[TRACE] [CALL 005] START Client.chat provider=gemini model=gemini-2.0-flash messages=3(sequence)
+[TRACE] [CALL 005] RESPONSE_TEXT_BEGIN chars=49
+The equatorial diameter of Jupiter is 139,820 km.
+[TRACE] [CALL 005] RESPONSE_TEXT_END
+[TRACE] [CALL 005] END   Client.chat duration=0.738s result=response(text_chars=49, thinking_chars=0, tool_calls=0, stop_reason=STOP)
+  Executing step 4...
+[TRACE] [CALL 006] START Client.chat provider=gemini model=gemini-2.0-flash messages=1(sequence)
+[TRACE] [CALL 006] RESPONSE_TEXT_BEGIN chars=0
+<empty>
+[TRACE] [CALL 006] RESPONSE_TEXT_END
+[TRACE] [CALL 006] RESPONSE_TOOL_CALLS count=2
+[TRACE] [CALL 006] RESPONSE_TOOL_CALL_1 id= name=lookup arguments={'topic': 'diameter of Jupiter'}
+[TRACE] [CALL 006] RESPONSE_TOOL_CALL_2 id= name=lookup arguments={'topic': 'diameter of Mars'}
+[TRACE] [CALL 006] END   Client.chat duration=0.587s result=response(text_chars=0, thinking_chars=0, tool_calls=2, stop_reason=STOP)
+[TRACE] [CALL 007] START Client.chat provider=gemini model=gemini-2.0-flash messages=4(sequence)
+[TRACE] [CALL 007] RESPONSE_TEXT_BEGIN chars=0
+<empty>
+[TRACE] [CALL 007] RESPONSE_TEXT_END
+[TRACE] [CALL 007] END   Client.chat duration=0.606s result=response(text_chars=0, thinking_chars=0, tool_calls=0, stop_reason=MALFORMED_FUNCTION_CALL)
+  Executing step 5...
+[TRACE] [CALL 008] START Client.chat provider=gemini model=gemini-2.0-flash messages=1(sequence)
+[TRACE] [CALL 008] RESPONSE_TEXT_BEGIN chars=0
+<empty>
+[TRACE] [CALL 008] RESPONSE_TEXT_END
+[TRACE] [CALL 008] RESPONSE_TOOL_CALLS count=1
+[TRACE] [CALL 008] RESPONSE_TOOL_CALL_1 id= name=compare arguments={'item_a': "Jupiter's diameter", 'item_b': "Mars' diameter"}
+[TRACE] [CALL 008] END   Client.chat duration=0.853s result=response(text_chars=0, thinking_chars=0, tool_calls=1, stop_reason=STOP)
+[TRACE] [CALL 009] START Client.chat provider=gemini model=gemini-2.0-flash messages=3(sequence)
+[TRACE] [CALL 009] RESPONSE_TEXT_BEGIN chars=0
+<empty>
+[TRACE] [CALL 009] RESPONSE_TEXT_END
+[TRACE] [CALL 009] RESPONSE_TOOL_CALLS count=2
+[TRACE] [CALL 009] RESPONSE_TOOL_CALL_1 id= name=lookup arguments={'topic': "Jupiter's diameter"}
+[TRACE] [CALL 009] RESPONSE_TOOL_CALL_2 id= name=lookup arguments={'topic': "Mars' diameter"}
+[TRACE] [CALL 009] END   Client.chat duration=0.684s result=response(text_chars=0, thinking_chars=0, tool_calls=2, stop_reason=STOP)
+[TRACE] [CALL 010] START Client.chat provider=gemini model=gemini-2.0-flash messages=6(sequence)
+[TRACE] [CALL 010] RESPONSE_TEXT_BEGIN chars=139
+Jupiter's diameter is 139,820 km and Mars' diameter is 6,779 km. Jupiter's diameter is approximately 20.6 times larger than Mars' diameter.
+[TRACE] [CALL 010] RESPONSE_TEXT_END
+[TRACE] [CALL 010] END   Client.chat duration=0.952s result=response(text_chars=139, thinking_chars=0, tool_calls=0, stop_reason=STOP)
+  Executing step 6...
+[TRACE] [CALL 011] START Client.chat provider=gemini model=gemini-2.0-flash messages=1(sequence)
+[TRACE] [CALL 011] RESPONSE_TEXT_BEGIN chars=0
+<empty>
+[TRACE] [CALL 011] RESPONSE_TEXT_END
+[TRACE] [CALL 011] RESPONSE_TOOL_CALLS count=1
+[TRACE] [CALL 011] RESPONSE_TOOL_CALL_1 id= name=lookup arguments={'topic': 'radius of Mars'}
+[TRACE] [CALL 011] END   Client.chat duration=0.685s result=response(text_chars=0, thinking_chars=0, tool_calls=1, stop_reason=STOP)
+[TRACE] [CALL 012] START Client.chat provider=gemini model=gemini-2.0-flash messages=3(sequence)
+[TRACE] [CALL 012] RESPONSE_TEXT_BEGIN chars=0
+<empty>
+[TRACE] [CALL 012] RESPONSE_TEXT_END
+[TRACE] [CALL 012] RESPONSE_TOOL_CALLS count=1
+[TRACE] [CALL 012] RESPONSE_TOOL_CALL_1 id= name=lookup arguments={'topic': 'pi'}
+[TRACE] [CALL 012] END   Client.chat duration=0.821s result=response(text_chars=0, thinking_chars=0, tool_calls=1, stop_reason=STOP)
+[TRACE] [CALL 013] START Client.chat provider=gemini model=gemini-2.0-flash messages=5(sequence)
+[TRACE] [CALL 013] RESPONSE_TEXT_BEGIN chars=249
+The radius of Mars is 6,779 km / 2 = 3389.5 km.
+Volume of Mars = (4/3) * pi * (3389.5 km)^3
+Since I don't have access to a value for pi, I will use 3.14159 as an approximation.
+Volume of Mars = (4/3) * 3.14159 * (3389.5 km)^3 = 1.631876 * 10^11 km^3
+[TRACE] [CALL 013] RESPONSE_TEXT_END
+[TRACE] [CALL 013] RESPONSE_TOOL_CALLS count=1
+[TRACE] [CALL 013] RESPONSE_TOOL_CALL_1 id= name=lookup arguments={'topic': 'volume of Mars'}
+[TRACE] [CALL 013] END   Client.chat duration=1.739s result=response(text_chars=249, thinking_chars=0, tool_calls=1, stop_reason=STOP)
+  Executing step 7...
+[TRACE] [CALL 014] START Client.chat provider=gemini model=gemini-2.0-flash messages=1(sequence)
+[TRACE] [CALL 014] FAIL  Client.chat duration=0.614s error=RateLimitError: HTTP 429: {'error': {'code': 429, 'message': 'Resource exhausted. Please try again later. Please refer to https://cloud.google.com/vertex-ai/generative-ai/docs/error-code-429 for more details.', 'status': 'RESOURCE_EXHAUSTED'}}
+[TRACE] [CALL 015] START Client.chat provider=gemini model=gemini-2.0-flash messages=1(sequence)
+[TRACE] [CALL 015] RESPONSE_TEXT_BEGIN chars=482
+```json
+[
+  "Find the radius of Jupiter (equatorial diameter / 2).",
+  "Calculate the volume of Jupiter, assuming it's a perfect sphere (4/3 * pi * (radius_Jupiter)^3), using 3.14159 as an approximation for pi.",
+  "Compare the volume of Jupiter to the volume of Mars by dividing Jupiter's volume by Mars' volume.",
+  "State how many times larger Jupiter's volume is than Mars' volume.",
+  "Summarize the size comparison of Mars and Jupiter based on both diameter and volume."
+]
+```
+[TRACE] [CALL 015] RESPONSE_TEXT_END
+[TRACE] [CALL 015] END   Client.chat duration=1.006s result=response(text_chars=482, thinking_chars=0, tool_calls=0, stop_reason=STOP)
+[Plan created]
+  Executing step 8...
+[TRACE] [CALL 016] START Client.chat provider=gemini model=gemini-2.0-flash messages=1(sequence)
+[TRACE] [CALL 016] RESPONSE_TEXT_BEGIN chars=0
+<empty>
+[TRACE] [CALL 016] RESPONSE_TEXT_END
+[TRACE] [CALL 016] RESPONSE_TOOL_CALLS count=1
+[TRACE] [CALL 016] RESPONSE_TOOL_CALL_1 id= name=lookup arguments={'topic': 'Jupiter equatorial diameter'}
+[TRACE] [CALL 016] END   Client.chat duration=0.838s result=response(text_chars=0, thinking_chars=0, tool_calls=1, stop_reason=STOP)
+[TRACE] [CALL 017] START Client.chat provider=gemini model=gemini-2.0-flash messages=3(sequence)
+[TRACE] [CALL 017] FAIL  Client.chat duration=0.716s error=RateLimitError: HTTP 429: {'error': {'code': 429, 'message': 'Resource exhausted. Please try again later. Please refer to https://cloud.google.com/vertex-ai/generative-ai/docs/error-code-429 for more details.', 'status': 'RESOURCE_EXHAUSTED'}}
+[TRACE] [CALL 018] START Client.chat provider=gemini model=gemini-2.0-flash messages=1(sequence)
+[TRACE] [CALL 018] RESPONSE_TEXT_BEGIN chars=1099
+```json
+[
+  "Find the radius of Jupiter (equatorial diameter / 2).: The equatorial diameter of Jupiter is 139,820 km. Radius of Jupiter = 139,820 km / 2 = 69,910 km.",
+  "Find the volume of Jupiter, assuming it's a perfect sphere (4/3 * pi * (radius_Jupiter)^3).: Radius of Jupiter = 69,910 km. Volume of Jupiter = (4/3) * pi * (69,910 km)^3",
+  "Calculate the volume of Jupiter using pi = 3.14159: Volume of Jupiter = (4/3) * 3.14159 * (69,910 km)^3 = 1.437128 * 10^15 km^3",
+  "Divide the volume of Jupiter by the volume of Mars to find how many times larger Jupiter is.: Volume of Jupiter = 1.437128 * 10^15 km^3. Volume of Mars = 1.631876 * 10^11 km^3. Volume of Jupiter / Volume of Mars = (1.437128 * 10^15 km^3) / (1.631876 * 10^11 km^3)",
+  "Calculate the ratio of Jupiter's volume to Mars' volume: 1.437128 * 10^15 / 1.631876 * 10^11 = 8806.56",
+  "State how many times larger Jupiter's volume is than Mars' volume.: Jupiter's volume is approximately 8806.56 times larger than Mars' volume.",
+  "Summarize the size comparison of Mars and Jupiter, including diameter and volume ratios."
+]
+```
+[TRACE] [CALL 018] RESPONSE_TEXT_END
+[TRACE] [CALL 018] END   Client.chat duration=2.731s result=response(text_chars=1099, thinking_chars=0, tool_calls=0, stop_reason=STOP)
+[Plan created]
+  Executing step 9...
+[TRACE] [CALL 019] START Client.chat provider=gemini model=gemini-2.0-flash messages=1(sequence)
+[TRACE] [CALL 019] RESPONSE_TEXT_BEGIN chars=0
+<empty>
+[TRACE] [CALL 019] RESPONSE_TEXT_END
+[TRACE] [CALL 019] RESPONSE_TOOL_CALLS count=1
+[TRACE] [CALL 019] RESPONSE_TOOL_CALL_1 id= name=lookup arguments={'topic': 'radius of Jupiter'}
+[TRACE] [CALL 019] END   Client.chat duration=0.519s result=response(text_chars=0, thinking_chars=0, tool_calls=1, stop_reason=STOP)
+[TRACE] [CALL 020] START Client.chat provider=gemini model=gemini-2.0-flash messages=3(sequence)
+[TRACE] [CALL 020] RESPONSE_TEXT_BEGIN chars=35
+The radius of Jupiter is 69,910 km.
+[TRACE] [CALL 020] RESPONSE_TEXT_END
+[TRACE] [CALL 020] END   Client.chat duration=0.470s result=response(text_chars=35, thinking_chars=0, tool_calls=0, stop_reason=STOP)
+  Executing step 10...
+[TRACE] [CALL 021] START Client.chat provider=gemini model=gemini-2.0-flash messages=1(sequence)
+[TRACE] [CALL 021] RESPONSE_TEXT_BEGIN chars=0
+<empty>
+[TRACE] [CALL 021] RESPONSE_TEXT_END
+[TRACE] [CALL 021] END   Client.chat duration=0.581s result=response(text_chars=0, thinking_chars=0, tool_calls=0, stop_reason=MALFORMED_FUNCTION_CALL)
+  Executing step 11...
+[TRACE] [CALL 022] START Client.chat provider=gemini model=gemini-2.0-flash messages=1(sequence)
+[TRACE] [CALL 022] RESPONSE_TEXT_BEGIN chars=194
+I have already calculated the volume of Jupiter using the given formula and value of pi. The volume of Jupiter is approximately 1.437128 * 10^15 km^3. Is there anything else I can help you with?
+[TRACE] [CALL 022] RESPONSE_TEXT_END
+[TRACE] [CALL 022] END   Client.chat duration=0.717s result=response(text_chars=194, thinking_chars=0, tool_calls=0, stop_reason=STOP)
+  Executing step 12...
+[TRACE] [CALL 023] START Client.chat provider=gemini model=gemini-2.0-flash messages=1(sequence)
+[TRACE] [CALL 023] RESPONSE_TEXT_BEGIN chars=0
+<empty>
+[TRACE] [CALL 023] RESPONSE_TEXT_END
+[TRACE] [CALL 023] END   Client.chat duration=0.616s result=response(text_chars=0, thinking_chars=0, tool_calls=0, stop_reason=MALFORMED_FUNCTION_CALL)
+  Executing step 13...
+[TRACE] [CALL 024] START Client.chat provider=gemini model=gemini-2.0-flash messages=1(sequence)
+[TRACE] [CALL 024] RESPONSE_TEXT_BEGIN chars=91
+I have already calculated the ratio of Jupiter's volume to Mars' volume, and it is 8806.56.
+[TRACE] [CALL 024] RESPONSE_TEXT_END
+[TRACE] [CALL 024] END   Client.chat duration=0.774s result=response(text_chars=91, thinking_chars=0, tool_calls=0, stop_reason=STOP)
+  Executing step 14...
+[TRACE] [CALL 025] START Client.chat provider=gemini model=gemini-2.0-flash messages=1(sequence)
+[TRACE] [CALL 025] RESPONSE_TEXT_BEGIN chars=73
+Jupiter's volume is approximately 8806.56 times larger than Mars' volume.
+[TRACE] [CALL 025] RESPONSE_TEXT_END
+[TRACE] [CALL 025] END   Client.chat duration=0.557s result=response(text_chars=73, thinking_chars=0, tool_calls=0, stop_reason=STOP)
+  Executing step 15...
+[TRACE] [CALL 026] START Client.chat provider=gemini model=gemini-2.0-flash messages=1(sequence)
+[TRACE] [CALL 026] RESPONSE_TEXT_BEGIN chars=0
+<empty>
+[TRACE] [CALL 026] RESPONSE_TEXT_END
+[TRACE] [CALL 026] RESPONSE_TOOL_CALLS count=1
+[TRACE] [CALL 026] RESPONSE_TOOL_CALL_1 id= name=compare arguments={'item_a': 'Mars', 'item_b': 'Jupiter'}
+[TRACE] [CALL 026] END   Client.chat duration=0.816s result=response(text_chars=0, thinking_chars=0, tool_calls=1, stop_reason=STOP)
+[TRACE] [CALL 027] START Client.chat provider=gemini model=gemini-2.0-flash messages=3(sequence)
+[TRACE] [CALL 027] RESPONSE_TEXT_BEGIN chars=0
+<empty>
+[TRACE] [CALL 027] RESPONSE_TEXT_END
+[TRACE] [CALL 027] RESPONSE_TOOL_CALLS count=2
+[TRACE] [CALL 027] RESPONSE_TOOL_CALL_1 id= name=lookup arguments={'topic': 'Mars'}
+[TRACE] [CALL 027] RESPONSE_TOOL_CALL_2 id= name=lookup arguments={'topic': 'Jupiter'}
+[TRACE] [CALL 027] END   Client.chat duration=0.809s result=response(text_chars=0, thinking_chars=0, tool_calls=2, stop_reason=STOP)
+[TRACE] [CALL 028] START Client.chat provider=gemini model=gemini-2.0-flash messages=6(sequence)
+[TRACE] [CALL 028] RESPONSE_TEXT_BEGIN chars=272
+Mars has a diameter of 6,779 km, while Jupiter has a diameter of 139,820 km. This means Jupiter's diameter is about 20.6 times larger than Mars's. Since volume is proportional to the cube of the diameter, Jupiter's volume is roughly 20.6^3 = 8741 times larger than Mars's.
+[TRACE] [CALL 028] RESPONSE_TEXT_END
+[TRACE] [CALL 028] END   Client.chat duration=1.241s result=response(text_chars=272, thinking_chars=0, tool_calls=0, stop_reason=STOP)
+  Executing step 16...
+[TRACE] [CALL 029] START Client.chat provider=gemini model=gemini-2.0-flash messages=1(sequence)
+[TRACE] [CALL 029] RESPONSE_TEXT_BEGIN chars=321
+Mars has an equatorial diameter of 6,779 km and a volume of approximately 1.63 x 10^11 km^3. Jupiter has an equatorial diameter of 139,820 km and a volume of approximately 1.44 x 10^15 km^3. Therefore, Jupiter's diameter is about 20.6 times larger than Mars's, and Jupiter's volume is about 8807 times larger than Mars's.
+[TRACE] [CALL 029] RESPONSE_TEXT_END
+[TRACE] [CALL 029] END   Client.chat duration=1.435s result=response(text_chars=321, thinking_chars=0, tool_calls=0, stop_reason=STOP)
+
+Answer: Mars has an equatorial diameter of 6,779 km and a volume of approximately 1.63 x 10^11 km^3. Jupiter has an equatorial diameter of 139,820 km and a volume of approximately 1.44 x 10^15 km^3. Therefore, Jupiter's diameter is about 20.6 times larger than Mars's, and Jupiter's volume is about 8807 times larger than Mars's.
+Steps: 24
+[TRACE] Example execution completed.
+[TRACE] CALL_SUMMARY total_calls=29 completed_calls=27 failed_calls=2
+
+=== STDERR ===
+<empty>
+
+=== OUTPUT VALIDATION ===
+PASS
+

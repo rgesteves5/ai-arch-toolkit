@@ -12,6 +12,7 @@ from ai_arch_toolkit.agents._base import (
     AgentResult,
     AgentStep,
     BaseAgent,
+    ReActResult,
     _accumulate_usage,
     _fire_event,
 )
@@ -153,18 +154,53 @@ class ReActAgent(BaseAgent):
 
     def run(self, task: str, **kwargs: Any) -> AgentResult:
         """Run the ReAct loop on the given task."""
+        stream = kwargs.pop("stream", False)
+        cancellation_token = self._resolve_cancellation_token(
+            kwargs.pop("cancellation_token", None)
+        )
+        if stream:
+            return self.run_stream(
+                task,
+                cancellation_token=cancellation_token,
+                **kwargs,
+            )
         messages: list[Message | ToolResult] = [Message(role="user", content=task)]
         steps: list[AgentStep] = []
         total_usage = Usage()
+        budget = self._new_budget_manager()
         start = time.monotonic()
         chat_kwargs = self._chat_kwargs(**kwargs)
 
         for step_num in range(1, self.config.max_iterations + 1):
+            if self._is_cancelled(cancellation_token):
+                return self._finalize_result(
+                    ReActResult(
+                        answer="[cancelled]",
+                        steps=tuple(steps),
+                        total_usage=total_usage,
+                        stop_reason="cancelled",
+                    ),
+                    result_type=ReActResult,
+                )
             if self._check_timeout(start):
-                return AgentResult(
-                    answer="[timeout exceeded]",
-                    steps=tuple(steps),
-                    total_usage=total_usage,
+                return self._finalize_result(
+                    ReActResult(
+                        answer="[timeout exceeded]",
+                        steps=tuple(steps),
+                        total_usage=total_usage,
+                        stop_reason="timeout",
+                    ),
+                    result_type=ReActResult,
+                )
+            if budget.exhausted_reason() is not None:
+                return self._finalize_result(
+                    ReActResult(
+                        answer="[token budget exceeded]",
+                        steps=tuple(steps),
+                        total_usage=total_usage,
+                        stop_reason="budget_exhausted",
+                    ),
+                    result_type=ReActResult,
                 )
 
             _fire_event(self.config, "step_start", step_number=step_num)
@@ -176,29 +212,78 @@ class ReActAgent(BaseAgent):
                 **chat_kwargs,
             )
             total_usage = _accumulate_usage(total_usage, response.usage)
+            step_cost = self._observe_response(budget, response, step_number=step_num)
+
+            if budget.exhausted_reason() is not None:
+                steps.append(
+                    AgentStep(
+                        step_number=step_num,
+                        response=response,
+                        usage=response.usage,
+                        cost_usd=step_cost,
+                    )
+                )
+                _fire_event(self.config, "step_end", step_number=step_num)
+                return self._finalize_result(
+                    ReActResult(
+                        answer=response.text or "[token budget exceeded]",
+                        steps=tuple(steps),
+                        total_usage=total_usage,
+                        stop_reason="budget_exhausted",
+                    ),
+                    result_type=ReActResult,
+                )
 
             if not response.tool_calls:
-                steps.append(AgentStep(step_number=step_num, response=response))
+                steps.append(
+                    AgentStep(
+                        step_number=step_num,
+                        response=response,
+                        usage=response.usage,
+                        cost_usd=step_cost,
+                    )
+                )
                 _fire_event(self.config, "step_end", step_number=step_num)
-                return AgentResult(
-                    answer=response.text,
-                    steps=tuple(steps),
-                    total_usage=total_usage,
+                return self._finalize_result(
+                    ReActResult(
+                        answer=response.text,
+                        steps=tuple(steps),
+                        total_usage=total_usage,
+                        stop_reason="completed",
+                    ),
+                    result_type=ReActResult,
                 )
 
-            # Token budget check
-            if (
-                self.config.max_tokens is not None
-                and total_usage.total_tokens >= self.config.max_tokens
-            ):
-                steps.append(AgentStep(step_number=step_num, response=response))
+            if budget.exhausted_reason() is not None:
+                steps.append(
+                    AgentStep(
+                        step_number=step_num,
+                        response=response,
+                        usage=response.usage,
+                        cost_usd=step_cost,
+                    )
+                )
                 _fire_event(self.config, "step_end", step_number=step_num)
-                return AgentResult(
-                    answer=response.text or "[token budget exceeded]",
-                    steps=tuple(steps),
-                    total_usage=total_usage,
+                return self._finalize_result(
+                    ReActResult(
+                        answer=response.text or "[token budget exceeded]",
+                        steps=tuple(steps),
+                        total_usage=total_usage,
+                        stop_reason="budget_exhausted",
+                    ),
+                    result_type=ReActResult,
                 )
 
+            if self._is_cancelled(cancellation_token):
+                return self._finalize_result(
+                    ReActResult(
+                        answer="[cancelled]",
+                        steps=tuple(steps),
+                        total_usage=total_usage,
+                        stop_reason="cancelled",
+                    ),
+                    result_type=ReActResult,
+                )
             tool_results = self._execute_tools_sync(response.tool_calls, step_num)
 
             steps.append(
@@ -207,6 +292,8 @@ class ReActAgent(BaseAgent):
                     response=response,
                     tool_calls=response.tool_calls,
                     tool_results=tuple(tool_results),
+                    usage=response.usage,
+                    cost_usd=step_cost,
                 )
             )
             _fire_event(self.config, "step_end", step_number=step_num)
@@ -215,26 +302,65 @@ class ReActAgent(BaseAgent):
             messages.extend(tool_results)
 
         last_text = steps[-1].response.text if steps else ""
-        return AgentResult(
-            answer=last_text or "[max iterations reached]",
-            steps=tuple(steps),
-            total_usage=total_usage,
+        return self._finalize_result(
+            ReActResult(
+                answer=last_text or "[max iterations reached]",
+                steps=tuple(steps),
+                total_usage=total_usage,
+                stop_reason="max_iterations",
+            ),
+            result_type=ReActResult,
         )
 
     async def async_run(self, task: str, **kwargs: Any) -> AgentResult:
         """Run the ReAct loop asynchronously on the given task."""
+        stream = kwargs.pop("stream", False)
+        cancellation_token = self._resolve_cancellation_token(
+            kwargs.pop("cancellation_token", None)
+        )
+        if stream:
+            return self.async_run_stream(
+                task,
+                cancellation_token=cancellation_token,
+                **kwargs,
+            )
         messages: list[Message | ToolResult] = [Message(role="user", content=task)]
         steps: list[AgentStep] = []
         total_usage = Usage()
+        budget = self._new_budget_manager()
         start = time.monotonic()
         chat_kwargs = self._chat_kwargs(**kwargs)
 
         for step_num in range(1, self.config.max_iterations + 1):
+            if self._is_cancelled(cancellation_token):
+                return self._finalize_result(
+                    ReActResult(
+                        answer="[cancelled]",
+                        steps=tuple(steps),
+                        total_usage=total_usage,
+                        stop_reason="cancelled",
+                    ),
+                    result_type=ReActResult,
+                )
             if self._check_timeout(start):
-                return AgentResult(
-                    answer="[timeout exceeded]",
-                    steps=tuple(steps),
-                    total_usage=total_usage,
+                return self._finalize_result(
+                    ReActResult(
+                        answer="[timeout exceeded]",
+                        steps=tuple(steps),
+                        total_usage=total_usage,
+                        stop_reason="timeout",
+                    ),
+                    result_type=ReActResult,
+                )
+            if budget.exhausted_reason() is not None:
+                return self._finalize_result(
+                    ReActResult(
+                        answer="[token budget exceeded]",
+                        steps=tuple(steps),
+                        total_usage=total_usage,
+                        stop_reason="budget_exhausted",
+                    ),
+                    result_type=ReActResult,
                 )
 
             _fire_event(self.config, "step_start", step_number=step_num)
@@ -246,29 +372,78 @@ class ReActAgent(BaseAgent):
                 **chat_kwargs,
             )
             total_usage = _accumulate_usage(total_usage, response.usage)
+            step_cost = self._observe_response(budget, response, step_number=step_num)
+
+            if budget.exhausted_reason() is not None:
+                steps.append(
+                    AgentStep(
+                        step_number=step_num,
+                        response=response,
+                        usage=response.usage,
+                        cost_usd=step_cost,
+                    )
+                )
+                _fire_event(self.config, "step_end", step_number=step_num)
+                return self._finalize_result(
+                    ReActResult(
+                        answer=response.text or "[token budget exceeded]",
+                        steps=tuple(steps),
+                        total_usage=total_usage,
+                        stop_reason="budget_exhausted",
+                    ),
+                    result_type=ReActResult,
+                )
 
             if not response.tool_calls:
-                steps.append(AgentStep(step_number=step_num, response=response))
+                steps.append(
+                    AgentStep(
+                        step_number=step_num,
+                        response=response,
+                        usage=response.usage,
+                        cost_usd=step_cost,
+                    )
+                )
                 _fire_event(self.config, "step_end", step_number=step_num)
-                return AgentResult(
-                    answer=response.text,
-                    steps=tuple(steps),
-                    total_usage=total_usage,
+                return self._finalize_result(
+                    ReActResult(
+                        answer=response.text,
+                        steps=tuple(steps),
+                        total_usage=total_usage,
+                        stop_reason="completed",
+                    ),
+                    result_type=ReActResult,
                 )
 
-            # Token budget check
-            if (
-                self.config.max_tokens is not None
-                and total_usage.total_tokens >= self.config.max_tokens
-            ):
-                steps.append(AgentStep(step_number=step_num, response=response))
+            if budget.exhausted_reason() is not None:
+                steps.append(
+                    AgentStep(
+                        step_number=step_num,
+                        response=response,
+                        usage=response.usage,
+                        cost_usd=step_cost,
+                    )
+                )
                 _fire_event(self.config, "step_end", step_number=step_num)
-                return AgentResult(
-                    answer=response.text or "[token budget exceeded]",
-                    steps=tuple(steps),
-                    total_usage=total_usage,
+                return self._finalize_result(
+                    ReActResult(
+                        answer=response.text or "[token budget exceeded]",
+                        steps=tuple(steps),
+                        total_usage=total_usage,
+                        stop_reason="budget_exhausted",
+                    ),
+                    result_type=ReActResult,
                 )
 
+            if self._is_cancelled(cancellation_token):
+                return self._finalize_result(
+                    ReActResult(
+                        answer="[cancelled]",
+                        steps=tuple(steps),
+                        total_usage=total_usage,
+                        stop_reason="cancelled",
+                    ),
+                    result_type=ReActResult,
+                )
             tool_results = await self._execute_tools_async(response.tool_calls, step_num)
 
             steps.append(
@@ -277,6 +452,8 @@ class ReActAgent(BaseAgent):
                     response=response,
                     tool_calls=response.tool_calls,
                     tool_results=tuple(tool_results),
+                    usage=response.usage,
+                    cost_usd=step_cost,
                 )
             )
             _fire_event(self.config, "step_end", step_number=step_num)
@@ -285,21 +462,34 @@ class ReActAgent(BaseAgent):
             messages.extend(tool_results)
 
         last_text = steps[-1].response.text if steps else ""
-        return AgentResult(
-            answer=last_text or "[max iterations reached]",
-            steps=tuple(steps),
-            total_usage=total_usage,
+        return self._finalize_result(
+            ReActResult(
+                answer=last_text or "[max iterations reached]",
+                steps=tuple(steps),
+                total_usage=total_usage,
+                stop_reason="max_iterations",
+            ),
+            result_type=ReActResult,
         )
 
     def run_stream(self, task: str, **kwargs: Any) -> Iterator[AgentStep]:
         """Run the ReAct loop, yielding each step as it completes."""
+        kwargs.pop("stream", None)
+        cancellation_token = self._resolve_cancellation_token(
+            kwargs.pop("cancellation_token", None)
+        )
         messages: list[Message | ToolResult] = [Message(role="user", content=task)]
         total_usage = Usage()
+        budget = self._new_budget_manager()
         start = time.monotonic()
         chat_kwargs = self._chat_kwargs(**kwargs)
 
         for step_num in range(1, self.config.max_iterations + 1):
+            if self._is_cancelled(cancellation_token):
+                return
             if self._check_timeout(start):
+                return
+            if budget.exhausted_reason() is not None:
                 return
 
             _fire_event(self.config, "step_start", step_number=step_num)
@@ -311,21 +501,40 @@ class ReActAgent(BaseAgent):
                 **chat_kwargs,
             )
             total_usage = _accumulate_usage(total_usage, response.usage)
+            step_cost = self._observe_response(budget, response, step_number=step_num)
+
+            if budget.exhausted_reason() is not None:
+                yield AgentStep(
+                    step_number=step_num,
+                    response=response,
+                    usage=response.usage,
+                    cost_usd=step_cost,
+                )
+                _fire_event(self.config, "step_end", step_number=step_num)
+                return
 
             if not response.tool_calls:
-                yield AgentStep(step_number=step_num, response=response)
+                yield AgentStep(
+                    step_number=step_num,
+                    response=response,
+                    usage=response.usage,
+                    cost_usd=step_cost,
+                )
                 _fire_event(self.config, "step_end", step_number=step_num)
                 return
 
-            # Token budget check
-            if (
-                self.config.max_tokens is not None
-                and total_usage.total_tokens >= self.config.max_tokens
-            ):
-                yield AgentStep(step_number=step_num, response=response)
+            if budget.exhausted_reason() is not None:
+                yield AgentStep(
+                    step_number=step_num,
+                    response=response,
+                    usage=response.usage,
+                    cost_usd=step_cost,
+                )
                 _fire_event(self.config, "step_end", step_number=step_num)
                 return
 
+            if self._is_cancelled(cancellation_token):
+                return
             tool_results = self._execute_tools_sync(response.tool_calls, step_num)
 
             yield AgentStep(
@@ -333,6 +542,8 @@ class ReActAgent(BaseAgent):
                 response=response,
                 tool_calls=response.tool_calls,
                 tool_results=tuple(tool_results),
+                usage=response.usage,
+                cost_usd=step_cost,
             )
             _fire_event(self.config, "step_end", step_number=step_num)
 
@@ -341,13 +552,22 @@ class ReActAgent(BaseAgent):
 
     async def async_run_stream(self, task: str, **kwargs: Any) -> AsyncIterator[AgentStep]:
         """Run the ReAct loop asynchronously, yielding each step."""
+        kwargs.pop("stream", None)
+        cancellation_token = self._resolve_cancellation_token(
+            kwargs.pop("cancellation_token", None)
+        )
         messages: list[Message | ToolResult] = [Message(role="user", content=task)]
         total_usage = Usage()
+        budget = self._new_budget_manager()
         start = time.monotonic()
         chat_kwargs = self._chat_kwargs(**kwargs)
 
         for step_num in range(1, self.config.max_iterations + 1):
+            if self._is_cancelled(cancellation_token):
+                return
             if self._check_timeout(start):
+                return
+            if budget.exhausted_reason() is not None:
                 return
 
             _fire_event(self.config, "step_start", step_number=step_num)
@@ -359,21 +579,40 @@ class ReActAgent(BaseAgent):
                 **chat_kwargs,
             )
             total_usage = _accumulate_usage(total_usage, response.usage)
+            step_cost = self._observe_response(budget, response, step_number=step_num)
+
+            if budget.exhausted_reason() is not None:
+                yield AgentStep(
+                    step_number=step_num,
+                    response=response,
+                    usage=response.usage,
+                    cost_usd=step_cost,
+                )
+                _fire_event(self.config, "step_end", step_number=step_num)
+                return
 
             if not response.tool_calls:
-                yield AgentStep(step_number=step_num, response=response)
+                yield AgentStep(
+                    step_number=step_num,
+                    response=response,
+                    usage=response.usage,
+                    cost_usd=step_cost,
+                )
                 _fire_event(self.config, "step_end", step_number=step_num)
                 return
 
-            # Token budget check
-            if (
-                self.config.max_tokens is not None
-                and total_usage.total_tokens >= self.config.max_tokens
-            ):
-                yield AgentStep(step_number=step_num, response=response)
+            if budget.exhausted_reason() is not None:
+                yield AgentStep(
+                    step_number=step_num,
+                    response=response,
+                    usage=response.usage,
+                    cost_usd=step_cost,
+                )
                 _fire_event(self.config, "step_end", step_number=step_num)
                 return
 
+            if self._is_cancelled(cancellation_token):
+                return
             tool_results = await self._execute_tools_async(response.tool_calls, step_num)
 
             yield AgentStep(
@@ -381,6 +620,8 @@ class ReActAgent(BaseAgent):
                 response=response,
                 tool_calls=response.tool_calls,
                 tool_results=tuple(tool_results),
+                usage=response.usage,
+                cost_usd=step_cost,
             )
             _fire_event(self.config, "step_end", step_number=step_num)
 

@@ -1,0 +1,57 @@
+=== EXAMPLE RUN REPORT ===
+example_script: examples/26_cost_reporting.py
+command: .venv/bin/python /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/scripts/_example_trace_runner.py examples/26_cost_reporting.py
+status: SUCCESS
+exit_code: 0
+duration_seconds: 14.076
+interpretation: Command completed without process errors.
+
+=== OUTPUT NOTES ===
+- Trace lines are present. Each [CALL NNN] START/END pair maps output to a specific SDK call.
+- Full model text is included between *_BEGIN and *_END trace markers for each call.
+
+=== STDOUT ===
+[TRACE] Runtime tracing enabled for ai-arch-toolkit clients.
+[TRACE] Executing example: /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/examples/26_cost_reporting.py
+[TRACE] [CALL 001] START Client.chat provider=openai model=gpt-5-nano messages=1(prompt str, chars=52)
+[TRACE] [CALL 001] RESPONSE_TEXT_BEGIN chars=198
+Eventual consistency is a consistency model in which, if no new updates are made, all replicas are guaranteed to converge to the same final state, though reads may return stale data in the meantime.
+[TRACE] [CALL 001] RESPONSE_TEXT_END
+[TRACE] [CALL 001] END   Client.chat duration=3.687s result=response(text_chars=198, thinking_chars=0, tool_calls=0, stop_reason=stop)
+Call 1: Eventual consistency is a consistency model in which, if no new updates are made, all replicas are guaranteed to converge to the same final state, though reads may return stale data in the meantime.
+[TRACE] [CALL 002] START Client.chat provider=openai model=gpt-5-nano messages=1(prompt str, chars=43)
+[TRACE] [CALL 002] RESPONSE_TEXT_BEGIN chars=126
+An operation is idempotent if applying it multiple times yields the same result as applying it once: f(f(x)) = f(x) for all x.
+[TRACE] [CALL 002] RESPONSE_TEXT_END
+[TRACE] [CALL 002] END   Client.chat duration=4.979s result=response(text_chars=126, thinking_chars=0, tool_calls=0, stop_reason=stop)
+Call 2: An operation is idempotent if applying it multiple times yields the same result as applying it once: f(f(x)) = f(x) for all x.
+
+Streaming call (to include stream-events usage accounting):
+[TRACE] [CALL 003] START Client.stream_events provider=openai model=gpt-5-nano messages=1(prompt str, chars=42)
+- GET — Retrieve a resource, e.g., fetch a product page or a user profile.
+- POST — Create a new resource, e.g., submit a new blog post or create a user account.
+- PUT — Update/replace an existing resource at a known URL, e.g., update a user’s profile at /users/{id}.[TRACE] [CALL 003] STREAM_EVENTS_TEXT_BEGIN chars=267
+- GET — Retrieve a resource, e.g., fetch a product page or a user profile.
+- POST — Create a new resource, e.g., submit a new blog post or create a user account.
+- PUT — Update/replace an existing resource at a known URL, e.g., update a user’s profile at /users/{id}.
+[TRACE] [CALL 003] STREAM_EVENTS_TEXT_END
+[TRACE] [CALL 003] STREAM_EVENTS_COUNTS {'text': 69, 'usage': 1, 'done': 1}
+[TRACE] [CALL 003] END   Client.stream_events duration=5.243s stream_items=71 text_chars=267
+
+
+=== Cost Snapshot ===
+requests: 3
+total_tokens: 1365
+estimated_total_cost_usd: 0.00079830
+
+Per-model usage/cost:
+  openai:gpt-5-nano: input=46, output=1319, total=1365, cost_usd=0.00079830
+[TRACE] Example execution completed.
+[TRACE] CALL_SUMMARY total_calls=3 completed_calls=3 failed_calls=0
+
+=== STDERR ===
+<empty>
+
+=== OUTPUT VALIDATION ===
+PASS
+

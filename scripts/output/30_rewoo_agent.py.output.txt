@@ -1,0 +1,71 @@
+=== EXAMPLE RUN REPORT ===
+example_script: examples/30_rewoo_agent.py
+command: .venv/bin/python /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/scripts/_example_trace_runner.py examples/30_rewoo_agent.py
+status: SUCCESS
+exit_code: 0
+duration_seconds: 35.662
+interpretation: Command completed without process errors.
+
+=== OUTPUT NOTES ===
+- Trace lines are present. Each [CALL NNN] START/END pair maps output to a specific SDK call.
+- Full model text is included between *_BEGIN and *_END trace markers for each call.
+
+=== STDOUT ===
+[TRACE] Runtime tracing enabled for ai-arch-toolkit clients.
+[TRACE] Executing example: /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/examples/30_rewoo_agent.py
+[TRACE] [CALL 001] START Client.chat provider=openai model=gpt-5-nano messages=1(sequence)
+[TRACE] [CALL 001] RESPONSE_TEXT_BEGIN chars=86
+#E1 = lookup[Mars diameter]
+#E2 = lookup[Jupiter diameter]
+#E3 = calculator[#E2 / #E1]
+[TRACE] [CALL 001] RESPONSE_TEXT_END
+[TRACE] [CALL 001] END   Client.chat duration=13.288s result=response(text_chars=86, thinking_chars=0, tool_calls=0, stop_reason=stop)
+
+[planner output]
+#E1 = lookup[Mars diameter]
+#E2 = lookup[Jupiter diameter]
+#E3 = calculator[#E2 / #E1]
+[tool_call] lookup args={'input': 'Mars diameter'}
+[tool_result] Mars diameter is 6,779 km.
+[tool_call] lookup args={'input': 'Jupiter diameter'}
+[tool_result] Jupiter diameter is 139,820 km.
+[tool_call] calculator args={'input': 'Jupiter diameter is 139,820 km. / Mars diameter is 6,779 km.'}
+[tool_result] Error: invalid syntax (<string>, line 1)
+[TRACE] [CALL 002] START Client.chat provider=openai model=gpt-5-nano messages=1(sequence)
+[TRACE] [CALL 002] RESPONSE_TEXT_BEGIN chars=331
+Using the given diameters:
+- Mars: 6,779 km
+- Jupiter: 139,820 km
+
+Compute the ratio:
+139,820 / 6,779 ≈ 20.63
+
+Conclusion: Jupiter’s diameter is about 20.6 times larger than Mars. (If rounded to the nearest whole number, about 21 times.)
+
+Note: E3 shows an invalid syntax error, but it doesn’t affect the diameter values used here.
+[TRACE] [CALL 002] RESPONSE_TEXT_END
+[TRACE] [CALL 002] END   Client.chat duration=22.210s result=response(text_chars=331, thinking_chars=0, tool_calls=0, stop_reason=stop)
+
+Final answer:
+Using the given diameters:
+- Mars: 6,779 km
+- Jupiter: 139,820 km
+
+Compute the ratio:
+139,820 / 6,779 ≈ 20.63
+
+Conclusion: Jupiter’s diameter is about 20.6 times larger than Mars. (If rounded to the nearest whole number, about 21 times.)
+
+Note: E3 shows an invalid syntax error, but it doesn’t affect the diameter values used here.
+
+Steps recorded: 3
+Total tokens: 3832
+[TRACE] Example execution completed.
+[TRACE] CALL_SUMMARY total_calls=2 completed_calls=2 failed_calls=0
+
+=== STDERR ===
+<empty>
+
+=== OUTPUT VALIDATION ===
+PASS
+

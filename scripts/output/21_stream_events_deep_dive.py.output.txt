@@ -1,0 +1,44 @@
+=== EXAMPLE RUN REPORT ===
+example_script: examples/21_stream_events_deep_dive.py
+command: .venv/bin/python /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/scripts/_example_trace_runner.py examples/21_stream_events_deep_dive.py
+status: SUCCESS
+exit_code: 0
+duration_seconds: 12.391
+interpretation: Command completed without process errors.
+
+=== OUTPUT NOTES ===
+- Trace lines are present. Each [CALL NNN] START/END pair maps output to a specific SDK call.
+
+=== STDOUT ===
+[TRACE] Runtime tracing enabled for ai-arch-toolkit clients.
+[TRACE] Executing example: /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/examples/21_stream_events_deep_dive.py
+=== stream_events deep dive ===
+[TRACE] [CALL 001] START Client.stream_events provider=openai model=gpt-5-nano messages=1(prompt str, chars=104)
+
+
+[tool_call] get_weather args={'city': 'Paris'}
+
+
+[tool_call] calculator args={'expression': '6/5'}
+
+
+[usage] input=164 output=1271 total=1435
+
+
+[done]
+[TRACE] [CALL 001] STREAM_EVENTS_COUNTS {'tool_call': 2, 'usage': 1, 'done': 1}
+[TRACE] [CALL 001] END   Client.stream_events duration=12.145s stream_items=4 text_chars=0
+
+Event counts:
+  done: 1
+  tool_call: 2
+  usage: 1
+[TRACE] Example execution completed.
+[TRACE] CALL_SUMMARY total_calls=1 completed_calls=1 failed_calls=0
+
+=== STDERR ===
+<empty>
+
+=== OUTPUT VALIDATION ===
+PASS
+

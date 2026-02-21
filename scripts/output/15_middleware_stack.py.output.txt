@@ -1,0 +1,70 @@
+=== EXAMPLE RUN REPORT ===
+example_script: examples/15_middleware_stack.py
+command: .venv/bin/python /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/scripts/_example_trace_runner.py examples/15_middleware_stack.py
+status: SUCCESS
+exit_code: 0
+duration_seconds: 10.938
+interpretation: Command completed without process errors.
+
+=== OUTPUT NOTES ===
+- Trace lines are present. Each [CALL NNN] START/END pair maps output to a specific SDK call.
+- Full model text is included between *_BEGIN and *_END trace markers for each call.
+
+=== STDOUT ===
+[TRACE] Runtime tracing enabled for ai-arch-toolkit clients.
+[TRACE] Executing example: /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/examples/15_middleware_stack.py
+=== First call (cache miss) ===
+[TRACE] [CALL 001] START Client.chat provider=openai model=gpt-5-nano messages=1(prompt str, chars=71)
+[trace] start span=llm.chat
+[trace] gen_ai.operation.name=chat
+[trace] gen_ai.system=openai
+[trace] gen_ai.request.model=gpt-5-nano
+[trace] gen_ai.request.message_count=1
+[trace] gen_ai.request.tool_count=0
+[trace] gen_ai.response.finish_reason=stop
+[trace] gen_ai.usage.input_tokens=18
+[trace] gen_ai.usage.output_tokens=1167
+[trace] gen_ai.usage.total_tokens=1185
+[trace] end span=llm.chat
+[TRACE] [CALL 001] RESPONSE_TEXT_BEGIN chars=1175
+The observer effect in quantum physics refers to the idea that measuring a system can change its state and future behavior. To measure something like position, momentum, or spin, you must interact with the system (for example, by scattering photons or using a detector), and this interaction inevitably perturbs the system. This disturbance helps explain why certain pairs of properties cannot be known precisely at the same time—the Heisenberg uncertainty principle—since the measurement process itself can introduce uncertainty and change.
+
+Note that “the observer” does not imply a conscious observer. Any interaction with a measuring device or the environment counts. In modern quantum theory, a system evolves deterministically unless a measurement occurs; the measurement outcome is probabilistic, described by the wavefunction. Decoherence describes how environmental interactions suppress interference, making the behavior appear classical. There are also measurement techniques that minimize disturbance, such as weak or quantum non-demolition measurements, highlighting that the core idea is information gain versus disturbance rather than a mystery of observation.
+[TRACE] [CALL 001] RESPONSE_TEXT_END
+[TRACE] [CALL 001] END   Client.chat duration=10.728s result=response(text_chars=1175, thinking_chars=0, tool_calls=0, stop_reason=stop)
+The observer effect in quantum physics refers to the idea that measuring a system can change its state and future behavior. To measure something like position, momentum, or spin, you must interact with the system (for example, by scattering photons or using a detector), and this interaction inevitably perturbs the system. This disturbance helps explain why certain pairs of properties cannot be kno ...
+
+=== Second call (cache hit) ===
+[TRACE] [CALL 002] START Client.chat provider=openai model=gpt-5-nano messages=1(prompt str, chars=71)
+[trace] start span=llm.chat
+[trace] gen_ai.operation.name=chat
+[trace] gen_ai.system=openai
+[trace] gen_ai.request.model=gpt-5-nano
+[trace] gen_ai.request.message_count=1
+[trace] gen_ai.request.tool_count=0
+[trace] gen_ai.response.finish_reason=stop
+[trace] gen_ai.usage.input_tokens=18
+[trace] gen_ai.usage.output_tokens=1167
+[trace] gen_ai.usage.total_tokens=1185
+[trace] end span=llm.chat
+[TRACE] [CALL 002] RESPONSE_TEXT_BEGIN chars=1175
+The observer effect in quantum physics refers to the idea that measuring a system can change its state and future behavior. To measure something like position, momentum, or spin, you must interact with the system (for example, by scattering photons or using a detector), and this interaction inevitably perturbs the system. This disturbance helps explain why certain pairs of properties cannot be known precisely at the same time—the Heisenberg uncertainty principle—since the measurement process itself can introduce uncertainty and change.
+
+Note that “the observer” does not imply a conscious observer. Any interaction with a measuring device or the environment counts. In modern quantum theory, a system evolves deterministically unless a measurement occurs; the measurement outcome is probabilistic, described by the wavefunction. Decoherence describes how environmental interactions suppress interference, making the behavior appear classical. There are also measurement techniques that minimize disturbance, such as weak or quantum non-demolition measurements, highlighting that the core idea is information gain versus disturbance rather than a mystery of observation.
+[TRACE] [CALL 002] RESPONSE_TEXT_END
+[TRACE] [CALL 002] END   Client.chat duration=0.000s result=response(text_chars=1175, thinking_chars=0, tool_calls=0, stop_reason=stop)
+The observer effect in quantum physics refers to the idea that measuring a system can change its state and future behavior. To measure something like position, momentum, or spin, you must interact wit ...
+
+=== Cost Snapshot ===
+requests: 2
+total tokens: 2370
+estimated cost (USD): 0.00140580
+[TRACE] Example execution completed.
+[TRACE] CALL_SUMMARY total_calls=2 completed_calls=2 failed_calls=0
+
+=== STDERR ===
+<empty>
+
+=== OUTPUT VALIDATION ===
+PASS
+

@@ -2,37 +2,70 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Repository Purpose
+## Build & Development Commands
 
-ai-arch-toolkit is a documentation-only research repository containing practical reference guides for building AI-powered applications and Python development. There is no runnable code, build system, or test suite — the repository consists entirely of Markdown documents with embedded code examples.
+```bash
+uv sync --dev                          # Install all dev dependencies
+uv run pytest                          # Run full test suite
+uv run pytest tests/llm/test_client.py # Run a single test file
+uv run pytest -k "test_chat_basic"     # Run tests matching a pattern
+uv run ruff check src tests examples   # Lint
+uv run ruff check --fix src tests      # Auto-fix lint issues (import sorting, etc.)
+uv run ruff format src tests           # Auto-format
+uv run python examples/01_hello_world.py  # Run an example
 
-## Repository Structure
+# Documentation
+uv sync --group docs                   # Install docs dependencies
+uv run mkdocs serve                    # Local docs server
+uv run pdoc ai_arch_toolkit -o site/api  # Generate API docs
+```
 
-All content lives in `research/`. The guides fall into two topic areas:
+## Architecture
 
-**AI / LLM:**
-- `llm_agent_architectures.md` — Patterns for building LLM agents (ReAct, ReWOO, LLMCompiler, Reflexion, LATS, Tree of Thoughts, Plan-then-Execute, Self-Discovery) with pseudocode, tradeoff analysis, and a decision tree
-- `llm_api_complete_guide_2026.md` — Comprehensive LLM API reference covering OpenAI, Anthropic, xAI, Google Gemini, Mistral, and Groq with canonical request/response schemas, runnable Python examples (using raw `requests`), pricing tables, and model lifecycle info
+**Three subpackages** under `src/ai_arch_toolkit/`: `llm/`, `tools/`, `agents/`. The top-level `__init__.py` re-exports all public symbols for flat imports (`from ai_arch_toolkit import Client, Tool, ReActAgent`).
 
-**Python / Graphs:**
-- `python_best_practices.md` — Python conventions and patterns guide targeting Python 3.12+ (project structure, naming, toolchain, type hints, design patterns, testing, async, CI/CD)
-- `modern_python_2015_16.md` — What changed in the Python ecosystem in 2025-2026 (uv, ruff, ty, Python 3.12-3.14 features, free-threading, deferred annotations)
-- `graph_algorithms_overview.md` — Graph algorithm taxonomy (traversal, shortest path, MST, flow, matching, etc.)
-- `networkx_guide.md` — Practical NetworkX 3.6+ reference (graph types, algorithms, visualization, pandas/numpy conversion, performance)
+### LLM layer
 
-## Conventions
+- **Types** (`llm/_types.py`): All data types are frozen dataclasses — `Message`, `Response`, `Tool`, `ToolCall`, `Usage`, multimodal parts (`ImagePart`, `AudioPart`, `DocumentPart`), `StreamEvent`, `ThinkingConfig`/`ThinkingBlock`. The `Content` type alias is `str | tuple[ContentPart, ...]`.
+- **Providers** (`llm/_providers/`): `BaseProvider` ABC defines `complete`, `stream`, `stream_events` + async variants. Implementations: `_anthropic.py`, `_openai_compat.py` (covers openai/xai/mistral via `OPENAI_COMPAT_PROVIDERS` dict), `_gemini.py`, `_openai_responses.py`, `_xai_responses.py`. Factory is `create_provider()` in `_providers/__init__.py`.
+- **Client** (`llm/_client.py`, `llm/_async_client.py`): User-facing facades wrapping providers. Accept `str` or `Sequence[Message | ToolResult]`. Middleware pipeline runs `before`/`after` hooks on every request.
+- **HTTP** (`llm/_http.py`, `llm/_async_http.py`): `post_json`, `stream_sse`, `stream_ndjson` helpers with `RetryConfig`. Sync uses `requests`, async uses `httpx`.
+- **Middleware** (`llm/_middleware.py`): `Middleware` Protocol with `before`/`after`/`abefore`/`aafter`. `Request` dataclass carries operation context. Implementations: `_tracing.py`, `_guardrails.py`, `_cache.py`, `_cost.py`.
+- **Utilities**: `_templates.py` (prompt templates), `_output_parsing.py` (JSON/list extraction), `_tokens.py` (token estimation), `_memory.py` (conversation memory), `_fallback.py` (fallback client).
 
-- All code examples use raw `requests` for LLM API calls (not provider SDKs) so they are self-contained and portable
-- Python helper functions (`post_json`, `extract_text`, `extract_usage`) are defined in the API guide and referenced throughout — keep them consistent when editing
-- Provider-specific differences (auth headers, schema shapes, role names) are called out explicitly; avoid generalizing across providers without noting divergences
-- The API guide includes a changelog section at the bottom — append entries when making updates
-- Python guides target 3.12+ and recommend the modern toolchain: uv + ruff + pytest + pyright
+### Tools layer
 
-## Key Considerations When Editing
+- `tools/_registry.py`: `ToolRegistry` — register/execute/async_execute functions, produces `Tool` definitions for LLM APIs.
+- `tools/_decorator.py`: `@tool` decorator auto-generates `Tool` JSON Schema from type hints + Google-style docstrings. Attaches `__tool__` attribute.
 
-- Model IDs, pricing, and deprecation dates change frequently — verify against official docs before updating
-- Anthropic uses `input_schema` for tools (not `parameters` like OpenAI)
-- Anthropic's `system` prompt is a top-level field, not a message role
-- Gemini uses `contents`/`parts` structure (not `messages`/`content`)
-- Claude 4.5 models use Extended Thinking (`thinking.type = "enabled"` + `budget_tokens`); Claude 4.6 uses Adaptive Thinking (`thinking.type = "adaptive"` + `effort` levels)
-- OpenAI has two API surfaces: Chat Completions (`/v1/chat/completions`) and Responses API (`/v1/responses`) — keep both documented
+### Agents layer
+
+- `agents/_base.py`: `BaseAgent` ABC with `run()`, `async_run()`, `run_stream()`. Common types: `AgentConfig`, `AgentStep`, `AgentResult`, `AgentEvent`.
+- Eight implementations: `_react.py`, `_rewoo.py`, `_reflexion.py`, `_plan_execute.py`, `_compiler.py`, `_tot.py`, `_lats.py`, `_self_discovery.py`.
+- `agents/_parsing.py`: Shared `parse_numbered_items` + `parse_score` used by ToT and LATS.
+
+## Testing Patterns
+
+- `tests/conftest.py`: `MockResponse` (mimics `requests.Response` with `json()`, `iter_lines()`, context manager), `mock_post` fixture (monkeypatches `requests.post`), `weather_tool` fixture.
+- Client/provider tests use `@patch("ai_arch_toolkit.llm._client.create_provider")` — note the `.llm.` in the path.
+- SSE test data: prefix lines with `"data: "`. Gemini NDJSON tests: plain JSON strings.
+- Agent tests: mock `Client` with `MagicMock`, set `client.chat.side_effect` with pre-built `Response` objects.
+- pytest-asyncio with `asyncio_mode = "auto"` — no `@pytest.mark.asyncio` needed.
+
+## Code Conventions
+
+- Python 3.12+, `from __future__ import annotations` in every file.
+- Ruff line length: 99. Run `ruff format` after edits — it reformats dict literals, multi-line calls, etc.
+- All dataclasses use `frozen=True, slots=True`.
+- `type` aliases (PEP 695 style) for union types: `type Content = str | tuple[ContentPart, ...]`.
+- Internal modules prefixed with `_` (e.g., `llm/_types.py`); public API is via top-level re-exports only.
+
+## Research Docs
+
+`research/` contains standalone Markdown reference guides (LLM API guide, agent architectures, Python best practices, graph algorithms). These are separate from the Python package.
+
+## Provider-Specific Gotchas
+
+- Anthropic: `input_schema` for tools (not `parameters`), `system` is a top-level field (not a message role).
+- Gemini: `contents`/`parts` structure (not `messages`/`content`), uses NDJSON streaming (not SSE).
+- OpenAI has two API surfaces: Chat Completions and Responses API — both have provider implementations.

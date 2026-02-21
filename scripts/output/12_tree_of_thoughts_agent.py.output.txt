@@ -1,0 +1,156 @@
+=== EXAMPLE RUN REPORT ===
+example_script: /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/examples/12_tree_of_thoughts_agent.py
+command: .venv/bin/python /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/scripts/_example_trace_runner.py /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/examples/12_tree_of_thoughts_agent.py
+status: SUCCESS
+exit_code: 0
+duration_seconds: 133.391
+interpretation: Command completed without process errors.
+
+=== OUTPUT NOTES ===
+- Trace lines are present. Each [CALL NNN] START/END pair maps output to a specific SDK call.
+- Full model text is included between *_BEGIN and *_END trace markers for each call.
+
+=== STDOUT ===
+[TRACE] Runtime tracing enabled for ai-arch-toolkit clients.
+[TRACE] Executing example: /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/examples/12_tree_of_thoughts_agent.py
+Solving river-crossing puzzle with Tree of Thoughts...
+
+  Branch exploration — depth 1
+[TRACE] [CALL 001] START Client.chat provider=xai model=grok-4-1-fast-reasoning messages=1(sequence)
+[TRACE] [CALL 001] RESPONSE_TEXT_BEGIN chars=527
+1. List all possible first moves for the farmer: take wolf across (leaves goat and cabbage together—unsafe), take cabbage across (leaves wolf and goat together—unsafe), or take goat across (leaves wolf and cabbage together—safe).
+
+2. Represent the state formally: denote left bank as [F,W,G,C] | [] right bank; track unsafe pairs (W+G or G+C unsupervised) to validate moves.
+
+3. Prioritize the goat as the first item to transport, since it's involved in both unsafe pairs, then plan return trips to manage the wolf and cabbage.
+[TRACE] [CALL 001] RESPONSE_TEXT_END
+[TRACE] [CALL 001] END   Client.chat duration=6.191s result=response(text_chars=527, thinking_chars=0, tool_calls=0, stop_reason=stop)
+[TRACE] [CALL 002] START Client.chat provider=xai model=grok-4-1-fast-reasoning messages=1(sequence)
+[TRACE] [CALL 002] RESPONSE_TEXT_BEGIN chars=3
+0.9
+[TRACE] [CALL 002] RESPONSE_TEXT_END
+[TRACE] [CALL 002] END   Client.chat duration=3.080s result=response(text_chars=3, thinking_chars=0, tool_calls=0, stop_reason=stop)
+[TRACE] [CALL 003] START Client.chat provider=xai model=grok-4-1-fast-reasoning messages=1(sequence)
+[TRACE] [CALL 003] RESPONSE_TEXT_BEGIN chars=4
+0.95
+[TRACE] [CALL 003] RESPONSE_TEXT_END
+[TRACE] [CALL 003] END   Client.chat duration=2.380s result=response(text_chars=4, thinking_chars=0, tool_calls=0, stop_reason=stop)
+[TRACE] [CALL 004] START Client.chat provider=xai model=grok-4-1-fast-reasoning messages=1(sequence)
+[TRACE] [CALL 004] RESPONSE_TEXT_BEGIN chars=4
+0.95
+[TRACE] [CALL 004] RESPONSE_TEXT_END
+[TRACE] [CALL 004] END   Client.chat duration=33.374s result=response(text_chars=4, thinking_chars=0, tool_calls=0, stop_reason=stop)
+    Score: ?
+  Branch exploration — depth 2
+[TRACE] [CALL 005] START Client.chat provider=xai model=grok-4-1-fast-reasoning messages=1(sequence)
+[TRACE] [CALL 005] RESPONSE_TEXT_BEGIN chars=768
+1. Define the full set of rules for state transitions: The farmer can row alone or with one item (W, G, or C); after each crossing, check both banks for safety (no W+G or G+C without F on that bank); represent states as (left bank items including F if present, right bank items including F if present, boat position).
+
+2. Perform BFS level-by-level: Initialize queue with start state ([F,W,G,C] | [], left); generate successors by moving F alone or F+one item to the opposite side, enqueue only safe states, track visited to avoid cycles.
+
+3. Manually validate first move: Test F+G to right → ([W,C] | [F,G], left safe as W≠eats C, right safe); discard F+W ([G,C] unsafe left) and F+C ([W,G] unsafe left); next from there, F returns alone → ([F,W,C] | [G], both safe).
+[TRACE] [CALL 005] RESPONSE_TEXT_END
+[TRACE] [CALL 005] END   Client.chat duration=8.219s result=response(text_chars=768, thinking_chars=0, tool_calls=0, stop_reason=stop)
+[TRACE] [CALL 006] START Client.chat provider=xai model=grok-4-1-fast-reasoning messages=1(sequence)
+[TRACE] [CALL 006] RESPONSE_TEXT_BEGIN chars=3
+1.0
+[TRACE] [CALL 006] RESPONSE_TEXT_END
+[TRACE] [CALL 006] END   Client.chat duration=5.989s result=response(text_chars=3, thinking_chars=0, tool_calls=0, stop_reason=stop)
+[TRACE] [CALL 007] START Client.chat provider=xai model=grok-4-1-fast-reasoning messages=1(sequence)
+[TRACE] [CALL 007] RESPONSE_TEXT_BEGIN chars=3
+1.0
+[TRACE] [CALL 007] RESPONSE_TEXT_END
+[TRACE] [CALL 007] END   Client.chat duration=2.648s result=response(text_chars=3, thinking_chars=0, tool_calls=0, stop_reason=stop)
+[TRACE] [CALL 008] START Client.chat provider=xai model=grok-4-1-fast-reasoning messages=1(sequence)
+[TRACE] [CALL 008] RESPONSE_TEXT_BEGIN chars=4
+0.95
+[TRACE] [CALL 008] RESPONSE_TEXT_END
+[TRACE] [CALL 008] END   Client.chat duration=3.873s result=response(text_chars=4, thinking_chars=0, tool_calls=0, stop_reason=stop)
+[TRACE] [CALL 009] START Client.chat provider=xai model=grok-4-1-fast-reasoning messages=1(sequence)
+[TRACE] [CALL 009] RESPONSE_TEXT_BEGIN chars=732
+1. After taking the goat across and returning alone (leaving wolf and cabbage safely together on the start side), transport the wolf next to the other side where the goat is, but immediately plan to bring the goat back on the return trip to prevent the wolf from eating it.
+
+2. Simulate states after goat prioritization: Start side (wolf, cabbage) safe; other side (goat) safe. Next, taking cabbage instead of wolf would pair it with goat on return—unsafe—so confirm wolf as second item to transport.
+
+3. Map full sequence post-goat start: (1) Goat over, return alone; (2) Wolf over; (3) Goat back; now verify states—start (goat, cabbage safe? Wait, cabbage alone safe), other (wolf safe)—then cabbage over, return alone, goat over.
+[TRACE] [CALL 009] RESPONSE_TEXT_END
+[TRACE] [CALL 009] END   Client.chat duration=6.000s result=response(text_chars=732, thinking_chars=0, tool_calls=0, stop_reason=stop)
+[TRACE] [CALL 010] START Client.chat provider=xai model=grok-4-1-fast-reasoning messages=1(sequence)
+[TRACE] [CALL 010] RESPONSE_TEXT_BEGIN chars=4
+0.95
+[TRACE] [CALL 010] RESPONSE_TEXT_END
+[TRACE] [CALL 010] END   Client.chat duration=3.465s result=response(text_chars=4, thinking_chars=0, tool_calls=0, stop_reason=stop)
+[TRACE] [CALL 011] START Client.chat provider=xai model=grok-4-1-fast-reasoning messages=1(sequence)
+[TRACE] [CALL 011] RESPONSE_TEXT_BEGIN chars=3
+0.4
+[TRACE] [CALL 011] RESPONSE_TEXT_END
+[TRACE] [CALL 011] END   Client.chat duration=6.491s result=response(text_chars=3, thinking_chars=0, tool_calls=0, stop_reason=stop)
+[TRACE] [CALL 012] START Client.chat provider=xai model=grok-4-1-fast-reasoning messages=1(sequence)
+[TRACE] [CALL 012] RESPONSE_TEXT_BEGIN chars=3
+1.0
+[TRACE] [CALL 012] RESPONSE_TEXT_END
+[TRACE] [CALL 012] END   Client.chat duration=11.572s result=response(text_chars=3, thinking_chars=0, tool_calls=0, stop_reason=stop)
+    Score: ?
+  Branch exploration — depth 3
+[TRACE] [CALL 013] START Client.chat provider=xai model=grok-4-1-fast-reasoning messages=1(sequence)
+[TRACE] [CALL 013] RESPONSE_TEXT_BEGIN chars=596
+1. Specify the initial state as (F,W,G,C | {} , left) and goal state as ({} | F,W,G,C , right), using shorthand notation where F=farmer, W=wolf, G=goat, C=cabbage, and {} denotes empty bank.
+
+2. From the initial state, enumerate valid first moves: F takes G to right → (W,C | F,G , right); check safety (left: W+C ok, right: F+G ok); other options like F+W or F+C lead to unsafe left bank (G alone with C).
+
+3. Implement a systematic search (e.g., BFS) by generating a queue of states, tracking visited states to avoid cycles, and applying transitions while pruning unsafe states after each move.
+[TRACE] [CALL 013] RESPONSE_TEXT_END
+[TRACE] [CALL 013] END   Client.chat duration=4.111s result=response(text_chars=596, thinking_chars=0, tool_calls=0, stop_reason=stop)
+[TRACE] [CALL 014] START Client.chat provider=xai model=grok-4-1-fast-reasoning messages=1(sequence)
+[TRACE] [CALL 014] RESPONSE_TEXT_BEGIN chars=4
+0.85
+[TRACE] [CALL 014] RESPONSE_TEXT_END
+[TRACE] [CALL 014] END   Client.chat duration=3.905s result=response(text_chars=4, thinking_chars=0, tool_calls=0, stop_reason=stop)
+[TRACE] [CALL 015] START Client.chat provider=xai model=grok-4-1-fast-reasoning messages=1(sequence)
+[TRACE] [CALL 015] RESPONSE_TEXT_BEGIN chars=4
+0.95
+[TRACE] [CALL 015] RESPONSE_TEXT_END
+[TRACE] [CALL 015] END   Client.chat duration=4.067s result=response(text_chars=4, thinking_chars=0, tool_calls=0, stop_reason=stop)
+[TRACE] [CALL 016] START Client.chat provider=xai model=grok-4-1-fast-reasoning messages=1(sequence)
+[TRACE] [CALL 016] RESPONSE_TEXT_BEGIN chars=3
+1.0
+[TRACE] [CALL 016] RESPONSE_TEXT_END
+[TRACE] [CALL 016] END   Client.chat duration=2.769s result=response(text_chars=3, thinking_chars=0, tool_calls=0, stop_reason=stop)
+[TRACE] [CALL 017] START Client.chat provider=xai model=grok-4-1-fast-reasoning messages=1(sequence)
+[TRACE] [CALL 017] RESPONSE_TEXT_BEGIN chars=761
+1. Define a safety check function: A state is safe if, on the left bank, neither (wolf and goat without farmer) nor (goat and cabbage without farmer) are present, and the same applies to the right bank; implement this before generating successors.
+
+2. From start state ([F,W,G,C] | [], left), generate valid first moves: farmer takes goat right → ([W,C] | [F,G], right); enqueue it as the only safe successor (other moves like wolf or cabbage alone leave goat+cabbage unsafe on left).
+
+3. Set up data structures: Use a queue for BFS (append new states with parent/ path tracking), a set for visited states (represent as sorted tuples like frozenset(left) + '|' + frozenset(right) + direction), and process level 1 by dequeuing and expanding the goat-move state.
+[TRACE] [CALL 017] RESPONSE_TEXT_END
+[TRACE] [CALL 017] END   Client.chat duration=4.724s result=response(text_chars=761, thinking_chars=0, tool_calls=0, stop_reason=stop)
+[TRACE] [CALL 018] START Client.chat provider=xai model=grok-4-1-fast-reasoning messages=1(sequence)
+[TRACE] [CALL 018] RESPONSE_TEXT_BEGIN chars=4
+0.95
+[TRACE] [CALL 018] RESPONSE_TEXT_END
+[TRACE] [CALL 018] END   Client.chat duration=5.848s result=response(text_chars=4, thinking_chars=0, tool_calls=0, stop_reason=stop)
+[TRACE] [CALL 019] START Client.chat provider=xai model=grok-4-1-fast-reasoning messages=1(sequence)
+[TRACE] [CALL 019] RESPONSE_TEXT_BEGIN chars=4
+0.95
+[TRACE] [CALL 019] RESPONSE_TEXT_END
+[TRACE] [CALL 019] END   Client.chat duration=4.373s result=response(text_chars=4, thinking_chars=0, tool_calls=0, stop_reason=stop)
+[TRACE] [CALL 020] START Client.chat provider=xai model=grok-4-1-fast-reasoning messages=1(sequence)
+[TRACE] [CALL 020] RESPONSE_TEXT_BEGIN chars=4
+0.95
+[TRACE] [CALL 020] RESPONSE_TEXT_END
+[TRACE] [CALL 020] END   Client.chat duration=10.138s result=response(text_chars=4, thinking_chars=0, tool_calls=0, stop_reason=stop)
+    Score: ?
+
+Solution:
+Define the full set of rules for state transitions: The farmer can row alone or with one item (W, G, or C); after each crossing, check both banks for safety (no W+G or G+C without F on that bank); represent states as (left bank items including F if present, right bank items including F if present, boat position).
+Steps explored: 5
+[TRACE] Example execution completed.
+[TRACE] CALL_SUMMARY total_calls=20 completed_calls=20 failed_calls=0
+
+=== STDERR ===
+<empty>
+
+=== OUTPUT VALIDATION ===
+PASS
+

@@ -6,6 +6,7 @@ import asyncio
 import json
 import re
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
@@ -14,10 +15,11 @@ from ai_arch_toolkit.agents._base import (
     AgentResult,
     AgentStep,
     BaseAgent,
+    LLMCompilerResult,
     _accumulate_usage,
     _fire_event,
 )
-from ai_arch_toolkit.llm._types import Message, ToolCall, ToolResult, Usage
+from ai_arch_toolkit.llm._types import Message, Response, ToolCall, ToolResult, Usage
 
 _PLAN_PROMPT = (
     "You are a planner that creates a DAG of tool calls. "
@@ -106,11 +108,17 @@ class LLMCompilerAgent(BaseAgent):
         tool_results: list[ToolResult],
         start: float,
         total_usage: Usage,
-    ) -> tuple[int, Usage, bool]:
-        """Execute a DAG synchronously. Returns (next step_num, usage, timed_out)."""
+        cancellation_token: object | None,
+    ) -> tuple[int, Usage, bool, bool]:
+        """Execute a DAG synchronously.
+
+        Returns ``(next_step_num, usage, timed_out, cancelled)``.
+        """
         while True:
+            if self._is_cancelled(cancellation_token):
+                return step_num, total_usage, False, True
             if self._check_timeout(start):
-                return step_num, total_usage, True
+                return step_num, total_usage, True, False
             ready = _get_ready_tasks(dag, results_map)
             if not ready:
                 break
@@ -128,6 +136,8 @@ class LLMCompilerAgent(BaseAgent):
                 )
 
             if self.config.parallel_tool_execution and len(ready) > 1:
+                if self._is_cancelled(cancellation_token):
+                    return step_num, total_usage, False, True
                 with ThreadPoolExecutor() as executor:
                     futures = {
                         dt.id: executor.submit(
@@ -138,12 +148,16 @@ class LLMCompilerAgent(BaseAgent):
                         for dt in ready
                     }
                     for dt in ready:
+                        if self._is_cancelled(cancellation_token):
+                            return step_num, total_usage, False, True
                         dt.result = futures[dt.id].result()
                         if dt.status != "failed":
                             dt.status = "completed"
                         results_map[dt.id] = dt.result
             else:
                 for dt in ready:
+                    if self._is_cancelled(cancellation_token):
+                        return step_num, total_usage, False, True
                     dt.result = self._exec_task(dt, results_map)
                     if dt.status != "failed":
                         dt.status = "completed"
@@ -170,7 +184,7 @@ class LLMCompilerAgent(BaseAgent):
             _fire_event(self.config, "step_end", step_number=step_num)
             step_num += 1
 
-        return step_num, total_usage, False
+        return step_num, total_usage, False, False
 
     async def _execute_dag_async(
         self,
@@ -180,11 +194,17 @@ class LLMCompilerAgent(BaseAgent):
         tool_results: list[ToolResult],
         start: float,
         total_usage: Usage,
-    ) -> tuple[int, Usage, bool]:
-        """Execute a DAG asynchronously. Returns (next step_num, usage, timed_out)."""
+        cancellation_token: object | None,
+    ) -> tuple[int, Usage, bool, bool]:
+        """Execute a DAG asynchronously.
+
+        Returns ``(next_step_num, usage, timed_out, cancelled)``.
+        """
         while True:
+            if self._is_cancelled(cancellation_token):
+                return step_num, total_usage, False, True
             if self._check_timeout(start):
-                return step_num, total_usage, True
+                return step_num, total_usage, True, False
             ready = _get_ready_tasks(dag, results_map)
             if not ready:
                 break
@@ -202,16 +222,22 @@ class LLMCompilerAgent(BaseAgent):
                 )
 
             if self.config.parallel_tool_execution and len(ready) > 1:
+                if self._is_cancelled(cancellation_token):
+                    return step_num, total_usage, False, True
                 outcomes = await asyncio.gather(
                     *[self._async_exec_task(dt, results_map) for dt in ready]
                 )
                 for dt, result in zip(ready, outcomes, strict=True):
+                    if self._is_cancelled(cancellation_token):
+                        return step_num, total_usage, False, True
                     dt.result = result
                     if dt.status != "failed":
                         dt.status = "completed"
                     results_map[dt.id] = dt.result
             else:
                 for dt in ready:
+                    if self._is_cancelled(cancellation_token):
+                        return step_num, total_usage, False, True
                     dt.result = await self._async_exec_task(dt, results_map)
                     if dt.status != "failed":
                         dt.status = "completed"
@@ -238,7 +264,7 @@ class LLMCompilerAgent(BaseAgent):
             _fire_event(self.config, "step_end", step_number=step_num)
             step_num += 1
 
-        return step_num, total_usage, False
+        return step_num, total_usage, False, False
 
     # ------------------------------------------------------------------
     # Main entry points
@@ -253,11 +279,36 @@ class LLMCompilerAgent(BaseAgent):
                 ``max_replans`` (int): Maximum joiner re-plan iterations
                 (default ``0`` for backward compatibility).
         """
+        stream = kwargs.pop("stream", False)
+        cancellation_token = self._resolve_cancellation_token(
+            kwargs.pop("cancellation_token", None)
+        )
+        if stream:
+            return self.run_stream(
+                task,
+                cancellation_token=cancellation_token,
+                **kwargs,
+            )
         max_replans: int = kwargs.pop("max_replans", 0)
         system = self.config.system or None
         total_usage = Usage()
+        budget = self._new_budget_manager()
         all_steps: list[AgentStep] = []
         start = time.monotonic()
+
+        def _record_repair_response(step_number: int, response: Response) -> None:
+            nonlocal total_usage
+            total_usage = _accumulate_usage(total_usage, response.usage)
+            repair_cost = self._observe_response(budget, response, step_number=step_number)
+            all_steps.append(
+                AgentStep(
+                    step_number=step_number,
+                    response=response,
+                    usage=response.usage,
+                    cost_usd=repair_cost,
+                    metadata={"repair_attempt": True},
+                )
+            )
 
         # Plan
         _fire_event(self.config, "step_start", step_number=1)
@@ -267,8 +318,17 @@ class LLMCompilerAgent(BaseAgent):
             **kwargs,
         )
         total_usage = _accumulate_usage(total_usage, plan_resp.usage)
-        all_steps.append(AgentStep(step_number=1, response=plan_resp))
-        dag = _parse_dag(plan_resp.text)
+        plan_cost = self._observe_response(budget, plan_resp, step_number=1)
+        all_steps.append(
+            AgentStep(step_number=1, response=plan_resp, usage=plan_resp.usage, cost_usd=plan_cost)
+        )
+        dag = self._parse_dag_with_fallback(
+            plan_resp.text,
+            system=system,
+            step_number=1,
+            on_repair_response=_record_repair_response,
+            **kwargs,
+        )
         _fire_event(
             self.config,
             "plan_created",
@@ -277,33 +337,83 @@ class LLMCompilerAgent(BaseAgent):
         )
         _fire_event(self.config, "step_end", step_number=1)
 
+        if budget.exhausted_reason() is not None:
+            return self._finalize_result(
+                LLMCompilerResult(
+                    answer="[token budget exceeded]",
+                    steps=tuple(all_steps),
+                    total_usage=total_usage,
+                    stop_reason="budget_exhausted",
+                ),
+                result_type=LLMCompilerResult,
+            )
+
         # Execute DAG
         step_num = 2
         results_map: dict[str, str] = {}
         tool_results: list[ToolResult] = []
 
-        step_num, total_usage, timed_out = self._execute_dag_sync(
+        step_num, total_usage, timed_out, cancelled = self._execute_dag_sync(
             dag,
             step_num,
             results_map,
             tool_results,
             start,
             total_usage,
+            cancellation_token,
         )
+        if cancelled:
+            return self._finalize_result(
+                LLMCompilerResult(
+                    answer="[cancelled]",
+                    steps=tuple(all_steps),
+                    total_usage=total_usage,
+                    stop_reason="cancelled",
+                ),
+                result_type=LLMCompilerResult,
+            )
         if timed_out:
-            return AgentResult(
-                answer="[timeout exceeded]",
-                steps=tuple(all_steps),
-                total_usage=total_usage,
+            return self._finalize_result(
+                LLMCompilerResult(
+                    answer="[timeout exceeded]",
+                    steps=tuple(all_steps),
+                    total_usage=total_usage,
+                    stop_reason="timeout",
+                ),
+                result_type=LLMCompilerResult,
             )
 
         # Re-plan loop
         for _replan_num in range(max_replans):
+            if self._is_cancelled(cancellation_token):
+                return self._finalize_result(
+                    LLMCompilerResult(
+                        answer="[cancelled]",
+                        steps=tuple(all_steps),
+                        total_usage=total_usage,
+                        stop_reason="cancelled",
+                    ),
+                    result_type=LLMCompilerResult,
+                )
             if self._check_timeout(start):
-                return AgentResult(
-                    answer="[timeout exceeded]",
-                    steps=tuple(all_steps),
-                    total_usage=total_usage,
+                return self._finalize_result(
+                    LLMCompilerResult(
+                        answer="[timeout exceeded]",
+                        steps=tuple(all_steps),
+                        total_usage=total_usage,
+                        stop_reason="timeout",
+                    ),
+                    result_type=LLMCompilerResult,
+                )
+            if budget.exhausted_reason() is not None:
+                return self._finalize_result(
+                    LLMCompilerResult(
+                        answer="[token budget exceeded]",
+                        steps=tuple(all_steps),
+                        total_usage=total_usage,
+                        stop_reason="budget_exhausted",
+                    ),
+                    result_type=LLMCompilerResult,
                 )
             results_text = self._build_results_text(results_map)
             check_resp = self.client.chat(
@@ -320,6 +430,7 @@ class LLMCompilerAgent(BaseAgent):
                 **kwargs,
             )
             total_usage = _accumulate_usage(total_usage, check_resp.usage)
+            self._observe_response(budget, check_resp, step_number=step_num)
 
             if "FINISH" in check_resp.text.upper():
                 break
@@ -342,32 +453,85 @@ class LLMCompilerAgent(BaseAgent):
                 **kwargs,
             )
             total_usage = _accumulate_usage(total_usage, replan_resp.usage)
-            new_dag = _parse_dag(replan_resp.text)
-            all_steps.append(AgentStep(step_number=step_num, response=replan_resp))
+            replan_cost = self._observe_response(budget, replan_resp, step_number=step_num)
+            new_dag = self._parse_dag_with_fallback(
+                replan_resp.text,
+                system=system,
+                step_number=step_num,
+                on_repair_response=_record_repair_response,
+                **kwargs,
+            )
+            all_steps.append(
+                AgentStep(
+                    step_number=step_num,
+                    response=replan_resp,
+                    usage=replan_resp.usage,
+                    cost_usd=replan_cost,
+                )
+            )
             step_num += 1
 
-            step_num, total_usage, timed_out = self._execute_dag_sync(
+            step_num, total_usage, timed_out, cancelled = self._execute_dag_sync(
                 new_dag,
                 step_num,
                 results_map,
                 tool_results,
                 start,
                 total_usage,
+                cancellation_token,
             )
+            if cancelled:
+                return self._finalize_result(
+                    LLMCompilerResult(
+                        answer="[cancelled]",
+                        steps=tuple(all_steps),
+                        total_usage=total_usage,
+                        stop_reason="cancelled",
+                    ),
+                    result_type=LLMCompilerResult,
+                )
             if timed_out:
-                return AgentResult(
-                    answer="[timeout exceeded]",
-                    steps=tuple(all_steps),
-                    total_usage=total_usage,
+                return self._finalize_result(
+                    LLMCompilerResult(
+                        answer="[timeout exceeded]",
+                        steps=tuple(all_steps),
+                        total_usage=total_usage,
+                        stop_reason="timeout",
+                    ),
+                    result_type=LLMCompilerResult,
                 )
             dag.extend(new_dag)
 
         # Joiner
+        if self._is_cancelled(cancellation_token):
+            return self._finalize_result(
+                LLMCompilerResult(
+                    answer="[cancelled]",
+                    steps=tuple(all_steps),
+                    total_usage=total_usage,
+                    stop_reason="cancelled",
+                ),
+                result_type=LLMCompilerResult,
+            )
         if self._check_timeout(start):
-            return AgentResult(
-                answer="[timeout exceeded]",
-                steps=tuple(all_steps),
-                total_usage=total_usage,
+            return self._finalize_result(
+                LLMCompilerResult(
+                    answer="[timeout exceeded]",
+                    steps=tuple(all_steps),
+                    total_usage=total_usage,
+                    stop_reason="timeout",
+                ),
+                result_type=LLMCompilerResult,
+            )
+        if budget.exhausted_reason() is not None:
+            return self._finalize_result(
+                LLMCompilerResult(
+                    answer="[token budget exceeded]",
+                    steps=tuple(all_steps),
+                    total_usage=total_usage,
+                    stop_reason="budget_exhausted",
+                ),
+                result_type=LLMCompilerResult,
             )
         _fire_event(self.config, "step_start", step_number=step_num)
         join_resp = self.client.chat(
@@ -381,19 +545,27 @@ class LLMCompilerAgent(BaseAgent):
             **kwargs,
         )
         total_usage = _accumulate_usage(total_usage, join_resp.usage)
+        join_cost = self._observe_response(budget, join_resp, step_number=step_num)
         all_steps.append(
             AgentStep(
                 step_number=step_num,
                 response=join_resp,
                 tool_results=tuple(tool_results),
+                usage=join_resp.usage,
+                cost_usd=join_cost,
             )
         )
         _fire_event(self.config, "step_end", step_number=step_num)
 
-        return AgentResult(
-            answer=join_resp.text,
-            steps=tuple(all_steps),
-            total_usage=total_usage,
+        return self._finalize_result(
+            LLMCompilerResult(
+                answer=join_resp.text,
+                steps=tuple(all_steps),
+                total_usage=total_usage,
+                stop_reason="completed",
+                metadata={"dag_size": len(dag)},
+            ),
+            result_type=LLMCompilerResult,
         )
 
     def _exec_task(
@@ -423,11 +595,36 @@ class LLMCompilerAgent(BaseAgent):
                 ``max_replans`` (int): Maximum joiner re-plan iterations
                 (default ``0`` for backward compatibility).
         """
+        stream = kwargs.pop("stream", False)
+        cancellation_token = self._resolve_cancellation_token(
+            kwargs.pop("cancellation_token", None)
+        )
+        if stream:
+            return self.async_run_stream(
+                task,
+                cancellation_token=cancellation_token,
+                **kwargs,
+            )
         max_replans: int = kwargs.pop("max_replans", 0)
         system = self.config.system or None
         total_usage = Usage()
+        budget = self._new_budget_manager()
         all_steps: list[AgentStep] = []
         start = time.monotonic()
+
+        def _record_repair_response(step_number: int, response: Response) -> None:
+            nonlocal total_usage
+            total_usage = _accumulate_usage(total_usage, response.usage)
+            repair_cost = self._observe_response(budget, response, step_number=step_number)
+            all_steps.append(
+                AgentStep(
+                    step_number=step_number,
+                    response=response,
+                    usage=response.usage,
+                    cost_usd=repair_cost,
+                    metadata={"repair_attempt": True},
+                )
+            )
 
         # Plan
         _fire_event(self.config, "step_start", step_number=1)
@@ -437,8 +634,17 @@ class LLMCompilerAgent(BaseAgent):
             **kwargs,
         )
         total_usage = _accumulate_usage(total_usage, plan_resp.usage)
-        all_steps.append(AgentStep(step_number=1, response=plan_resp))
-        dag = _parse_dag(plan_resp.text)
+        plan_cost = self._observe_response(budget, plan_resp, step_number=1)
+        all_steps.append(
+            AgentStep(step_number=1, response=plan_resp, usage=plan_resp.usage, cost_usd=plan_cost)
+        )
+        dag = await self._aparse_dag_with_fallback(
+            plan_resp.text,
+            system=system,
+            step_number=1,
+            on_repair_response=_record_repair_response,
+            **kwargs,
+        )
         _fire_event(
             self.config,
             "plan_created",
@@ -447,33 +653,83 @@ class LLMCompilerAgent(BaseAgent):
         )
         _fire_event(self.config, "step_end", step_number=1)
 
+        if budget.exhausted_reason() is not None:
+            return self._finalize_result(
+                LLMCompilerResult(
+                    answer="[token budget exceeded]",
+                    steps=tuple(all_steps),
+                    total_usage=total_usage,
+                    stop_reason="budget_exhausted",
+                ),
+                result_type=LLMCompilerResult,
+            )
+
         # Execute DAG
         step_num = 2
         results_map: dict[str, str] = {}
         tool_results: list[ToolResult] = []
 
-        step_num, total_usage, timed_out = await self._execute_dag_async(
+        step_num, total_usage, timed_out, cancelled = await self._execute_dag_async(
             dag,
             step_num,
             results_map,
             tool_results,
             start,
             total_usage,
+            cancellation_token,
         )
+        if cancelled:
+            return self._finalize_result(
+                LLMCompilerResult(
+                    answer="[cancelled]",
+                    steps=tuple(all_steps),
+                    total_usage=total_usage,
+                    stop_reason="cancelled",
+                ),
+                result_type=LLMCompilerResult,
+            )
         if timed_out:
-            return AgentResult(
-                answer="[timeout exceeded]",
-                steps=tuple(all_steps),
-                total_usage=total_usage,
+            return self._finalize_result(
+                LLMCompilerResult(
+                    answer="[timeout exceeded]",
+                    steps=tuple(all_steps),
+                    total_usage=total_usage,
+                    stop_reason="timeout",
+                ),
+                result_type=LLMCompilerResult,
             )
 
         # Re-plan loop
         for _replan_num in range(max_replans):
+            if self._is_cancelled(cancellation_token):
+                return self._finalize_result(
+                    LLMCompilerResult(
+                        answer="[cancelled]",
+                        steps=tuple(all_steps),
+                        total_usage=total_usage,
+                        stop_reason="cancelled",
+                    ),
+                    result_type=LLMCompilerResult,
+                )
             if self._check_timeout(start):
-                return AgentResult(
-                    answer="[timeout exceeded]",
-                    steps=tuple(all_steps),
-                    total_usage=total_usage,
+                return self._finalize_result(
+                    LLMCompilerResult(
+                        answer="[timeout exceeded]",
+                        steps=tuple(all_steps),
+                        total_usage=total_usage,
+                        stop_reason="timeout",
+                    ),
+                    result_type=LLMCompilerResult,
+                )
+            if budget.exhausted_reason() is not None:
+                return self._finalize_result(
+                    LLMCompilerResult(
+                        answer="[token budget exceeded]",
+                        steps=tuple(all_steps),
+                        total_usage=total_usage,
+                        stop_reason="budget_exhausted",
+                    ),
+                    result_type=LLMCompilerResult,
                 )
             results_text = self._build_results_text(results_map)
             check_resp = await self.client.chat(
@@ -490,6 +746,7 @@ class LLMCompilerAgent(BaseAgent):
                 **kwargs,
             )
             total_usage = _accumulate_usage(total_usage, check_resp.usage)
+            self._observe_response(budget, check_resp, step_number=step_num)
 
             if "FINISH" in check_resp.text.upper():
                 break
@@ -512,32 +769,85 @@ class LLMCompilerAgent(BaseAgent):
                 **kwargs,
             )
             total_usage = _accumulate_usage(total_usage, replan_resp.usage)
-            new_dag = _parse_dag(replan_resp.text)
-            all_steps.append(AgentStep(step_number=step_num, response=replan_resp))
+            replan_cost = self._observe_response(budget, replan_resp, step_number=step_num)
+            new_dag = await self._aparse_dag_with_fallback(
+                replan_resp.text,
+                system=system,
+                step_number=step_num,
+                on_repair_response=_record_repair_response,
+                **kwargs,
+            )
+            all_steps.append(
+                AgentStep(
+                    step_number=step_num,
+                    response=replan_resp,
+                    usage=replan_resp.usage,
+                    cost_usd=replan_cost,
+                )
+            )
             step_num += 1
 
-            step_num, total_usage, timed_out = await self._execute_dag_async(
+            step_num, total_usage, timed_out, cancelled = await self._execute_dag_async(
                 new_dag,
                 step_num,
                 results_map,
                 tool_results,
                 start,
                 total_usage,
+                cancellation_token,
             )
+            if cancelled:
+                return self._finalize_result(
+                    LLMCompilerResult(
+                        answer="[cancelled]",
+                        steps=tuple(all_steps),
+                        total_usage=total_usage,
+                        stop_reason="cancelled",
+                    ),
+                    result_type=LLMCompilerResult,
+                )
             if timed_out:
-                return AgentResult(
-                    answer="[timeout exceeded]",
-                    steps=tuple(all_steps),
-                    total_usage=total_usage,
+                return self._finalize_result(
+                    LLMCompilerResult(
+                        answer="[timeout exceeded]",
+                        steps=tuple(all_steps),
+                        total_usage=total_usage,
+                        stop_reason="timeout",
+                    ),
+                    result_type=LLMCompilerResult,
                 )
             dag.extend(new_dag)
 
         # Joiner
+        if self._is_cancelled(cancellation_token):
+            return self._finalize_result(
+                LLMCompilerResult(
+                    answer="[cancelled]",
+                    steps=tuple(all_steps),
+                    total_usage=total_usage,
+                    stop_reason="cancelled",
+                ),
+                result_type=LLMCompilerResult,
+            )
         if self._check_timeout(start):
-            return AgentResult(
-                answer="[timeout exceeded]",
-                steps=tuple(all_steps),
-                total_usage=total_usage,
+            return self._finalize_result(
+                LLMCompilerResult(
+                    answer="[timeout exceeded]",
+                    steps=tuple(all_steps),
+                    total_usage=total_usage,
+                    stop_reason="timeout",
+                ),
+                result_type=LLMCompilerResult,
+            )
+        if budget.exhausted_reason() is not None:
+            return self._finalize_result(
+                LLMCompilerResult(
+                    answer="[token budget exceeded]",
+                    steps=tuple(all_steps),
+                    total_usage=total_usage,
+                    stop_reason="budget_exhausted",
+                ),
+                result_type=LLMCompilerResult,
             )
         _fire_event(self.config, "step_start", step_number=step_num)
         join_resp = await self.client.chat(
@@ -551,19 +861,27 @@ class LLMCompilerAgent(BaseAgent):
             **kwargs,
         )
         total_usage = _accumulate_usage(total_usage, join_resp.usage)
+        join_cost = self._observe_response(budget, join_resp, step_number=step_num)
         all_steps.append(
             AgentStep(
                 step_number=step_num,
                 response=join_resp,
                 tool_results=tuple(tool_results),
+                usage=join_resp.usage,
+                cost_usd=join_cost,
             )
         )
         _fire_event(self.config, "step_end", step_number=step_num)
 
-        return AgentResult(
-            answer=join_resp.text,
-            steps=tuple(all_steps),
-            total_usage=total_usage,
+        return self._finalize_result(
+            LLMCompilerResult(
+                answer=join_resp.text,
+                steps=tuple(all_steps),
+                total_usage=total_usage,
+                stop_reason="completed",
+                metadata={"dag_size": len(dag)},
+            ),
+            result_type=LLMCompilerResult,
         )
 
     async def _async_exec_task(
@@ -583,6 +901,111 @@ class LLMCompilerAgent(BaseAgent):
         except Exception as exc:
             dt.status = "failed"
             return f"Error: {exc}"
+
+    def _parse_dag_with_fallback(
+        self,
+        text: str,
+        *,
+        system: str | None,
+        step_number: int,
+        on_repair_response: Callable[[int, Response], None] | None = None,
+        **kwargs: Any,
+    ) -> list[_DAGTask]:
+        dag = _parse_dag(text)
+        if dag:
+            return dag
+        repaired = text
+        for _ in range(max(0, self.config.planner_repair_retries)):
+            repair_resp = self.client.chat(
+                [
+                    Message(
+                        role="user",
+                        content=(
+                            "Repair the following into a valid JSON array of "
+                            "{\"id\":\"1\",\"tool\":\"name\",\"args\":{},\"deps\":[]} objects. "
+                            "Return only JSON.\n\n"
+                            f"{repaired}"
+                        ),
+                    )
+                ],
+                system=system,
+                **kwargs,
+            )
+            if on_repair_response is not None:
+                on_repair_response(step_number, repair_resp)
+            repaired = repair_resp.text
+            dag = _parse_dag(repaired)
+            if dag:
+                _fire_event(
+                    self.config,
+                    "plan_created",
+                    step_number=step_number,
+                    result=repaired,
+                    metadata={"repair_used": True},
+                )
+                return dag
+        msg = "Unable to parse DAG planner output"
+        _fire_event(
+            self.config,
+            "error",
+            step_number=step_number,
+            error=msg,
+            metadata={"raw_plan": text},
+        )
+        raise ValueError(msg)
+
+    async def _aparse_dag_with_fallback(
+        self,
+        text: str,
+        *,
+        system: str | None,
+        step_number: int,
+        on_repair_response: Callable[[int, Response], None] | None = None,
+        **kwargs: Any,
+    ) -> list[_DAGTask]:
+        dag = _parse_dag(text)
+        if dag:
+            return dag
+        repaired = text
+        for _ in range(max(0, self.config.planner_repair_retries)):
+            repair_resp = await self.client.chat(
+                [
+                    Message(
+                        role="user",
+                        content=(
+                            "Repair the following into a valid JSON array of "
+                            "{\"id\":\"1\",\"tool\":\"name\","
+                            "\"args\":{},\"deps\":[]} objects. "
+                            "Return only JSON.\n\n"
+                            f"{repaired}"
+                        ),
+                    )
+                ],
+                system=system,
+                **kwargs,
+            )
+            if on_repair_response is not None:
+                on_repair_response(step_number, repair_resp)
+            repaired = repair_resp.text
+            dag = _parse_dag(repaired)
+            if dag:
+                _fire_event(
+                    self.config,
+                    "plan_created",
+                    step_number=step_number,
+                    result=repaired,
+                    metadata={"repair_used": True},
+                )
+                return dag
+        msg = "Unable to parse DAG planner output"
+        _fire_event(
+            self.config,
+            "error",
+            step_number=step_number,
+            error=msg,
+            metadata={"raw_plan": text},
+        )
+        raise ValueError(msg)
 
 
 def _parse_dag(text: str) -> list[_DAGTask]:

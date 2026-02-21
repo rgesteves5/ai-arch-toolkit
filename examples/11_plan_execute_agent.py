@@ -8,6 +8,7 @@ from ai_arch_toolkit import (
     AgentConfig,
     Client,
     PlanExecuteAgent,
+    RateLimitError,
     ToolRegistry,
     tool,
 )
@@ -62,7 +63,11 @@ agent = PlanExecuteAgent(
     config=AgentConfig(max_iterations=8, on_event=on_event),
 )
 
-result = agent.run("Compare the sizes of Mars and Jupiter.")
+try:
+    result = agent.run("Compare the sizes of Mars and Jupiter.")
+except RateLimitError as exc:
+    print(f"\nRate-limited by provider while running agent: {exc}")
+    raise SystemExit(0) from exc
 
 print(f"\nAnswer: {result.answer}")
 print(f"Steps: {len(result.steps)}")

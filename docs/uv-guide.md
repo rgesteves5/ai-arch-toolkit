@@ -46,6 +46,29 @@ uv run ruff check src/
 `uv run` automatically activates the project's virtual environment. You never
 need to manually run `source .venv/bin/activate`.
 
+### Loading environment variables from `.env`
+
+If your API keys or config values are stored in `.env`, load them into your
+current shell before running commands:
+
+```bash
+set -a
+source .env
+set +a
+```
+
+Verify a variable is loaded:
+
+```bash
+echo $OPENAI_API_KEY
+```
+
+For a one-off command (without keeping vars in your shell session):
+
+```bash
+set -a; source .env; set +a; uv run python examples/01_hello_world.py
+```
+
 ### Managing dependencies
 
 ```bash

@@ -1,0 +1,58 @@
+=== EXAMPLE RUN REPORT ===
+example_script: examples/02_multi_turn_conversation.py
+command: .venv/bin/python /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/scripts/_example_trace_runner.py examples/02_multi_turn_conversation.py
+status: SUCCESS
+exit_code: 0
+duration_seconds: 4.764
+interpretation: Command completed without process errors.
+
+=== OUTPUT NOTES ===
+- This output contains assistant replies only. The example likely uses hardcoded user prompts and only prints model responses.
+- Trace lines are present. Each [CALL NNN] START/END pair maps output to a specific SDK call.
+- Full model text is included between *_BEGIN and *_END trace markers for each call.
+
+=== STDOUT ===
+[TRACE] Runtime tracing enabled for ai-arch-toolkit clients.
+[TRACE] Executing example: /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/examples/02_multi_turn_conversation.py
+[TRACE] [CALL 001] START Client.chat provider=anthropic model=claude-haiku-4-5-20251001 messages=1(sequence)
+[TRACE] [CALL 001] RESPONSE_TEXT_BEGIN chars=469
+# Hey Alice! 👋
+
+Here's a fun one: **A day on Venus is longer than a year on Venus!**
+
+Venus takes about 243 Earth days to spin once on its axis (one day), but only about 225 Earth days to orbit the Sun (one year). So if you were standing on Venus, you'd experience a year passing before you'd see a full sunrise and sunset! 🌍✨
+
+Plus, Venus spins *backwards* compared to most planets, which makes it extra weird.
+
+Is there anything else about space you're curious about?
+[TRACE] [CALL 001] RESPONSE_TEXT_END
+[TRACE] [CALL 001] END   Client.chat duration=3.537s result=response(text_chars=469, thinking_chars=0, tool_calls=0, stop_reason=end_turn)
+Assistant: # Hey Alice! 👋
+
+Here's a fun one: **A day on Venus is longer than a year on Venus!**
+
+Venus takes about 243 Earth days to spin once on its axis (one day), but only about 225 Earth days to orbit the Sun (one year). So if you were standing on Venus, you'd experience a year passing before you'd see a full sunrise and sunset! 🌍✨
+
+Plus, Venus spins *backwards* compared to most planets, which makes it extra weird.
+
+Is there anything else about space you're curious about?
+[TRACE] [CALL 002] START Client.chat provider=anthropic model=claude-haiku-4-5-20251001 messages=3(sequence)
+[TRACE] [CALL 002] RESPONSE_TEXT_BEGIN chars=127
+Your name is **Alice**! 😊
+
+You told me at the start of our conversation. Is there anything else you'd like to know about space?
+[TRACE] [CALL 002] RESPONSE_TEXT_END
+[TRACE] [CALL 002] END   Client.chat duration=1.067s result=response(text_chars=127, thinking_chars=0, tool_calls=0, stop_reason=end_turn)
+
+Assistant: Your name is **Alice**! 😊
+
+You told me at the start of our conversation. Is there anything else you'd like to know about space?
+[TRACE] Example execution completed.
+[TRACE] CALL_SUMMARY total_calls=2 completed_calls=2 failed_calls=0
+
+=== STDERR ===
+<empty>
+
+=== OUTPUT VALIDATION ===
+PASS
+

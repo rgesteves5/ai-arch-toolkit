@@ -1,0 +1,38 @@
+=== EXAMPLE RUN REPORT ===
+example_script: examples/04_structured_output.py
+command: .venv/bin/python /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/scripts/_example_trace_runner.py examples/04_structured_output.py
+status: SUCCESS
+exit_code: 0
+duration_seconds: 16.241
+interpretation: Command completed without process errors.
+
+=== OUTPUT NOTES ===
+- Trace lines are present. Each [CALL NNN] START/END pair maps output to a specific SDK call.
+- Full model text is included between *_BEGIN and *_END trace markers for each call.
+
+=== STDOUT ===
+[TRACE] Runtime tracing enabled for ai-arch-toolkit clients.
+[TRACE] Executing example: /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/examples/04_structured_output.py
+[TRACE] [CALL 001] START Client.chat provider=openai model=gpt-5-nano messages=1(prompt str, chars=43)
+[TRACE] [CALL 001] RESPONSE_TEXT_BEGIN chars=583
+{"books":[{"title":"Dune","author":"Frank Herbert","year":1965,"reason":"A sweeping epic of politics, ecology, and prophecy on a desert planet; a landmark work that reshaped science fiction."},{"title":"Neuromancer","author":"William Gibson","year":1984,"reason":"A defining cyberpunk novel that popularized cyberspace, AI, and corporate-dominated futures; a cornerstone of modern SF."},{"title":"Foundation","author":"Isaac Asimov","year":1951,"reason":"A grand, science-driven saga about psychohistory, empire, and the rise and fall of civilizations; foundational to the genre."}]}
+[TRACE] [CALL 001] RESPONSE_TEXT_END
+[TRACE] [CALL 001] END   Client.chat duration=16.080s result=response(text_chars=583, thinking_chars=0, tool_calls=0, stop_reason=stop)
+  Dune by Frank Herbert (1965)
+    → A sweeping epic of politics, ecology, and prophecy on a desert planet; a landmark work that reshaped science fiction.
+
+  Neuromancer by William Gibson (1984)
+    → A defining cyberpunk novel that popularized cyberspace, AI, and corporate-dominated futures; a cornerstone of modern SF.
+
+  Foundation by Isaac Asimov (1951)
+    → A grand, science-driven saga about psychohistory, empire, and the rise and fall of civilizations; foundational to the genre.
+
+[TRACE] Example execution completed.
+[TRACE] CALL_SUMMARY total_calls=1 completed_calls=1 failed_calls=0
+
+=== STDERR ===
+<empty>
+
+=== OUTPUT VALIDATION ===
+PASS
+

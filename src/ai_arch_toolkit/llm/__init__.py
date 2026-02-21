@@ -3,9 +3,56 @@
 from ai_arch_toolkit.llm._async_batch import AsyncBatchClient
 from ai_arch_toolkit.llm._async_client import AsyncClient
 from ai_arch_toolkit.llm._batch import BatchClient, BatchJob, BatchRequest, BatchResult
+from ai_arch_toolkit.llm._cache import CacheBackend, InMemoryCacheBackend, ResponseCache
 from ai_arch_toolkit.llm._client import Client
+from ai_arch_toolkit.llm._cost import (
+    CostPreview,
+    CostSnapshot,
+    CostTracker,
+    ModelPricing,
+    estimate_usage_cost,
+    preview_conversation_usage_and_cost,
+    preview_conversation_usage_and_cost_for_models,
+    preview_text_usage_and_cost,
+    preview_text_usage_and_cost_for_models,
+    resolve_model_pricing,
+)
 from ai_arch_toolkit.llm._exceptions import APIError, RateLimitError
+from ai_arch_toolkit.llm._fallback import FallbackClient
+from ai_arch_toolkit.llm._guardrails import GuardrailMiddleware, GuardrailViolation
 from ai_arch_toolkit.llm._http import RetryConfig
+from ai_arch_toolkit.llm._memory import ConversationMemory, SlidingWindowMemory
+from ai_arch_toolkit.llm._middleware import Middleware, Request
+from ai_arch_toolkit.llm._output_parsing import (
+    extract_code_block,
+    extract_list,
+    parse_json,
+    parse_json_as,
+)
+from ai_arch_toolkit.llm._templates import ChatTemplate, PromptTemplate
+from ai_arch_toolkit.llm._tokens import (
+    CLAUDE_3_CORRECTION_FACTOR,
+    CLAUDE_4_CORRECTION_FACTOR,
+    DEFAULT_CORRECTION_FACTOR,
+    DEFAULT_TOKEN_CORRECTION_CONFIG,
+    GEMINI_CORRECTION_FACTOR,
+    GROK_CORRECTION_FACTOR,
+    META_CORRECTION_FACTOR,
+    TokenCorrectionConfig,
+    estimate_content_tokens,
+    estimate_content_tokens_for_model,
+    estimate_conversation_tokens,
+    estimate_conversation_tokens_for_model,
+    estimate_item_tokens,
+    estimate_item_tokens_for_model,
+    estimate_message_tokens,
+    estimate_message_tokens_for_model,
+    estimate_text_tokens,
+    estimate_text_tokens_for_model,
+    get_correction_factor,
+    raw_tiktoken_count,
+)
+from ai_arch_toolkit.llm._tracing import TracingMiddleware
 from ai_arch_toolkit.llm._types import (
     AudioPart,
     DocumentPart,
@@ -25,6 +72,13 @@ from ai_arch_toolkit.llm._types import (
 )
 
 __all__ = [
+    "CLAUDE_3_CORRECTION_FACTOR",
+    "CLAUDE_4_CORRECTION_FACTOR",
+    "DEFAULT_CORRECTION_FACTOR",
+    "DEFAULT_TOKEN_CORRECTION_CONFIG",
+    "GEMINI_CORRECTION_FACTOR",
+    "GROK_CORRECTION_FACTOR",
+    "META_CORRECTION_FACTOR",
     "APIError",
     "AsyncBatchClient",
     "AsyncClient",
@@ -33,21 +87,61 @@ __all__ = [
     "BatchJob",
     "BatchRequest",
     "BatchResult",
+    "CacheBackend",
+    "ChatTemplate",
     "Client",
+    "ConversationMemory",
+    "CostPreview",
+    "CostSnapshot",
+    "CostTracker",
     "DocumentPart",
+    "FallbackClient",
+    "GuardrailMiddleware",
+    "GuardrailViolation",
     "ImagePart",
+    "InMemoryCacheBackend",
     "JsonSchema",
     "Message",
+    "Middleware",
+    "ModelPricing",
+    "PromptTemplate",
     "RateLimitError",
+    "Request",
     "Response",
+    "ResponseCache",
     "RetryConfig",
     "ServerTool",
+    "SlidingWindowMemory",
     "StreamEvent",
     "TextPart",
     "ThinkingBlock",
     "ThinkingConfig",
+    "TokenCorrectionConfig",
     "Tool",
     "ToolCall",
     "ToolResult",
+    "TracingMiddleware",
     "Usage",
+    "estimate_content_tokens",
+    "estimate_content_tokens_for_model",
+    "estimate_conversation_tokens",
+    "estimate_conversation_tokens_for_model",
+    "estimate_item_tokens",
+    "estimate_item_tokens_for_model",
+    "estimate_message_tokens",
+    "estimate_message_tokens_for_model",
+    "estimate_text_tokens",
+    "estimate_text_tokens_for_model",
+    "estimate_usage_cost",
+    "extract_code_block",
+    "extract_list",
+    "get_correction_factor",
+    "parse_json",
+    "parse_json_as",
+    "preview_conversation_usage_and_cost",
+    "preview_conversation_usage_and_cost_for_models",
+    "preview_text_usage_and_cost",
+    "preview_text_usage_and_cost_for_models",
+    "raw_tiktoken_count",
+    "resolve_model_pricing",
 ]

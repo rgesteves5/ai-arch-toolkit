@@ -1,0 +1,41 @@
+=== EXAMPLE RUN REPORT ===
+example_script: examples/29_reflexion_agent.py
+command: .venv/bin/python /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/scripts/_example_trace_runner.py examples/29_reflexion_agent.py
+status: SUCCESS
+exit_code: 0
+duration_seconds: 7.352
+interpretation: Command completed without process errors.
+
+=== OUTPUT NOTES ===
+- Trace lines are present. Each [CALL NNN] START/END pair maps output to a specific SDK call.
+- Full model text is included between *_BEGIN and *_END trace markers for each call.
+
+=== STDOUT ===
+[TRACE] Runtime tracing enabled for ai-arch-toolkit clients.
+[TRACE] Executing example: /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/examples/29_reflexion_agent.py
+
+[attempt 1]
+[TRACE] [CALL 001] START Client.chat provider=openai model=gpt-5-nano messages=1(sequence)
+[TRACE] [CALL 001] RESPONSE_TEXT_BEGIN chars=128
+299,792.458 km/s
+
+Short calculation: 299,792,458 m/s ÷ 1000 = 299,792.458 km/s (exact by definition, since c = 299,792,458 m/s).
+[TRACE] [CALL 001] RESPONSE_TEXT_END
+[TRACE] [CALL 001] END   Client.chat duration=7.183s result=response(text_chars=128, thinking_chars=0, tool_calls=0, stop_reason=stop)
+
+Final answer:
+299,792.458 km/s
+
+Short calculation: 299,792,458 m/s ÷ 1000 = 299,792.458 km/s (exact by definition, since c = 299,792,458 m/s).
+
+Steps recorded: 1
+Total tokens: 855
+[TRACE] Example execution completed.
+[TRACE] CALL_SUMMARY total_calls=1 completed_calls=1 failed_calls=0
+
+=== STDERR ===
+<empty>
+
+=== OUTPUT VALIDATION ===
+PASS
+

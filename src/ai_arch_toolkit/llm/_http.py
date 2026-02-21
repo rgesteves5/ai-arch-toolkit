@@ -57,8 +57,10 @@ def post_json(
     payload: dict[str, Any],
     timeout: int = 60,
     retry: RetryConfig | None = None,
+    session: requests.Session | None = None,
 ) -> dict[str, Any]:
     """POST JSON and return the parsed response, raising on HTTP errors."""
+    http = session or requests
     config = retry or NO_RETRY
     last_exc: APIError | None = None
     for attempt in range(config.max_retries + 1):
@@ -66,7 +68,7 @@ def post_json(
             retry_after = getattr(last_exc, "retry_after", None)
             time.sleep(_wait_time(attempt, config, retry_after))
         try:
-            r = requests.post(url, headers=headers, json=payload, timeout=timeout)
+            r = http.post(url, headers=headers, json=payload, timeout=timeout)
             _raise_for_status(r)
             return r.json()
         except APIError as exc:
@@ -82,11 +84,13 @@ def stream_sse(
     payload: dict[str, Any],
     timeout: int = 120,
     retry: RetryConfig | None = None,
+    session: requests.Session | None = None,
 ) -> Iterator[str]:
     """POST and yield SSE ``data:`` payloads (without the prefix).
 
     Retries only on connection-level failures (before yielding starts).
     """
+    http = session or requests
     config = retry or NO_RETRY
     last_exc: APIError | None = None
     for attempt in range(config.max_retries + 1):
@@ -94,7 +98,7 @@ def stream_sse(
             retry_after = getattr(last_exc, "retry_after", None)
             time.sleep(_wait_time(attempt, config, retry_after))
         try:
-            with requests.post(
+            with http.post(
                 url, headers=headers, json=payload, stream=True, timeout=timeout
             ) as r:
                 _raise_for_status(r)
@@ -118,11 +122,13 @@ def stream_ndjson(
     payload: dict[str, Any],
     timeout: int = 120,
     retry: RetryConfig | None = None,
+    session: requests.Session | None = None,
 ) -> Iterator[str]:
     """POST and yield newline-delimited JSON lines.
 
     Retries only on connection-level failures (before yielding starts).
     """
+    http = session or requests
     config = retry or NO_RETRY
     last_exc: APIError | None = None
     for attempt in range(config.max_retries + 1):
@@ -130,7 +136,7 @@ def stream_ndjson(
             retry_after = getattr(last_exc, "retry_after", None)
             time.sleep(_wait_time(attempt, config, retry_after))
         try:
-            with requests.post(
+            with http.post(
                 url, headers=headers, json=payload, stream=True, timeout=timeout
             ) as r:
                 _raise_for_status(r)

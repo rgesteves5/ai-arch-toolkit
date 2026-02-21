@@ -1,0 +1,297 @@
+=== EXAMPLE RUN REPORT ===
+example_script: examples/07_thinking.py
+command: .venv/bin/python /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/scripts/_example_trace_runner.py examples/07_thinking.py
+status: SUCCESS
+exit_code: 0
+duration_seconds: 14.302
+interpretation: Command completed without process errors.
+
+=== OUTPUT NOTES ===
+- Trace lines are present. Each [CALL NNN] START/END pair maps output to a specific SDK call.
+- Full model text is included between *_BEGIN and *_END trace markers for each call.
+
+=== STDOUT ===
+[TRACE] Runtime tracing enabled for ai-arch-toolkit clients.
+[TRACE] Executing example: /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/examples/07_thinking.py
+=== Extended Thinking (budget_tokens=2048) ===
+[TRACE] [CALL 001] START Client.chat provider=anthropic model=claude-haiku-4-5 messages=1(prompt str, chars=75)
+[TRACE] [CALL 001] RESPONSE_TEXT_BEGIN chars=1472
+# Philosophical Implications of Gödel's Incompleteness Theorems
+
+## Core Insights
+
+**Truth transcends provability**
+The theorems establish that mathematical truth exists independently of what we can formally prove. Some truths are simply unprovable *within any given system*—a profound distinction many hadn't clearly separated before.
+
+**Limits to formalization**
+No finite set of axioms can capture all mathematical truths. This challenged the ambitious Hilbert program and suggests completeness is fundamentally unattainable, not just practically difficult.
+
+## Deeper Philosophical Questions
+
+| Domain | Implication |
+|--------|-------------|
+| **Platonism** | Suggests abstract mathematical objects exist objectively (what else would these unprovable truths be *about*?) |
+| **Reductionism** | Implies you can't fully reduce mathematics to basic components |
+| **Knowledge limits** | Whether this constrains human understanding remains hotly debated |
+| **Mind & AI** | Some argue it shows consciousness isn't purely computational (controversial) |
+
+## Important Caveats
+
+- **Interpretive gap**: The theorems constrain formal systems, not necessarily human reasoning
+- **Over-extension risk**: Philosophers sometimes draw conclusions Gödel didn't support
+- **Technical precision matters**: Different readings yield different philosophical conclusions
+
+What aspect interests you most—the implications for mathematics itself, for human cognition, or for something else?
+[TRACE] [CALL 001] RESPONSE_TEXT_END
+[TRACE] [CALL 001] RESPONSE_THINKING_BEGIN chars=3176
+This is a great philosophical question about Gödel's incompleteness theorems. Let me think through the main philosophical implications:
+
+**The Theorems Themselves:**
+- First incompleteness theorem: In any consistent formal system powerful enough to express arithmetic, there are true statements that cannot be proved within that system
+- Second incompleteness theorem: No consistent formal system can prove its own consistency
+
+**Major Philosophical Implications:**
+
+1. **Limits of Formal Systems/Axiomatization**
+- Not all mathematical truths can be captured by any single formal system
+- This challenged the Hilbert program's goal of formalizing all mathematics
+- Shows that complete formal axiomatization of mathematics is impossible
+
+2. **Truth vs. Provability**
+- Demonstrates a crucial distinction between what is true and what is provable
+- Some truths are simply unprovable within a given system
+- Truth cannot be reduced to or identified with provability
+
+3. **Implications for Mathematical Platonism**
+- Suggests mathematical truths exist independently of our ability to prove them
+- Supports the idea that mathematical objects/truths have some objective existence
+- Challenges strict formalist views that mathematics is just manipulation of symbols
+
+4. **Reductionism & Emergence**
+- Shows you can't reduce mathematics to any finite set of axioms
+- Suggests some properties cannot be reduced to or derived from fundamental components
+- Questions whether everything can be mechanistically explained
+
+5. **Limitations of Human Knowledge/Reason**
+- Some claim it shows limits of what any finite mind can know or prove
+- Though this is debated - the incompleteness is about formal systems, not necessarily human knowledge
+
+6. **Implications for AI/Computability**
+- Relates to questions about machine intelligence and what machines can compute
+- If mind is computation, there may be limits to what minds can prove about themselves
+- (Though the connection between Gödel and human cognition is controversial)
+
+7. **Philosophy of Mind**
+- Some philosophers (like Penrose) argue Gödel shows human minds can't be purely computational
+
+
+- Conversely, others contend this reasoning misapplies the theorems, questioning whether intelligence could be entirely mechanical.
+
+8. **The Limits of Science/Rationalism**
+- Some interpret Gödel as showing rationalism has fundamental limits
+- Scientific theories can be seen as formal systems with similar limitations
+- Questions about whether a complete scientific theory is possible
+
+9. **Logic and Consistency**
+- Shows that consistency cannot be self-proving
+- A system cannot establish its own consistency from within itself
+- Raises questions about the foundations of mathematics and logic
+
+**Important Caveats:**
+- Different interpretations exist - Gödel's theorems don't automatically settle philosophical questions
+- The theorems are specifically about formal systems and their mathematical properties, not necessarily about the nature of reality or human cognition
+
+. Some philosophical applications drawn from them remain contested, and the theorems themselves don't inherently support mystical or anti-rational conclusions.
+[TRACE] [CALL 001] RESPONSE_THINKING_END
+[TRACE] [CALL 001] RESPONSE_THINKING_BLOCKS count=1
+[TRACE] [CALL 001] RESPONSE_THINKING_BLOCK_1_BEGIN chars=3176
+This is a great philosophical question about Gödel's incompleteness theorems. Let me think through the main philosophical implications:
+
+**The Theorems Themselves:**
+- First incompleteness theorem: In any consistent formal system powerful enough to express arithmetic, there are true statements that cannot be proved within that system
+- Second incompleteness theorem: No consistent formal system can prove its own consistency
+
+**Major Philosophical Implications:**
+
+1. **Limits of Formal Systems/Axiomatization**
+- Not all mathematical truths can be captured by any single formal system
+- This challenged the Hilbert program's goal of formalizing all mathematics
+- Shows that complete formal axiomatization of mathematics is impossible
+
+2. **Truth vs. Provability**
+- Demonstrates a crucial distinction between what is true and what is provable
+- Some truths are simply unprovable within a given system
+- Truth cannot be reduced to or identified with provability
+
+3. **Implications for Mathematical Platonism**
+- Suggests mathematical truths exist independently of our ability to prove them
+- Supports the idea that mathematical objects/truths have some objective existence
+- Challenges strict formalist views that mathematics is just manipulation of symbols
+
+4. **Reductionism & Emergence**
+- Shows you can't reduce mathematics to any finite set of axioms
+- Suggests some properties cannot be reduced to or derived from fundamental components
+- Questions whether everything can be mechanistically explained
+
+5. **Limitations of Human Knowledge/Reason**
+- Some claim it shows limits of what any finite mind can know or prove
+- Though this is debated - the incompleteness is about formal systems, not necessarily human knowledge
+
+6. **Implications for AI/Computability**
+- Relates to questions about machine intelligence and what machines can compute
+- If mind is computation, there may be limits to what minds can prove about themselves
+- (Though the connection between Gödel and human cognition is controversial)
+
+7. **Philosophy of Mind**
+- Some philosophers (like Penrose) argue Gödel shows human minds can't be purely computational
+
+
+- Conversely, others contend this reasoning misapplies the theorems, questioning whether intelligence could be entirely mechanical.
+
+8. **The Limits of Science/Rationalism**
+- Some interpret Gödel as showing rationalism has fundamental limits
+- Scientific theories can be seen as formal systems with similar limitations
+- Questions about whether a complete scientific theory is possible
+
+9. **Logic and Consistency**
+- Shows that consistency cannot be self-proving
+- A system cannot establish its own consistency from within itself
+- Raises questions about the foundations of mathematics and logic
+
+**Important Caveats:**
+- Different interpretations exist - Gödel's theorems don't automatically settle philosophical questions
+- The theorems are specifically about formal systems and their mathematical properties, not necessarily about the nature of reality or human cognition
+
+. Some philosophical applications drawn from them remain contested, and the theorems themselves don't inherently support mystical or anti-rational conclusions.
+[TRACE] [CALL 001] RESPONSE_THINKING_BLOCK_1_END
+[TRACE] [CALL 001] END   Client.chat duration=10.285s result=response(text_chars=1472, thinking_chars=3176, tool_calls=0, stop_reason=end_turn)
+[Thinking (3176 chars)]: This is a great philosophical question about Gödel's incompleteness theorems. Let me think through the main philosophical implications:
+
+**The Theorems Themselves:**
+- First incompleteness theorem: In...
+
+Answer: # Philosophical Implications of Gödel's Incompleteness Theorems
+
+## Core Insights
+
+**Truth transcends provability**
+The theorems establish that mathematical truth exists independently of what we can formally prove. Some truths are simply unprovable *within any given system*—a profound distinction ma ...
+
+=== Extended Thinking (budget_tokens=4096) ===
+[TRACE] [CALL 002] START Client.chat provider=anthropic model=claude-haiku-4-5 messages=1(prompt str, chars=166)
+[TRACE] [CALL 002] RESPONSE_TEXT_BEGIN chars=740
+# Average Speed Calculation
+
+## Step 1: Find Total Distance
+- First segment: 120 km
+- Second segment: 80 km
+- **Total distance = 120 + 80 = 200 km**
+
+## Step 2: Find Total Time
+- First segment: 1.5 hours
+- Stop: 30 minutes = 0.5 hours
+- Second segment: 1 hour
+- **Total time = 1.5 + 0.5 + 1 = 3 hours**
+
+## Step 3: Calculate Average Speed
+$$\text{Average Speed} = \frac{\text{Total Distance}}{\text{Total Time}}$$
+
+$$\text{Average Speed} = \frac{200 \text{ km}}{3 \text{ hours}} = 66.67 \text{ km/h}$$
+
+## Answer
+**The average speed for the entire journey is 66.67 km/h** (or 66⅔ km/h)
+
+*Note: The stop is included in the total time, which is why it reduces the average speed from what it would be if calculated based only on driving time.*
+[TRACE] [CALL 002] RESPONSE_TEXT_END
+[TRACE] [CALL 002] RESPONSE_THINKING_BEGIN chars=525
+Let me solve this step by step.
+
+To find average speed, I need:
+Average speed = Total distance / Total time
+
+Step 1: Find the total distance
+- First leg: 120 km
+- Second leg: 80 km
+- Total distance = 120 + 80 = 200 km
+
+Step 2: Find the total time
+- First leg: 1.5 hours
+- Stop: 30 minutes = 30/60 hours = 0.5 hours
+- Second leg: 1 hour
+- Total time = 1.5 + 0.5 + 1 = 3 hours
+
+Step 3: Calculate average speed
+Average speed = Total distance / Total time
+Average speed = 200 km / 3 hours
+Average speed = 66.67 km/h (or 66⅔ km/h)
+[TRACE] [CALL 002] RESPONSE_THINKING_END
+[TRACE] [CALL 002] RESPONSE_THINKING_BLOCKS count=1
+[TRACE] [CALL 002] RESPONSE_THINKING_BLOCK_1_BEGIN chars=525
+Let me solve this step by step.
+
+To find average speed, I need:
+Average speed = Total distance / Total time
+
+Step 1: Find the total distance
+- First leg: 120 km
+- Second leg: 80 km
+- Total distance = 120 + 80 = 200 km
+
+Step 2: Find the total time
+- First leg: 1.5 hours
+- Stop: 30 minutes = 30/60 hours = 0.5 hours
+- Second leg: 1 hour
+- Total time = 1.5 + 0.5 + 1 = 3 hours
+
+Step 3: Calculate average speed
+Average speed = Total distance / Total time
+Average speed = 200 km / 3 hours
+Average speed = 66.67 km/h (or 66⅔ km/h)
+[TRACE] [CALL 002] RESPONSE_THINKING_BLOCK_1_END
+[TRACE] [CALL 002] END   Client.chat duration=3.675s result=response(text_chars=740, thinking_chars=525, tool_calls=0, stop_reason=end_turn)
+[Thinking (525 chars)]: Let me solve this step by step.
+
+To find average speed, I need:
+Average speed = Total distance / Total time
+
+Step 1: Find the total distance
+- First leg: 120 km
+- Second leg: 80 km
+- Total distance = ...
+
+Answer: # Average Speed Calculation
+
+## Step 1: Find Total Distance
+- First segment: 120 km
+- Second segment: 80 km
+- **Total distance = 120 + 80 = 200 km**
+
+## Step 2: Find Total Time
+- First segment: 1.5 hours
+- Stop: 30 minutes = 0.5 hours
+- Second segment: 1 hour
+- **Total time = 1.5 + 0.5 + 1 = 3 hours**
+
+## Step 3: Calculate Average Speed
+$$\text{Average Speed} = \frac{\text{Total Distance}}{\text{Total Time}}$$
+
+$$\text{Average Speed} = \frac{200 \text{ km}}{3 \text{ hours}} = 66.67 \text{ km/h}$$
+
+## Answer
+**The average speed for the entire journey is 66.67 km/h** (or 66⅔ km/h)
+
+*Note: The stop is included in the total time, which is why it reduces the average speed from what it would be if calculated based only on driving time.*
+
+=== Adaptive Thinking (effort='high') ===
+[TRACE] [CALL 003] START Client.chat provider=anthropic model=claude-haiku-4-5 messages=1(prompt str, chars=65)
+[TRACE] [CALL 003] FAIL  Client.chat duration=0.182s error=APIError: HTTP 400: {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'thinking.adaptive.effort: Extra inputs are not permitted'}, 'request_id': 'req_011CY1GPaYYkMTXreiVdPZqW'}
+Adaptive effort not supported by this model/account: HTTP 400: {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'thinking.adaptive.effort: Extra inputs are not permitted'}, 'request_id': 'req_011CY1GPaYYkMTXreiVdPZqW'}
+[TRACE] Example execution completed.
+[TRACE] CALL_SUMMARY total_calls=3 completed_calls=2 failed_calls=1
+
+=== STDERR ===
+<empty>
+
+=== OUTPUT VALIDATION ===
+PASS
+

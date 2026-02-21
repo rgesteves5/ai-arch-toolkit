@@ -1,0 +1,122 @@
+=== EXAMPLE RUN REPORT ===
+example_script: examples/31_llm_compiler_agent.py
+command: .venv/bin/python /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/scripts/_example_trace_runner.py examples/31_llm_compiler_agent.py
+status: SUCCESS
+exit_code: 0
+duration_seconds: 63.151
+interpretation: Command completed without process errors.
+
+=== OUTPUT NOTES ===
+- Trace lines are present. Each [CALL NNN] START/END pair maps output to a specific SDK call.
+- Full model text is included between *_BEGIN and *_END trace markers for each call.
+
+=== STDOUT ===
+[TRACE] Runtime tracing enabled for ai-arch-toolkit clients.
+[TRACE] Executing example: /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/examples/31_llm_compiler_agent.py
+
+[step 1 start]
+[TRACE] [CALL 001] START Client.chat provider=openai model=gpt-5-nano messages=1(sequence)
+[TRACE] [CALL 001] RESPONSE_TEXT_BEGIN chars=330
+[
+  {"id": "1", "tool": "lookup_planet", "args": {"name": "Earth"}, "deps": []},
+  {"id": "2", "tool": "lookup_planet", "args": {"name": "Mars"}, "deps": []},
+  {"id": "3", "tool": "calculator", "args": {"expression": "$1 / $2"}, "deps": ["1", "2"]}
+]
+
+Earth/Mars diameter ratio ≈ 1.88 (Earth is about 1.88 times as wide as Mars).
+[TRACE] [CALL 001] RESPONSE_TEXT_END
+[TRACE] [CALL 001] END   Client.chat duration=21.786s result=response(text_chars=330, thinking_chars=0, tool_calls=0, stop_reason=stop)
+
+[plan_created]
+[
+  {"id": "1", "tool": "lookup_planet", "args": {"name": "Earth"}, "deps": []},
+  {"id": "2", "tool": "lookup_planet", "args": {"name": "Mars"}, "deps": []},
+  {"id": "3", "tool": "calculator", "args": {"expression": "$1 / $2"}, "deps": ["1", "2"]}
+]
+
+Earth/Mars diameter ratio ≈ 1.88 (Earth is about 1.88 times as wide as Mars).
+
+[step 2 start]
+[tool_call] lookup_planet args={'name': 'Earth'}
+[tool_call] lookup_planet args={'name': 'Mars'}
+[tool_result] Error: Missing required argument 'input' for tool 'lookup_planet'
+[tool_result] Error: Missing required argument 'input' for tool 'lookup_planet'
+
+[step 3 start]
+[tool_call] calculator args={'expression': "Error: Missing required argument 'input' for tool 'lookup_planet' / Error: Missing required argument 'input' for tool 'lookup_planet'"}
+[tool_result] Error: Missing required argument 'input' for tool 'calculator'
+[TRACE] [CALL 002] START Client.chat provider=openai model=gpt-5-nano messages=1(sequence)
+[TRACE] [CALL 002] RESPONSE_TEXT_BEGIN chars=608
+REPLAN
+
+The results are not sufficient. All tool calls returned errors and no diameters were obtained, so the Earth/Mars ratio cannot be computed yet.
+
+What’s needed:
+- Retrieve the diameters for Earth and Mars (preferably the same type, e.g., equatorial diameters), in the same units (km or miles).
+- Then compute ratio = Earth_diameter / Mars_diameter (using a calculator tool or manual calculation).
+
+If you want, I can fetch standard values and compute the ratio. Common values: Earth ≈ 12,742 km, Mars ≈ 6,779–6,792 km, giving a ratio ≈ 1.88. If you want me to use those, I can proceed once you confirm.
+[TRACE] [CALL 002] RESPONSE_TEXT_END
+[TRACE] [CALL 002] END   Client.chat duration=8.999s result=response(text_chars=608, thinking_chars=0, tool_calls=0, stop_reason=stop)
+
+[plan_created]
+REPLAN
+
+The results are not sufficient. All tool calls returned errors and no diameters were obtained, so the Earth/Mars ratio cannot be computed yet.
+
+What’s needed:
+- Retrieve the diameters for Earth and Mars (preferably the same type, e.g., equatorial diameters), in the same units (km or miles).
+- Then compute ratio = Earth_diameter / Mars_diameter (using a calculator tool or manual calculation).
+
+If you want, I can fetch standard values and compute the ratio. Common values: Earth ≈ 12,742 km, Mars ≈ 6,779–6,792 km, giving a ratio ≈ 1.88. If you want me to use those, I can proceed once you confirm.
+[TRACE] [CALL 003] START Client.chat provider=openai model=gpt-5-nano messages=1(sequence)
+[TRACE] [CALL 003] RESPONSE_TEXT_BEGIN chars=252
+[
+  {"id": "4", "tool": "lookup_planet", "args": {"input": "Earth"}, "deps": []},
+  {"id": "5", "tool": "lookup_planet", "args": {"input": "Mars"}, "deps": []},
+  {"id": "6", "tool": "calculator", "args": {"expression": "$1 / $2"}, "deps": ["4","5"]}
+]
+[TRACE] [CALL 003] RESPONSE_TEXT_END
+[TRACE] [CALL 003] END   Client.chat duration=20.054s result=response(text_chars=252, thinking_chars=0, tool_calls=0, stop_reason=stop)
+
+[step 5 start]
+[tool_call] lookup_planet args={'input': 'Earth'}
+[tool_call] lookup_planet args={'input': 'Mars'}
+[tool_result] No data for: Earth
+[tool_result] No data for: Mars
+
+[step 6 start]
+[tool_call] calculator args={'expression': "Error: Missing required argument 'input' for tool 'lookup_planet' / Error: Missing required argument 'input' for tool 'lookup_planet'"}
+[tool_result] Error: Missing required argument 'input' for tool 'calculator'
+
+[step 7 start]
+[TRACE] [CALL 004] START Client.chat provider=openai model=gpt-5-nano messages=1(sequence)
+[TRACE] [CALL 004] RESPONSE_TEXT_BEGIN chars=152
+Earth diameter: about 12,742 km
+Mars diameter: about 6,779 km
+
+Earth/Mars ratio ≈ 12,742 / 6,779 ≈ 1.88
+
+So Earth is roughly 1.88 times wider than Mars.
+[TRACE] [CALL 004] RESPONSE_TEXT_END
+[TRACE] [CALL 004] END   Client.chat duration=12.143s result=response(text_chars=152, thinking_chars=0, tool_calls=0, stop_reason=stop)
+
+Final answer:
+Earth diameter: about 12,742 km
+Mars diameter: about 6,779 km
+
+Earth/Mars ratio ≈ 12,742 / 6,779 ≈ 1.88
+
+So Earth is roughly 1.88 times wider than Mars.
+
+Steps recorded: 3
+Total tokens: 6593
+[TRACE] Example execution completed.
+[TRACE] CALL_SUMMARY total_calls=4 completed_calls=4 failed_calls=0
+
+=== STDERR ===
+<empty>
+
+=== OUTPUT VALIDATION ===
+PASS
+

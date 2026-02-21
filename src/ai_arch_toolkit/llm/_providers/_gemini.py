@@ -245,7 +245,14 @@ class GeminiProvider(BaseProvider):
         payload = self._build_payload(
             messages, system=system, tools=tools, json_schema=json_schema, **kwargs
         )
-        raw = post_json(self._url, self._headers, payload, timeout=timeout, retry=self._retry)
+        raw = post_json(
+            self._url,
+            self._headers,
+            payload,
+            timeout=timeout,
+            retry=self._retry,
+            session=self._session,
+        )
         return _parse_response(raw)
 
     def stream(
@@ -258,7 +265,12 @@ class GeminiProvider(BaseProvider):
         timeout = kwargs.pop("timeout", 120)
         payload = self._build_payload(messages, system=system, **kwargs)
         for data in stream_sse(
-            self._stream_url, self._headers, payload, timeout=timeout, retry=self._retry
+            self._stream_url,
+            self._headers,
+            payload,
+            timeout=timeout,
+            retry=self._retry,
+            session=self._session,
         ):
             try:
                 chunk = json.loads(data)
@@ -280,7 +292,12 @@ class GeminiProvider(BaseProvider):
         timeout = kwargs.pop("timeout", 120)
         payload = self._build_payload(messages, system=system, tools=tools, **kwargs)
         for data in stream_sse(
-            self._stream_url, self._headers, payload, timeout=timeout, retry=self._retry
+            self._stream_url,
+            self._headers,
+            payload,
+            timeout=timeout,
+            retry=self._retry,
+            session=self._session,
         ):
             try:
                 chunk = json.loads(data)
@@ -329,7 +346,14 @@ class GeminiProvider(BaseProvider):
         }
         if system:
             payload["systemInstruction"] = {"parts": [{"text": system}]}
-        raw = post_json(_CACHE_URL, self._headers, payload, timeout=60, retry=self._retry)
+        raw = post_json(
+            _CACHE_URL,
+            self._headers,
+            payload,
+            timeout=60,
+            retry=self._retry,
+            session=self._session,
+        )
         return raw.get("name", "")
 
     def complete_with_cache(
@@ -351,7 +375,14 @@ class GeminiProvider(BaseProvider):
             gen_config["maxOutputTokens"] = kwargs.pop("max_tokens")
         if gen_config:
             payload["generationConfig"] = gen_config
-        raw = post_json(self._url, self._headers, payload, timeout=timeout, retry=self._retry)
+        raw = post_json(
+            self._url,
+            self._headers,
+            payload,
+            timeout=timeout,
+            retry=self._retry,
+            session=self._session,
+        )
         return _parse_response(raw)
 
     async def acomplete(
@@ -368,7 +399,12 @@ class GeminiProvider(BaseProvider):
             messages, system=system, tools=tools, json_schema=json_schema, **kwargs
         )
         raw = await async_post_json(
-            self._url, self._headers, payload, timeout=timeout, retry=self._retry
+            self._url,
+            self._headers,
+            payload,
+            timeout=timeout,
+            retry=self._retry,
+            client=self._async_client,
         )
         return _parse_response(raw)
 
@@ -382,7 +418,12 @@ class GeminiProvider(BaseProvider):
         timeout = kwargs.pop("timeout", 120)
         payload = self._build_payload(messages, system=system, **kwargs)
         async for data in async_stream_sse(
-            self._stream_url, self._headers, payload, timeout=timeout, retry=self._retry
+            self._stream_url,
+            self._headers,
+            payload,
+            timeout=timeout,
+            retry=self._retry,
+            client=self._async_client,
         ):
             try:
                 chunk = json.loads(data)
@@ -404,7 +445,12 @@ class GeminiProvider(BaseProvider):
         timeout = kwargs.pop("timeout", 120)
         payload = self._build_payload(messages, system=system, tools=tools, **kwargs)
         async for data in async_stream_sse(
-            self._stream_url, self._headers, payload, timeout=timeout, retry=self._retry
+            self._stream_url,
+            self._headers,
+            payload,
+            timeout=timeout,
+            retry=self._retry,
+            client=self._async_client,
         ):
             try:
                 chunk = json.loads(data)

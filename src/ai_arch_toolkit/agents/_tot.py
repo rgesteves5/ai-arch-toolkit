@@ -10,6 +10,7 @@ from ai_arch_toolkit.agents._base import (
     AgentResult,
     AgentStep,
     BaseAgent,
+    TreeOfThoughtsResult,
     _accumulate_usage,
     _fire_event,
 )
@@ -54,6 +55,16 @@ class TreeOfThoughtsAgent(BaseAgent):
 
     def run(self, task: str, **kwargs: Any) -> AgentResult:
         """Run the Tree of Thoughts search."""
+        stream = kwargs.pop("stream", False)
+        cancellation_token = self._resolve_cancellation_token(
+            kwargs.pop("cancellation_token", None)
+        )
+        if stream:
+            return self.run_stream(
+                task,
+                cancellation_token=cancellation_token,
+                **kwargs,
+            )
         max_depth = kwargs.pop("max_depth", 3)
         branching_factor = kwargs.pop("branching_factor", 3)
         beam_width = kwargs.pop("beam_width", 2)
@@ -62,6 +73,18 @@ class TreeOfThoughtsAgent(BaseAgent):
         total_usage = Usage()
         all_steps: list[AgentStep] = []
         start = time.monotonic()
+        budget = self._new_budget_manager()
+
+        if self._is_cancelled(cancellation_token):
+            return self._finalize_result(
+                TreeOfThoughtsResult(
+                    answer="[cancelled]",
+                    steps=tuple(all_steps),
+                    total_usage=total_usage,
+                    stop_reason="cancelled",
+                ),
+                result_type=TreeOfThoughtsResult,
+            )
 
         root = _ThoughtNode(state="(start)", depth=0)
         best_node = root
@@ -73,6 +96,7 @@ class TreeOfThoughtsAgent(BaseAgent):
                 max_depth,
                 branching_factor,
                 system,
+                budget,
                 total_usage,
                 all_steps,
                 best_node,
@@ -87,16 +111,26 @@ class TreeOfThoughtsAgent(BaseAgent):
                 branching_factor,
                 beam_width,
                 system,
+                budget,
                 total_usage,
                 all_steps,
                 start=start,
                 **kwargs,
             )
+        stop_reason = "completed"
+        if best_node.state == "[timeout exceeded]":
+            stop_reason = "timeout"
+        elif budget.exhausted_reason() is not None:
+            stop_reason = "budget_exhausted"
 
-        return AgentResult(
-            answer=best_node.state,
-            steps=tuple(all_steps),
-            total_usage=total_usage,
+        return self._finalize_result(
+            TreeOfThoughtsResult(
+                answer=best_node.state,
+                steps=tuple(all_steps),
+                total_usage=total_usage,
+                stop_reason=stop_reason,
+            ),
+            result_type=TreeOfThoughtsResult,
         )
 
     def _bfs(
@@ -107,6 +141,7 @@ class TreeOfThoughtsAgent(BaseAgent):
         branching_factor: int,
         beam_width: int,
         system: str | None,
+        budget: object,
         total_usage: Usage,
         all_steps: list[AgentStep],
         *,
@@ -130,6 +165,7 @@ class TreeOfThoughtsAgent(BaseAgent):
                     branching_factor,
                     depth,
                     system,
+                    budget=budget,
                     **kwargs,
                 )
                 total_usage = _accumulate_usage(total_usage, usage)
@@ -160,6 +196,7 @@ class TreeOfThoughtsAgent(BaseAgent):
         max_depth: int,
         branching_factor: int,
         system: str | None,
+        budget: object,
         total_usage: Usage,
         all_steps: list[AgentStep],
         best_node: _ThoughtNode,
@@ -175,7 +212,7 @@ class TreeOfThoughtsAgent(BaseAgent):
         _fire_event(self.config, "step_start", step_number=depth)
 
         children, usage, steps = self._expand_and_score(
-            task, node, branching_factor, depth, system, **kwargs
+            task, node, branching_factor, depth, system, budget=budget, **kwargs
         )
         total_usage = _accumulate_usage(total_usage, usage)
         all_steps.extend(steps)
@@ -193,6 +230,7 @@ class TreeOfThoughtsAgent(BaseAgent):
                 max_depth,
                 branching_factor,
                 system,
+                budget,
                 total_usage,
                 all_steps,
                 best_node,
@@ -209,6 +247,8 @@ class TreeOfThoughtsAgent(BaseAgent):
         branching_factor: int,
         depth: int,
         system: str | None,
+        *,
+        budget: object,
         **kwargs: Any,
     ) -> tuple[list[_ThoughtNode], Usage, list[AgentStep]]:
         """Generate and score child thoughts for a node."""
@@ -223,6 +263,7 @@ class TreeOfThoughtsAgent(BaseAgent):
             **kwargs,
         )
         total_usage = _accumulate_usage(total_usage, gen_resp.usage)
+        self._observe_response(budget, gen_resp, step_number=depth)
         steps.append(AgentStep(step_number=depth, response=gen_resp))
 
         thoughts = parse_numbered_items(gen_resp.text, branching_factor)
@@ -237,6 +278,7 @@ class TreeOfThoughtsAgent(BaseAgent):
                 **kwargs,
             )
             total_usage = _accumulate_usage(total_usage, eval_resp.usage)
+            self._observe_response(budget, eval_resp, step_number=depth)
             score = parse_score(eval_resp.text)
             child = _ThoughtNode(
                 state=thought,
@@ -251,6 +293,16 @@ class TreeOfThoughtsAgent(BaseAgent):
 
     async def async_run(self, task: str, **kwargs: Any) -> AgentResult:
         """Run the Tree of Thoughts search asynchronously."""
+        stream = kwargs.pop("stream", False)
+        cancellation_token = self._resolve_cancellation_token(
+            kwargs.pop("cancellation_token", None)
+        )
+        if stream:
+            return self.async_run_stream(
+                task,
+                cancellation_token=cancellation_token,
+                **kwargs,
+            )
         max_depth = kwargs.pop("max_depth", 3)
         branching_factor = kwargs.pop("branching_factor", 3)
         beam_width = kwargs.pop("beam_width", 2)
@@ -259,6 +311,18 @@ class TreeOfThoughtsAgent(BaseAgent):
         total_usage = Usage()
         all_steps: list[AgentStep] = []
         start = time.monotonic()
+        budget = self._new_budget_manager()
+
+        if self._is_cancelled(cancellation_token):
+            return self._finalize_result(
+                TreeOfThoughtsResult(
+                    answer="[cancelled]",
+                    steps=tuple(all_steps),
+                    total_usage=total_usage,
+                    stop_reason="cancelled",
+                ),
+                result_type=TreeOfThoughtsResult,
+            )
 
         root = _ThoughtNode(state="(start)", depth=0)
         best_node = root
@@ -270,6 +334,7 @@ class TreeOfThoughtsAgent(BaseAgent):
                 max_depth,
                 branching_factor,
                 system,
+                budget,
                 total_usage,
                 all_steps,
                 best_node,
@@ -284,16 +349,26 @@ class TreeOfThoughtsAgent(BaseAgent):
                 branching_factor,
                 beam_width,
                 system,
+                budget,
                 total_usage,
                 all_steps,
                 start=start,
                 **kwargs,
             )
+        stop_reason = "completed"
+        if best_node.state == "[timeout exceeded]":
+            stop_reason = "timeout"
+        elif budget.exhausted_reason() is not None:
+            stop_reason = "budget_exhausted"
 
-        return AgentResult(
-            answer=best_node.state,
-            steps=tuple(all_steps),
-            total_usage=total_usage,
+        return self._finalize_result(
+            TreeOfThoughtsResult(
+                answer=best_node.state,
+                steps=tuple(all_steps),
+                total_usage=total_usage,
+                stop_reason=stop_reason,
+            ),
+            result_type=TreeOfThoughtsResult,
         )
 
     async def _async_bfs(
@@ -304,6 +379,7 @@ class TreeOfThoughtsAgent(BaseAgent):
         branching_factor: int,
         beam_width: int,
         system: str | None,
+        budget: object,
         total_usage: Usage,
         all_steps: list[AgentStep],
         *,
@@ -326,6 +402,7 @@ class TreeOfThoughtsAgent(BaseAgent):
                     branching_factor,
                     depth,
                     system,
+                    budget=budget,
                     **kwargs,
                 )
                 total_usage = _accumulate_usage(total_usage, usage)
@@ -355,6 +432,7 @@ class TreeOfThoughtsAgent(BaseAgent):
         max_depth: int,
         branching_factor: int,
         system: str | None,
+        budget: object,
         total_usage: Usage,
         all_steps: list[AgentStep],
         best_node: _ThoughtNode,
@@ -374,6 +452,7 @@ class TreeOfThoughtsAgent(BaseAgent):
             branching_factor,
             depth,
             system,
+            budget=budget,
             **kwargs,
         )
         total_usage = _accumulate_usage(total_usage, usage)
@@ -391,6 +470,7 @@ class TreeOfThoughtsAgent(BaseAgent):
                 max_depth,
                 branching_factor,
                 system,
+                budget,
                 total_usage,
                 all_steps,
                 best_node,
@@ -407,6 +487,8 @@ class TreeOfThoughtsAgent(BaseAgent):
         branching_factor: int,
         depth: int,
         system: str | None,
+        *,
+        budget: object,
         **kwargs: Any,
     ) -> tuple[list[_ThoughtNode], Usage, list[AgentStep]]:
         total_usage = Usage()
@@ -419,6 +501,7 @@ class TreeOfThoughtsAgent(BaseAgent):
             **kwargs,
         )
         total_usage = _accumulate_usage(total_usage, gen_resp.usage)
+        self._observe_response(budget, gen_resp, step_number=depth)
         steps.append(AgentStep(step_number=depth, response=gen_resp))
 
         thoughts = parse_numbered_items(gen_resp.text, branching_factor)
@@ -432,6 +515,7 @@ class TreeOfThoughtsAgent(BaseAgent):
                 **kwargs,
             )
             total_usage = _accumulate_usage(total_usage, eval_resp.usage)
+            self._observe_response(budget, eval_resp, step_number=depth)
             score = parse_score(eval_resp.text)
             child = _ThoughtNode(
                 state=thought,

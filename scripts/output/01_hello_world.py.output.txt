@@ -1,0 +1,31 @@
+=== EXAMPLE RUN REPORT ===
+example_script: examples/01_hello_world.py
+command: .venv/bin/python /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/scripts/_example_trace_runner.py examples/01_hello_world.py
+status: SUCCESS
+exit_code: 0
+duration_seconds: 2.569
+interpretation: Command completed without process errors.
+
+=== OUTPUT NOTES ===
+- Trace lines are present. Each [CALL NNN] START/END pair maps output to a specific SDK call.
+- Full model text is included between *_BEGIN and *_END trace markers for each call.
+
+=== STDOUT ===
+[TRACE] Runtime tracing enabled for ai-arch-toolkit clients.
+[TRACE] Executing example: /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/examples/01_hello_world.py
+[TRACE] [CALL 001] START Client.chat provider=openai model=gpt-5-nano messages=1(prompt str, chars=53)
+[TRACE] [CALL 001] RESPONSE_TEXT_BEGIN chars=31
+The capital of France is Paris.
+[TRACE] [CALL 001] RESPONSE_TEXT_END
+[TRACE] [CALL 001] END   Client.chat duration=2.408s result=response(text_chars=31, thinking_chars=0, tool_calls=0, stop_reason=stop)
+Response: The capital of France is Paris.
+Tokens — in: 18, out: 80
+[TRACE] Example execution completed.
+[TRACE] CALL_SUMMARY total_calls=1 completed_calls=1 failed_calls=0
+
+=== STDERR ===
+<empty>
+
+=== OUTPUT VALIDATION ===
+PASS
+

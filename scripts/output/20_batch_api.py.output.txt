@@ -1,0 +1,116 @@
+=== EXAMPLE RUN REPORT ===
+example_script: examples/20_batch_api.py
+command: .venv/bin/python /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/scripts/_example_trace_runner.py examples/20_batch_api.py
+status: SUCCESS
+exit_code: 0
+duration_seconds: 58.228
+interpretation: Command completed without process errors.
+
+=== OUTPUT NOTES ===
+- Trace lines are present. Each [CALL NNN] START/END pair maps output to a specific SDK call.
+- Full model text is included between *_BEGIN and *_END trace markers for each call.
+
+=== STDOUT ===
+[TRACE] Runtime tracing enabled for ai-arch-toolkit clients.
+[TRACE] Executing example: /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/examples/20_batch_api.py
+[TRACE] [CALL 001] START BatchClient.submit provider=openai model=gpt-5-nano messages=2(sequence)
+[TRACE] [CALL 001] END   BatchClient.submit duration=0.962s result=BatchJob
+Submitted batch: batch_698bc2119b4081909082490d8a467190 (status=validating)
+[TRACE] [CALL 002] START BatchClient.status provider=openai model=gpt-5-nano messages=unknown(type=BatchJob)
+[TRACE] [CALL 002] END   BatchClient.status duration=0.211s result=BatchJob
+Batch status: in_progress
+[TRACE] [CALL 003] START BatchClient.status provider=openai model=gpt-5-nano messages=unknown(type=BatchJob)
+[TRACE] [CALL 003] END   BatchClient.status duration=0.220s result=BatchJob
+Batch status: in_progress
+[TRACE] [CALL 004] START BatchClient.status provider=openai model=gpt-5-nano messages=unknown(type=BatchJob)
+[TRACE] [CALL 004] END   BatchClient.status duration=0.212s result=BatchJob
+Batch status: in_progress
+[TRACE] [CALL 005] START BatchClient.status provider=openai model=gpt-5-nano messages=unknown(type=BatchJob)
+[TRACE] [CALL 005] END   BatchClient.status duration=0.330s result=BatchJob
+Batch status: in_progress
+[TRACE] [CALL 006] START BatchClient.status provider=openai model=gpt-5-nano messages=unknown(type=BatchJob)
+[TRACE] [CALL 006] END   BatchClient.status duration=0.215s result=BatchJob
+Batch status: in_progress
+[TRACE] [CALL 007] START BatchClient.status provider=openai model=gpt-5-nano messages=unknown(type=BatchJob)
+[TRACE] [CALL 007] END   BatchClient.status duration=0.219s result=BatchJob
+Batch status: in_progress
+[TRACE] [CALL 008] START BatchClient.status provider=openai model=gpt-5-nano messages=unknown(type=BatchJob)
+[TRACE] [CALL 008] END   BatchClient.status duration=0.219s result=BatchJob
+Batch status: in_progress
+[TRACE] [CALL 009] START BatchClient.status provider=openai model=gpt-5-nano messages=unknown(type=BatchJob)
+[TRACE] [CALL 009] END   BatchClient.status duration=0.218s result=BatchJob
+Batch status: in_progress
+[TRACE] [CALL 010] START BatchClient.status provider=openai model=gpt-5-nano messages=unknown(type=BatchJob)
+[TRACE] [CALL 010] END   BatchClient.status duration=0.616s result=BatchJob
+Batch status: in_progress
+[TRACE] [CALL 011] START BatchClient.status provider=openai model=gpt-5-nano messages=unknown(type=BatchJob)
+[TRACE] [CALL 011] END   BatchClient.status duration=0.209s result=BatchJob
+Batch status: in_progress
+[TRACE] [CALL 012] START BatchClient.status provider=openai model=gpt-5-nano messages=unknown(type=BatchJob)
+[TRACE] [CALL 012] END   BatchClient.status duration=0.213s result=BatchJob
+Batch status: in_progress
+[TRACE] [CALL 013] START BatchClient.status provider=openai model=gpt-5-nano messages=unknown(type=BatchJob)
+[TRACE] [CALL 013] END   BatchClient.status duration=0.240s result=BatchJob
+Batch status: in_progress
+[TRACE] [CALL 014] START BatchClient.status provider=openai model=gpt-5-nano messages=unknown(type=BatchJob)
+[TRACE] [CALL 014] END   BatchClient.status duration=0.227s result=BatchJob
+Batch status: in_progress
+[TRACE] [CALL 015] START BatchClient.status provider=openai model=gpt-5-nano messages=unknown(type=BatchJob)
+[TRACE] [CALL 015] END   BatchClient.status duration=0.208s result=BatchJob
+Batch status: in_progress
+[TRACE] [CALL 016] START BatchClient.status provider=openai model=gpt-5-nano messages=unknown(type=BatchJob)
+[TRACE] [CALL 016] END   BatchClient.status duration=0.217s result=BatchJob
+Batch status: in_progress
+[TRACE] [CALL 017] START BatchClient.status provider=openai model=gpt-5-nano messages=unknown(type=BatchJob)
+[TRACE] [CALL 017] END   BatchClient.status duration=0.228s result=BatchJob
+Batch status: in_progress
+[TRACE] [CALL 018] START BatchClient.status provider=openai model=gpt-5-nano messages=unknown(type=BatchJob)
+[TRACE] [CALL 018] END   BatchClient.status duration=0.217s result=BatchJob
+Batch status: in_progress
+[TRACE] [CALL 019] START BatchClient.status provider=openai model=gpt-5-nano messages=unknown(type=BatchJob)
+[TRACE] [CALL 019] END   BatchClient.status duration=0.214s result=BatchJob
+Batch status: in_progress
+[TRACE] [CALL 020] START BatchClient.status provider=openai model=gpt-5-nano messages=unknown(type=BatchJob)
+[TRACE] [CALL 020] END   BatchClient.status duration=0.330s result=BatchJob
+Batch status: in_progress
+[TRACE] [CALL 021] START BatchClient.status provider=openai model=gpt-5-nano messages=unknown(type=BatchJob)
+[TRACE] [CALL 021] END   BatchClient.status duration=0.220s result=BatchJob
+Batch status: in_progress
+[TRACE] [CALL 022] START BatchClient.status provider=openai model=gpt-5-nano messages=unknown(type=BatchJob)
+[TRACE] [CALL 022] END   BatchClient.status duration=0.217s result=BatchJob
+Batch status: in_progress
+[TRACE] [CALL 023] START BatchClient.status provider=openai model=gpt-5-nano messages=unknown(type=BatchJob)
+[TRACE] [CALL 023] END   BatchClient.status duration=0.210s result=BatchJob
+Batch status: in_progress
+[TRACE] [CALL 024] START BatchClient.status provider=openai model=gpt-5-nano messages=unknown(type=BatchJob)
+[TRACE] [CALL 024] END   BatchClient.status duration=0.216s result=BatchJob
+Batch status: finalizing
+[TRACE] [CALL 025] START BatchClient.status provider=openai model=gpt-5-nano messages=unknown(type=BatchJob)
+[TRACE] [CALL 025] END   BatchClient.status duration=0.214s result=BatchJob
+Batch status: finalizing
+[TRACE] [CALL 026] START BatchClient.status provider=openai model=gpt-5-nano messages=unknown(type=BatchJob)
+[TRACE] [CALL 026] END   BatchClient.status duration=0.219s result=BatchJob
+Batch status: completed
+[TRACE] [CALL 027] START BatchClient.results provider=openai model=gpt-5-nano messages=unknown(type=BatchJob)
+[TRACE] [CALL 027] BATCH_ITEM_1 custom_id=q1 response_text_chars=79
+[TRACE] [CALL 027] BATCH_ITEM_1_RESPONSE_TEXT_BEGIN chars=79
+4. In base-10 arithmetic, 2 + 2 = 4. (For reference, in binary: 10 + 10 = 100.)
+[TRACE] [CALL 027] BATCH_ITEM_1_RESPONSE_TEXT_END
+[TRACE] [CALL 027] BATCH_ITEM_2 custom_id=q2 response_text_chars=2
+[TRACE] [CALL 027] BATCH_ITEM_2_RESPONSE_TEXT_BEGIN chars=2
+Io
+[TRACE] [CALL 027] BATCH_ITEM_2_RESPONSE_TEXT_END
+[TRACE] [CALL 027] END   BatchClient.results duration=0.982s result=list(len=2)
+
+Results:
+  q1: 4. In base-10 arithmetic, 2 + 2 = 4. (For reference, in binary: 10 + 10 = 100.)
+  q2: Io
+[TRACE] Example execution completed.
+[TRACE] CALL_SUMMARY total_calls=27 completed_calls=27 failed_calls=0
+
+=== STDERR ===
+<empty>
+
+=== OUTPUT VALIDATION ===
+PASS
+

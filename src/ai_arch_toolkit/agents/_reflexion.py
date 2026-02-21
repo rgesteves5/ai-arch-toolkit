@@ -10,6 +10,7 @@ from ai_arch_toolkit.agents._base import (
     AgentResult,
     AgentStep,
     BaseAgent,
+    ReflexionResult,
     _accumulate_usage,
     _fire_event,
 )
@@ -44,6 +45,7 @@ class ReflexionAgent(BaseAgent):
             max_iterations=self.config.max_iterations,
             system=inner_system,
             max_tokens=self.config.max_tokens,
+            planner_repair_retries=self.config.planner_repair_retries,
         )
 
     def _build_reflect_prompt(self, task: str, result: str, reflections: list[str]) -> str:
@@ -56,6 +58,16 @@ class ReflexionAgent(BaseAgent):
 
     def run(self, task: str, **kwargs: Any) -> AgentResult:
         """Run the Reflexion loop."""
+        stream = kwargs.pop("stream", False)
+        cancellation_token = self._resolve_cancellation_token(
+            kwargs.pop("cancellation_token", None)
+        )
+        if stream:
+            return self.run_stream(
+                task,
+                cancellation_token=cancellation_token,
+                **kwargs,
+            )
         evaluator = kwargs.pop("evaluator", None)
         if evaluator is None:
             msg = "ReflexionAgent requires an 'evaluator' kwarg"
@@ -63,16 +75,42 @@ class ReflexionAgent(BaseAgent):
         threshold = kwargs.pop("threshold", 0.8)
         system = self.config.system or None
         total_usage = Usage()
+        budget = self._new_budget_manager()
         all_steps: list[AgentStep] = []
         reflections: list[str] = []
+        last_inner_answer = ""
         start = time.monotonic()
 
         for attempt in range(1, self.config.max_iterations + 1):
+            if self._is_cancelled(cancellation_token):
+                return self._finalize_result(
+                    ReflexionResult(
+                        answer="[cancelled]",
+                        steps=tuple(all_steps),
+                        total_usage=total_usage,
+                        stop_reason="cancelled",
+                    ),
+                    result_type=ReflexionResult,
+                )
             if self._check_timeout(start):
-                return AgentResult(
-                    answer="[timeout exceeded]",
-                    steps=tuple(all_steps),
-                    total_usage=total_usage,
+                return self._finalize_result(
+                    ReflexionResult(
+                        answer="[timeout exceeded]",
+                        steps=tuple(all_steps),
+                        total_usage=total_usage,
+                        stop_reason="timeout",
+                    ),
+                    result_type=ReflexionResult,
+                )
+            if budget.exhausted_reason() is not None:
+                return self._finalize_result(
+                    ReflexionResult(
+                        answer="[token budget exceeded]",
+                        steps=tuple(all_steps),
+                        total_usage=total_usage,
+                        stop_reason="budget_exhausted",
+                    ),
+                    result_type=ReflexionResult,
                 )
             _fire_event(self.config, "step_start", step_number=attempt)
 
@@ -82,8 +120,14 @@ class ReflexionAgent(BaseAgent):
                 self.tools,
                 config=inner_config,
             )
-            inner_result = inner.run(task, **kwargs)
+            inner_result = inner.run(
+                task,
+                cancellation_token=cancellation_token,
+                **kwargs,
+            )
+            last_inner_answer = inner_result.answer
             total_usage = _accumulate_usage(total_usage, inner_result.total_usage)
+            budget.observe_usage(inner_result.total_usage)
             all_steps.extend(inner_result.steps)
 
             # Evaluate
@@ -91,10 +135,15 @@ class ReflexionAgent(BaseAgent):
             _fire_event(self.config, "step_end", step_number=attempt)
 
             if score >= threshold:
-                return AgentResult(
-                    answer=inner_result.answer,
-                    steps=tuple(all_steps),
-                    total_usage=total_usage,
+                return self._finalize_result(
+                    ReflexionResult(
+                        answer=inner_result.answer,
+                        steps=tuple(all_steps),
+                        total_usage=total_usage,
+                        stop_reason="completed",
+                        metadata={"reflections": list(reflections)},
+                    ),
+                    result_type=ReflexionResult,
                 )
 
             # Reflect
@@ -105,6 +154,15 @@ class ReflexionAgent(BaseAgent):
                 **kwargs,
             )
             total_usage = _accumulate_usage(total_usage, reflect_resp.usage)
+            reflect_cost = self._observe_response(budget, reflect_resp, step_number=attempt)
+            all_steps.append(
+                AgentStep(
+                    step_number=attempt,
+                    response=reflect_resp,
+                    usage=reflect_resp.usage,
+                    cost_usd=reflect_cost,
+                )
+            )
             reflections.append(reflect_resp.text)
             _fire_event(
                 self.config,
@@ -114,15 +172,29 @@ class ReflexionAgent(BaseAgent):
             )
 
         # Max iterations reached — return last result
-        last_answer = all_steps[-1].response.text if all_steps else ""
-        return AgentResult(
-            answer=last_answer or "[max iterations reached]",
-            steps=tuple(all_steps),
-            total_usage=total_usage,
+        return self._finalize_result(
+            ReflexionResult(
+                answer=last_inner_answer or "[max iterations reached]",
+                steps=tuple(all_steps),
+                total_usage=total_usage,
+                stop_reason="max_iterations",
+                metadata={"reflections": list(reflections)},
+            ),
+            result_type=ReflexionResult,
         )
 
     async def async_run(self, task: str, **kwargs: Any) -> AgentResult:
         """Run the Reflexion loop asynchronously."""
+        stream = kwargs.pop("stream", False)
+        cancellation_token = self._resolve_cancellation_token(
+            kwargs.pop("cancellation_token", None)
+        )
+        if stream:
+            return self.async_run_stream(
+                task,
+                cancellation_token=cancellation_token,
+                **kwargs,
+            )
         evaluator = kwargs.pop("evaluator", None)
         if evaluator is None:
             msg = "ReflexionAgent requires an 'evaluator' kwarg"
@@ -130,16 +202,42 @@ class ReflexionAgent(BaseAgent):
         threshold = kwargs.pop("threshold", 0.8)
         system = self.config.system or None
         total_usage = Usage()
+        budget = self._new_budget_manager()
         all_steps: list[AgentStep] = []
         reflections: list[str] = []
+        last_inner_answer = ""
         start = time.monotonic()
 
         for attempt in range(1, self.config.max_iterations + 1):
+            if self._is_cancelled(cancellation_token):
+                return self._finalize_result(
+                    ReflexionResult(
+                        answer="[cancelled]",
+                        steps=tuple(all_steps),
+                        total_usage=total_usage,
+                        stop_reason="cancelled",
+                    ),
+                    result_type=ReflexionResult,
+                )
             if self._check_timeout(start):
-                return AgentResult(
-                    answer="[timeout exceeded]",
-                    steps=tuple(all_steps),
-                    total_usage=total_usage,
+                return self._finalize_result(
+                    ReflexionResult(
+                        answer="[timeout exceeded]",
+                        steps=tuple(all_steps),
+                        total_usage=total_usage,
+                        stop_reason="timeout",
+                    ),
+                    result_type=ReflexionResult,
+                )
+            if budget.exhausted_reason() is not None:
+                return self._finalize_result(
+                    ReflexionResult(
+                        answer="[token budget exceeded]",
+                        steps=tuple(all_steps),
+                        total_usage=total_usage,
+                        stop_reason="budget_exhausted",
+                    ),
+                    result_type=ReflexionResult,
                 )
             _fire_event(self.config, "step_start", step_number=attempt)
 
@@ -153,24 +251,36 @@ class ReflexionAgent(BaseAgent):
                 max_iterations=self.config.max_iterations,
                 system=inner_system,
                 max_tokens=self.config.max_tokens,
+                planner_repair_retries=self.config.planner_repair_retries,
             )
             inner = ReActAgent(
                 self.client,
                 self.tools,
                 config=inner_config,
             )
-            inner_result = await inner.async_run(task, **kwargs)
+            inner_result = await inner.async_run(
+                task,
+                cancellation_token=cancellation_token,
+                **kwargs,
+            )
+            last_inner_answer = inner_result.answer
             total_usage = _accumulate_usage(total_usage, inner_result.total_usage)
+            budget.observe_usage(inner_result.total_usage)
             all_steps.extend(inner_result.steps)
 
             score = evaluator(inner_result.answer)
             _fire_event(self.config, "step_end", step_number=attempt)
 
             if score >= threshold:
-                return AgentResult(
-                    answer=inner_result.answer,
-                    steps=tuple(all_steps),
-                    total_usage=total_usage,
+                return self._finalize_result(
+                    ReflexionResult(
+                        answer=inner_result.answer,
+                        steps=tuple(all_steps),
+                        total_usage=total_usage,
+                        stop_reason="completed",
+                        metadata={"reflections": list(reflections)},
+                    ),
+                    result_type=ReflexionResult,
                 )
 
             reflect_prompt = self._build_reflect_prompt(task, inner_result.answer, reflections)
@@ -180,6 +290,15 @@ class ReflexionAgent(BaseAgent):
                 **kwargs,
             )
             total_usage = _accumulate_usage(total_usage, reflect_resp.usage)
+            reflect_cost = self._observe_response(budget, reflect_resp, step_number=attempt)
+            all_steps.append(
+                AgentStep(
+                    step_number=attempt,
+                    response=reflect_resp,
+                    usage=reflect_resp.usage,
+                    cost_usd=reflect_cost,
+                )
+            )
             reflections.append(reflect_resp.text)
             _fire_event(
                 self.config,
@@ -188,9 +307,13 @@ class ReflexionAgent(BaseAgent):
                 result=reflect_resp.text,
             )
 
-        last_answer = all_steps[-1].response.text if all_steps else ""
-        return AgentResult(
-            answer=last_answer or "[max iterations reached]",
-            steps=tuple(all_steps),
-            total_usage=total_usage,
+        return self._finalize_result(
+            ReflexionResult(
+                answer=last_inner_answer or "[max iterations reached]",
+                steps=tuple(all_steps),
+                total_usage=total_usage,
+                stop_reason="max_iterations",
+                metadata={"reflections": list(reflections)},
+            ),
+            result_type=ReflexionResult,
         )

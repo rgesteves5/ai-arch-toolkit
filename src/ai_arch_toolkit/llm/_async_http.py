@@ -36,6 +36,7 @@ async def async_post_json(
     payload: dict[str, Any],
     timeout: int = 60,
     retry: RetryConfig | None = None,
+    client: httpx.AsyncClient | None = None,
 ) -> dict[str, Any]:
     """POST JSON asynchronously and return the parsed response."""
     config = retry or NO_RETRY
@@ -45,8 +46,12 @@ async def async_post_json(
             retry_after = getattr(last_exc, "retry_after", None)
             await asyncio.sleep(_wait_time(attempt, config, retry_after))
         try:
-            async with httpx.AsyncClient() as client:
+            if client is not None:
                 r = await client.post(url, headers=headers, json=payload, timeout=timeout)
+                _raise_for_status_httpx(r)
+                return r.json()
+            async with httpx.AsyncClient() as default_client:
+                r = await default_client.post(url, headers=headers, json=payload, timeout=timeout)
                 _raise_for_status_httpx(r)
                 return r.json()
         except APIError as exc:
@@ -62,6 +67,7 @@ async def async_stream_sse(
     payload: dict[str, Any],
     timeout: int = 120,
     retry: RetryConfig | None = None,
+    client: httpx.AsyncClient | None = None,
 ) -> AsyncIterator[str]:
     """POST and yield SSE ``data:`` payloads asynchronously.
 
@@ -74,9 +80,24 @@ async def async_stream_sse(
             retry_after = getattr(last_exc, "retry_after", None)
             await asyncio.sleep(_wait_time(attempt, config, retry_after))
         try:
+            if client is not None:
+                async with client.stream(
+                    "POST", url, headers=headers, json=payload, timeout=timeout
+                ) as r:
+                    if not r.is_success:
+                        await r.aread()
+                        _raise_for_status_httpx(r)
+                    async for line in r.aiter_lines():
+                        if not line or line.startswith(":"):
+                            continue
+                        if line.startswith("data: "):
+                            yield line[len("data: ") :]
+                    return
             async with (
-                httpx.AsyncClient() as client,
-                client.stream("POST", url, headers=headers, json=payload, timeout=timeout) as r,
+                httpx.AsyncClient() as default_client,
+                default_client.stream(
+                    "POST", url, headers=headers, json=payload, timeout=timeout
+                ) as r,
             ):
                 if not r.is_success:
                     await r.aread()
@@ -100,6 +121,7 @@ async def async_stream_ndjson(
     payload: dict[str, Any],
     timeout: int = 120,
     retry: RetryConfig | None = None,
+    client: httpx.AsyncClient | None = None,
 ) -> AsyncIterator[str]:
     """POST and yield newline-delimited JSON lines asynchronously.
 
@@ -112,9 +134,22 @@ async def async_stream_ndjson(
             retry_after = getattr(last_exc, "retry_after", None)
             await asyncio.sleep(_wait_time(attempt, config, retry_after))
         try:
+            if client is not None:
+                async with client.stream(
+                    "POST", url, headers=headers, json=payload, timeout=timeout
+                ) as r:
+                    if not r.is_success:
+                        await r.aread()
+                        _raise_for_status_httpx(r)
+                    async for line in r.aiter_lines():
+                        if line:
+                            yield line
+                    return
             async with (
-                httpx.AsyncClient() as client,
-                client.stream("POST", url, headers=headers, json=payload, timeout=timeout) as r,
+                httpx.AsyncClient() as default_client,
+                default_client.stream(
+                    "POST", url, headers=headers, json=payload, timeout=timeout
+                ) as r,
             ):
                 if not r.is_success:
                     await r.aread()

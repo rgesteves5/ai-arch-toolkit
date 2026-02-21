@@ -238,7 +238,14 @@ class OpenAICompatProvider(BaseProvider):
         payload = self._build_payload(
             messages, system=system, tools=tools, json_schema=json_schema, **kwargs
         )
-        raw = post_json(self._url, self._headers, payload, timeout=timeout, retry=self._retry)
+        raw = post_json(
+            self._url,
+            self._headers,
+            payload,
+            timeout=timeout,
+            retry=self._retry,
+            session=self._session,
+        )
         return _parse_response(raw)
 
     def stream(
@@ -252,7 +259,12 @@ class OpenAICompatProvider(BaseProvider):
         payload = self._build_payload(messages, system=system, **kwargs)
         payload["stream"] = True
         for data in stream_sse(
-            self._url, self._headers, payload, timeout=timeout, retry=self._retry
+            self._url,
+            self._headers,
+            payload,
+            timeout=timeout,
+            retry=self._retry,
+            session=self._session,
         ):
             if data.strip() == "[DONE]":
                 break
@@ -281,7 +293,12 @@ class OpenAICompatProvider(BaseProvider):
         tc_acc: dict[int, dict[str, str]] = {}
 
         for data in stream_sse(
-            self._url, self._headers, payload, timeout=timeout, retry=self._retry
+            self._url,
+            self._headers,
+            payload,
+            timeout=timeout,
+            retry=self._retry,
+            session=self._session,
         ):
             if data.strip() == "[DONE]":
                 yield StreamEvent(type="done")
@@ -357,7 +374,12 @@ class OpenAICompatProvider(BaseProvider):
             messages, system=system, tools=tools, json_schema=json_schema, **kwargs
         )
         raw = await async_post_json(
-            self._url, self._headers, payload, timeout=timeout, retry=self._retry
+            self._url,
+            self._headers,
+            payload,
+            timeout=timeout,
+            retry=self._retry,
+            client=self._async_client,
         )
         return _parse_response(raw)
 
@@ -372,7 +394,12 @@ class OpenAICompatProvider(BaseProvider):
         payload = self._build_payload(messages, system=system, **kwargs)
         payload["stream"] = True
         async for data in async_stream_sse(
-            self._url, self._headers, payload, timeout=timeout, retry=self._retry
+            self._url,
+            self._headers,
+            payload,
+            timeout=timeout,
+            retry=self._retry,
+            client=self._async_client,
         ):
             if data.strip() == "[DONE]":
                 break
@@ -400,7 +427,12 @@ class OpenAICompatProvider(BaseProvider):
         tc_acc: dict[int, dict[str, str]] = {}
 
         async for data in async_stream_sse(
-            self._url, self._headers, payload, timeout=timeout, retry=self._retry
+            self._url,
+            self._headers,
+            payload,
+            timeout=timeout,
+            retry=self._retry,
+            client=self._async_client,
         ):
             if data.strip() == "[DONE]":
                 yield StreamEvent(type="done")

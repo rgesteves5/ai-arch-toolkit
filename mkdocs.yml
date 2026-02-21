@@ -1,0 +1,9 @@
+site_name: ai-arch-toolkit
+site_description: Unified LLM client and agent architecture toolkit
+repo_url: https://github.com/example/ai-arch-toolkit
+theme:
+  name: mkdocs
+nav:
+  - Home: index.md
+  - API Docs: api.md
+  - UV Guide: uv-guide.md

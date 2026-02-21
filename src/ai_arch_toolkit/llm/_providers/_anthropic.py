@@ -256,7 +256,14 @@ class AnthropicProvider(BaseProvider):
         payload = self._build_payload(
             messages, system=system, tools=tools, json_schema=json_schema, **kwargs
         )
-        raw = post_json(_BASE_URL, headers, payload, timeout=timeout, retry=self._retry)
+        raw = post_json(
+            _BASE_URL,
+            headers,
+            payload,
+            timeout=timeout,
+            retry=self._retry,
+            session=self._session,
+        )
         return _parse_response(raw)
 
     def stream(
@@ -270,7 +277,14 @@ class AnthropicProvider(BaseProvider):
         headers = self._request_headers(**kwargs)
         payload = self._build_payload(messages, system=system, **kwargs)
         payload["stream"] = True
-        for data in stream_sse(_BASE_URL, headers, payload, timeout=timeout, retry=self._retry):
+        for data in stream_sse(
+            _BASE_URL,
+            headers,
+            payload,
+            timeout=timeout,
+            retry=self._retry,
+            session=self._session,
+        ):
             try:
                 event = json.loads(data)
                 if event.get("type") == "content_block_delta":
@@ -299,7 +313,14 @@ class AnthropicProvider(BaseProvider):
         current_block: dict[str, Any] | None = None
         tool_args_acc = ""
 
-        for data in stream_sse(_BASE_URL, headers, payload, timeout=timeout, retry=self._retry):
+        for data in stream_sse(
+            _BASE_URL,
+            headers,
+            payload,
+            timeout=timeout,
+            retry=self._retry,
+            session=self._session,
+        ):
             try:
                 event = json.loads(data)
             except json.JSONDecodeError:
@@ -371,7 +392,12 @@ class AnthropicProvider(BaseProvider):
             messages, system=system, tools=tools, json_schema=json_schema, **kwargs
         )
         raw = await async_post_json(
-            _BASE_URL, headers, payload, timeout=timeout, retry=self._retry
+            _BASE_URL,
+            headers,
+            payload,
+            timeout=timeout,
+            retry=self._retry,
+            client=self._async_client,
         )
         return _parse_response(raw)
 
@@ -387,7 +413,12 @@ class AnthropicProvider(BaseProvider):
         payload = self._build_payload(messages, system=system, **kwargs)
         payload["stream"] = True
         async for data in async_stream_sse(
-            _BASE_URL, headers, payload, timeout=timeout, retry=self._retry
+            _BASE_URL,
+            headers,
+            payload,
+            timeout=timeout,
+            retry=self._retry,
+            client=self._async_client,
         ):
             try:
                 event = json.loads(data)
@@ -417,7 +448,12 @@ class AnthropicProvider(BaseProvider):
         tool_args_acc = ""
 
         async for data in async_stream_sse(
-            _BASE_URL, headers, payload, timeout=timeout, retry=self._retry
+            _BASE_URL,
+            headers,
+            payload,
+            timeout=timeout,
+            retry=self._retry,
+            client=self._async_client,
         ):
             try:
                 event = json.loads(data)

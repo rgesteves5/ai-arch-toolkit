@@ -1,0 +1,30 @@
+=== EXAMPLE RUN REPORT ===
+example_script: examples/19_guardrails.py
+command: .venv/bin/python /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/scripts/_example_trace_runner.py examples/19_guardrails.py
+status: SUCCESS
+exit_code: 0
+duration_seconds: 11.041
+interpretation: Command completed without process errors.
+
+=== OUTPUT NOTES ===
+- Trace lines are present. Each [CALL NNN] START/END pair maps output to a specific SDK call.
+
+=== STDOUT ===
+[TRACE] Runtime tracing enabled for ai-arch-toolkit clients.
+[TRACE] Executing example: /Users/rge/Documents/dev/ai-arch-toolkit/ai-arch-toolkit/examples/19_guardrails.py
+[TRACE] [CALL 001] START Client.chat provider=openai model=gpt-5-nano messages=1(prompt str, chars=41)
+[TRACE] [CALL 001] FAIL  Client.chat duration=0.000s error=GuardrailViolation: Blocked input content matched pattern: 'password'
+Blocked by guardrails: Blocked input content matched pattern: 'password'
+[TRACE] [CALL 002] START Client.chat provider=openai model=gpt-5-nano messages=1(prompt str, chars=59)
+[TRACE] [CALL 002] FAIL  Client.chat duration=10.879s error=GuardrailViolation: Blocked output content matched pattern: 'password'
+
+Output was blocked by guardrails: Blocked output content matched pattern: 'password'
+[TRACE] Example execution completed.
+[TRACE] CALL_SUMMARY total_calls=2 completed_calls=0 failed_calls=2
+
+=== STDERR ===
+<empty>
+
+=== OUTPUT VALIDATION ===
+PASS
+
