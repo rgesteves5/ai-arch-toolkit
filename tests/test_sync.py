@@ -1,0 +1,58 @@
+"""Tests for _sync.py — sync wrappers."""
+
+from __future__ import annotations
+
+from ai_arch_toolkit._sync import _run_sync, _stream_sync
+
+
+class TestRunSync:
+    def test_runs_coroutine(self):
+        async def add(a: int, b: int) -> int:
+            return a + b
+
+        assert _run_sync(add(2, 3)) == 5
+
+    def test_returns_none(self):
+        async def noop() -> None:
+            pass
+
+        assert _run_sync(noop()) is None
+
+    def test_propagates_exception(self):
+        async def fail() -> None:
+            raise ValueError("boom")
+
+        try:
+            _run_sync(fail())
+            assert False, "Should have raised"
+        except ValueError as e:
+            assert "boom" in str(e)
+
+
+class TestStreamSync:
+    def test_yields_items(self):
+        async def gen():
+            for i in range(5):
+                yield i
+
+        result = list(_stream_sync(lambda: gen()))
+        assert result == [0, 1, 2, 3, 4]
+
+    def test_empty_iterator(self):
+        async def gen():
+            return
+            yield  # noqa: RET504 — make it an async generator
+
+        result = list(_stream_sync(lambda: gen()))
+        assert result == []
+
+    def test_propagates_exception(self):
+        async def gen():
+            yield 1
+            raise RuntimeError("stream error")
+
+        try:
+            list(_stream_sync(lambda: gen()))
+            assert False, "Should have raised"
+        except RuntimeError as e:
+            assert "stream error" in str(e)

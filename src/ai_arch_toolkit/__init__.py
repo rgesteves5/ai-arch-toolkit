@@ -3,6 +3,9 @@
 from importlib.metadata import PackageNotFoundError, version
 
 from ai_arch_toolkit import _logging as _package_logging
+from ai_arch_toolkit._content import assistant, system, tool_result, user
+from ai_arch_toolkit._llm import LLM
+from ai_arch_toolkit._pricing import pricing
 from ai_arch_toolkit.agents import (
     AgentConfig,
     AgentEvent,
@@ -119,6 +122,7 @@ __all__ = [
     "DEFAULT_TOKEN_CORRECTION_CONFIG",
     "GEMINI_CORRECTION_FACTOR",
     "GROK_CORRECTION_FACTOR",
+    "LLM",
     "META_CORRECTION_FACTOR",
     "APIError",
     "AgentConfig",
@@ -189,6 +193,7 @@ __all__ = [
     "Usage",
     "ValidationError",
     "__version__",
+    "assistant",
     "estimate_content_tokens",
     "estimate_content_tokens_for_model",
     "estimate_conversation_tokens",
@@ -209,7 +214,11 @@ __all__ = [
     "preview_conversation_usage_and_cost_for_models",
     "preview_text_usage_and_cost",
     "preview_text_usage_and_cost_for_models",
+    "pricing",
     "raw_tiktoken_count",
     "resolve_model_pricing",
+    "system",
     "tool",
+    "tool_result",
+    "user",
 ]
