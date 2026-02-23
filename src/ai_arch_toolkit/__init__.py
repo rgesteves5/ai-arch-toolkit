@@ -6,6 +6,7 @@ from ai_arch_toolkit import _logging as _package_logging
 from ai_arch_toolkit._content import assistant, system, tool_result, user
 from ai_arch_toolkit._llm import LLM
 from ai_arch_toolkit._pricing import pricing
+from ai_arch_toolkit._tools import ToolGroup, async_execute_tool, execute_tool
 from ai_arch_toolkit.agents import (
     AgentConfig,
     AgentEvent,
@@ -185,6 +186,7 @@ __all__ = [
     "TokenCorrectionConfig",
     "Tool",
     "ToolCall",
+    "ToolGroup",
     "ToolRegistry",
     "ToolResult",
     "TracingMiddleware",
@@ -194,6 +196,7 @@ __all__ = [
     "ValidationError",
     "__version__",
     "assistant",
+    "async_execute_tool",
     "estimate_content_tokens",
     "estimate_content_tokens_for_model",
     "estimate_conversation_tokens",
@@ -205,6 +208,7 @@ __all__ = [
     "estimate_text_tokens",
     "estimate_text_tokens_for_model",
     "estimate_usage_cost",
+    "execute_tool",
     "extract_code_block",
     "extract_list",
     "get_correction_factor",

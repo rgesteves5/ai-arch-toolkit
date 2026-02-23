@@ -9,6 +9,7 @@ from ai_arch_toolkit._pricing import pricing
 from ai_arch_toolkit._providers import create_provider
 from ai_arch_toolkit._response import Response, StreamResponse, SyncStreamResponse, Usage
 from ai_arch_toolkit._sync import _run_sync, _stream_sync
+from ai_arch_toolkit._tools import prepare_tools
 
 
 class LLM:
@@ -90,13 +91,14 @@ class LLM:
         messages: str | list[dict[str, Any]],
         *,
         system: str | None = None,
-        tools: list[dict[str, Any]] | None = None,
+        tools: Any | None = None,
         **kwargs: Any,
     ) -> Response:
         """Send messages and return a Response."""
         normalized = self._normalize(messages)
         merged = self._merge_kwargs(**kwargs)
-        return await self._provider.complete(normalized, system=system, tools=tools, **merged)
+        wire_tools = prepare_tools(tools)
+        return await self._provider.complete(normalized, system=system, tools=wire_tools, **merged)
 
     def stream(
         self,
@@ -148,7 +150,7 @@ class LLM:
         messages: str | list[dict[str, Any]],
         *,
         system: str | None = None,
-        tools: list[dict[str, Any]] | None = None,
+        tools: Any | None = None,
         **kwargs: Any,
     ) -> Response:
         """Synchronous version of ``complete()``."""

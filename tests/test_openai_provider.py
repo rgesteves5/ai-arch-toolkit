@@ -7,15 +7,13 @@ from unittest.mock import AsyncMock, patch
 
 from ai_arch_toolkit._providers._openai import (
     OpenAIProvider,
-    _StreamState,
     _build_payload,
     _messages_to_wire,
     _parse_response,
     _parse_tool_args,
     _tool_to_openai,
 )
-from ai_arch_toolkit._response import Response, ToolCall, Usage
-
+from ai_arch_toolkit._response import Response, ToolCall
 
 # ---------------------------------------------------------------------------
 # Pure function tests
@@ -150,6 +148,28 @@ class TestToolToOpenai:
         assert result["function"]["name"] == "search"
         assert result["function"]["description"] == "Search the web"
         assert result["function"]["parameters"] == tool["parameters"]
+
+
+    def test_accepts_input_schema_key(self):
+        tool = {
+            "name": "search",
+            "description": "Search",
+            "input_schema": {"type": "object", "properties": {"q": {"type": "string"}}},
+        }
+        result = _tool_to_openai(tool)
+        assert result["function"]["parameters"] == tool["input_schema"]
+
+    def test_prefers_input_schema_over_parameters(self):
+        """When both keys present, input_schema wins (canonical format)."""
+        tool = {
+            "name": "fn",
+            "description": "desc",
+            "input_schema": {"type": "object", "properties": {"a": {"type": "string"}}},
+            "parameters": {"type": "object", "properties": {"b": {"type": "integer"}}},
+        }
+        result = _tool_to_openai(tool)
+        assert "a" in result["function"]["parameters"]["properties"]
+        assert "b" not in result["function"]["parameters"]["properties"]
 
 
 class TestParseToolArgs:
@@ -319,7 +339,7 @@ class TestOpenAIProviderStream:
         mock_stream.return_value = _fake_stream()
 
         provider = OpenAIProvider("gpt-4o", "test-key")
-        aiter, state = provider.stream([{"role": "user", "content": "Hi"}])
+        aiter, _state = provider.stream([{"role": "user", "content": "Hi"}])
         chunks = []
         async for chunk in aiter:
             chunks.append(chunk)

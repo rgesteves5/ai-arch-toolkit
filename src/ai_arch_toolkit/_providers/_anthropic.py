@@ -35,11 +35,11 @@ class _StreamState:
 
 
 def _tool_to_anthropic(tool: dict[str, Any]) -> dict[str, Any]:
-    """Map generic tool dict (with ``parameters``) to Anthropic wire format."""
+    """Map generic tool dict to Anthropic wire format (prefers ``input_schema``)."""
     return {
         "name": tool["name"],
         "description": tool.get("description", ""),
-        "input_schema": tool.get("parameters", tool.get("input_schema", {})),
+        "input_schema": tool.get("input_schema", tool.get("parameters", {})),
     }
 
 

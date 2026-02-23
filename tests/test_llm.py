@@ -9,7 +9,6 @@ import pytest
 from ai_arch_toolkit._llm import LLM
 from ai_arch_toolkit._response import Response, StreamResponse, SyncStreamResponse, Usage
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -112,7 +111,7 @@ class TestComplete:
         llm = LLM("claude-sonnet-4-20250514", api_key="test")
         await llm.complete("Hi", tools=tools)
         call_kwargs = mock_provider.complete.call_args[1]
-        assert call_kwargs["tools"] is tools
+        assert call_kwargs["tools"] == tools
 
 
 class TestStream:
@@ -172,7 +171,7 @@ class TestStream:
         llm = LLM("claude-sonnet-4-20250514", api_key="test")
 
         async with llm.stream("Hi") as stream:
-            async for chunk in stream:
+            async for _chunk in stream:
                 break  # early exit
 
         # Response should be finalized with partial content

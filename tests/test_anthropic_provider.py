@@ -5,19 +5,16 @@ from __future__ import annotations
 import warnings
 from unittest.mock import AsyncMock, patch
 
-import pytest
-
 from ai_arch_toolkit._providers._anthropic import (
     AnthropicProvider,
-    _StreamState,
     _build_payload,
     _messages_to_wire,
     _parse_response,
     _parse_stream_usage,
+    _StreamState,
     _tool_to_anthropic,
 )
-from ai_arch_toolkit._response import Response, ToolCall, Usage
-
+from ai_arch_toolkit._response import Response, ToolCall
 
 # ---------------------------------------------------------------------------
 # Pure function tests
@@ -179,6 +176,18 @@ class TestToolToAnthropic:
         result = _tool_to_anthropic(tool)
         assert result["input_schema"] == {"type": "object"}
 
+    def test_prefers_input_schema_over_parameters(self):
+        """When both keys present, input_schema wins (canonical format)."""
+        tool = {
+            "name": "fn",
+            "description": "desc",
+            "input_schema": {"type": "object", "properties": {"a": {"type": "string"}}},
+            "parameters": {"type": "object", "properties": {"b": {"type": "integer"}}},
+        }
+        result = _tool_to_anthropic(tool)
+        assert "a" in result["input_schema"]["properties"]
+        assert "b" not in result["input_schema"]["properties"]
+
 
 class TestParseStreamUsage:
     def test_extracts_usage(self):
@@ -306,7 +315,7 @@ class TestAnthropicProviderStream:
         mock_stream.return_value = _fake_stream()
 
         provider = AnthropicProvider("claude-sonnet-4-20250514", "test-key")
-        aiter, state = provider.stream([{"role": "user", "content": "Hi"}])
+        aiter, _state = provider.stream([{"role": "user", "content": "Hi"}])
         chunks = []
         async for chunk in aiter:
             chunks.append(chunk)
@@ -349,7 +358,7 @@ class TestAnthropicProviderStream:
         mock_stream.return_value = _fake_stream()
 
         provider = AnthropicProvider("claude-sonnet-4-20250514", "test-key")
-        aiter, state = provider.stream([{"role": "user", "content": "Hi"}])
+        aiter, _state = provider.stream([{"role": "user", "content": "Hi"}])
         async for _ in aiter:
             pass
         call_kwargs = mock_stream.call_args[1]

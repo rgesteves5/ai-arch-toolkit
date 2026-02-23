@@ -49,7 +49,7 @@ def _tool_to_openai(tool: dict[str, Any]) -> dict[str, Any]:
         "function": {
             "name": tool["name"],
             "description": tool.get("description", ""),
-            "parameters": tool.get("parameters", tool.get("input_schema", {})),
+            "parameters": tool.get("input_schema", tool.get("parameters", {})),
         },
     }
 
