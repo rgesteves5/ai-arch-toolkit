@@ -14,6 +14,10 @@ logger = logging.getLogger(__name__)
 
 _MODEL_PREFIXES: dict[str, str] = {
     "claude-": "anthropic",
+    "gpt-": "openai",
+    "o1-": "openai",
+    "o3-": "openai",
+    "o4-": "openai",
 }
 
 
@@ -52,6 +56,16 @@ def create_provider(
         return AnthropicProvider(
             model,
             _resolve_key("ANTHROPIC_API_KEY", api_key),
+            base_url=base_url,
+            retry=retry,
+        )
+
+    if name == "openai":
+        from ai_arch_toolkit._providers._openai import OpenAIProvider
+
+        return OpenAIProvider(
+            model,
+            _resolve_key("OPENAI_API_KEY", api_key),
             base_url=base_url,
             retry=retry,
         )

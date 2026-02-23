@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from ai_arch_toolkit._llm import LLM
-from ai_arch_toolkit._response import Response, Usage
+from ai_arch_toolkit._response import Response, StreamResponse, SyncStreamResponse, Usage
 
 
 # ---------------------------------------------------------------------------
@@ -17,6 +17,15 @@ from ai_arch_toolkit._response import Response, Usage
 
 def _make_response(text: str = "Hello") -> Response:
     return Response(text=text, usage=Usage(input_tokens=10, output_tokens=5))
+
+
+def _make_stream_state(usage=None, model="claude-sonnet-4-20250514", stop_reason="end_turn"):
+    """Create a mock stream state."""
+    state = MagicMock()
+    state.usage = usage or Usage(input_tokens=10, output_tokens=5)
+    state.model = model
+    state.stop_reason = stop_reason
+    return state
 
 
 # ---------------------------------------------------------------------------
@@ -109,19 +118,66 @@ class TestComplete:
 class TestStream:
     @patch("ai_arch_toolkit._llm.create_provider")
     async def test_yields_chunks(self, mock_create):
-        async def _fake_stream(*args, **kwargs):
+        async def _fake_gen():
             for chunk in ["Hello", " ", "world"]:
                 yield chunk
 
+        state = _make_stream_state()
         mock_provider = MagicMock()
-        mock_provider.stream = _fake_stream
+        mock_provider.stream.return_value = (_fake_gen(), state)
         mock_create.return_value = mock_provider
 
         llm = LLM("claude-sonnet-4-20250514", api_key="test")
+        stream = llm.stream("Hi")
+        assert isinstance(stream, StreamResponse)
+
         chunks = []
-        async for chunk in llm.stream("Hi"):
+        async for chunk in stream:
             chunks.append(chunk)
         assert chunks == ["Hello", " ", "world"]
+
+    @patch("ai_arch_toolkit._llm.create_provider")
+    async def test_stream_response_available_after_consume(self, mock_create):
+        async def _fake_gen():
+            for chunk in ["Hello"]:
+                yield chunk
+
+        state = _make_stream_state()
+        mock_provider = MagicMock()
+        mock_provider.stream.return_value = (_fake_gen(), state)
+        mock_create.return_value = mock_provider
+
+        llm = LLM("claude-sonnet-4-20250514", api_key="test")
+        stream = llm.stream("Hi")
+        assert stream.response is None  # not consumed yet
+
+        async for _ in stream:
+            pass
+
+        assert stream.response is not None
+        assert stream.response.text == "Hello"
+        assert stream.response.usage.input_tokens == 10
+
+    @patch("ai_arch_toolkit._llm.create_provider")
+    async def test_stream_context_manager_early_exit(self, mock_create):
+        async def _fake_gen():
+            for chunk in ["Hello", " ", "world"]:
+                yield chunk
+
+        state = _make_stream_state()
+        mock_provider = MagicMock()
+        mock_provider.stream.return_value = (_fake_gen(), state)
+        mock_create.return_value = mock_provider
+
+        llm = LLM("claude-sonnet-4-20250514", api_key="test")
+
+        async with llm.stream("Hi") as stream:
+            async for chunk in stream:
+                break  # early exit
+
+        # Response should be finalized with partial content
+        assert stream.response is not None
+        assert stream.response.text == "Hello"
 
 
 class TestCall:
@@ -149,17 +205,23 @@ class TestSyncWrappers:
 
     @patch("ai_arch_toolkit._llm.create_provider")
     def test_stream_sync(self, mock_create):
-        async def _fake_stream(*args, **kwargs):
+        async def _fake_gen():
             for chunk in ["a", "b", "c"]:
                 yield chunk
 
+        state = _make_stream_state()
         mock_provider = MagicMock()
-        mock_provider.stream = _fake_stream
+        mock_provider.stream.return_value = (_fake_gen(), state)
         mock_create.return_value = mock_provider
 
         llm = LLM("claude-sonnet-4-20250514", api_key="test")
-        chunks = list(llm.stream_sync("Hi"))
+        stream = llm.stream_sync("Hi")
+        assert isinstance(stream, SyncStreamResponse)
+
+        chunks = list(stream)
         assert chunks == ["a", "b", "c"]
+        assert stream.response is not None
+        assert stream.response.text == "abc"
 
 
 class TestRepr:
@@ -190,3 +252,34 @@ class TestModelRouting:
         LLM("claude-sonnet-4-20250514", api_key="test")
         mock_create.assert_called_once()
         assert mock_create.call_args[0][0] == "claude-sonnet-4-20250514"
+
+
+class TestLifecycle:
+    @patch("ai_arch_toolkit._llm.create_provider")
+    async def test_async_context_manager(self, mock_create):
+        mock_provider = AsyncMock()
+        mock_create.return_value = mock_provider
+
+        async with LLM("claude-sonnet-4-20250514", api_key="test") as llm:
+            assert llm is not None
+
+        mock_provider.close.assert_called_once()
+
+    @patch("ai_arch_toolkit._llm.create_provider")
+    async def test_close(self, mock_create):
+        mock_provider = AsyncMock()
+        mock_create.return_value = mock_provider
+
+        llm = LLM("claude-sonnet-4-20250514", api_key="test")
+        await llm.close()
+        mock_provider.close.assert_called_once()
+
+    @patch("ai_arch_toolkit._llm.create_provider")
+    def test_sync_context_manager(self, mock_create):
+        mock_provider = AsyncMock()
+        mock_create.return_value = mock_provider
+
+        with LLM("claude-sonnet-4-20250514", api_key="test") as llm:
+            assert llm is not None
+
+        mock_provider.close.assert_called_once()

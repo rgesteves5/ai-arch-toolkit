@@ -9,12 +9,14 @@ import pytest
 
 from ai_arch_toolkit._providers._anthropic import (
     AnthropicProvider,
+    _StreamState,
     _build_payload,
     _messages_to_wire,
     _parse_response,
+    _parse_stream_usage,
     _tool_to_anthropic,
 )
-from ai_arch_toolkit._response import Response, ToolCall
+from ai_arch_toolkit._response import Response, ToolCall, Usage
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +180,29 @@ class TestToolToAnthropic:
         assert result["input_schema"] == {"type": "object"}
 
 
+class TestParseStreamUsage:
+    def test_extracts_usage(self):
+        event = {"usage": {"input_tokens": 100, "output_tokens": 50}}
+        usage = _parse_stream_usage(event)
+        assert usage is not None
+        assert usage.input_tokens == 100
+        assert usage.output_tokens == 50
+
+    def test_no_usage(self):
+        event = {"type": "content_block_delta"}
+        usage = _parse_stream_usage(event)
+        assert usage is None
+
+
+class TestStreamState:
+    def test_initial_state(self):
+        state = _StreamState()
+        assert state.usage is None
+        assert state.model == ""
+        assert state.stop_reason == ""
+        assert state.raw is None
+
+
 # ---------------------------------------------------------------------------
 # Provider integration tests (mocked HTTP)
 # ---------------------------------------------------------------------------
@@ -199,6 +224,19 @@ class TestAnthropicProviderComplete:
         mock_post.assert_called_once()
 
     @patch("ai_arch_toolkit._providers._anthropic.async_post_json", new_callable=AsyncMock)
+    async def test_complete_passes_client(self, mock_post):
+        """Verify the provider passes its httpx client to async_post_json."""
+        mock_post.return_value = {
+            "content": [{"type": "text", "text": "Ok"}],
+            "usage": {"input_tokens": 5, "output_tokens": 3},
+            "stop_reason": "end_turn",
+        }
+        provider = AnthropicProvider("claude-sonnet-4-20250514", "test-key")
+        await provider.complete([{"role": "user", "content": "Hi"}])
+        call_kwargs = mock_post.call_args[1]
+        assert call_kwargs["client"] is provider._client
+
+    @patch("ai_arch_toolkit._providers._anthropic.async_post_json", new_callable=AsyncMock)
     async def test_complete_with_tools(self, mock_post):
         mock_post.return_value = {
             "content": [
@@ -214,7 +252,7 @@ class TestAnthropicProviderComplete:
 
         # Verify tools were forwarded in payload
         call_args = mock_post.call_args
-        payload = call_args[0][2]  # third positional arg
+        payload = call_args[1]["payload"]
         assert "tools" in payload
 
     @patch("ai_arch_toolkit._providers._anthropic.async_post_json", new_callable=AsyncMock)
@@ -230,7 +268,7 @@ class TestAnthropicProviderComplete:
             {"role": "user", "content": "Hi"},
         ]
         await provider.complete(msgs)
-        payload = mock_post.call_args[0][2]
+        payload = mock_post.call_args[1]["payload"]
         assert payload["system"] == "Be brief."
         # System should not appear in messages
         assert all(m["role"] != "system" for m in payload["messages"])
@@ -248,7 +286,7 @@ class TestAnthropicProviderComplete:
             {"role": "user", "content": "Hi"},
         ]
         await provider.complete(msgs, system="Explicit system.")
-        payload = mock_post.call_args[0][2]
+        payload = mock_post.call_args[1]["payload"]
         assert payload["system"] == "Explicit system."
 
 
@@ -268,7 +306,62 @@ class TestAnthropicProviderStream:
         mock_stream.return_value = _fake_stream()
 
         provider = AnthropicProvider("claude-sonnet-4-20250514", "test-key")
+        aiter, state = provider.stream([{"role": "user", "content": "Hi"}])
         chunks = []
-        async for chunk in provider.stream([{"role": "user", "content": "Hi"}]):
+        async for chunk in aiter:
             chunks.append(chunk)
         assert chunks == ["Hello", " world"]
+
+    @patch("ai_arch_toolkit._providers._anthropic.async_stream_sse")
+    async def test_stream_captures_usage(self, mock_stream):
+        events = [
+            '{"type":"message_start","message":{"model":"claude-sonnet-4-20250514","usage":{"input_tokens":25,"output_tokens":0}}}',
+            '{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hi"}}',
+            '{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":10}}',
+        ]
+
+        async def _fake_stream(*args, **kwargs):
+            for e in events:
+                yield e
+
+        mock_stream.return_value = _fake_stream()
+
+        provider = AnthropicProvider("claude-sonnet-4-20250514", "test-key")
+        aiter, state = provider.stream([{"role": "user", "content": "Hi"}])
+        chunks = []
+        async for chunk in aiter:
+            chunks.append(chunk)
+
+        assert chunks == ["Hi"]
+        assert state.usage is not None
+        assert state.usage.input_tokens == 25
+        assert state.usage.output_tokens == 10
+        assert state.stop_reason == "end_turn"
+        assert state.model == "claude-sonnet-4-20250514"
+
+    @patch("ai_arch_toolkit._providers._anthropic.async_stream_sse")
+    async def test_stream_passes_client(self, mock_stream):
+        """Verify the provider passes its httpx client to async_stream_sse."""
+
+        async def _fake_stream(*args, **kwargs):
+            yield '{"type":"message_stop"}'
+
+        mock_stream.return_value = _fake_stream()
+
+        provider = AnthropicProvider("claude-sonnet-4-20250514", "test-key")
+        aiter, state = provider.stream([{"role": "user", "content": "Hi"}])
+        async for _ in aiter:
+            pass
+        call_kwargs = mock_stream.call_args[1]
+        assert call_kwargs["client"] is provider._client
+
+
+class TestAnthropicProviderLifecycle:
+    async def test_close(self):
+        provider = AnthropicProvider("claude-sonnet-4-20250514", "test-key")
+        assert provider._client is not None
+        await provider.close()
+
+    async def test_context_manager(self):
+        async with AnthropicProvider("claude-sonnet-4-20250514", "test-key") as provider:
+            assert provider._client is not None

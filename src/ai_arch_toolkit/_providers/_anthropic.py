@@ -7,6 +7,8 @@ import warnings
 from collections.abc import AsyncIterator
 from typing import Any
 
+import httpx
+
 from ai_arch_toolkit._http import RetryConfig, async_post_json, async_stream_sse
 from ai_arch_toolkit._pricing import pricing
 from ai_arch_toolkit._providers._base import BaseProvider
@@ -18,6 +20,18 @@ _DEFAULT_MAX_TOKENS = 4096
 
 # Parameters safe to forward to the Anthropic Messages API.
 _ANTHROPIC_PARAMS = {"temperature", "top_p", "top_k", "stop_sequences", "max_tokens"}
+
+
+class _StreamState:
+    """Per-stream metadata accumulator (concurrent-safe: one per call)."""
+
+    __slots__ = ("model", "raw", "stop_reason", "usage")
+
+    def __init__(self) -> None:
+        self.usage: Usage | None = None
+        self.model: str = ""
+        self.stop_reason: str = ""
+        self.raw: dict[str, Any] | None = None
 
 
 def _tool_to_anthropic(tool: dict[str, Any]) -> dict[str, Any]:
@@ -136,8 +150,21 @@ def _build_payload(
     return payload
 
 
+def _parse_stream_usage(event: dict[str, Any]) -> Usage | None:
+    """Extract usage from a message_delta or message_start event."""
+    raw_usage = event.get("usage", {})
+    if not raw_usage:
+        return None
+    return Usage(
+        input_tokens=raw_usage.get("input_tokens", 0),
+        output_tokens=raw_usage.get("output_tokens", 0),
+        cache_write_tokens=raw_usage.get("cache_creation_input_tokens", 0),
+        cache_read_tokens=raw_usage.get("cache_read_input_tokens", 0),
+    )
+
+
 class AnthropicProvider(BaseProvider):
-    """Anthropic Messages API provider (async-only)."""
+    """Anthropic Messages API provider (async-only, reuses httpx client)."""
 
     def __init__(
         self,
@@ -155,6 +182,10 @@ class AnthropicProvider(BaseProvider):
             "anthropic-version": _API_VERSION,
             "Content-Type": "application/json",
         }
+        self._client = httpx.AsyncClient(headers=self._headers)
+
+    async def close(self) -> None:
+        await self._client.aclose()
 
     async def complete(
         self,
@@ -171,32 +202,72 @@ class AnthropicProvider(BaseProvider):
             wire, model=self._model, system=effective_system, tools=tools, **kwargs
         )
         raw = await async_post_json(
-            self._base_url, self._headers, payload, timeout=timeout, retry=self._retry
+            self._base_url,
+            payload=payload,
+            timeout=timeout,
+            retry=self._retry,
+            client=self._client,
         )
         return _parse_response(raw, self._model)
 
-    async def stream(  # type: ignore[override]
+    def stream(
         self,
         messages: list[dict[str, Any]],
         *,
         system: str | None = None,
         **kwargs: Any,
-    ) -> AsyncIterator[str]:
+    ) -> tuple[AsyncIterator[str], _StreamState]:
         timeout = kwargs.pop("timeout", 120)
         msg_system, wire = _messages_to_wire(messages)
         effective_system = system if system is not None else msg_system
         payload = _build_payload(wire, model=self._model, system=effective_system, **kwargs)
         payload["stream"] = True
-        async for data in async_stream_sse(
-            self._base_url, self._headers, payload, timeout=timeout, retry=self._retry
-        ):
-            try:
-                event = json.loads(data)
-                if event.get("type") == "content_block_delta":
+
+        state = _StreamState()
+        state.model = self._model
+
+        async def _generate() -> AsyncIterator[str]:
+            async for data in async_stream_sse(
+                self._base_url,
+                payload=payload,
+                timeout=timeout,
+                retry=self._retry,
+                client=self._client,
+            ):
+                try:
+                    event = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+
+                event_type = event.get("type")
+
+                if event_type == "content_block_delta":
                     delta = event.get("delta", {})
                     if delta.get("type") == "text_delta":
                         text = delta.get("text", "")
                         if text:
                             yield text
-            except json.JSONDecodeError:
-                continue
+
+                elif event_type == "message_start":
+                    msg = event.get("message", {})
+                    state.model = msg.get("model", self._model)
+                    usage = _parse_stream_usage(msg)
+                    if usage:
+                        state.usage = usage
+
+                elif event_type == "message_delta":
+                    delta = event.get("delta", {})
+                    state.stop_reason = delta.get("stop_reason", "")
+                    usage = _parse_stream_usage(event)
+                    if usage:
+                        # Merge: message_start has input_tokens, message_delta has output_tokens.
+                        # Use addition (not `or`) — values are complementary and 0 is valid.
+                        prev = state.usage or Usage()
+                        state.usage = Usage(
+                            input_tokens=prev.input_tokens + usage.input_tokens,
+                            output_tokens=prev.output_tokens + usage.output_tokens,
+                            cache_write_tokens=prev.cache_write_tokens + usage.cache_write_tokens,
+                            cache_read_tokens=prev.cache_read_tokens + usage.cache_read_tokens,
+                        )
+
+        return _generate(), state

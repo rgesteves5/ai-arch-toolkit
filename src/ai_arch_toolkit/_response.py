@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -79,3 +80,92 @@ class Response:
 
     def __radd__(self, other: str) -> str:
         return other + self.text
+
+
+# ---------------------------------------------------------------------------
+# Stream wrappers
+# ---------------------------------------------------------------------------
+
+
+class StreamResponse:
+    """Async-iterable stream that accumulates a final ``Response``.
+
+    Usage::
+
+        stream = llm.stream("Hello")
+        async for chunk in stream:
+            print(chunk, end="")
+        print(stream.response.cost)
+    """
+
+    __slots__ = ("_aiter", "_chunks", "_finalizer", "_response")
+
+    def __init__(
+        self,
+        aiter: AsyncIterator[str],
+        finalizer: Callable[[str], Response],
+    ) -> None:
+        self._aiter = aiter
+        self._finalizer = finalizer
+        self._response: Response | None = None
+        self._chunks: list[str] = []
+
+    def __aiter__(self) -> StreamResponse:
+        return self
+
+    async def __anext__(self) -> str:
+        try:
+            chunk = await self._aiter.__anext__()
+            self._chunks.append(chunk)
+            return chunk
+        except StopAsyncIteration:
+            self._response = self._finalizer("".join(self._chunks))
+            raise
+
+    @property
+    def response(self) -> Response | None:
+        """Available after stream is fully consumed. ``None`` during iteration."""
+        return self._response
+
+    async def __aenter__(self) -> StreamResponse:
+        return self
+
+    async def __aexit__(self, *args: Any) -> None:
+        # Don't drain — just finalize with what we have so far.
+        if self._response is None:
+            self._response = self._finalizer("".join(self._chunks))
+
+
+class SyncStreamResponse:
+    """Sync-iterable stream that accumulates a final ``Response``.
+
+    Usage::
+
+        stream = llm.stream_sync("Hello")
+        for chunk in stream:
+            print(chunk, end="")
+        print(stream.response.cost)
+    """
+
+    __slots__ = ("_chunks", "_finalizer", "_iter", "_response")
+
+    def __init__(
+        self,
+        sync_iter: Iterator[str],
+        finalizer: Callable[[str], Response],
+    ) -> None:
+        self._iter = sync_iter
+        self._finalizer = finalizer
+        self._response: Response | None = None
+        self._chunks: list[str] = []
+
+    @property
+    def response(self) -> Response | None:
+        """Available after stream is fully consumed. ``None`` during iteration."""
+        return self._response
+
+    def __iter__(self) -> Iterator[str]:
+        for chunk in self._iter:
+            self._chunks.append(chunk)
+            yield chunk
+        self._response = self._finalizer("".join(self._chunks))

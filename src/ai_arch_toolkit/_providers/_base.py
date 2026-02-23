@@ -1,4 +1,4 @@
-"""Abstract base for LLM providers — async-only, 2 methods."""
+"""Abstract base for LLM providers — async-only."""
 
 from __future__ import annotations
 
@@ -23,10 +23,23 @@ class BaseProvider(ABC):
     ) -> Response: ...
 
     @abstractmethod
-    async def stream(
+    def stream(
         self,
         messages: list[dict[str, Any]],
         *,
         system: str | None = None,
         **kwargs: Any,
-    ) -> AsyncIterator[str]: ...
+    ) -> tuple[AsyncIterator[str], Any]: ...
+
+    # ------------------------------------------------------------------
+    # Lifecycle — concrete no-ops, providers override if needed
+    # ------------------------------------------------------------------
+
+    async def close(self) -> None:  # noqa: B027
+        """Release resources. Override in providers that hold clients."""
+
+    async def __aenter__(self) -> BaseProvider:
+        return self
+
+    async def __aexit__(self, *args: Any) -> None:
+        await self.close()

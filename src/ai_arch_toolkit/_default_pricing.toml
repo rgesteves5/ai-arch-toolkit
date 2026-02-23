@@ -79,6 +79,10 @@ input = 10.0
 output = 30.0
 
 # o-series
+[o4-mini]
+input = 1.10
+output = 4.40
+
 [o3-mini]
 input = 1.10
 output = 4.40
