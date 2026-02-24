@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from ai_arch_toolkit.agents import (
+from ai_arch_toolkit._legacy.agents import (
     AgentConfig,
     AgentResult,
     LATSAgent,
@@ -16,8 +16,8 @@ from ai_arch_toolkit.agents import (
     SelfDiscoveryAgent,
     TreeOfThoughtsAgent,
 )
-from ai_arch_toolkit.llm._types import Response, Tool, Usage
-from ai_arch_toolkit.tools._registry import ToolRegistry
+from ai_arch_toolkit._legacy.llm._types import Response, Tool, Usage
+from ai_arch_toolkit._legacy.tools._registry import ToolRegistry
 
 
 def _client_with_responses(responses: list[Response]) -> MagicMock:
@@ -125,9 +125,7 @@ def test_stream_flag_tot_matches_non_stream_steps() -> None:
     agent = TreeOfThoughtsAgent(client, reg)
 
     result = agent.run("task", max_depth=1, branching_factor=1, beam_width=1)
-    streamed = list(
-        agent.run("task", stream=True, max_depth=1, branching_factor=1, beam_width=1)
-    )
+    streamed = list(agent.run("task", stream=True, max_depth=1, branching_factor=1, beam_width=1))
 
     assert streamed == list(result.steps)
 

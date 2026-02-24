@@ -6,12 +6,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ai_arch_toolkit.llm import AsyncClient, Client
-from ai_arch_toolkit.llm._cache import InMemoryCacheBackend, ResponseCache
-from ai_arch_toolkit.llm._types import Response, Usage
+from ai_arch_toolkit._legacy.llm import AsyncClient, Client
+from ai_arch_toolkit._legacy.llm._cache import InMemoryCacheBackend, ResponseCache
+from ai_arch_toolkit._legacy.llm._types import Response, Usage
 
 
-@patch("ai_arch_toolkit.llm._client.create_provider")
+@patch("ai_arch_toolkit._legacy.llm._client.create_provider")
 def test_response_cache_short_circuits_sync_chat(mock_create: MagicMock) -> None:
     provider = MagicMock()
     provider.complete.side_effect = [
@@ -30,7 +30,7 @@ def test_response_cache_short_circuits_sync_chat(mock_create: MagicMock) -> None
     assert provider.complete.call_count == 1
 
 
-@patch("ai_arch_toolkit.llm._async_client.create_provider")
+@patch("ai_arch_toolkit._legacy.llm._async_client.create_provider")
 @pytest.mark.asyncio
 async def test_response_cache_short_circuits_async_chat(mock_create: MagicMock) -> None:
     provider = MagicMock()
@@ -52,7 +52,7 @@ async def test_response_cache_short_circuits_async_chat(mock_create: MagicMock) 
     assert provider.acomplete.call_count == 1
 
 
-@patch("ai_arch_toolkit.llm._client.create_provider")
+@patch("ai_arch_toolkit._legacy.llm._client.create_provider")
 def test_response_cache_respects_ttl(mock_create: MagicMock) -> None:
     provider = MagicMock()
     provider.complete.side_effect = [
@@ -95,7 +95,7 @@ class _RecordingBackend:
         self._values[key] = value
 
 
-@patch("ai_arch_toolkit.llm._client.create_provider")
+@patch("ai_arch_toolkit._legacy.llm._client.create_provider")
 def test_response_cache_supports_custom_backend_and_key_fn(mock_create: MagicMock) -> None:
     provider = MagicMock()
     provider.complete.return_value = Response(text="ok", usage=Usage(total_tokens=1))
@@ -110,4 +110,3 @@ def test_response_cache_supports_custom_backend_and_key_fn(mock_create: MagicMoc
 
     assert backend.keys_set == ["fixed-key"]
     assert provider.complete.call_count == 1
-

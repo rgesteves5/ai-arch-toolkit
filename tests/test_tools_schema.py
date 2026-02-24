@@ -6,7 +6,7 @@ import dataclasses
 import enum
 from typing import Literal
 
-from ai_arch_toolkit._tools._schema import (
+from ai_arch_toolkit.core._tools._schema import (
     _get_summary,
     _hint_to_json_schema,
     _parse_param_descriptions,

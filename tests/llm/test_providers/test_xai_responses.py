@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from ai_arch_toolkit.llm._providers._xai_responses import XAIResponsesProvider
-from ai_arch_toolkit.llm._types import Message, ServerTool
+from ai_arch_toolkit._legacy.llm._providers._xai_responses import XAIResponsesProvider
+from ai_arch_toolkit._legacy.llm._types import Message, ServerTool
 from tests.conftest import MockResponse
 
 _TEXT_RESPONSE = {

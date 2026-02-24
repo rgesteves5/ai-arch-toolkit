@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ai_arch_toolkit.llm._async_batch import AsyncBatchClient
-from ai_arch_toolkit.llm._batch import BatchJob, BatchRequest
-from ai_arch_toolkit.llm._types import Message
+from ai_arch_toolkit._legacy.llm._async_batch import AsyncBatchClient
+from ai_arch_toolkit._legacy.llm._batch import BatchJob, BatchRequest
+from ai_arch_toolkit._legacy.llm._types import Message
 
 
 def _make_openai_client() -> AsyncBatchClient:
@@ -57,7 +57,7 @@ class _MockHttpxResponse:
         pass
 
 
-@patch("ai_arch_toolkit.llm._async_http.httpx.AsyncClient")
+@patch("ai_arch_toolkit._legacy.llm._async_http.httpx.AsyncClient")
 @patch("httpx.AsyncClient")
 async def test_openai_submit(
     mock_httpx_cls: MagicMock,
@@ -81,7 +81,7 @@ async def test_openai_submit(
     mock_async_http_cls.return_value = mock_async_http_client
 
     client = _make_openai_client()
-    with patch("ai_arch_toolkit.llm._async_batch.async_post_json", mock_async_post):
+    with patch("ai_arch_toolkit._legacy.llm._async_batch.async_post_json", mock_async_post):
         job = await client.submit(
             [
                 BatchRequest(
@@ -162,7 +162,7 @@ async def test_openai_results(mock_httpx_cls: MagicMock) -> None:
 # --- Anthropic submit ---
 
 
-@patch("ai_arch_toolkit.llm._async_batch.async_post_json")
+@patch("ai_arch_toolkit._legacy.llm._async_batch.async_post_json")
 async def test_anthropic_submit(mock_post: AsyncMock) -> None:
     mock_post.return_value = {"id": "msgbatch-abc", "processing_status": "in_progress"}
 

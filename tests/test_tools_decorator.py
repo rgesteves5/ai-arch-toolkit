@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ai_arch_toolkit._tools._decorator import tool
+from ai_arch_toolkit.core._tools._decorator import tool
 
 
 class TestToolDecorator:

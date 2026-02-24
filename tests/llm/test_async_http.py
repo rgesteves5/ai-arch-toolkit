@@ -8,9 +8,9 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from ai_arch_toolkit.llm._async_http import async_post_json
-from ai_arch_toolkit.llm._exceptions import APIError, RateLimitError
-from ai_arch_toolkit.llm._http import RetryConfig
+from ai_arch_toolkit._legacy.llm._async_http import async_post_json
+from ai_arch_toolkit._legacy.llm._exceptions import APIError, RateLimitError
+from ai_arch_toolkit._legacy.llm._http import RetryConfig
 
 
 def _mock_httpx_response(
@@ -31,7 +31,7 @@ def _mock_httpx_response(
 @pytest.fixture
 def mock_async_client():
     """Patch httpx.AsyncClient for non-streaming tests."""
-    with patch("ai_arch_toolkit.llm._async_http.httpx.AsyncClient") as mock_cls:
+    with patch("ai_arch_toolkit._legacy.llm._async_http.httpx.AsyncClient") as mock_cls:
         mock_instance = AsyncMock()
         mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_instance)
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=None)
@@ -65,7 +65,7 @@ async def test_async_post_json_rate_limit(mock_async_client: AsyncMock) -> None:
     assert exc_info.value.retry_after == 3.0
 
 
-@patch("ai_arch_toolkit.llm._async_http.asyncio.sleep", new_callable=AsyncMock)
+@patch("ai_arch_toolkit._legacy.llm._async_http.asyncio.sleep", new_callable=AsyncMock)
 async def test_async_post_json_retries(
     mock_sleep: AsyncMock, mock_async_client: AsyncMock
 ) -> None:

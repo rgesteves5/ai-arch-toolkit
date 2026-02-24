@@ -6,10 +6,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ai_arch_toolkit.llm import AsyncClient, Client
-from ai_arch_toolkit.llm._middleware import Request
-from ai_arch_toolkit.llm._tracing import TracingMiddleware
-from ai_arch_toolkit.llm._types import Message, Response, StreamEvent, Usage
+from ai_arch_toolkit._legacy.llm import AsyncClient, Client
+from ai_arch_toolkit._legacy.llm._middleware import Request
+from ai_arch_toolkit._legacy.llm._tracing import TracingMiddleware
+from ai_arch_toolkit._legacy.llm._types import Message, Response, StreamEvent, Usage
 
 
 class _FakeSpan:
@@ -51,7 +51,7 @@ class _FakeTracer:
         return cm
 
 
-@patch("ai_arch_toolkit.llm._client.create_provider")
+@patch("ai_arch_toolkit._legacy.llm._client.create_provider")
 def test_tracing_chat_records_attributes_and_ends_span(mock_create: MagicMock) -> None:
     provider = MagicMock()
     provider.complete.return_value = Response(
@@ -74,7 +74,7 @@ def test_tracing_chat_records_attributes_and_ends_span(mock_create: MagicMock) -
     assert tracer.cms[0].ended is True
 
 
-@patch("ai_arch_toolkit.llm._client.create_provider")
+@patch("ai_arch_toolkit._legacy.llm._client.create_provider")
 def test_tracing_stream_events_records_usage(mock_create: MagicMock) -> None:
     provider = MagicMock()
     provider.stream_events.return_value = iter(
@@ -99,7 +99,7 @@ def test_tracing_stream_events_records_usage(mock_create: MagicMock) -> None:
     assert tracer.cms[0].ended is True
 
 
-@patch("ai_arch_toolkit.llm._async_client.create_provider")
+@patch("ai_arch_toolkit._legacy.llm._async_client.create_provider")
 @pytest.mark.asyncio
 async def test_tracing_async_chat_records_attributes(mock_create: MagicMock) -> None:
     provider = MagicMock()

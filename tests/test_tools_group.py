@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from ai_arch_toolkit._response import ToolCall
-from ai_arch_toolkit._tools._decorator import tool
-from ai_arch_toolkit._tools._group import ToolGroup
+from ai_arch_toolkit.core._response import ToolCall
+from ai_arch_toolkit.core._tools._decorator import tool
+from ai_arch_toolkit.core._tools._group import ToolGroup
 
 
 @tool

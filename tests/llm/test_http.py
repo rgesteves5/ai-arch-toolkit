@@ -6,8 +6,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ai_arch_toolkit.llm._exceptions import APIError, RateLimitError
-from ai_arch_toolkit.llm._http import (
+from ai_arch_toolkit._legacy.llm._exceptions import APIError, RateLimitError
+from ai_arch_toolkit._legacy.llm._http import (
     NO_RETRY,
     RetryConfig,
     _should_retry,
@@ -146,7 +146,7 @@ def test_rate_limit_error_without_retry_after(mock_post: MagicMock) -> None:
     assert exc_info.value.retry_after is None
 
 
-@patch("ai_arch_toolkit.llm._http.time.sleep")
+@patch("ai_arch_toolkit._legacy.llm._http.time.sleep")
 def test_post_json_retries_on_429(mock_sleep: MagicMock, mock_post: MagicMock) -> None:
     mock_post.side_effect = [
         MockResponse(json_data={"error": "rate limited"}, status_code=429),
@@ -159,7 +159,7 @@ def test_post_json_retries_on_429(mock_sleep: MagicMock, mock_post: MagicMock) -
     mock_sleep.assert_called_once()
 
 
-@patch("ai_arch_toolkit.llm._http.time.sleep")
+@patch("ai_arch_toolkit._legacy.llm._http.time.sleep")
 def test_post_json_retries_on_500(mock_sleep: MagicMock, mock_post: MagicMock) -> None:
     resp500 = MockResponse(status_code=500, text="Server Error")
     resp500._json_data = None
@@ -173,7 +173,7 @@ def test_post_json_retries_on_500(mock_sleep: MagicMock, mock_post: MagicMock) -
     assert mock_post.call_count == 2
 
 
-@patch("ai_arch_toolkit.llm._http.time.sleep")
+@patch("ai_arch_toolkit._legacy.llm._http.time.sleep")
 def test_post_json_exhausts_retries(mock_sleep: MagicMock, mock_post: MagicMock) -> None:
     mock_post.return_value = MockResponse(json_data={"error": "rate limited"}, status_code=429)
     config = RetryConfig(max_retries=2, backoff_factor=1.0)
@@ -190,7 +190,7 @@ def test_post_json_no_retry_on_400(mock_post: MagicMock) -> None:
     assert mock_post.call_count == 1
 
 
-@patch("ai_arch_toolkit.llm._http.time.sleep")
+@patch("ai_arch_toolkit._legacy.llm._http.time.sleep")
 def test_stream_sse_retries_before_yield(mock_sleep: MagicMock, mock_post: MagicMock) -> None:
     mock_post.side_effect = [
         MockResponse(json_data={"error": "rate limited"}, status_code=429),
@@ -202,7 +202,7 @@ def test_stream_sse_retries_before_yield(mock_sleep: MagicMock, mock_post: Magic
     assert mock_post.call_count == 2
 
 
-@patch("ai_arch_toolkit.llm._http.time.sleep")
+@patch("ai_arch_toolkit._legacy.llm._http.time.sleep")
 def test_stream_ndjson_retries_before_yield(mock_sleep: MagicMock, mock_post: MagicMock) -> None:
     mock_post.side_effect = [
         MockResponse(json_data={"error": "overloaded"}, status_code=503),

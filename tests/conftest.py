@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from ai_arch_toolkit.llm._types import Tool
+from ai_arch_toolkit._legacy.llm._types import Tool
 
 
 @pytest.fixture

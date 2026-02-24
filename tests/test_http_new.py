@@ -6,8 +6,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ai_arch_toolkit._exceptions import APIError, RateLimitError
-from ai_arch_toolkit._http import (
+from ai_arch_toolkit.core._exceptions import APIError, RateLimitError
+from ai_arch_toolkit.core._http import (
     RetryConfig,
     _should_retry,
     _wait_time,
@@ -16,7 +16,6 @@ from ai_arch_toolkit._http import (
     post_json,
     stream_sse,
 )
-
 
 # ---------------------------------------------------------------------------
 # Pure function tests
@@ -121,7 +120,7 @@ class TestPostJson:
             MockResponse(status_code=500, json_data={"error": "server"}),
             MockResponse(json_data={"result": "ok"}),
         ]
-        with patch("ai_arch_toolkit._http.time.sleep"):
+        with patch("ai_arch_toolkit.core._http.time.sleep"):
             result = post_json(
                 "http://test", {}, {}, session=mock_session, retry=RetryConfig(max_retries=1)
             )

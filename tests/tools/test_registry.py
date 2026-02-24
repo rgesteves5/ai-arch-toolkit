@@ -9,9 +9,9 @@ from typing import Literal, TypedDict
 
 import pytest
 
-from ai_arch_toolkit.llm._types import Tool, ToolCall
-from ai_arch_toolkit.tools._decorator import tool
-from ai_arch_toolkit.tools._registry import ToolRegistry, ValidationError
+from ai_arch_toolkit._legacy.llm._types import Tool, ToolCall
+from ai_arch_toolkit._legacy.tools._decorator import tool
+from ai_arch_toolkit._legacy.tools._registry import ToolRegistry, ValidationError
 
 # Module-level types needed for get_type_hints() resolution with PEP 563
 

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from ai_arch_toolkit.llm._providers._openai_responses import OpenAIResponsesProvider
-from ai_arch_toolkit.llm._types import (
+from ai_arch_toolkit._legacy.llm._providers._openai_responses import OpenAIResponsesProvider
+from ai_arch_toolkit._legacy.llm._types import (
     JsonSchema,
     Message,
     ServerTool,

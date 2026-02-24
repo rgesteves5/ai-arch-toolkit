@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from ai_arch_toolkit.llm._output_parsing import (
+from ai_arch_toolkit._legacy.llm._output_parsing import (
     extract_code_block,
     extract_list,
     parse_json,
@@ -26,13 +26,13 @@ def test_parse_json_from_plain_text() -> None:
 
 
 def test_parse_json_from_fenced_code_block() -> None:
-    text = "Result:\n```json\n{\"ok\": true, \"items\": [1,2]}\n```"
+    text = 'Result:\n```json\n{"ok": true, "items": [1,2]}\n```'
     parsed = parse_json(text)
     assert parsed == {"ok": True, "items": [1, 2]}
 
 
 def test_parse_json_extracts_embedded_object() -> None:
-    text = "The answer is: {\"a\": 1, \"b\": [2,3]} thanks."
+    text = 'The answer is: {"a": 1, "b": [2,3]} thanks.'
     parsed = parse_json(text)
     assert parsed == {"a": 1, "b": [2, 3]}
 
@@ -65,4 +65,3 @@ def test_extract_list_for_bullets_and_numbers() -> None:
     plain fallback
     """
     assert extract_list(text) == ["first", "second", "third", "plain fallback"]
-

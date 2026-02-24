@@ -4,9 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
-from ai_arch_toolkit._pricing import ModelPricing, PricingRegistry, estimate_cost, pricing
+from ai_arch_toolkit.core._pricing import ModelPricing, PricingRegistry, estimate_cost, pricing
 
 
 class TestPricingRegistryDefaults:
@@ -103,9 +101,7 @@ class TestEstimateCost:
             cache_write_tokens=500,
             cache_read_tokens=200,
         )
-        expected = (
-            3.0 * 1000 / 1_000_000 + 3.75 * 500 / 1_000_000 + 0.30 * 200 / 1_000_000
-        )
+        expected = 3.0 * 1000 / 1_000_000 + 3.75 * 500 / 1_000_000 + 0.30 * 200 / 1_000_000
         assert abs(cost - expected) < 1e-10
         assert known is True
 

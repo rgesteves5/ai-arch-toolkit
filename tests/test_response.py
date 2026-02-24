@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from ai_arch_toolkit._response import Response, ToolCall, Usage
+from ai_arch_toolkit.core._response import Response, ToolCall, Usage
 
 
 class TestToolCall:

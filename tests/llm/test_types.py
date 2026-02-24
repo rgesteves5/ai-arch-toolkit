@@ -1,6 +1,6 @@
 """Tests for _types.py dataclasses."""
 
-from ai_arch_toolkit.llm._types import (
+from ai_arch_toolkit._legacy.llm._types import (
     AudioPart,
     DocumentPart,
     ImagePart,

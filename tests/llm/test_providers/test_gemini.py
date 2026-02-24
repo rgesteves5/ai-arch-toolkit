@@ -7,8 +7,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from ai_arch_toolkit.llm._providers._gemini import GeminiProvider
-from ai_arch_toolkit.llm._types import (
+from ai_arch_toolkit._legacy.llm._providers._gemini import GeminiProvider
+from ai_arch_toolkit._legacy.llm._types import (
     AudioPart,
     DocumentPart,
     ImagePart,

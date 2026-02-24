@@ -5,7 +5,7 @@ from __future__ import annotations
 import warnings
 from unittest.mock import AsyncMock, patch
 
-from ai_arch_toolkit._providers._anthropic import (
+from ai_arch_toolkit.core._providers._anthropic import (
     AnthropicProvider,
     _build_payload,
     _messages_to_wire,
@@ -14,7 +14,7 @@ from ai_arch_toolkit._providers._anthropic import (
     _StreamState,
     _tool_to_anthropic,
 )
-from ai_arch_toolkit._response import Response, ToolCall
+from ai_arch_toolkit.core._response import Response, ToolCall
 
 # ---------------------------------------------------------------------------
 # Pure function tests
@@ -54,6 +54,61 @@ class TestMessagesToWire:
         assert wire[0]["role"] == "user"
         assert wire[0]["content"][0]["type"] == "tool_result"
         assert wire[0]["content"][0]["tool_use_id"] == "call_1"
+
+    def test_assistant_with_tool_calls(self):
+        msgs = [
+            {
+                "role": "assistant",
+                "content": "Let me check.",
+                "tool_calls": [
+                    {"id": "tc_1", "name": "get_weather", "input": {"city": "NYC"}},
+                ],
+            },
+        ]
+        _, wire = _messages_to_wire(msgs)
+        assert wire[0]["role"] == "assistant"
+        content = wire[0]["content"]
+        assert isinstance(content, list)
+        assert content[0] == {"type": "text", "text": "Let me check."}
+        assert content[1] == {
+            "type": "tool_use",
+            "id": "tc_1",
+            "name": "get_weather",
+            "input": {"city": "NYC"},
+        }
+
+    def test_assistant_with_tool_calls_no_text(self):
+        msgs = [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "tc_1", "name": "search", "input": {"q": "test"}},
+                ],
+            },
+        ]
+        _, wire = _messages_to_wire(msgs)
+        content = wire[0]["content"]
+        assert len(content) == 1  # no text block when empty
+        assert content[0]["type"] == "tool_use"
+
+    def test_assistant_with_multiple_tool_calls(self):
+        msgs = [
+            {
+                "role": "assistant",
+                "content": "Checking both.",
+                "tool_calls": [
+                    {"id": "tc_1", "name": "get_weather", "input": {"city": "NYC"}},
+                    {"id": "tc_2", "name": "get_time", "input": {"tz": "UTC"}},
+                ],
+            },
+        ]
+        _, wire = _messages_to_wire(msgs)
+        content = wire[0]["content"]
+        assert len(content) == 3  # text + 2 tool_use
+        assert content[0]["type"] == "text"
+        assert content[1]["type"] == "tool_use"
+        assert content[2]["type"] == "tool_use"
 
 
 class TestParseResponse:
@@ -218,7 +273,7 @@ class TestStreamState:
 
 
 class TestAnthropicProviderComplete:
-    @patch("ai_arch_toolkit._providers._anthropic.async_post_json", new_callable=AsyncMock)
+    @patch("ai_arch_toolkit.core._providers._anthropic.async_post_json", new_callable=AsyncMock)
     async def test_complete(self, mock_post):
         mock_post.return_value = {
             "content": [{"type": "text", "text": "Hello!"}],
@@ -232,7 +287,7 @@ class TestAnthropicProviderComplete:
         assert isinstance(result, Response)
         mock_post.assert_called_once()
 
-    @patch("ai_arch_toolkit._providers._anthropic.async_post_json", new_callable=AsyncMock)
+    @patch("ai_arch_toolkit.core._providers._anthropic.async_post_json", new_callable=AsyncMock)
     async def test_complete_passes_client(self, mock_post):
         """Verify the provider passes its httpx client to async_post_json."""
         mock_post.return_value = {
@@ -245,7 +300,7 @@ class TestAnthropicProviderComplete:
         call_kwargs = mock_post.call_args[1]
         assert call_kwargs["client"] is provider._client
 
-    @patch("ai_arch_toolkit._providers._anthropic.async_post_json", new_callable=AsyncMock)
+    @patch("ai_arch_toolkit.core._providers._anthropic.async_post_json", new_callable=AsyncMock)
     async def test_complete_with_tools(self, mock_post):
         mock_post.return_value = {
             "content": [
@@ -264,7 +319,7 @@ class TestAnthropicProviderComplete:
         payload = call_args[1]["payload"]
         assert "tools" in payload
 
-    @patch("ai_arch_toolkit._providers._anthropic.async_post_json", new_callable=AsyncMock)
+    @patch("ai_arch_toolkit.core._providers._anthropic.async_post_json", new_callable=AsyncMock)
     async def test_system_from_messages(self, mock_post):
         mock_post.return_value = {
             "content": [{"type": "text", "text": "Ok"}],
@@ -282,7 +337,7 @@ class TestAnthropicProviderComplete:
         # System should not appear in messages
         assert all(m["role"] != "system" for m in payload["messages"])
 
-    @patch("ai_arch_toolkit._providers._anthropic.async_post_json", new_callable=AsyncMock)
+    @patch("ai_arch_toolkit.core._providers._anthropic.async_post_json", new_callable=AsyncMock)
     async def test_explicit_system_overrides(self, mock_post):
         mock_post.return_value = {
             "content": [{"type": "text", "text": "Ok"}],
@@ -300,7 +355,7 @@ class TestAnthropicProviderComplete:
 
 
 class TestAnthropicProviderStream:
-    @patch("ai_arch_toolkit._providers._anthropic.async_stream_sse")
+    @patch("ai_arch_toolkit.core._providers._anthropic.async_stream_sse")
     async def test_stream_text_deltas(self, mock_stream):
         events = [
             '{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hello"}}',
@@ -321,7 +376,7 @@ class TestAnthropicProviderStream:
             chunks.append(chunk)
         assert chunks == ["Hello", " world"]
 
-    @patch("ai_arch_toolkit._providers._anthropic.async_stream_sse")
+    @patch("ai_arch_toolkit.core._providers._anthropic.async_stream_sse")
     async def test_stream_captures_usage(self, mock_stream):
         events = [
             '{"type":"message_start","message":{"model":"claude-sonnet-4-20250514","usage":{"input_tokens":25,"output_tokens":0}}}',
@@ -348,7 +403,7 @@ class TestAnthropicProviderStream:
         assert state.stop_reason == "end_turn"
         assert state.model == "claude-sonnet-4-20250514"
 
-    @patch("ai_arch_toolkit._providers._anthropic.async_stream_sse")
+    @patch("ai_arch_toolkit.core._providers._anthropic.async_stream_sse")
     async def test_stream_passes_client(self, mock_stream):
         """Verify the provider passes its httpx client to async_stream_sse."""
 

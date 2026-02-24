@@ -6,9 +6,9 @@ from collections.abc import AsyncIterator, Iterator
 
 import pytest
 
-from ai_arch_toolkit.llm._exceptions import APIError
-from ai_arch_toolkit.llm._fallback import FallbackClient
-from ai_arch_toolkit.llm._types import Response, StreamEvent
+from ai_arch_toolkit._legacy.llm._exceptions import APIError
+from ai_arch_toolkit._legacy.llm._fallback import FallbackClient
+from ai_arch_toolkit._legacy.llm._types import Response, StreamEvent
 
 
 class _FailingSyncClient:

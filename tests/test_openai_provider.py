@@ -5,7 +5,7 @@ from __future__ import annotations
 import warnings
 from unittest.mock import AsyncMock, patch
 
-from ai_arch_toolkit._providers._openai import (
+from ai_arch_toolkit.core._providers._openai import (
     OpenAIProvider,
     _build_payload,
     _messages_to_wire,
@@ -13,7 +13,7 @@ from ai_arch_toolkit._providers._openai import (
     _parse_tool_args,
     _tool_to_openai,
 )
-from ai_arch_toolkit._response import Response, ToolCall
+from ai_arch_toolkit.core._response import Response, ToolCall
 
 # ---------------------------------------------------------------------------
 # Pure function tests
@@ -70,6 +70,26 @@ class TestMessagesToWire:
         wire = _messages_to_wire(msgs)
         assert len(wire) == 1
         assert wire[0]["role"] == "user"
+
+    def test_assistant_with_tool_calls(self):
+        """Verify generic format is converted to OpenAI wire format."""
+        msgs = [
+            {
+                "role": "assistant",
+                "content": "Let me check.",
+                "tool_calls": [
+                    {"id": "tc_1", "name": "get_weather", "input": {"city": "NYC"}},
+                ],
+            },
+        ]
+        wire = _messages_to_wire(msgs)
+        assert wire[0]["role"] == "assistant"
+        assert wire[0]["content"] == "Let me check."
+        tc = wire[0]["tool_calls"][0]
+        assert tc["id"] == "tc_1"
+        assert tc["type"] == "function"
+        assert tc["function"]["name"] == "get_weather"
+        assert tc["function"]["arguments"] == '{"city": "NYC"}'
 
 
 class TestParseResponse:
@@ -148,7 +168,6 @@ class TestToolToOpenai:
         assert result["function"]["name"] == "search"
         assert result["function"]["description"] == "Search the web"
         assert result["function"]["parameters"] == tool["parameters"]
-
 
     def test_accepts_input_schema_key(self):
         tool = {
@@ -229,7 +248,7 @@ class TestBuildPayload:
 
 
 class TestOpenAIProviderComplete:
-    @patch("ai_arch_toolkit._providers._openai.async_post_json", new_callable=AsyncMock)
+    @patch("ai_arch_toolkit.core._providers._openai.async_post_json", new_callable=AsyncMock)
     async def test_complete(self, mock_post):
         mock_post.return_value = {
             "choices": [
@@ -247,7 +266,7 @@ class TestOpenAIProviderComplete:
         assert isinstance(result, Response)
         mock_post.assert_called_once()
 
-    @patch("ai_arch_toolkit._providers._openai.async_post_json", new_callable=AsyncMock)
+    @patch("ai_arch_toolkit.core._providers._openai.async_post_json", new_callable=AsyncMock)
     async def test_complete_passes_client(self, mock_post):
         mock_post.return_value = {
             "choices": [{"message": {"content": "Ok"}, "finish_reason": "stop"}],
@@ -258,7 +277,7 @@ class TestOpenAIProviderComplete:
         call_kwargs = mock_post.call_args[1]
         assert call_kwargs["client"] is provider._client
 
-    @patch("ai_arch_toolkit._providers._openai.async_post_json", new_callable=AsyncMock)
+    @patch("ai_arch_toolkit.core._providers._openai.async_post_json", new_callable=AsyncMock)
     async def test_complete_with_tools(self, mock_post):
         mock_post.return_value = {
             "choices": [
@@ -289,7 +308,7 @@ class TestOpenAIProviderComplete:
         assert "tools" in payload
         assert payload["tools"][0]["type"] == "function"
 
-    @patch("ai_arch_toolkit._providers._openai.async_post_json", new_callable=AsyncMock)
+    @patch("ai_arch_toolkit.core._providers._openai.async_post_json", new_callable=AsyncMock)
     async def test_system_passed_as_message(self, mock_post):
         mock_post.return_value = {
             "choices": [{"message": {"content": "Ok"}, "finish_reason": "stop"}],
@@ -305,7 +324,7 @@ class TestOpenAIProviderComplete:
         assert payload["messages"][0] == {"role": "system", "content": "Be brief."}
         assert payload["messages"][1] == {"role": "user", "content": "Hi"}
 
-    @patch("ai_arch_toolkit._providers._openai.async_post_json", new_callable=AsyncMock)
+    @patch("ai_arch_toolkit.core._providers._openai.async_post_json", new_callable=AsyncMock)
     async def test_explicit_system_overrides_list_system(self, mock_post):
         mock_post.return_value = {
             "choices": [{"message": {"content": "Ok"}, "finish_reason": "stop"}],
@@ -324,7 +343,7 @@ class TestOpenAIProviderComplete:
 
 
 class TestOpenAIProviderStream:
-    @patch("ai_arch_toolkit._providers._openai.async_stream_sse")
+    @patch("ai_arch_toolkit.core._providers._openai.async_stream_sse")
     async def test_stream_text_deltas(self, mock_stream):
         events = [
             '{"choices":[{"delta":{"content":"Hello"},"finish_reason":null}],"model":"gpt-4o"}',
@@ -345,7 +364,7 @@ class TestOpenAIProviderStream:
             chunks.append(chunk)
         assert chunks == ["Hello", " world"]
 
-    @patch("ai_arch_toolkit._providers._openai.async_stream_sse")
+    @patch("ai_arch_toolkit.core._providers._openai.async_stream_sse")
     async def test_stream_captures_usage(self, mock_stream):
         events = [
             '{"choices":[{"delta":{"content":"Hi"},"finish_reason":null}],"model":"gpt-4o"}',
@@ -371,7 +390,7 @@ class TestOpenAIProviderStream:
         assert state.usage.output_tokens == 10
         assert state.stop_reason == "stop"
 
-    @patch("ai_arch_toolkit._providers._openai.async_stream_sse")
+    @patch("ai_arch_toolkit.core._providers._openai.async_stream_sse")
     async def test_stream_includes_usage_option(self, mock_stream):
         """Verify stream payload includes stream_options for usage."""
 
@@ -389,7 +408,7 @@ class TestOpenAIProviderStream:
         assert payload["stream"] is True
         assert payload["stream_options"] == {"include_usage": True}
 
-    @patch("ai_arch_toolkit._providers._openai.async_stream_sse")
+    @patch("ai_arch_toolkit.core._providers._openai.async_stream_sse")
     async def test_stream_passes_client(self, mock_stream):
 
         async def _fake_stream(*args, **kwargs):

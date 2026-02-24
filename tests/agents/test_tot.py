@@ -5,10 +5,10 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
-from ai_arch_toolkit.agents._base import AgentConfig
-from ai_arch_toolkit.agents._tot import TreeOfThoughtsAgent
-from ai_arch_toolkit.llm._types import Response, Usage
-from ai_arch_toolkit.tools._registry import ToolRegistry
+from ai_arch_toolkit._legacy.agents._base import AgentConfig
+from ai_arch_toolkit._legacy.agents._tot import TreeOfThoughtsAgent
+from ai_arch_toolkit._legacy.llm._types import Response, Usage
+from ai_arch_toolkit._legacy.tools._registry import ToolRegistry
 
 
 def _make_client(responses: list[Response]) -> MagicMock:

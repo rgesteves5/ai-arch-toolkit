@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ai_arch_toolkit._sync import _run_sync, _stream_sync
+from ai_arch_toolkit.core._sync import _run_sync, _stream_sync
 
 
 class TestRunSync:
@@ -41,7 +41,7 @@ class TestStreamSync:
     def test_empty_iterator(self):
         async def gen():
             return
-            yield  # noqa: RET504 — make it an async generator
+            yield
 
         result = list(_stream_sync(lambda: gen()))
         assert result == []

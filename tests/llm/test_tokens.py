@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ai_arch_toolkit.llm._tokens import (
+from ai_arch_toolkit._legacy.llm._tokens import (
     CLAUDE_3_CORRECTION_FACTOR,
     CLAUDE_4_CORRECTION_FACTOR,
     DEFAULT_CORRECTION_FACTOR,
@@ -19,7 +19,7 @@ from ai_arch_toolkit.llm._tokens import (
     estimate_text_tokens_for_model,
     get_correction_factor,
 )
-from ai_arch_toolkit.llm._types import Message, TextPart, ToolCall, ToolResult
+from ai_arch_toolkit._legacy.llm._types import Message, TextPart, ToolCall, ToolResult
 
 
 def test_estimate_text_tokens_len_div_4() -> None:

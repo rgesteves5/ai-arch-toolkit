@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from ai_arch_toolkit._response import Response, StreamResponse, SyncStreamResponse, Usage
-
+from ai_arch_toolkit.core._response import Response, StreamResponse, SyncStreamResponse, Usage
 
 # ---------------------------------------------------------------------------
 # Helpers

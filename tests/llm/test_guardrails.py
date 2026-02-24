@@ -6,12 +6,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ai_arch_toolkit.llm import AsyncClient, Client
-from ai_arch_toolkit.llm._guardrails import GuardrailMiddleware, GuardrailViolation
-from ai_arch_toolkit.llm._types import Response, Usage
+from ai_arch_toolkit._legacy.llm import AsyncClient, Client
+from ai_arch_toolkit._legacy.llm._guardrails import GuardrailMiddleware, GuardrailViolation
+from ai_arch_toolkit._legacy.llm._types import Response, Usage
 
 
-@patch("ai_arch_toolkit.llm._client.create_provider")
+@patch("ai_arch_toolkit._legacy.llm._client.create_provider")
 def test_guardrail_blocks_input_pattern(mock_create: MagicMock) -> None:
     mock_create.return_value = MagicMock()
     middleware = GuardrailMiddleware(blocked_patterns=["password"])
@@ -21,7 +21,7 @@ def test_guardrail_blocks_input_pattern(mock_create: MagicMock) -> None:
         client.chat("my password is 123")
 
 
-@patch("ai_arch_toolkit.llm._client.create_provider")
+@patch("ai_arch_toolkit._legacy.llm._client.create_provider")
 def test_guardrail_blocks_output_pattern(mock_create: MagicMock) -> None:
     provider = MagicMock()
     provider.complete.return_value = Response(text="sensitive secret", usage=Usage())
@@ -33,7 +33,7 @@ def test_guardrail_blocks_output_pattern(mock_create: MagicMock) -> None:
         client.chat("hello")
 
 
-@patch("ai_arch_toolkit.llm._client.create_provider")
+@patch("ai_arch_toolkit._legacy.llm._client.create_provider")
 def test_guardrail_runs_custom_validators(mock_create: MagicMock) -> None:
     provider = MagicMock()
     provider.complete.return_value = Response(text="ok", usage=Usage())
@@ -56,7 +56,7 @@ def test_guardrail_runs_custom_validators(mock_create: MagicMock) -> None:
     assert call_kwargs["validated"] is True
 
 
-@patch("ai_arch_toolkit.llm._async_client.create_provider")
+@patch("ai_arch_toolkit._legacy.llm._async_client.create_provider")
 @pytest.mark.asyncio
 async def test_guardrail_async_blocks_output_pattern(mock_create: MagicMock) -> None:
     provider = MagicMock()
@@ -67,4 +67,3 @@ async def test_guardrail_async_blocks_output_pattern(mock_create: MagicMock) -> 
 
     with pytest.raises(GuardrailViolation, match="output"):
         await client.chat("hello")
-

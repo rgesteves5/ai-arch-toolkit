@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ai_arch_toolkit.agents._parsing import parse_numbered_items, parse_score
+from ai_arch_toolkit._legacy.agents._parsing import parse_numbered_items, parse_score
 
 
 def test_parse_numbered_items_basic():

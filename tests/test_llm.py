@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ai_arch_toolkit._llm import LLM
-from ai_arch_toolkit._response import Response, StreamResponse, SyncStreamResponse, Usage
+from ai_arch_toolkit.core._llm import LLM
+from ai_arch_toolkit.core._response import Response, StreamResponse, SyncStreamResponse, Usage
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -43,7 +43,7 @@ class TestNormalize:
 
 
 class TestComplete:
-    @patch("ai_arch_toolkit._llm.create_provider")
+    @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_basic(self, mock_create):
         mock_provider = AsyncMock()
         mock_provider.complete.return_value = _make_response()
@@ -54,7 +54,7 @@ class TestComplete:
         assert result.text == "Hello"
         mock_provider.complete.assert_called_once()
 
-    @patch("ai_arch_toolkit._llm.create_provider")
+    @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_string_normalized(self, mock_create):
         mock_provider = AsyncMock()
         mock_provider.complete.return_value = _make_response()
@@ -66,7 +66,7 @@ class TestComplete:
         messages = call_args[0][0]
         assert messages == [{"role": "user", "content": "Hello"}]
 
-    @patch("ai_arch_toolkit._llm.create_provider")
+    @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_list_passthrough(self, mock_create):
         mock_provider = AsyncMock()
         mock_provider.complete.return_value = _make_response()
@@ -78,7 +78,7 @@ class TestComplete:
         call_args = mock_provider.complete.call_args
         assert call_args[0][0] is msgs
 
-    @patch("ai_arch_toolkit._llm.create_provider")
+    @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_default_kwargs(self, mock_create):
         mock_provider = AsyncMock()
         mock_provider.complete.return_value = _make_response()
@@ -90,7 +90,7 @@ class TestComplete:
         assert call_kwargs["temperature"] == 0.5
         assert call_kwargs["max_tokens"] == 1000
 
-    @patch("ai_arch_toolkit._llm.create_provider")
+    @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_override_kwargs(self, mock_create):
         mock_provider = AsyncMock()
         mock_provider.complete.return_value = _make_response()
@@ -101,7 +101,7 @@ class TestComplete:
         call_kwargs = mock_provider.complete.call_args[1]
         assert call_kwargs["temperature"] == 0.8
 
-    @patch("ai_arch_toolkit._llm.create_provider")
+    @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_tools_forwarded(self, mock_create):
         mock_provider = AsyncMock()
         mock_provider.complete.return_value = _make_response()
@@ -115,7 +115,7 @@ class TestComplete:
 
 
 class TestStream:
-    @patch("ai_arch_toolkit._llm.create_provider")
+    @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_yields_chunks(self, mock_create):
         async def _fake_gen():
             for chunk in ["Hello", " ", "world"]:
@@ -135,7 +135,7 @@ class TestStream:
             chunks.append(chunk)
         assert chunks == ["Hello", " ", "world"]
 
-    @patch("ai_arch_toolkit._llm.create_provider")
+    @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_stream_response_available_after_consume(self, mock_create):
         async def _fake_gen():
             for chunk in ["Hello"]:
@@ -157,7 +157,7 @@ class TestStream:
         assert stream.response.text == "Hello"
         assert stream.response.usage.input_tokens == 10
 
-    @patch("ai_arch_toolkit._llm.create_provider")
+    @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_stream_context_manager_early_exit(self, mock_create):
         async def _fake_gen():
             for chunk in ["Hello", " ", "world"]:
@@ -180,7 +180,7 @@ class TestStream:
 
 
 class TestCall:
-    @patch("ai_arch_toolkit._llm.create_provider")
+    @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_call_is_alias(self, mock_create):
         mock_provider = AsyncMock()
         mock_provider.complete.return_value = _make_response("via call")
@@ -192,7 +192,7 @@ class TestCall:
 
 
 class TestSyncWrappers:
-    @patch("ai_arch_toolkit._llm.create_provider")
+    @patch("ai_arch_toolkit.core._llm.create_provider")
     def test_complete_sync(self, mock_create):
         mock_provider = AsyncMock()
         mock_provider.complete.return_value = _make_response("sync result")
@@ -202,7 +202,7 @@ class TestSyncWrappers:
         result = llm.complete_sync("Hello")
         assert result.text == "sync result"
 
-    @patch("ai_arch_toolkit._llm.create_provider")
+    @patch("ai_arch_toolkit.core._llm.create_provider")
     def test_stream_sync(self, mock_create):
         async def _fake_gen():
             for chunk in ["a", "b", "c"]:
@@ -224,7 +224,7 @@ class TestSyncWrappers:
 
 
 class TestRepr:
-    @patch("ai_arch_toolkit._llm.create_provider")
+    @patch("ai_arch_toolkit.core._llm.create_provider")
     def test_repr_custom_params(self, mock_create):
         mock_create.return_value = AsyncMock()
         llm = LLM("claude-sonnet-4-20250514", api_key="test", temperature=0.5)
@@ -233,7 +233,7 @@ class TestRepr:
         assert "temperature=0.5" in r
         assert "max_tokens" not in r  # default not shown
 
-    @patch("ai_arch_toolkit._llm.create_provider")
+    @patch("ai_arch_toolkit.core._llm.create_provider")
     def test_repr_defaults_only(self, mock_create):
         mock_create.return_value = AsyncMock()
         llm = LLM("claude-sonnet-4-20250514", api_key="test")
@@ -245,7 +245,7 @@ class TestModelRouting:
         with pytest.raises(ValueError, match="Cannot detect provider"):
             LLM("unknown-model-v1", api_key="test")
 
-    @patch("ai_arch_toolkit._llm.create_provider")
+    @patch("ai_arch_toolkit.core._llm.create_provider")
     def test_claude_model_creates_provider(self, mock_create):
         mock_create.return_value = AsyncMock()
         LLM("claude-sonnet-4-20250514", api_key="test")
@@ -254,7 +254,7 @@ class TestModelRouting:
 
 
 class TestLifecycle:
-    @patch("ai_arch_toolkit._llm.create_provider")
+    @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_async_context_manager(self, mock_create):
         mock_provider = AsyncMock()
         mock_create.return_value = mock_provider
@@ -264,7 +264,7 @@ class TestLifecycle:
 
         mock_provider.close.assert_called_once()
 
-    @patch("ai_arch_toolkit._llm.create_provider")
+    @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_close(self, mock_create):
         mock_provider = AsyncMock()
         mock_create.return_value = mock_provider
@@ -273,7 +273,7 @@ class TestLifecycle:
         await llm.close()
         mock_provider.close.assert_called_once()
 
-    @patch("ai_arch_toolkit._llm.create_provider")
+    @patch("ai_arch_toolkit.core._llm.create_provider")
     def test_sync_context_manager(self, mock_create):
         mock_provider = AsyncMock()
         mock_create.return_value = mock_provider

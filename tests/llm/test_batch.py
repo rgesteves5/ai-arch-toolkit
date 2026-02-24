@@ -7,8 +7,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ai_arch_toolkit.llm._batch import BatchClient, BatchJob, BatchRequest, BatchResult
-from ai_arch_toolkit.llm._types import Message
+from ai_arch_toolkit._legacy.llm._batch import BatchClient, BatchJob, BatchRequest, BatchResult
+from ai_arch_toolkit._legacy.llm._types import Message
 from tests.conftest import MockResponse
 
 

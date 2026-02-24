@@ -6,9 +6,9 @@ from collections.abc import Iterator
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-from ai_arch_toolkit.llm._client import Client
-from ai_arch_toolkit.llm._middleware import Request
-from ai_arch_toolkit.llm._types import Message, Response, StreamEvent, ToolCall, Usage
+from ai_arch_toolkit._legacy.llm._client import Client
+from ai_arch_toolkit._legacy.llm._middleware import Request
+from ai_arch_toolkit._legacy.llm._types import Message, Response, StreamEvent, ToolCall, Usage
 
 
 def _mock_provider() -> MagicMock:
@@ -31,7 +31,7 @@ def _mock_provider() -> MagicMock:
     return provider
 
 
-@patch("ai_arch_toolkit.llm._client.create_provider")
+@patch("ai_arch_toolkit._legacy.llm._client.create_provider")
 def test_chat_string(mock_create: MagicMock) -> None:
     mock_create.return_value = _mock_provider()
     client = Client("openai", model="gpt-4o", api_key="sk-test")
@@ -46,7 +46,7 @@ def test_chat_string(mock_create: MagicMock) -> None:
     assert messages[0].content == "Hello!"
 
 
-@patch("ai_arch_toolkit.llm._client.create_provider")
+@patch("ai_arch_toolkit._legacy.llm._client.create_provider")
 def test_chat_with_system(mock_create: MagicMock) -> None:
     mock_create.return_value = _mock_provider()
     client = Client("openai", model="gpt-4o", api_key="sk-test")
@@ -57,7 +57,7 @@ def test_chat_with_system(mock_create: MagicMock) -> None:
     assert call_kwargs["system"] == "Be helpful"
 
 
-@patch("ai_arch_toolkit.llm._client.create_provider")
+@patch("ai_arch_toolkit._legacy.llm._client.create_provider")
 def test_chat_messages(mock_create: MagicMock) -> None:
     mock_create.return_value = _mock_provider()
     client = Client("openai", model="gpt-4o", api_key="sk-test")
@@ -69,7 +69,7 @@ def test_chat_messages(mock_create: MagicMock) -> None:
     assert len(messages) == 2
 
 
-@patch("ai_arch_toolkit.llm._client.create_provider")
+@patch("ai_arch_toolkit._legacy.llm._client.create_provider")
 def test_stream(mock_create: MagicMock) -> None:
     mock_create.return_value = _mock_provider()
     client = Client("openai", model="gpt-4o", api_key="sk-test")
@@ -77,7 +77,7 @@ def test_stream(mock_create: MagicMock) -> None:
     assert chunks == ["Hello", " world"]
 
 
-@patch("ai_arch_toolkit.llm._client.create_provider")
+@patch("ai_arch_toolkit._legacy.llm._client.create_provider")
 def test_stream_events(mock_create: MagicMock) -> None:
     mock_create.return_value = _mock_provider()
     client = Client("openai", model="gpt-4o", api_key="sk-test")
@@ -93,7 +93,7 @@ def test_stream_events(mock_create: MagicMock) -> None:
     assert events[3].type == "done"
 
 
-@patch("ai_arch_toolkit.llm._client.create_provider")
+@patch("ai_arch_toolkit._legacy.llm._client.create_provider")
 def test_chat_forwards_timeout(mock_create: MagicMock) -> None:
     mock_create.return_value = _mock_provider()
     client = Client("openai", model="gpt-4o", api_key="sk-test")
@@ -105,7 +105,7 @@ def test_chat_forwards_timeout(mock_create: MagicMock) -> None:
     assert call_kwargs["timeout"] == 17
 
 
-@patch("ai_arch_toolkit.llm._client.create_provider")
+@patch("ai_arch_toolkit._legacy.llm._client.create_provider")
 def test_stream_forwards_timeout(mock_create: MagicMock) -> None:
     mock_create.return_value = _mock_provider()
     client = Client("openai", model="gpt-4o", api_key="sk-test")
@@ -140,7 +140,7 @@ def _upper_stream(stream: Iterator[str]) -> Iterator[str]:
         yield chunk.upper()
 
 
-@patch("ai_arch_toolkit.llm._client.create_provider")
+@patch("ai_arch_toolkit._legacy.llm._client.create_provider")
 def test_chat_runs_middleware_before_and_after(mock_create: MagicMock) -> None:
     mock_create.return_value = _mock_provider()
     events: list[str] = []
@@ -156,7 +156,7 @@ def test_chat_runs_middleware_before_and_after(mock_create: MagicMock) -> None:
     assert call_kwargs["middleware_marker"] == "sync"
 
 
-@patch("ai_arch_toolkit.llm._client.create_provider")
+@patch("ai_arch_toolkit._legacy.llm._client.create_provider")
 def test_stream_can_be_transformed_by_middleware(mock_create: MagicMock) -> None:
     mock_create.return_value = _mock_provider()
     events: list[str] = []

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ai_arch_toolkit._content import assistant, system, tool_result, user
+from ai_arch_toolkit.core._content import assistant, system, tool_result, user
 
 
 class TestSystem:

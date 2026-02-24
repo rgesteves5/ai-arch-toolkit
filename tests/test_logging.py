@@ -7,9 +7,9 @@ import logging
 import pytest
 
 import ai_arch_toolkit
-from ai_arch_toolkit.llm._async_client import AsyncClient
-from ai_arch_toolkit.llm._client import Client
-from ai_arch_toolkit.llm._providers import _resolve_key, create_provider
+from ai_arch_toolkit._legacy.llm._async_client import AsyncClient
+from ai_arch_toolkit._legacy.llm._client import Client
+from ai_arch_toolkit._legacy.llm._providers import _resolve_key, create_provider
 
 
 def test_package_logger_has_null_handler() -> None:

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from ai_arch_toolkit.llm._templates import ChatTemplate, PromptTemplate
-from ai_arch_toolkit.llm._types import Message, TextPart
+from ai_arch_toolkit._legacy.llm._templates import ChatTemplate, PromptTemplate
+from ai_arch_toolkit._legacy.llm._types import Message, TextPart
 
 
 def test_prompt_template_formats_with_str_format() -> None:

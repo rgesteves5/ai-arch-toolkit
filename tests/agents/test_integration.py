@@ -5,17 +5,17 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock
 
-from ai_arch_toolkit.agents._base import AgentConfig
-from ai_arch_toolkit.agents._compiler import LLMCompilerAgent
-from ai_arch_toolkit.agents._lats import LATSAgent
-from ai_arch_toolkit.agents._plan_execute import PlanExecuteAgent
-from ai_arch_toolkit.agents._react import ReActAgent
-from ai_arch_toolkit.agents._reflexion import ReflexionAgent
-from ai_arch_toolkit.agents._rewoo import ReWOOAgent
-from ai_arch_toolkit.agents._self_discovery import SelfDiscoveryAgent
-from ai_arch_toolkit.agents._tot import TreeOfThoughtsAgent
-from ai_arch_toolkit.llm._types import Response, Tool, ToolCall, Usage
-from ai_arch_toolkit.tools._registry import ToolRegistry
+from ai_arch_toolkit._legacy.agents._base import AgentConfig
+from ai_arch_toolkit._legacy.agents._compiler import LLMCompilerAgent
+from ai_arch_toolkit._legacy.agents._lats import LATSAgent
+from ai_arch_toolkit._legacy.agents._plan_execute import PlanExecuteAgent
+from ai_arch_toolkit._legacy.agents._react import ReActAgent
+from ai_arch_toolkit._legacy.agents._reflexion import ReflexionAgent
+from ai_arch_toolkit._legacy.agents._rewoo import ReWOOAgent
+from ai_arch_toolkit._legacy.agents._self_discovery import SelfDiscoveryAgent
+from ai_arch_toolkit._legacy.agents._tot import TreeOfThoughtsAgent
+from ai_arch_toolkit._legacy.llm._types import Response, Tool, ToolCall, Usage
+from ai_arch_toolkit._legacy.tools._registry import ToolRegistry
 
 
 def _calc_registry() -> ToolRegistry:

@@ -1,13 +1,11 @@
 """ai-arch-toolkit — Lightweight unified LLM client with agent architectures."""
 
+from __future__ import annotations
+
 from importlib.metadata import PackageNotFoundError, version
 
-from ai_arch_toolkit import _logging as _package_logging
-from ai_arch_toolkit._content import assistant, system, tool_result, user
-from ai_arch_toolkit._llm import LLM
-from ai_arch_toolkit._pricing import pricing
-from ai_arch_toolkit._tools import ToolGroup, async_execute_tool, execute_tool
-from ai_arch_toolkit.agents import (
+# --- Legacy re-exports (backward compat — old tests still use these) ---
+from ai_arch_toolkit._legacy.agents import (
     AgentConfig,
     AgentEvent,
     AgentResult,
@@ -32,7 +30,7 @@ from ai_arch_toolkit.agents import (
     TreeOfThoughtsAgent,
     TreeOfThoughtsResult,
 )
-from ai_arch_toolkit.llm import (
+from ai_arch_toolkit._legacy.llm import (
     CLAUDE_3_CORRECTION_FACTOR,
     CLAUDE_4_CORRECTION_FACTOR,
     DEFAULT_CORRECTION_FACTOR,
@@ -106,15 +104,25 @@ from ai_arch_toolkit.llm import (
     raw_tiktoken_count,
     resolve_model_pricing,
 )
-from ai_arch_toolkit.tools import ToolRegistry, ValidationError, tool
+from ai_arch_toolkit._legacy.tools import ToolRegistry, ValidationError, tool
+
+# --- Core primitives ---
+from ai_arch_toolkit.core._content import assistant, system, tool_result, user
+from ai_arch_toolkit.core._llm import LLM
+from ai_arch_toolkit.core._pricing import pricing
+from ai_arch_toolkit.core._tools import (
+    ToolGroup,
+    async_execute_tool,
+    execute_tool,
+)
+
+# --- Toolkit convenience ---
+from ai_arch_toolkit.toolkit import run_tools, run_tools_sync
 
 try:
     __version__ = version("ai-arch-toolkit")
 except PackageNotFoundError:
     __version__ = "0.0.0"
-
-# Keep package logger configured on import without exporting internal symbols.
-del _package_logging
 
 __all__ = [
     "CLAUDE_3_CORRECTION_FACTOR",
@@ -221,6 +229,8 @@ __all__ = [
     "pricing",
     "raw_tiktoken_count",
     "resolve_model_pricing",
+    "run_tools",
+    "run_tools_sync",
     "system",
     "tool",
     "tool_result",

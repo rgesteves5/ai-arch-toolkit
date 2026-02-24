@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from ai_arch_toolkit.llm._memory import ConversationMemory, SlidingWindowMemory
-from ai_arch_toolkit.llm._types import Message
+from ai_arch_toolkit._legacy.llm._memory import ConversationMemory, SlidingWindowMemory
+from ai_arch_toolkit._legacy.llm._types import Message
 
 
 def test_conversation_memory_add_extend_history_clear() -> None:
@@ -34,4 +34,3 @@ def test_sliding_window_memory_trims_oldest() -> None:
 
     history = memory.history()
     assert len(history) <= 1
-

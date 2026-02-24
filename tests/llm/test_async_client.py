@@ -8,9 +8,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ai_arch_toolkit.llm._async_client import AsyncClient
-from ai_arch_toolkit.llm._middleware import Request
-from ai_arch_toolkit.llm._types import Message, Response, StreamEvent, ToolCall, Usage
+from ai_arch_toolkit._legacy.llm._async_client import AsyncClient
+from ai_arch_toolkit._legacy.llm._middleware import Request
+from ai_arch_toolkit._legacy.llm._types import Message, Response, StreamEvent, ToolCall, Usage
 
 
 @pytest.fixture
@@ -38,7 +38,7 @@ def mock_provider():
     return provider
 
 
-@patch("ai_arch_toolkit.llm._async_client.create_provider")
+@patch("ai_arch_toolkit._legacy.llm._async_client.create_provider")
 async def test_async_chat_string(mock_create: MagicMock, mock_provider: MagicMock) -> None:
     mock_create.return_value = mock_provider
     client = AsyncClient("openai", model="gpt-4o", api_key="sk-test")
@@ -53,7 +53,7 @@ async def test_async_chat_string(mock_create: MagicMock, mock_provider: MagicMoc
     assert messages[0].content == "Hello!"
 
 
-@patch("ai_arch_toolkit.llm._async_client.create_provider")
+@patch("ai_arch_toolkit._legacy.llm._async_client.create_provider")
 async def test_async_chat_messages(mock_create: MagicMock, mock_provider: MagicMock) -> None:
     mock_create.return_value = mock_provider
     client = AsyncClient("openai", model="gpt-4o", api_key="sk-test")
@@ -65,7 +65,7 @@ async def test_async_chat_messages(mock_create: MagicMock, mock_provider: MagicM
     assert len(messages) == 2
 
 
-@patch("ai_arch_toolkit.llm._async_client.create_provider")
+@patch("ai_arch_toolkit._legacy.llm._async_client.create_provider")
 async def test_async_stream(mock_create: MagicMock, mock_provider: MagicMock) -> None:
     mock_create.return_value = mock_provider
     client = AsyncClient("openai", model="gpt-4o", api_key="sk-test")
@@ -76,7 +76,7 @@ async def test_async_stream(mock_create: MagicMock, mock_provider: MagicMock) ->
     assert chunks == ["Hello", " world"]
 
 
-@patch("ai_arch_toolkit.llm._async_client.create_provider")
+@patch("ai_arch_toolkit._legacy.llm._async_client.create_provider")
 async def test_async_chat_with_system(mock_create: MagicMock, mock_provider: MagicMock) -> None:
     mock_create.return_value = mock_provider
     client = AsyncClient("openai", model="gpt-4o", api_key="sk-test")
@@ -86,7 +86,7 @@ async def test_async_chat_with_system(mock_create: MagicMock, mock_provider: Mag
     assert call_kwargs["system"] == "Be helpful"
 
 
-@patch("ai_arch_toolkit.llm._async_client.create_provider")
+@patch("ai_arch_toolkit._legacy.llm._async_client.create_provider")
 async def test_async_stream_events(mock_create: MagicMock, mock_provider: MagicMock) -> None:
     mock_create.return_value = mock_provider
     client = AsyncClient("openai", model="gpt-4o", api_key="sk-test")
@@ -105,7 +105,7 @@ async def test_async_stream_events(mock_create: MagicMock, mock_provider: MagicM
     assert events[3].type == "done"
 
 
-@patch("ai_arch_toolkit.llm._async_client.create_provider")
+@patch("ai_arch_toolkit._legacy.llm._async_client.create_provider")
 async def test_async_chat_forwards_timeout(
     mock_create: MagicMock, mock_provider: MagicMock
 ) -> None:
@@ -118,7 +118,7 @@ async def test_async_chat_forwards_timeout(
     assert call_kwargs["timeout"] == 17
 
 
-@patch("ai_arch_toolkit.llm._async_client.create_provider")
+@patch("ai_arch_toolkit._legacy.llm._async_client.create_provider")
 async def test_async_stream_forwards_timeout(
     mock_create: MagicMock, mock_provider: MagicMock
 ) -> None:
@@ -157,7 +157,7 @@ async def _aupper_stream(stream: AsyncIterator[str]) -> AsyncIterator[str]:
         yield chunk.upper()
 
 
-@patch("ai_arch_toolkit.llm._async_client.create_provider")
+@patch("ai_arch_toolkit._legacy.llm._async_client.create_provider")
 async def test_async_chat_runs_middleware_before_and_after(
     mock_create: MagicMock, mock_provider: MagicMock
 ) -> None:
@@ -174,7 +174,7 @@ async def test_async_chat_runs_middleware_before_and_after(
     assert call_kwargs["middleware_marker"] == "async"
 
 
-@patch("ai_arch_toolkit.llm._async_client.create_provider")
+@patch("ai_arch_toolkit._legacy.llm._async_client.create_provider")
 async def test_async_stream_can_be_transformed_by_middleware(
     mock_create: MagicMock, mock_provider: MagicMock
 ) -> None:

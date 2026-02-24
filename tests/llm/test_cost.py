@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ai_arch_toolkit.llm import AsyncClient, Client
-from ai_arch_toolkit.llm._cost import (
+from ai_arch_toolkit._legacy.llm import AsyncClient, Client
+from ai_arch_toolkit._legacy.llm._cost import (
     CostTracker,
     ModelPricing,
     estimate_usage_cost,
@@ -16,11 +16,11 @@ from ai_arch_toolkit.llm._cost import (
     preview_text_usage_and_cost_for_models,
     resolve_model_pricing,
 )
-from ai_arch_toolkit.llm._tokens import CLAUDE_3_CORRECTION_FACTOR, TokenCorrectionConfig
-from ai_arch_toolkit.llm._types import Message, Response, StreamEvent, Usage
+from ai_arch_toolkit._legacy.llm._tokens import CLAUDE_3_CORRECTION_FACTOR, TokenCorrectionConfig
+from ai_arch_toolkit._legacy.llm._types import Message, Response, StreamEvent, Usage
 
 
-@patch("ai_arch_toolkit.llm._client.create_provider")
+@patch("ai_arch_toolkit._legacy.llm._client.create_provider")
 def test_cost_tracker_accumulates_chat_usage_and_cost(mock_create: MagicMock) -> None:
     provider = MagicMock()
     provider.complete.return_value = Response(
@@ -42,7 +42,7 @@ def test_cost_tracker_accumulates_chat_usage_and_cost(mock_create: MagicMock) ->
     assert snapshot.per_model_cost_usd["openai:gpt-4o"] == pytest.approx(0.005)
 
 
-@patch("ai_arch_toolkit.llm._client.create_provider")
+@patch("ai_arch_toolkit._legacy.llm._client.create_provider")
 def test_cost_tracker_accumulates_usage_from_stream_events(mock_create: MagicMock) -> None:
     provider = MagicMock()
     provider.stream_events.return_value = iter(
@@ -67,7 +67,7 @@ def test_cost_tracker_accumulates_usage_from_stream_events(mock_create: MagicMoc
     assert snapshot.total_cost_usd == pytest.approx(0.00017)
 
 
-@patch("ai_arch_toolkit.llm._client.create_provider")
+@patch("ai_arch_toolkit._legacy.llm._client.create_provider")
 def test_cost_tracker_warns_once_for_unknown_pricing(
     mock_create: MagicMock, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -84,7 +84,7 @@ def test_cost_tracker_warns_once_for_unknown_pricing(
     assert caplog.text.count("No pricing configured for provider=openai model=unknown-model") == 1
 
 
-@patch("ai_arch_toolkit.llm._async_client.create_provider")
+@patch("ai_arch_toolkit._legacy.llm._async_client.create_provider")
 @pytest.mark.asyncio
 async def test_async_cost_tracker_accumulates_chat_usage_and_cost(mock_create: MagicMock) -> None:
     provider = MagicMock()
@@ -106,7 +106,7 @@ async def test_async_cost_tracker_accumulates_chat_usage_and_cost(mock_create: M
     assert snapshot.total_cost_usd == pytest.approx(0.005)
 
 
-@patch("ai_arch_toolkit.llm._async_client.create_provider")
+@patch("ai_arch_toolkit._legacy.llm._async_client.create_provider")
 @pytest.mark.asyncio
 async def test_async_cost_tracker_accumulates_usage_from_stream_events(
     mock_create: MagicMock,
