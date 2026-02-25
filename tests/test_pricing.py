@@ -18,6 +18,11 @@ class TestPricingRegistryDefaults:
         assert pricing.has("gpt-4o-2024-08-06")
         assert pricing.has("gpt-4o-mini-2024-07-18")
 
+    def test_has_gemini_25_and_grok_models(self):
+        assert pricing.has("gemini-2.5-flash")
+        assert pricing.has("gemini-2.5-pro")
+        assert pricing.has("grok-3")
+
     def test_unknown_model(self):
         assert not pricing.has("unknown-model-v1")
         assert pricing.get("unknown-model-v1") is None

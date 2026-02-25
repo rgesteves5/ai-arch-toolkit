@@ -16,7 +16,7 @@ class ToolCall:
     input: dict[str, Any]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class Usage:
     """Token usage counters."""
 
@@ -27,11 +27,52 @@ class Usage:
 
 
 @dataclass(frozen=True, slots=True)
+class ThinkingBlock:
+    """A thinking/reasoning block from the model."""
+
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
+class OutputSchema:
+    """Structured output schema definition.
+
+    Use directly or pass a Pydantic model class to ``_resolve_output_schema()``.
+    """
+
+    name: str
+    schema: dict[str, Any]
+    strict: bool = True
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError("OutputSchema.name must be a non-empty string")
+        if not self.schema:
+            raise ValueError("OutputSchema.schema must be a non-empty dict")
+
+
+def _resolve_output_schema(schema: OutputSchema | type) -> OutputSchema:
+    """Accept ``OutputSchema`` or a Pydantic model class, return ``OutputSchema``."""
+    if isinstance(schema, OutputSchema):
+        return schema
+    try:
+        from pydantic import BaseModel
+
+        if isinstance(schema, type) and issubclass(schema, BaseModel):
+            return OutputSchema(name=schema.__name__, schema=schema.model_json_schema())
+    except ImportError:
+        pass
+    raise TypeError(f"Expected OutputSchema or Pydantic model, got {type(schema)}")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class Response:
     """Immutable LLM response with string-like convenience."""
 
     text: str = ""
     tool_calls: tuple[ToolCall, ...] = ()
+    thinking: tuple[ThinkingBlock, ...] = ()
+    parsed: Any = None  # populated only when output_schema was requested
     usage: Usage = field(default_factory=Usage)
     cost: float = 0.0
     cost_estimated: bool = False
@@ -69,6 +110,8 @@ class Response:
             msg["tool_calls"] = [
                 {"id": tc.id, "name": tc.name, "input": dict(tc.input)} for tc in self.tool_calls
             ]
+        if self.parsed is not None:
+            msg["parsed"] = self.parsed
         return msg
 
     # --- string-like behaviour ---
@@ -84,15 +127,6 @@ class Response:
 
     def __bool__(self) -> bool:
         return bool(self.text) or bool(self.tool_calls)
-
-    def __contains__(self, item: str) -> bool:
-        return item in self.text
-
-    def __add__(self, other: str) -> str:
-        return self.text + other
-
-    def __radd__(self, other: str) -> str:
-        return other + self.text
 
 
 # ---------------------------------------------------------------------------
@@ -182,3 +216,10 @@ class SyncStreamResponse:
             self._chunks.append(chunk)
             yield chunk
         self._response = self._finalizer("".join(self._chunks))
+
+    def __enter__(self) -> SyncStreamResponse:
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        if self._response is None:
+            self._response = self._finalizer("".join(self._chunks))

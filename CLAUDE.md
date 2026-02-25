@@ -54,7 +54,7 @@ uv run pdoc ai_arch_toolkit -o site/api  # Generate API docs
 
 ## Code Conventions
 
-- Python 3.12+, `from __future__ import annotations` in every file.
+- Python 3.13+, `from __future__ import annotations` in every file.
 - Ruff line length: 99. Run `ruff format` after edits — it reformats dict literals, multi-line calls, etc.
 - All dataclasses use `frozen=True, slots=True`.
 - `type` aliases (PEP 695 style) for union types: `type Content = str | tuple[ContentPart, ...]`.

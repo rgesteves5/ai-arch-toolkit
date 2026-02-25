@@ -5,10 +5,14 @@ from __future__ import annotations
 import dataclasses
 import enum
 import inspect
+import logging
 import types
 import typing
+import warnings
 from collections.abc import Callable
 from typing import Any, get_type_hints
+
+logger = logging.getLogger(__name__)
 
 _PYTHON_TYPE_TO_JSON: dict[type, str] = {
     str: "string",
@@ -33,11 +37,17 @@ def _hint_to_json_schema(hint: Any) -> tuple[dict[str, object], bool]:
             schema, _ = _hint_to_json_schema(non_none[0])
             return schema, True
         # Multi-type union (not just Optional) — fall back to string
+        warnings.warn(
+            f"Multi-type union {hint} collapsed to string; consider using a single type",
+            stacklevel=3,
+        )
         return {"type": "string"}, True
 
     # Handle Literal["a", "b"] or Literal[1, 2]
     if origin is typing.Literal:
         args = typing.get_args(hint)
+        if not args:
+            return {"type": "string"}, False
         if args and all(isinstance(a, int) for a in args):
             return {"type": "integer", "enum": list(args)}, False
         return {"type": "string", "enum": list(args)}, False
@@ -45,6 +55,8 @@ def _hint_to_json_schema(hint: Any) -> tuple[dict[str, object], bool]:
     # Handle enum.Enum subclasses
     if isinstance(hint, type) and issubclass(hint, enum.Enum):
         values = [m.value for m in hint]
+        if not values:
+            return {"type": "string"}, False
         if values and all(isinstance(v, int) for v in values):
             return {"type": "integer", "enum": values}, False
         return {"type": "string", "enum": values}, False
@@ -107,7 +119,8 @@ def _typeddict_to_schema(hint: Any) -> dict[str, object]:
     """Convert a TypedDict to JSON Schema."""
     try:
         hints = get_type_hints(hint)
-    except Exception:
+    except (NameError, AttributeError, TypeError):
+        logger.warning("Could not resolve type hints for TypedDict %s", hint.__name__)
         hints = {}
     properties: dict[str, object] = {}
     for name, h in hints.items():
@@ -125,7 +138,8 @@ def _dataclass_to_schema(hint: Any) -> dict[str, object]:
     """Convert a dataclass to JSON Schema."""
     try:
         hints = get_type_hints(hint)
-    except Exception:
+    except (NameError, AttributeError, TypeError):
+        logger.warning("Could not resolve type hints for dataclass %s", hint.__name__)
         hints = {}
     fields = dataclasses.fields(hint)
     properties: dict[str, object] = {}
@@ -254,7 +268,8 @@ def infer_schema(
     tool_name = name or fn.__name__
     try:
         hints = get_type_hints(fn)
-    except Exception:
+    except (NameError, AttributeError, TypeError):
+        logger.warning("Could not resolve type hints for %s, using annotations", fn.__name__)
         hints = getattr(fn, "__annotations__", {})
 
     sig = inspect.signature(fn)
@@ -270,7 +285,8 @@ def infer_schema(
         if hint is not None:
             try:
                 schema, is_optional = _hint_to_json_schema(hint)
-            except Exception:
+            except (NameError, AttributeError, TypeError):
+                logger.warning("Could not convert hint for parameter %r", param_name)
                 schema, is_optional = {"type": "string"}, False
         else:
             schema, is_optional = {"type": "string"}, False

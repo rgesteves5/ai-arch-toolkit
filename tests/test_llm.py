@@ -7,7 +7,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from ai_arch_toolkit.core._llm import LLM
-from ai_arch_toolkit.core._response import Response, StreamResponse, SyncStreamResponse, Usage
+from ai_arch_toolkit.core._response import (
+    OutputSchema,
+    Response,
+    StreamResponse,
+    SyncStreamResponse,
+    ThinkingBlock,
+    Usage,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -24,6 +31,8 @@ def _make_stream_state(usage=None, model="claude-sonnet-4-20250514", stop_reason
     state.usage = usage or Usage(input_tokens=10, output_tokens=5)
     state.model = model
     state.stop_reason = stop_reason
+    state.tool_calls = []
+    state.thinking = []
     return state
 
 
@@ -282,3 +291,167 @@ class TestLifecycle:
             assert llm is not None
 
         mock_provider.close.assert_called_once()
+
+
+class TestThinkingParams:
+    @patch("ai_arch_toolkit.core._llm.create_provider")
+    async def test_thinking_forwarded(self, mock_create):
+        mock_provider = AsyncMock()
+        mock_provider.complete.return_value = _make_response()
+        mock_create.return_value = mock_provider
+
+        llm = LLM("claude-sonnet-4-20250514", api_key="test")
+        await llm.complete("Hi", thinking=True, thinking_effort="high")
+        call_kwargs = mock_provider.complete.call_args[1]
+        assert call_kwargs["thinking"] is True
+        assert call_kwargs["thinking_effort"] == "high"
+
+    @patch("ai_arch_toolkit.core._llm.create_provider")
+    async def test_thinking_budget_forwarded(self, mock_create):
+        mock_provider = AsyncMock()
+        mock_provider.complete.return_value = _make_response()
+        mock_create.return_value = mock_provider
+
+        llm = LLM("claude-sonnet-4-20250514", api_key="test")
+        await llm.complete("Hi", thinking=True, thinking_budget=10000)
+        call_kwargs = mock_provider.complete.call_args[1]
+        assert call_kwargs["thinking_budget"] == 10000
+
+    @patch("ai_arch_toolkit.core._llm.create_provider")
+    async def test_thinking_defaults_not_forwarded(self, mock_create):
+        mock_provider = AsyncMock()
+        mock_provider.complete.return_value = _make_response()
+        mock_create.return_value = mock_provider
+
+        llm = LLM("claude-sonnet-4-20250514", api_key="test")
+        await llm.complete("Hi")
+        call_kwargs = mock_provider.complete.call_args[1]
+        assert "thinking" not in call_kwargs
+        assert "thinking_effort" not in call_kwargs
+        assert "thinking_budget" not in call_kwargs
+
+
+class TestThinkingValidation:
+    @patch("ai_arch_toolkit.core._llm.create_provider")
+    async def test_empty_thinking_effort_raises(self, mock_create):
+        mock_create.return_value = AsyncMock()
+        llm = LLM("claude-sonnet-4-20250514", api_key="test")
+        with pytest.raises(ValueError, match="thinking_effort must be a non-empty string"):
+            await llm.complete("Hi", thinking_effort="")
+
+    @patch("ai_arch_toolkit.core._llm.create_provider")
+    async def test_negative_thinking_budget_raises(self, mock_create):
+        mock_create.return_value = AsyncMock()
+        llm = LLM("claude-sonnet-4-20250514", api_key="test")
+        with pytest.raises(ValueError, match="thinking_budget must be non-negative"):
+            await llm.complete("Hi", thinking_budget=-1)
+
+    @patch("ai_arch_toolkit.core._llm.create_provider")
+    async def test_zero_thinking_budget_allowed(self, mock_create):
+        mock_provider = AsyncMock()
+        mock_provider.complete.return_value = _make_response()
+        mock_create.return_value = mock_provider
+        llm = LLM("claude-sonnet-4-20250514", api_key="test")
+        await llm.complete("Hi", thinking_budget=0)  # should not raise
+
+
+class TestOutputSchema:
+    @patch("ai_arch_toolkit.core._llm.create_provider")
+    async def test_output_schema_forwarded(self, mock_create):
+        mock_provider = AsyncMock()
+        mock_provider.complete.return_value = _make_response()
+        mock_create.return_value = mock_provider
+
+        schema = OutputSchema(name="Person", schema={"type": "object"})
+        llm = LLM("claude-sonnet-4-20250514", api_key="test")
+        await llm.complete("Hi", output_schema=schema)
+        call_kwargs = mock_provider.complete.call_args[1]
+        assert call_kwargs["output_schema"] is schema
+
+    @patch("ai_arch_toolkit.core._llm.create_provider")
+    async def test_output_schema_default_not_forwarded(self, mock_create):
+        mock_provider = AsyncMock()
+        mock_provider.complete.return_value = _make_response()
+        mock_create.return_value = mock_provider
+
+        llm = LLM("claude-sonnet-4-20250514", api_key="test")
+        await llm.complete("Hi")
+        call_kwargs = mock_provider.complete.call_args[1]
+        assert "output_schema" not in call_kwargs
+
+
+class TestStreamForwarding:
+    @patch("ai_arch_toolkit.core._llm.create_provider")
+    async def test_stream_forwards_thinking_params(self, mock_create):
+        async def _fake_gen():
+            yield "Hi"
+
+        state = _make_stream_state()
+        mock_provider = MagicMock()
+        mock_provider.stream.return_value = (_fake_gen(), state)
+        mock_create.return_value = mock_provider
+
+        llm = LLM("claude-sonnet-4-20250514", api_key="test")
+        stream = llm.stream("Hi", thinking=True, thinking_effort="high", thinking_budget=5000)
+        async for _ in stream:
+            pass
+        call_kwargs = mock_provider.stream.call_args[1]
+        assert call_kwargs["thinking"] is True
+        assert call_kwargs["thinking_effort"] == "high"
+        assert call_kwargs["thinking_budget"] == 5000
+
+    @patch("ai_arch_toolkit.core._llm.create_provider")
+    async def test_stream_forwards_output_schema(self, mock_create):
+        async def _fake_gen():
+            yield "Hi"
+
+        state = _make_stream_state()
+        mock_provider = MagicMock()
+        mock_provider.stream.return_value = (_fake_gen(), state)
+        mock_create.return_value = mock_provider
+
+        schema = OutputSchema(name="X", schema={"type": "object"})
+        llm = LLM("claude-sonnet-4-20250514", api_key="test")
+        stream = llm.stream("Hi", output_schema=schema)
+        async for _ in stream:
+            pass
+        call_kwargs = mock_provider.stream.call_args[1]
+        assert call_kwargs["output_schema"] is schema
+
+    @patch("ai_arch_toolkit.core._llm.create_provider")
+    def test_stream_sync_forwards_thinking_params(self, mock_create):
+        async def _fake_gen():
+            yield "Hi"
+
+        state = _make_stream_state()
+        mock_provider = MagicMock()
+        mock_provider.stream.return_value = (_fake_gen(), state)
+        mock_create.return_value = mock_provider
+
+        llm = LLM("claude-sonnet-4-20250514", api_key="test")
+        stream = llm.stream_sync("Hi", thinking=True, thinking_effort="low")
+        list(stream)
+        call_kwargs = mock_provider.stream.call_args[1]
+        assert call_kwargs["thinking"] is True
+        assert call_kwargs["thinking_effort"] == "low"
+
+
+class TestStreamThinking:
+    @patch("ai_arch_toolkit.core._llm.create_provider")
+    async def test_stream_includes_thinking(self, mock_create):
+        async def _fake_gen():
+            yield "Answer"
+
+        state = _make_stream_state()
+        state.thinking = [ThinkingBlock(text="Let me think...")]
+        mock_provider = MagicMock()
+        mock_provider.stream.return_value = (_fake_gen(), state)
+        mock_create.return_value = mock_provider
+
+        llm = LLM("claude-sonnet-4-20250514", api_key="test")
+        stream = llm.stream("Hi")
+        async for _ in stream:
+            pass
+        assert stream.response is not None
+        assert len(stream.response.thinking) == 1
+        assert stream.response.thinking[0].text == "Let me think..."

@@ -10,7 +10,7 @@ def system(content: str) -> dict[str, Any]:
     return {"role": "system", "content": content}
 
 
-def user(content: str | list[Any]) -> dict[str, Any]:
+def user(content: str) -> dict[str, Any]:
     """Create a user message dict."""
     return {"role": "user", "content": content}
 
@@ -20,6 +20,19 @@ def assistant(content: str) -> dict[str, Any]:
     return {"role": "assistant", "content": content}
 
 
-def tool_result(content: Any, *, tool_use_id: str) -> dict[str, Any]:
-    """Create a tool_result message dict."""
-    return {"role": "tool", "content": content, "tool_use_id": tool_use_id}
+def tool_result(
+    content: Any,
+    *,
+    tool_use_id: str,
+    name: str | None = None,
+) -> dict[str, Any]:
+    """Create a tool_result message dict.
+
+    ``tool_use_id`` is the provider-agnostic discriminator for tool results.
+    """
+    if not tool_use_id:
+        raise ValueError("tool_use_id must be a non-empty string")
+    msg = {"role": "tool", "content": content, "tool_use_id": tool_use_id}
+    if name:
+        msg["name"] = name
+    return msg

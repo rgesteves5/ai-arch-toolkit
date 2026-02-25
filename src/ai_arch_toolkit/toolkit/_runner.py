@@ -45,7 +45,7 @@ async def run_tools(
             result = await fn(**tc.input)
         else:
             result = await asyncio.to_thread(fn, **tc.input)
-        results.append(tool_result(_format_result(result), tool_use_id=tc.id))
+        results.append(tool_result(_format_result(result), tool_use_id=tc.id, name=tc.name))
     return results
 
 
@@ -71,5 +71,5 @@ def run_tools_sync(
     for tc in response.tool_calls:
         fn = _resolve_fn(tc, fns)
         result = fn(**tc.input)
-        results.append(tool_result(_format_result(result), tool_use_id=tc.id))
+        results.append(tool_result(_format_result(result), tool_use_id=tc.id, name=tc.name))
     return results

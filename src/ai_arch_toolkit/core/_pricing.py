@@ -112,9 +112,9 @@ class PricingRegistry:
 
         total = inp * input_tokens / per_m + out * output_tokens / per_m
 
-        if cache_write_tokens and p.cache_write is not None:
+        if cache_write_tokens > 0 and p.cache_write is not None:
             total += p.cache_write * cache_write_tokens / per_m
-        if cache_read_tokens and p.cache_read is not None:
+        if cache_read_tokens > 0 and p.cache_read is not None:
             total += p.cache_read * cache_read_tokens / per_m
 
         return total, True
@@ -149,6 +149,17 @@ class PricingRegistry:
 
 # ── Module-level singleton ──
 pricing = PricingRegistry()
+
+
+def _estimate_response_cost(model: str, usage: Any) -> tuple[float, bool]:
+    """Estimate response cost from a ``Usage``-like object."""
+    return pricing.estimate_cost(
+        model,
+        input_tokens=getattr(usage, "input_tokens", 0),
+        output_tokens=getattr(usage, "output_tokens", 0),
+        cache_write_tokens=getattr(usage, "cache_write_tokens", 0),
+        cache_read_tokens=getattr(usage, "cache_read_tokens", 0),
+    )
 
 
 def estimate_cost(

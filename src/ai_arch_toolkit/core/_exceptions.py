@@ -6,16 +6,16 @@ from typing import Any
 
 
 class APIError(Exception):
-    """Raised when an LLM provider returns an HTTP error."""
+    """Raised when an LLM provider returns an API error."""
 
     def __init__(self, status_code: int, body: dict[str, Any] | str) -> None:
         self.status_code = status_code
         self.body = body
-        super().__init__(f"HTTP {status_code}: {body}")
+        super().__init__(f"API {status_code}: {body}")
 
 
 class RateLimitError(APIError):
-    """Raised on HTTP 429 — includes optional ``retry_after`` from the server."""
+    """Raised on rate limit (429) — includes optional ``retry_after`` from the server."""
 
     def __init__(
         self,

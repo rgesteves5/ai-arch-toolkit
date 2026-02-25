@@ -59,6 +59,16 @@ class TestToMessage:
         msg["tool_calls"][0]["input"]["q"] = "mutated"
         assert tc.input["q"] == "test"  # original unchanged
 
+    def test_with_parsed(self):
+        r = Response(text='{"name": "Alice"}', parsed={"name": "Alice"})
+        msg = r.to_message()
+        assert msg["parsed"] == {"name": "Alice"}
+
+    def test_parsed_none_excluded(self):
+        r = Response(text="Hello")
+        msg = r.to_message()
+        assert "parsed" not in msg
+
     def test_roundtrip_format_matches_content_helper(self):
         """to_message() format is compatible with _content.assistant()."""
         r = Response(text="Hello")

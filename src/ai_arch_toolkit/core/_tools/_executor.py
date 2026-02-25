@@ -46,7 +46,10 @@ def execute_tool(tool_call: ToolCall, tools: list[Callable[..., Any]]) -> str:
         tools: List of decorated tool functions to search.
     """
     fn = _resolve_fn(tool_call, tools)
-    result = fn(**tool_call.input)
+    try:
+        result = fn(**tool_call.input)
+    except TypeError as exc:
+        raise TypeError(f"Tool {tool_call.name!r} argument mismatch: {exc}") from exc
     return _format_result(result)
 
 
@@ -58,8 +61,11 @@ async def async_execute_tool(tool_call: ToolCall, tools: list[Callable[..., Any]
         tools: List of decorated tool functions to search.
     """
     fn = _resolve_fn(tool_call, tools)
-    if inspect.iscoroutinefunction(fn):
-        result = await fn(**tool_call.input)
-    else:
-        result = await asyncio.to_thread(fn, **tool_call.input)
+    try:
+        if inspect.iscoroutinefunction(fn):
+            result = await fn(**tool_call.input)
+        else:
+            result = await asyncio.to_thread(fn, **tool_call.input)
+    except TypeError as exc:
+        raise TypeError(f"Tool {tool_call.name!r} argument mismatch: {exc}") from exc
     return _format_result(result)

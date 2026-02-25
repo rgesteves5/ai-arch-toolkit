@@ -1,26 +1,22 @@
-"""03 — Streaming (Gemini).
+"""03 — Streaming.
 
-Two streaming modes:
-  1. stream()        — yields plain text chunks
-  2. stream_events() — yields StreamEvent objects with type metadata
+Stream text chunks from the model. After the stream is consumed,
+access the full Response (with usage, cost, etc.) via stream.response.
 """
 
-from ai_arch_toolkit import Client
+from ai_arch_toolkit import LLM
 
-client = Client("gemini", model="gemini-2.0-flash")
+llm = LLM("gpt-4.1-nano")
 
-# --- Mode 1: Simple text streaming ---
-print("=== stream() ===")
-for chunk in client.stream("Explain photosynthesis in three sentences."):
+# --- Sync streaming ---
+print("=== stream_sync() ===")
+stream = llm.stream_sync("Explain photosynthesis in three sentences.")
+for chunk in stream:
     print(chunk, end="", flush=True)
-print("\n")
 
-# --- Mode 2: Rich event streaming ---
-print("=== stream_events() ===")
-for event in client.stream_events("Why is the sky blue? One paragraph."):
-    if event.type == "text":
-        print(event.text, end="", flush=True)
-    elif event.type == "usage":
-        print(f"\n\n[Tokens — in: {event.usage.input_tokens}, out: {event.usage.output_tokens}]")
-    elif event.type == "done":
-        print("[Stream complete]")
+# After the stream is fully consumed, .response is available
+print(
+    f"\n\n[Tokens — in: {stream.response.usage.input_tokens}, "
+    f"out: {stream.response.usage.output_tokens}]"
+)
+print(f"[Cost: ${stream.response.cost:.6f}]")

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from ai_arch_toolkit.core._sync import _run_sync, _stream_sync
 
 
@@ -22,11 +24,8 @@ class TestRunSync:
         async def fail() -> None:
             raise ValueError("boom")
 
-        try:
+        with pytest.raises(ValueError, match="boom"):
             _run_sync(fail())
-            assert False, "Should have raised"
-        except ValueError as e:
-            assert "boom" in str(e)
 
 
 class TestStreamSync:
@@ -51,8 +50,5 @@ class TestStreamSync:
             yield 1
             raise RuntimeError("stream error")
 
-        try:
+        with pytest.raises(RuntimeError, match="stream error"):
             list(_stream_sync(lambda: gen()))
-            assert False, "Should have raised"
-        except RuntimeError as e:
-            assert "stream error" in str(e)

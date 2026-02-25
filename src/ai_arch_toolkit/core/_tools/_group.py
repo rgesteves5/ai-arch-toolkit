@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import warnings
 from collections.abc import Callable
 from typing import Any
 
@@ -43,6 +44,11 @@ class ToolGroup:
         if tool_def is None:
             tool_def = infer_schema(fn)
         name = tool_def["name"]
+        if name in self._fns:
+            warnings.warn(
+                f"Duplicate tool name {name!r} in ToolGroup; overwriting previous",
+                stacklevel=2,
+            )
         self._fns[name] = fn
         self._definitions[name] = tool_def
 

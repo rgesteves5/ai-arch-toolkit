@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Callable
 from typing import Any
 
@@ -47,11 +48,22 @@ def prepare_tools(
 
     # List of mixed items
     if not isinstance(tools, list):
+        warnings.warn(
+            "Unsupported tools input type "
+            f"{type(tools).__name__}; expected list, ToolGroup, or tool",
+            stacklevel=3,
+        )
         return None
 
     result: list[dict[str, Any]] = []
     for item in tools:
         if isinstance(item, dict):
+            if "name" not in item or not item["name"]:
+                warnings.warn(
+                    "Tool dict missing 'name' field; skipping",
+                    stacklevel=3,
+                )
+                continue
             result.append(item)
         elif isinstance(item, ToolGroup):
             result.extend(item.definitions)
@@ -61,5 +73,9 @@ def prepare_tools(
                 result.append(tool_def)
             else:
                 result.append(infer_schema(item))
-        # Skip unrecognized items silently
-    return result or None
+        else:
+            warnings.warn(
+                f"Skipping unsupported tool entry of type {type(item).__name__}",
+                stacklevel=3,
+            )
+    return result

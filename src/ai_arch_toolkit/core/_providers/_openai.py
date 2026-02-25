@@ -1,50 +1,51 @@
-"""Provider for the OpenAI Chat Completions API."""
+"""OpenAI provider — thin adapter over the ``openai`` SDK."""
 
 from __future__ import annotations
 
 import json
+import logging
 import warnings
 from collections.abc import AsyncIterator
 from typing import Any
 
-import httpx
+from ai_arch_toolkit.core._exceptions import APIError, RateLimitError
+from ai_arch_toolkit.core._pricing import _estimate_response_cost
+from ai_arch_toolkit.core._providers._base import (
+    BaseProvider,
+    StreamState,
+    _parse_retry_after,
+    parse_tool_args,
+)
+from ai_arch_toolkit.core._providers._imports import require_sdk
+from ai_arch_toolkit.core._response import OutputSchema, Response, ToolCall, Usage
 
-from ai_arch_toolkit.core._http import RetryConfig, async_post_json, async_stream_sse
-from ai_arch_toolkit.core._pricing import pricing
-from ai_arch_toolkit.core._providers._base import BaseProvider
-from ai_arch_toolkit.core._response import Response, ToolCall, Usage
+require_sdk("openai", "openai")
+import openai  # noqa: E402
 
-_BASE_URL = "https://api.openai.com/v1/chat/completions"
-_DEFAULT_MAX_TOKENS = 4096
+logger = logging.getLogger(__name__)
 
-# Parameters safe to forward to the OpenAI Chat Completions API.
-_OPENAI_PARAMS = {
+# Parameters safe to forward directly to the SDK.
+_SDK_PARAMS = {
     "temperature",
     "top_p",
     "max_tokens",
+    "max_completion_tokens",
     "stop",
     "frequency_penalty",
     "presence_penalty",
     "seed",
     "response_format",
+    "parallel_tool_calls",
 }
 
 
-class _StreamState:
-    """Per-stream metadata accumulator (concurrent-safe: one per call)."""
-
-    __slots__ = ("model", "raw", "stop_reason", "tool_calls", "usage")
-
-    def __init__(self) -> None:
-        self.usage: Usage | None = None
-        self.model: str = ""
-        self.stop_reason: str = ""
-        self.raw: dict[str, Any] | None = None
-        self.tool_calls: list[ToolCall] = []
+# ---------------------------------------------------------------------------
+# Adapter helpers
+# ---------------------------------------------------------------------------
 
 
-def _tool_to_openai(tool: dict[str, Any]) -> dict[str, Any]:
-    """Map generic tool dict to OpenAI wire format (function wrapper)."""
+def _tool_to_sdk(tool: dict[str, Any]) -> dict[str, Any]:
+    """Map generic tool dict to OpenAI SDK format (function wrapper)."""
     return {
         "type": "function",
         "function": {
@@ -55,38 +56,23 @@ def _tool_to_openai(tool: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _parse_tool_args(raw_args: str | dict[str, Any]) -> dict[str, Any]:
-    """Parse tool call arguments (may be JSON string or dict)."""
-    if isinstance(raw_args, dict):
-        return raw_args
-    try:
-        return json.loads(raw_args)
-    except (json.JSONDecodeError, TypeError):
-        return {"_raw": raw_args}
-
-
-def _messages_to_wire(
+def _messages_to_sdk(
     messages: list[dict[str, Any]],
     *,
     system: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Convert generic messages to OpenAI wire format.
+    """Convert generic messages to OpenAI SDK format.
 
-    System stays as a regular message. tool_result messages use role="tool".
-    If an explicit ``system`` is provided, system messages in the list are
-    discarded (explicit overrides — same semantics as Anthropic provider).
+    ``tool_use_id`` is the tool-result discriminator (role is ignored).
+    System stays as a regular message role. tool results use role="tool".
+    If ``system`` is provided, system messages in the list are discarded.
     """
     wire: list[dict[str, Any]] = []
     if system is not None:
         wire.append({"role": "system", "content": system})
     for msg in messages:
         role = msg.get("role", "user")
-        if role == "system":
-            # Skip if explicit system was provided (explicit overrides)
-            if system is None:
-                wire.append({"role": "system", "content": msg.get("content", "")})
-        elif msg.get("tool_use_id"):
-            # tool_result — OpenAI uses role="tool" + tool_call_id
+        if msg.get("tool_use_id"):
             wire.append(
                 {
                     "role": "tool",
@@ -94,8 +80,10 @@ def _messages_to_wire(
                     "content": str(msg.get("content", "")),
                 }
             )
+        elif role == "system":
+            if system is None:
+                wire.append({"role": "system", "content": msg.get("content", "")})
         elif role == "assistant" and msg.get("tool_calls"):
-            # Assistant message with tool calls
             wire.append(
                 {
                     "role": "assistant",
@@ -118,77 +106,88 @@ def _messages_to_wire(
     return wire
 
 
-def _parse_response(raw: dict[str, Any], model: str) -> Response:
-    """Convert OpenAI API response to our Response dataclass."""
-    choices = raw.get("choices", [])
+def _build_output_schema_format(
+    output_schema: OutputSchema,
+) -> dict[str, Any]:
+    """Build OpenAI ``response_format`` for structured output."""
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": output_schema.name,
+            "schema": output_schema.schema,
+            "strict": output_schema.strict,
+        },
+    }
+
+
+def _extract_usage(sdk_usage: Any) -> Usage:
+    """Convert SDK usage object to our Usage dataclass."""
+    cache_read = 0
+    details = getattr(sdk_usage, "prompt_tokens_details", None)
+    if details:
+        cache_read = getattr(details, "cached_tokens", 0) or 0
+    return Usage(
+        input_tokens=getattr(sdk_usage, "prompt_tokens", 0),
+        output_tokens=getattr(sdk_usage, "completion_tokens", 0),
+        cache_read_tokens=cache_read,
+    )
+
+
+def _parse_sdk_response(
+    completion: Any,
+    model: str,
+    *,
+    output_schema: OutputSchema | None = None,
+) -> Response:
+    """Convert ``openai.types.chat.ChatCompletion`` to our ``Response``."""
+    choices = completion.choices or []
     if not choices:
-        return Response(raw=raw, model=model)
+        return Response(raw=completion, model=model)
 
     choice = choices[0]
-    message = choice.get("message", {})
-    text = message.get("content") or ""
+    message = choice.message
+    text = message.content or ""
 
     tool_calls: list[ToolCall] = []
-    for tc in message.get("tool_calls", []):
-        fn = tc.get("function", {})
+    for tc in message.tool_calls or []:
         tool_calls.append(
             ToolCall(
-                id=tc.get("id", ""),
-                name=fn.get("name", ""),
-                input=_parse_tool_args(fn.get("arguments", "{}")),
+                id=tc.id,
+                name=tc.function.name,
+                input=parse_tool_args(tc.function.arguments),
             )
         )
 
-    raw_usage = raw.get("usage", {})
-    input_tokens = raw_usage.get("prompt_tokens", 0)
-    output_tokens = raw_usage.get("completion_tokens", 0)
+    parsed: Any = None
+    if output_schema and text:
+        try:
+            parsed = json.loads(text)
+        except (json.JSONDecodeError, TypeError):
+            logger.warning("Failed to parse structured output as JSON")
 
-    usage = Usage(input_tokens=input_tokens, output_tokens=output_tokens)
-
-    cost, cost_estimated = pricing.estimate_cost(
-        model,
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
-    )
+    usage = _extract_usage(completion.usage) if completion.usage else Usage()
+    cost, cost_estimated = _estimate_response_cost(model, usage)
 
     return Response(
         text=text.strip(),
         tool_calls=tuple(tool_calls),
+        parsed=parsed,
         usage=usage,
         cost=cost,
         cost_estimated=cost_estimated,
-        stop_reason=choice.get("finish_reason", ""),
-        model=raw.get("model", model),
-        raw=raw,
+        stop_reason=choice.finish_reason or "",
+        model=completion.model or model,
+        raw=completion,
     )
 
 
-def _build_payload(
-    wire_messages: list[dict[str, Any]],
-    *,
-    model: str,
-    tools: list[dict[str, Any]] | None = None,
-    **kwargs: Any,
-) -> dict[str, Any]:
-    unknown = set(kwargs) - _OPENAI_PARAMS
-    if unknown:
-        warnings.warn(
-            f"Unknown parameter(s) ignored for OpenAI: {sorted(unknown)}",
-            stacklevel=4,
-        )
-    filtered = {k: v for k, v in kwargs.items() if k in _OPENAI_PARAMS}
-    payload: dict[str, Any] = {
-        "model": model,
-        "messages": wire_messages,
-        **filtered,
-    }
-    if tools:
-        payload["tools"] = [_tool_to_openai(t) for t in tools]
-    return payload
+# ---------------------------------------------------------------------------
+# Provider
+# ---------------------------------------------------------------------------
 
 
 class OpenAIProvider(BaseProvider):
-    """OpenAI Chat Completions API provider (async-only, reuses httpx client)."""
+    """OpenAI Chat Completions API provider via the official SDK."""
 
     def __init__(
         self,
@@ -196,19 +195,72 @@ class OpenAIProvider(BaseProvider):
         api_key: str,
         *,
         base_url: str | None = None,
-        retry: RetryConfig | None = None,
     ) -> None:
         self._model = model
-        self._base_url = base_url or _BASE_URL
-        self._retry = retry
-        self._headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-        self._client = httpx.AsyncClient(headers=self._headers)
+        self._client = openai.AsyncOpenAI(
+            api_key=api_key,
+            base_url=base_url,
+        )
 
     async def close(self) -> None:
-        await self._client.aclose()
+        await self._client.close()
+
+    # ------------------------------------------------------------------
+    # Internals
+    # ------------------------------------------------------------------
+
+    def _build_sdk_kwargs(
+        self,
+        wire_messages: list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]] | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Build kwargs dict for ``chat.completions.create()``."""
+        # Extract our special params
+        thinking = kwargs.pop("thinking", False)
+        thinking_effort = kwargs.pop("thinking_effort", None)
+        thinking_budget = kwargs.pop("thinking_budget", None)
+        output_schema: OutputSchema | None = kwargs.pop("output_schema", None)
+
+        # Warn about unknown params
+        unknown = set(kwargs) - _SDK_PARAMS
+        if unknown:
+            warnings.warn(
+                f"Unknown parameter(s) ignored for OpenAI: {sorted(unknown)}. "
+                f"Valid: {sorted(_SDK_PARAMS)}",
+                stacklevel=4,
+            )
+        filtered = {k: v for k, v in kwargs.items() if k in _SDK_PARAMS}
+
+        sdk_kwargs: dict[str, Any] = {
+            "model": self._model,
+            "messages": wire_messages,
+            **filtered,
+        }
+
+        # Thinking → reasoning_effort (OpenAI naming)
+        if thinking:
+            sdk_kwargs["reasoning_effort"] = thinking_effort or "high"
+        if thinking_budget:
+            warnings.warn(
+                "thinking_budget is not supported by OpenAI (only reasoning_effort string), "
+                "ignoring",
+                stacklevel=4,
+            )
+
+        # Structured output via native response_format
+        if output_schema:
+            sdk_kwargs["response_format"] = _build_output_schema_format(output_schema)
+
+        if tools:
+            sdk_kwargs["tools"] = [_tool_to_sdk(t) for t in tools]
+
+        return sdk_kwargs
+
+    # ------------------------------------------------------------------
+    # complete
+    # ------------------------------------------------------------------
 
     async def complete(
         self,
@@ -218,17 +270,30 @@ class OpenAIProvider(BaseProvider):
         tools: list[dict[str, Any]] | None = None,
         **kwargs: Any,
     ) -> Response:
-        timeout = kwargs.pop("timeout", 60)
-        wire = _messages_to_wire(messages, system=system)
-        payload = _build_payload(wire, model=self._model, tools=tools, **kwargs)
-        raw = await async_post_json(
-            self._base_url,
-            payload=payload,
-            timeout=timeout,
-            retry=self._retry,
-            client=self._client,
-        )
-        return _parse_response(raw, self._model)
+        output_schema: OutputSchema | None = kwargs.get("output_schema")
+        wire = _messages_to_sdk(messages, system=system)
+        sdk_kwargs = self._build_sdk_kwargs(wire, tools=tools, **kwargs)
+
+        try:
+            completion = await self._client.chat.completions.create(**sdk_kwargs)
+        except openai.RateLimitError as exc:
+            retry_after = exc.response.headers.get("retry-after") if exc.response else None
+            raise RateLimitError(
+                exc.response.status_code if exc.response else 429,
+                str(exc.body),
+                retry_after=_parse_retry_after(retry_after),
+            ) from exc
+        except openai.APIStatusError as exc:
+            raise APIError(
+                exc.response.status_code if exc.response else 500,
+                str(exc.body),
+            ) from exc
+
+        return _parse_sdk_response(completion, self._model, output_schema=output_schema)
+
+    # ------------------------------------------------------------------
+    # stream
+    # ------------------------------------------------------------------
 
     def stream(
         self,
@@ -237,87 +302,92 @@ class OpenAIProvider(BaseProvider):
         system: str | None = None,
         tools: list[dict[str, Any]] | None = None,
         **kwargs: Any,
-    ) -> tuple[AsyncIterator[str], _StreamState]:
-        timeout = kwargs.pop("timeout", 120)
-        wire = _messages_to_wire(messages, system=system)
-        payload = _build_payload(wire, model=self._model, tools=tools, **kwargs)
-        payload["stream"] = True
-        payload["stream_options"] = {"include_usage": True}
+    ) -> tuple[AsyncIterator[str], StreamState]:
+        wire = _messages_to_sdk(messages, system=system)
+        sdk_kwargs = self._build_sdk_kwargs(wire, tools=tools, **kwargs)
 
-        state = _StreamState()
+        state = StreamState()
         state.model = self._model
 
         async def _generate() -> AsyncIterator[str]:
             tc_acc: dict[int, dict[str, str]] = {}
 
-            async for data in async_stream_sse(
-                self._base_url,
-                payload=payload,
-                timeout=timeout,
-                retry=self._retry,
-                client=self._client,
-            ):
-                try:
-                    chunk = json.loads(data)
-                except json.JSONDecodeError:
-                    continue
+            try:
+                stream = await self._client.chat.completions.create(
+                    **sdk_kwargs,
+                    stream=True,
+                    stream_options={"include_usage": True},
+                )
+                async for chunk in stream:
+                    # Usage chunk (final)
+                    if chunk.usage:
+                        state.usage = _extract_usage(chunk.usage)
 
-                # Usage chunk (final chunk with usage info)
-                if raw_usage := chunk.get("usage"):
-                    state.usage = Usage(
-                        input_tokens=raw_usage.get("prompt_tokens", 0),
-                        output_tokens=raw_usage.get("completion_tokens", 0),
-                    )
-                    continue
+                    choices = chunk.choices or []
+                    if not choices:
+                        continue
 
-                choices = chunk.get("choices", [])
-                if not choices:
-                    continue
+                    choice = choices[0]
+                    delta = choice.delta
 
-                choice = choices[0]
-                delta = choice.get("delta", {})
+                    # Text content
+                    if delta and delta.content:
+                        yield delta.content
 
-                if text := delta.get("content"):
-                    yield text
+                    # Accumulate tool call deltas
+                    if delta and delta.tool_calls:
+                        for tc_delta in delta.tool_calls:
+                            idx = tc_delta.index
+                            if idx not in tc_acc:
+                                tc_acc[idx] = {
+                                    "id": tc_delta.id or "",
+                                    "name": (
+                                        tc_delta.function.name
+                                        if tc_delta.function and tc_delta.function.name
+                                        else ""
+                                    ),
+                                    "arguments": "",
+                                }
+                            else:
+                                if tc_delta.id:
+                                    tc_acc[idx]["id"] = tc_delta.id
+                                if tc_delta.function and tc_delta.function.name:
+                                    tc_acc[idx]["name"] = tc_delta.function.name
+                            if tc_delta.function and tc_delta.function.arguments:
+                                tc_acc[idx]["arguments"] += tc_delta.function.arguments
 
-                # Accumulate tool call deltas
-                for tc_delta in delta.get("tool_calls", []):
-                    idx = tc_delta.get("index", 0)
-                    if idx not in tc_acc:
-                        tc_acc[idx] = {
-                            "id": tc_delta.get("id", ""),
-                            "name": tc_delta.get("function", {}).get("name", ""),
-                            "arguments": "",
-                        }
-                    else:
-                        if tc_id := tc_delta.get("id"):
-                            tc_acc[idx]["id"] = tc_id
-                        if fn_name := tc_delta.get("function", {}).get("name"):
-                            tc_acc[idx]["name"] = fn_name
-                    tc_acc[idx]["arguments"] += (
-                        tc_delta.get("function", {}).get("arguments", "")
-                    )
-
-                finish = choice.get("finish_reason")
-
-                # Emit completed tool calls on finish_reason
-                if finish == "tool_calls" and tc_acc:
-                    for _idx in sorted(tc_acc):
-                        acc = tc_acc[_idx]
-                        state.tool_calls.append(
-                            ToolCall(
-                                id=acc["id"],
-                                name=acc["name"],
-                                input=_parse_tool_args(acc["arguments"]),
+                    finish = choice.finish_reason
+                    if finish == "tool_calls" and tc_acc:
+                        for _idx in sorted(tc_acc):
+                            acc = tc_acc[_idx]
+                            state.tool_calls.append(
+                                ToolCall(
+                                    id=acc["id"],
+                                    name=acc["name"],
+                                    input=parse_tool_args(acc["arguments"]),
+                                )
                             )
-                        )
-                    tc_acc.clear()
+                        tc_acc.clear()
 
-                if finish:
-                    state.stop_reason = finish
+                    if finish:
+                        state.stop_reason = finish
 
-                # Capture model from first chunk
-                if model_name := chunk.get("model"):
-                    state.model = model_name
+                    if chunk.model:
+                        state.model = chunk.model
+
+                    state.raw = chunk
+
+            except openai.RateLimitError as exc:
+                retry_after = exc.response.headers.get("retry-after") if exc.response else None
+                raise RateLimitError(
+                    exc.response.status_code if exc.response else 429,
+                    str(exc.body),
+                    retry_after=_parse_retry_after(retry_after),
+                ) from exc
+            except openai.APIStatusError as exc:
+                raise APIError(
+                    exc.response.status_code if exc.response else 500,
+                    str(exc.body),
+                ) from exc
 
         return _generate(), state

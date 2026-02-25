@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from ai_arch_toolkit.core._response import Response, ToolCall, Usage
 from ai_arch_toolkit.core._tools._decorator import tool
 from ai_arch_toolkit.core._tools._group import ToolGroup
@@ -77,7 +79,6 @@ class TestRunTools:
 
     async def test_unknown_tool_raises(self):
         r = _make_response(ToolCall(id="tc_1", name="nonexistent", input={}))
-        import pytest
 
         with pytest.raises(KeyError, match="nonexistent"):
             await run_tools(r, [get_weather])
@@ -89,6 +90,7 @@ class TestRunTools:
         msg = results[0]
         assert msg["role"] == "tool"
         assert "tool_use_id" in msg
+        assert msg["name"] == "get_weather"
         assert "content" in msg
 
 
@@ -156,7 +158,7 @@ class TestRunToolsWithToolGroup:
 class TestRoundtrip:
     def test_to_message_through_anthropic_wire(self):
         """Response → to_message → Anthropic _messages_to_wire → correct format."""
-        from ai_arch_toolkit.core._providers._anthropic import _messages_to_wire as anthropic_wire
+        from ai_arch_toolkit.core._providers._anthropic import _messages_to_sdk as anthropic_wire
 
         r = Response(
             text="Let me check.",
@@ -191,8 +193,8 @@ class TestRoundtrip:
         assert wire[2]["content"][0]["tool_use_id"] == "tc_1"
 
     def test_to_message_through_openai_wire(self):
-        """Response → to_message → OpenAI _messages_to_wire → correct format."""
-        from ai_arch_toolkit.core._providers._openai import _messages_to_wire as openai_wire
+        """Response → to_message → OpenAI _messages_to_sdk → correct format."""
+        from ai_arch_toolkit.core._providers._openai import _messages_to_sdk as openai_wire
 
         r = Response(
             text="Let me check.",

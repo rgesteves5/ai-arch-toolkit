@@ -1,15 +1,15 @@
-"""06 — Tool Registry (xAI).
+"""06 — Tool Loop with @tool and ToolGroup.
 
 Use the @tool decorator to auto-generate schemas from type hints and
-docstrings, and let the ToolRegistry handle execution.
+docstrings. ToolGroup manages registration, and run_tools_sync handles
+execution + tool_result message creation in a single call.
 """
 
-from ai_arch_toolkit import Client, ToolRegistry, ToolResult, tool
+from ai_arch_toolkit import LLM, run_tools_sync
+from ai_arch_toolkit.core import ToolGroup, tool
 
-registry = ToolRegistry()
 
-
-@tool(registry=registry)
+@tool
 def calculate(expression: str) -> str:
     """Evaluate a mathematical expression.
 
@@ -23,7 +23,7 @@ def calculate(expression: str) -> str:
     return str(result)
 
 
-@tool(registry=registry)
+@tool
 def unit_convert(value: float, from_unit: str, to_unit: str) -> str:
     """Convert between common units.
 
@@ -46,24 +46,27 @@ def unit_convert(value: float, from_unit: str, to_unit: str) -> str:
     return f"{fn(value):.2f} {to_unit}"
 
 
+# Build a ToolGroup from decorated functions
+group = ToolGroup(calculate, unit_convert)
+
 # Show auto-generated definitions
 print("Registered tools:")
-for t in registry.definitions():
-    print(f"  {t.name}: {t.description}")
+for t in group.definitions:
+    print(f"  {t['name']}: {t['description']}")
 print()
 
-# Use with an LLM
-client = Client("xai", model="grok-4-1-fast-reasoning")
+# Tool loop — keep calling until the model stops requesting tools
+llm = LLM("gpt-4.1-nano")
 messages = [{"role": "user", "content": "What is 42 * 17, and convert 100 km to miles?"}]
 
-response = client.chat(messages, tools=registry.definitions())
+response = llm.complete_sync(messages, tools=group)
 
-while response.tool_calls:
+while response.has_tool_calls:
     messages.append(response.to_message())
-    for tc in response.tool_calls:
-        result = registry.execute(tc)
-        print(f"[Tool: {tc.name}({tc.arguments}) → {result}]")
-        messages.append(ToolResult(tool_call_id=tc.id, name=tc.name, content=result))
-    response = client.chat(messages, tools=registry.definitions())
+    tool_results = run_tools_sync(response, group)
+    for tr in tool_results:
+        print(f"[Tool result: {tr['name']} → {tr['content']}]")
+    messages.extend(tool_results)
+    response = llm.complete_sync(messages, tools=group)
 
 print("\nAssistant:", response.text)

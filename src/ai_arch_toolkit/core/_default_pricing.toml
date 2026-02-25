@@ -1,5 +1,5 @@
 # Default pricing table — USD per 1M tokens
-# Last updated: 2025-02-22
+# Last updated: 2026-02-25
 # Override with: pricing.load("your_file.toml") or pricing.register(...)
 
 # Claude 4 / 4.5
@@ -100,6 +100,18 @@ input = 15.0
 output = 60.0
 
 # Gemini
+[gemini-2.5-pro]
+input = 1.25
+output = 10.0
+
+[gemini-2.5-flash]
+input = 0.30
+output = 2.50
+
+[gemini-2.5-flash-lite]
+input = 0.10
+output = 0.40
+
 [gemini-2.0-flash]
 input = 0.10
 output = 0.40
@@ -111,3 +123,16 @@ output = 5.0
 [gemini-1.5-flash]
 input = 0.075
 output = 0.30
+
+# xAI Grok
+[grok-3]
+input = 3.0
+output = 15.0
+
+[grok-3-mini]
+input = 0.30
+output = 0.50
+
+[grok-2]
+input = 2.0
+output = 10.0

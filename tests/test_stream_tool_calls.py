@@ -1,31 +1,85 @@
-"""Tests for tool call streaming — Phase 4."""
+"""Tests for tool call streaming — Phase 4 (updated for SDK adapters)."""
 
 from __future__ import annotations
 
-import json
-from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from ai_arch_toolkit.core._providers._anthropic import AnthropicProvider
-from ai_arch_toolkit.core._providers._anthropic import (
-    _StreamState as AnthropicStreamState,
-)
+from ai_arch_toolkit.core._providers._base import StreamState
 from ai_arch_toolkit.core._providers._openai import OpenAIProvider
-from ai_arch_toolkit.core._providers._openai import (
-    _StreamState as OpenAIStreamState,
-)
 from ai_arch_toolkit.core._response import ToolCall, Usage
 
 # ---------------------------------------------------------------------------
-# Helpers — build SSE event strings via json.dumps (avoids long lines)
+# Helpers — build fake SDK stream events
 # ---------------------------------------------------------------------------
 
 
-def _anth(obj: dict) -> str:
-    return json.dumps(obj, separators=(",", ":"))
+def _sdk_event(event_type: str, **kwargs) -> SimpleNamespace:
+    """Build a fake SDK stream event."""
+    ns = SimpleNamespace(type=event_type)
+    for k, v in kwargs.items():
+        setattr(ns, k, v)
+    return ns
 
 
-def _oai(obj: dict) -> str:
-    return json.dumps(obj, separators=(",", ":"))
+def _content_block_start(index: int, block_type: str, **block_attrs) -> SimpleNamespace:
+    block = SimpleNamespace(type=block_type, **block_attrs)
+    return _sdk_event("content_block_start", index=index, content_block=block)
+
+
+def _text_delta(index: int, text: str) -> SimpleNamespace:
+    delta = SimpleNamespace(type="text_delta", text=text)
+    return _sdk_event("content_block_delta", index=index, delta=delta)
+
+
+def _input_json_delta(index: int, partial_json: str) -> SimpleNamespace:
+    delta = SimpleNamespace(type="input_json_delta", partial_json=partial_json)
+    return _sdk_event("content_block_delta", index=index, delta=delta)
+
+
+def _block_stop(index: int) -> SimpleNamespace:
+    return _sdk_event("content_block_stop", index=index)
+
+
+def _message_start(model: str = "claude-sonnet-4-20250514", **usage_kwargs) -> SimpleNamespace:
+    usage = SimpleNamespace(**usage_kwargs) if usage_kwargs else SimpleNamespace(input_tokens=0)
+    msg = SimpleNamespace(model=model, usage=usage)
+    return _sdk_event("message_start", message=msg)
+
+
+def _message_delta(stop_reason: str = "", **usage_kwargs) -> SimpleNamespace:
+    delta = SimpleNamespace(stop_reason=stop_reason)
+    usage = SimpleNamespace(**usage_kwargs) if usage_kwargs else None
+    return _sdk_event("message_delta", delta=delta, usage=usage)
+
+
+def _final_message(content=None) -> SimpleNamespace:
+    return SimpleNamespace(content=content or [])
+
+
+class _FakeStream:
+    """Fake async context manager mimicking SDK messages.stream()."""
+
+    def __init__(self, events: list, final_message=None):
+        self._events = events
+        self._final = final_message or _final_message()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        pass
+
+    def __aiter__(self):
+        return self._iter_events()
+
+    async def _iter_events(self):
+        for event in self._events:
+            yield event
+
+    async def get_final_message(self):
+        return self._final
 
 
 # ---------------------------------------------------------------------------
@@ -34,72 +88,26 @@ def _oai(obj: dict) -> str:
 
 
 class TestAnthropicStreamToolCalls:
-    @patch("ai_arch_toolkit.core._providers._anthropic.async_stream_sse")
-    async def test_single_tool_call(self, mock_stream):
+    async def test_single_tool_call(self):
         events = [
-            _anth(
-                {
-                    "type": "message_start",
-                    "message": {
-                        "model": "claude-sonnet-4-20250514",
-                        "usage": {"input_tokens": 25, "output_tokens": 0},
-                    },
-                }
-            ),
-            _anth(
-                {
-                    "type": "content_block_start",
-                    "index": 0,
-                    "content_block": {
-                        "type": "tool_use",
-                        "id": "tc_1",
-                        "name": "get_weather",
-                    },
-                }
-            ),
-            _anth(
-                {
-                    "type": "content_block_delta",
-                    "index": 0,
-                    "delta": {
-                        "type": "input_json_delta",
-                        "partial_json": '{"city"',
-                    },
-                }
-            ),
-            _anth(
-                {
-                    "type": "content_block_delta",
-                    "index": 0,
-                    "delta": {
-                        "type": "input_json_delta",
-                        "partial_json": ': "NYC"}',
-                    },
-                }
-            ),
-            _anth({"type": "content_block_stop", "index": 0}),
-            _anth(
-                {
-                    "type": "message_delta",
-                    "delta": {"stop_reason": "tool_use"},
-                    "usage": {"output_tokens": 15},
-                }
-            ),
+            _message_start(input_tokens=25, output_tokens=0),
+            _content_block_start(0, "tool_use", id="tc_1", name="get_weather"),
+            _input_json_delta(0, '{"city"'),
+            _input_json_delta(0, ': "NYC"}'),
+            _block_stop(0),
+            _message_delta(stop_reason="tool_use", output_tokens=15),
         ]
 
-        async def _fake_stream(*args, **kwargs):
-            for e in events:
-                yield e
-
-        mock_stream.return_value = _fake_stream()
-
         provider = AnthropicProvider("claude-sonnet-4-20250514", "test-key")
+        provider._client = MagicMock()
+        provider._client.messages.stream.return_value = _FakeStream(events)
+
         aiter, state = provider.stream([{"role": "user", "content": "Hi"}])
         chunks = []
         async for chunk in aiter:
             chunks.append(chunk)
 
-        assert chunks == []  # no text, only tool call
+        assert chunks == []
         assert len(state.tool_calls) == 1
         tc = state.tool_calls[0]
         assert isinstance(tc, ToolCall)
@@ -108,71 +116,22 @@ class TestAnthropicStreamToolCalls:
         assert tc.input == {"city": "NYC"}
         assert state.stop_reason == "tool_use"
 
-    @patch("ai_arch_toolkit.core._providers._anthropic.async_stream_sse")
-    async def test_text_then_tool_call(self, mock_stream):
+    async def test_text_then_tool_call(self):
         events = [
-            _anth(
-                {
-                    "type": "message_start",
-                    "message": {
-                        "model": "claude-sonnet-4-20250514",
-                        "usage": {"input_tokens": 10, "output_tokens": 0},
-                    },
-                }
-            ),
-            _anth(
-                {
-                    "type": "content_block_start",
-                    "index": 0,
-                    "content_block": {"type": "text", "text": ""},
-                }
-            ),
-            _anth(
-                {
-                    "type": "content_block_delta",
-                    "index": 0,
-                    "delta": {"type": "text_delta", "text": "Let me check."},
-                }
-            ),
-            _anth({"type": "content_block_stop", "index": 0}),
-            _anth(
-                {
-                    "type": "content_block_start",
-                    "index": 1,
-                    "content_block": {
-                        "type": "tool_use",
-                        "id": "tc_1",
-                        "name": "get_weather",
-                    },
-                }
-            ),
-            _anth(
-                {
-                    "type": "content_block_delta",
-                    "index": 1,
-                    "delta": {
-                        "type": "input_json_delta",
-                        "partial_json": '{"city": "NYC"}',
-                    },
-                }
-            ),
-            _anth({"type": "content_block_stop", "index": 1}),
-            _anth(
-                {
-                    "type": "message_delta",
-                    "delta": {"stop_reason": "tool_use"},
-                    "usage": {"output_tokens": 20},
-                }
-            ),
+            _message_start(input_tokens=10, output_tokens=0),
+            _content_block_start(0, "text", text=""),
+            _text_delta(0, "Let me check."),
+            _block_stop(0),
+            _content_block_start(1, "tool_use", id="tc_1", name="get_weather"),
+            _input_json_delta(1, '{"city": "NYC"}'),
+            _block_stop(1),
+            _message_delta(stop_reason="tool_use", output_tokens=20),
         ]
 
-        async def _fake_stream(*args, **kwargs):
-            for e in events:
-                yield e
-
-        mock_stream.return_value = _fake_stream()
-
         provider = AnthropicProvider("claude-sonnet-4-20250514", "test-key")
+        provider._client = MagicMock()
+        provider._client.messages.stream.return_value = _FakeStream(events)
+
         aiter, state = provider.stream([{"role": "user", "content": "Hi"}])
         chunks = []
         async for chunk in aiter:
@@ -183,78 +142,22 @@ class TestAnthropicStreamToolCalls:
         assert state.tool_calls[0].name == "get_weather"
         assert state.tool_calls[0].input == {"city": "NYC"}
 
-    @patch("ai_arch_toolkit.core._providers._anthropic.async_stream_sse")
-    async def test_multiple_tool_calls(self, mock_stream):
+    async def test_multiple_tool_calls(self):
         events = [
-            _anth(
-                {
-                    "type": "message_start",
-                    "message": {
-                        "model": "claude-sonnet-4-20250514",
-                        "usage": {"input_tokens": 10, "output_tokens": 0},
-                    },
-                }
-            ),
-            _anth(
-                {
-                    "type": "content_block_start",
-                    "index": 0,
-                    "content_block": {
-                        "type": "tool_use",
-                        "id": "tc_1",
-                        "name": "get_weather",
-                    },
-                }
-            ),
-            _anth(
-                {
-                    "type": "content_block_delta",
-                    "index": 0,
-                    "delta": {
-                        "type": "input_json_delta",
-                        "partial_json": '{"city": "NYC"}',
-                    },
-                }
-            ),
-            _anth({"type": "content_block_stop", "index": 0}),
-            _anth(
-                {
-                    "type": "content_block_start",
-                    "index": 1,
-                    "content_block": {
-                        "type": "tool_use",
-                        "id": "tc_2",
-                        "name": "get_time",
-                    },
-                }
-            ),
-            _anth(
-                {
-                    "type": "content_block_delta",
-                    "index": 1,
-                    "delta": {
-                        "type": "input_json_delta",
-                        "partial_json": '{"tz": "UTC"}',
-                    },
-                }
-            ),
-            _anth({"type": "content_block_stop", "index": 1}),
-            _anth(
-                {
-                    "type": "message_delta",
-                    "delta": {"stop_reason": "tool_use"},
-                    "usage": {"output_tokens": 20},
-                }
-            ),
+            _message_start(input_tokens=10, output_tokens=0),
+            _content_block_start(0, "tool_use", id="tc_1", name="get_weather"),
+            _input_json_delta(0, '{"city": "NYC"}'),
+            _block_stop(0),
+            _content_block_start(1, "tool_use", id="tc_2", name="get_time"),
+            _input_json_delta(1, '{"tz": "UTC"}'),
+            _block_stop(1),
+            _message_delta(stop_reason="tool_use", output_tokens=20),
         ]
 
-        async def _fake_stream(*args, **kwargs):
-            for e in events:
-                yield e
-
-        mock_stream.return_value = _fake_stream()
-
         provider = AnthropicProvider("claude-sonnet-4-20250514", "test-key")
+        provider._client = MagicMock()
+        provider._client.messages.stream.return_value = _FakeStream(events)
+
         aiter, state = provider.stream([{"role": "user", "content": "Hi"}])
         async for _ in aiter:
             pass
@@ -266,40 +169,17 @@ class TestAnthropicStreamToolCalls:
         assert state.tool_calls[1].name == "get_time"
         assert state.tool_calls[1].input == {"tz": "UTC"}
 
-    @patch("ai_arch_toolkit.core._providers._anthropic.async_stream_sse")
-    async def test_malformed_tool_args(self, mock_stream):
+    async def test_malformed_tool_args(self):
         events = [
-            _anth(
-                {
-                    "type": "content_block_start",
-                    "index": 0,
-                    "content_block": {
-                        "type": "tool_use",
-                        "id": "tc_1",
-                        "name": "fn",
-                    },
-                }
-            ),
-            _anth(
-                {
-                    "type": "content_block_delta",
-                    "index": 0,
-                    "delta": {
-                        "type": "input_json_delta",
-                        "partial_json": "not valid json",
-                    },
-                }
-            ),
-            _anth({"type": "content_block_stop", "index": 0}),
+            _content_block_start(0, "tool_use", id="tc_1", name="fn"),
+            _input_json_delta(0, "not valid json"),
+            _block_stop(0),
         ]
 
-        async def _fake_stream(*args, **kwargs):
-            for e in events:
-                yield e
-
-        mock_stream.return_value = _fake_stream()
-
         provider = AnthropicProvider("claude-sonnet-4-20250514", "test-key")
+        provider._client = MagicMock()
+        provider._client.messages.stream.return_value = _FakeStream(events)
+
         aiter, state = provider.stream([{"role": "user", "content": "Hi"}])
         async for _ in aiter:
             pass
@@ -307,12 +187,11 @@ class TestAnthropicStreamToolCalls:
         assert len(state.tool_calls) == 1
         assert state.tool_calls[0].input == {"_raw": "not valid json"}
 
-    @patch("ai_arch_toolkit.core._providers._anthropic.async_stream_sse")
-    async def test_tools_passed_in_payload(self, mock_stream):
-        async def _fake_stream(*args, **kwargs):
-            yield '{"type":"message_stop"}'
-
-        mock_stream.return_value = _fake_stream()
+    async def test_tools_passed_in_sdk_kwargs(self):
+        events = []
+        provider = AnthropicProvider("claude-sonnet-4-20250514", "test-key")
+        provider._client = MagicMock()
+        provider._client.messages.stream.return_value = _FakeStream(events)
 
         tools = [
             {
@@ -321,40 +200,24 @@ class TestAnthropicStreamToolCalls:
                 "input_schema": {"type": "object"},
             }
         ]
-        provider = AnthropicProvider("claude-sonnet-4-20250514", "test-key")
         aiter, _ = provider.stream([{"role": "user", "content": "Hi"}], tools=tools)
         async for _ in aiter:
             pass
 
-        payload = mock_stream.call_args[1]["payload"]
-        assert "tools" in payload
-        assert payload["tools"][0]["name"] == "get_weather"
+        call_kwargs = provider._client.messages.stream.call_args[1]
+        assert "tools" in call_kwargs
+        assert call_kwargs["tools"][0]["name"] == "get_weather"
 
-    @patch("ai_arch_toolkit.core._providers._anthropic.async_stream_sse")
-    async def test_empty_tool_args(self, mock_stream):
-        """Tool call with no arguments (empty partial_json)."""
+    async def test_empty_tool_args(self):
         events = [
-            _anth(
-                {
-                    "type": "content_block_start",
-                    "index": 0,
-                    "content_block": {
-                        "type": "tool_use",
-                        "id": "tc_1",
-                        "name": "get_status",
-                    },
-                }
-            ),
-            _anth({"type": "content_block_stop", "index": 0}),
+            _content_block_start(0, "tool_use", id="tc_1", name="get_status"),
+            _block_stop(0),
         ]
 
-        async def _fake_stream(*args, **kwargs):
-            for e in events:
-                yield e
-
-        mock_stream.return_value = _fake_stream()
-
         provider = AnthropicProvider("claude-sonnet-4-20250514", "test-key")
+        provider._client = MagicMock()
+        provider._client.messages.stream.return_value = _FakeStream(events)
+
         aiter, state = provider.stream([{"role": "user", "content": "Hi"}])
         async for _ in aiter:
             pass
@@ -363,13 +226,149 @@ class TestAnthropicStreamToolCalls:
         assert state.tool_calls[0].input == {}
 
 
-class TestAnthropicStreamState:
+class TestAnthropicStreamThinking:
+    async def test_thinking_blocks_accumulated_from_final_message(self):
+        """Thinking blocks are extracted from get_final_message() into state.thinking."""
+        thinking_delta = SimpleNamespace(type="thinking_delta", thinking="partial thought")
+        events = [
+            _message_start(input_tokens=10, output_tokens=0),
+            _content_block_start(0, "thinking", thinking="", signature=""),
+            _sdk_event("content_block_delta", index=0, delta=thinking_delta),
+            _block_stop(0),
+            _content_block_start(1, "text", text=""),
+            _text_delta(1, "The answer is 42."),
+            _block_stop(1),
+            _message_delta(stop_reason="end_turn", output_tokens=20),
+        ]
+
+        # Final message includes the full thinking block
+        final = _final_message(
+            content=[
+                SimpleNamespace(type="thinking", thinking="Let me reason step by step..."),
+                SimpleNamespace(type="text", text="The answer is 42."),
+            ]
+        )
+
+        provider = AnthropicProvider("claude-sonnet-4-20250514", "test-key")
+        provider._client = MagicMock()
+        provider._client.messages.stream.return_value = _FakeStream(events, final_message=final)
+
+        aiter, state = provider.stream([{"role": "user", "content": "Think about this"}])
+        chunks = []
+        async for chunk in aiter:
+            chunks.append(chunk)
+
+        assert chunks == ["The answer is 42."]
+        assert len(state.thinking) == 1
+        assert state.thinking[0].text == "Let me reason step by step..."
+
+    async def test_multiple_thinking_blocks(self):
+        """Multiple thinking blocks are all accumulated."""
+        events = [
+            _text_delta(0, "Answer."),
+            _block_stop(0),
+            _message_delta(stop_reason="end_turn"),
+        ]
+
+        final = _final_message(
+            content=[
+                SimpleNamespace(type="thinking", thinking="First thought"),
+                SimpleNamespace(type="thinking", thinking="Second thought"),
+                SimpleNamespace(type="text", text="Answer."),
+            ]
+        )
+
+        provider = AnthropicProvider("claude-sonnet-4-20250514", "test-key")
+        provider._client = MagicMock()
+        provider._client.messages.stream.return_value = _FakeStream(events, final_message=final)
+
+        aiter, state = provider.stream([{"role": "user", "content": "Hi"}])
+        async for _ in aiter:
+            pass
+
+        assert len(state.thinking) == 2
+        assert state.thinking[0].text == "First thought"
+        assert state.thinking[1].text == "Second thought"
+
+    async def test_no_thinking_blocks(self):
+        """When no thinking, state.thinking remains empty."""
+        events = [
+            _text_delta(0, "Hello"),
+            _block_stop(0),
+            _message_delta(stop_reason="end_turn"),
+        ]
+
+        provider = AnthropicProvider("claude-sonnet-4-20250514", "test-key")
+        provider._client = MagicMock()
+        provider._client.messages.stream.return_value = _FakeStream(events)
+
+        aiter, state = provider.stream([{"role": "user", "content": "Hi"}])
+        async for _ in aiter:
+            pass
+
+        assert state.thinking == []
+
+
+class TestStreamState:
     def test_initial_state_has_tool_calls(self):
-        state = AnthropicStreamState()
+        state = StreamState()
         assert state.tool_calls == []
         assert state.usage is None
         assert state.model == ""
         assert state.stop_reason == ""
+        assert state.thinking == []
+
+
+# ---------------------------------------------------------------------------
+# OpenAI stream helpers
+# ---------------------------------------------------------------------------
+
+
+def _oai_chunk(
+    *,
+    content: str | None = None,
+    tool_calls: list[dict] | None = None,
+    finish_reason: str | None = None,
+    model: str = "gpt-4o",
+    usage: dict | None = None,
+) -> SimpleNamespace:
+    """Build a fake OpenAI ChatCompletionChunk-like object."""
+    delta = SimpleNamespace(content=content, tool_calls=None)
+    if tool_calls:
+        delta.tool_calls = [
+            SimpleNamespace(
+                index=tc.get("index", 0),
+                id=tc.get("id"),
+                function=SimpleNamespace(
+                    name=tc.get("name"),
+                    arguments=tc.get("arguments"),
+                )
+                if tc.get("name") is not None or tc.get("arguments") is not None
+                else None,
+                type=tc.get("type", "function"),
+            )
+            for tc in tool_calls
+        ]
+    choice = SimpleNamespace(delta=delta, finish_reason=finish_reason, index=0)
+    sdk_usage = None
+    if usage:
+        sdk_usage = SimpleNamespace(
+            prompt_tokens=usage.get("prompt_tokens", 0),
+            completion_tokens=usage.get("completion_tokens", 0),
+        )
+    return SimpleNamespace(choices=[choice], model=model, usage=sdk_usage)
+
+
+def _oai_usage_chunk(prompt_tokens: int = 0, completion_tokens: int = 0) -> SimpleNamespace:
+    """Build a final usage-only chunk."""
+    return SimpleNamespace(
+        choices=[],
+        model="gpt-4o",
+        usage=SimpleNamespace(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -377,61 +376,33 @@ class TestAnthropicStreamState:
 # ---------------------------------------------------------------------------
 
 
-def _oai_tc_delta(
-    index: int,
-    *,
-    tc_id: str = "",
-    name: str = "",
-    arguments: str = "",
-    finish: str | None = None,
-) -> str:
-    """Build an OpenAI streaming chunk with a tool_calls delta."""
-    tc: dict = {"index": index}
-    if tc_id:
-        tc["id"] = tc_id
-    fn: dict = {}
-    if name:
-        fn["name"] = name
-    fn["arguments"] = arguments
-    tc["function"] = fn
-    choice: dict = {
-        "delta": {"tool_calls": [tc]},
-        "finish_reason": finish,
-    }
-    return _oai({"choices": [choice], "model": "gpt-4o"})
-
-
 class TestOpenAIStreamToolCalls:
-    @patch("ai_arch_toolkit.core._providers._openai.async_stream_sse")
-    async def test_single_tool_call(self, mock_stream):
-        events = [
-            _oai_tc_delta(0, tc_id="tc_1", name="get_weather"),
-            _oai_tc_delta(0, arguments='{"city"'),
-            _oai_tc_delta(0, arguments=': "NYC"}', finish="tool_calls"),
-            _oai(
-                {
-                    "choices": [],
-                    "usage": {
-                        "prompt_tokens": 25,
-                        "completion_tokens": 15,
-                    },
-                }
+    async def test_single_tool_call(self):
+        chunks = [
+            _oai_chunk(tool_calls=[{"index": 0, "id": "tc_1", "name": "get_weather"}]),
+            _oai_chunk(tool_calls=[{"index": 0, "arguments": '{"city"'}]),
+            _oai_chunk(
+                tool_calls=[{"index": 0, "arguments": ': "NYC"}'}],
+                finish_reason="tool_calls",
             ),
+            _oai_usage_chunk(prompt_tokens=25, completion_tokens=15),
         ]
 
-        async def _fake_stream(*args, **kwargs):
-            for e in events:
-                yield e
+        async def _fake_stream():
+            for c in chunks:
+                yield c
 
-        mock_stream.return_value = _fake_stream()
+        mock_client = AsyncMock()
+        mock_client.chat.completions.create.return_value = _fake_stream()
 
         provider = OpenAIProvider("gpt-4o", "test-key")
+        provider._client = mock_client
         aiter, state = provider.stream([{"role": "user", "content": "Hi"}])
-        chunks = []
+        text_chunks = []
         async for chunk in aiter:
-            chunks.append(chunk)
+            text_chunks.append(chunk)
 
-        assert chunks == []  # no text, only tool call
+        assert text_chunks == []
         assert len(state.tool_calls) == 1
         tc = state.tool_calls[0]
         assert isinstance(tc, ToolCall)
@@ -440,31 +411,27 @@ class TestOpenAIStreamToolCalls:
         assert tc.input == {"city": "NYC"}
         assert state.stop_reason == "tool_calls"
 
-    @patch("ai_arch_toolkit.core._providers._openai.async_stream_sse")
-    async def test_multiple_tool_calls(self, mock_stream):
-        events = [
-            _oai_tc_delta(0, tc_id="tc_1", name="get_weather"),
-            _oai_tc_delta(0, arguments='{"city": "NYC"}'),
-            _oai_tc_delta(1, tc_id="tc_2", name="get_time"),
-            _oai_tc_delta(1, arguments='{"tz": "UTC"}', finish="tool_calls"),
-            _oai(
-                {
-                    "choices": [],
-                    "usage": {
-                        "prompt_tokens": 30,
-                        "completion_tokens": 20,
-                    },
-                }
+    async def test_multiple_tool_calls(self):
+        chunks = [
+            _oai_chunk(tool_calls=[{"index": 0, "id": "tc_1", "name": "get_weather"}]),
+            _oai_chunk(tool_calls=[{"index": 0, "arguments": '{"city": "NYC"}'}]),
+            _oai_chunk(tool_calls=[{"index": 1, "id": "tc_2", "name": "get_time"}]),
+            _oai_chunk(
+                tool_calls=[{"index": 1, "arguments": '{"tz": "UTC"}'}],
+                finish_reason="tool_calls",
             ),
+            _oai_usage_chunk(prompt_tokens=30, completion_tokens=20),
         ]
 
-        async def _fake_stream(*args, **kwargs):
-            for e in events:
-                yield e
+        async def _fake_stream():
+            for c in chunks:
+                yield c
 
-        mock_stream.return_value = _fake_stream()
+        mock_client = AsyncMock()
+        mock_client.chat.completions.create.return_value = _fake_stream()
 
         provider = OpenAIProvider("gpt-4o", "test-key")
+        provider._client = mock_client
         aiter, state = provider.stream([{"role": "user", "content": "Hi"}])
         async for _ in aiter:
             pass
@@ -477,87 +444,108 @@ class TestOpenAIStreamToolCalls:
         assert state.tool_calls[1].name == "get_time"
         assert state.tool_calls[1].input == {"tz": "UTC"}
 
-    @patch("ai_arch_toolkit.core._providers._openai.async_stream_sse")
-    async def test_text_then_tool_call(self, mock_stream):
-        events = [
-            _oai(
-                {
-                    "choices": [
-                        {
-                            "delta": {"content": "Let me check."},
-                            "finish_reason": None,
-                        }
-                    ],
-                    "model": "gpt-4o",
-                }
+    async def test_text_then_tool_call(self):
+        chunks = [
+            _oai_chunk(content="Let me check."),
+            _oai_chunk(
+                tool_calls=[
+                    {
+                        "index": 0,
+                        "id": "tc_1",
+                        "name": "get_weather",
+                        "arguments": '{"city": "NYC"}',
+                    }
+                ],
+                finish_reason="tool_calls",
             ),
-            _oai_tc_delta(
-                0,
-                tc_id="tc_1",
-                name="get_weather",
-                arguments='{"city": "NYC"}',
-                finish="tool_calls",
-            ),
-            _oai(
-                {
-                    "choices": [],
-                    "usage": {
-                        "prompt_tokens": 20,
-                        "completion_tokens": 15,
-                    },
-                }
-            ),
+            _oai_usage_chunk(prompt_tokens=20, completion_tokens=15),
         ]
 
-        async def _fake_stream(*args, **kwargs):
-            for e in events:
-                yield e
+        async def _fake_stream():
+            for c in chunks:
+                yield c
 
-        mock_stream.return_value = _fake_stream()
+        mock_client = AsyncMock()
+        mock_client.chat.completions.create.return_value = _fake_stream()
 
         provider = OpenAIProvider("gpt-4o", "test-key")
+        provider._client = mock_client
         aiter, state = provider.stream([{"role": "user", "content": "Hi"}])
-        chunks = []
+        text_chunks = []
         async for chunk in aiter:
-            chunks.append(chunk)
+            text_chunks.append(chunk)
 
-        assert chunks == ["Let me check."]
+        assert text_chunks == ["Let me check."]
         assert len(state.tool_calls) == 1
         assert state.tool_calls[0].name == "get_weather"
 
-    @patch("ai_arch_toolkit.core._providers._openai.async_stream_sse")
-    async def test_tools_passed_in_payload(self, mock_stream):
-        async def _fake_stream(*args, **kwargs):
-            yield _oai(
-                {
-                    "choices": [{"delta": {}, "finish_reason": "stop"}],
-                }
-            )
+    async def test_tools_passed_in_sdk_kwargs(self):
+        async def _fake_stream():
+            yield _oai_chunk(finish_reason="stop")
 
-        mock_stream.return_value = _fake_stream()
+        mock_client = AsyncMock()
+        mock_client.chat.completions.create.return_value = _fake_stream()
 
         tools = [
             {
                 "name": "get_weather",
                 "description": "Get weather",
-                "parameters": {"type": "object"},
+                "input_schema": {"type": "object"},
             }
         ]
         provider = OpenAIProvider("gpt-4o", "test-key")
+        provider._client = mock_client
         aiter, _ = provider.stream([{"role": "user", "content": "Hi"}], tools=tools)
         async for _ in aiter:
             pass
 
-        payload = mock_stream.call_args[1]["payload"]
-        assert "tools" in payload
-        assert payload["tools"][0]["type"] == "function"
-        assert payload["tools"][0]["function"]["name"] == "get_weather"
+        call_kwargs = mock_client.chat.completions.create.call_args[1]
+        assert "tools" in call_kwargs
+        assert call_kwargs["tools"][0]["type"] == "function"
 
+    async def test_stream_includes_usage_option(self):
+        async def _fake_stream():
+            yield _oai_chunk(finish_reason="stop")
 
-class TestOpenAIStreamState:
-    def test_initial_state_has_tool_calls(self):
-        state = OpenAIStreamState()
-        assert state.tool_calls == []
+        mock_client = AsyncMock()
+        mock_client.chat.completions.create.return_value = _fake_stream()
+
+        provider = OpenAIProvider("gpt-4o", "test-key")
+        provider._client = mock_client
+        aiter, _ = provider.stream([{"role": "user", "content": "Hi"}])
+        async for _ in aiter:
+            pass
+
+        call_kwargs = mock_client.chat.completions.create.call_args[1]
+        assert call_kwargs["stream"] is True
+        assert call_kwargs["stream_options"] == {"include_usage": True}
+
+    async def test_stream_captures_usage(self):
+        chunks = [
+            _oai_chunk(content="Hi"),
+            _oai_chunk(finish_reason="stop"),
+            _oai_usage_chunk(prompt_tokens=25, completion_tokens=10),
+        ]
+
+        async def _fake_stream():
+            for c in chunks:
+                yield c
+
+        mock_client = AsyncMock()
+        mock_client.chat.completions.create.return_value = _fake_stream()
+
+        provider = OpenAIProvider("gpt-4o", "test-key")
+        provider._client = mock_client
+        aiter, state = provider.stream([{"role": "user", "content": "Hi"}])
+        text_chunks = []
+        async for chunk in aiter:
+            text_chunks.append(chunk)
+
+        assert text_chunks == ["Hi"]
+        assert state.usage is not None
+        assert state.usage.input_tokens == 25
+        assert state.usage.output_tokens == 10
+        assert state.stop_reason == "stop"
 
 
 # ---------------------------------------------------------------------------
@@ -578,11 +566,7 @@ class TestLLMStreamToolCalls:
         state.model = "claude-sonnet-4-20250514"
         state.stop_reason = "tool_use"
         state.tool_calls = [
-            ToolCall(
-                id="tc_1",
-                name="get_weather",
-                input={"city": "NYC"},
-            ),
+            ToolCall(id="tc_1", name="get_weather", input={"city": "NYC"}),
         ]
 
         mock_provider = MagicMock()

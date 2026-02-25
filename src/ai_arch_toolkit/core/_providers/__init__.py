@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import logging
 import os
+import warnings
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ai_arch_toolkit.core._http import RetryConfig
     from ai_arch_toolkit.core._providers._base import BaseProvider
+
+__all__ = ["create_provider"]
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +20,8 @@ _MODEL_PREFIXES: dict[str, str] = {
     "o1-": "openai",
     "o3-": "openai",
     "o4-": "openai",
+    "grok-": "xai",
+    "gemini-": "gemini",
 }
 
 
@@ -45,7 +49,6 @@ def create_provider(
     *,
     api_key: str | None = None,
     base_url: str | None = None,
-    retry: RetryConfig | None = None,
 ) -> BaseProvider:
     """Create a provider instance from a model string."""
     name = _detect_provider(model)
@@ -57,7 +60,6 @@ def create_provider(
             model,
             _resolve_key("ANTHROPIC_API_KEY", api_key),
             base_url=base_url,
-            retry=retry,
         )
 
     if name == "openai":
@@ -67,7 +69,26 @@ def create_provider(
             model,
             _resolve_key("OPENAI_API_KEY", api_key),
             base_url=base_url,
-            retry=retry,
+        )
+
+    if name == "xai":
+        from ai_arch_toolkit.core._providers._xai import XAIProvider
+
+        if base_url:
+            warnings.warn(f"base_url is not supported by {name} provider, ignoring", stacklevel=2)
+        return XAIProvider(
+            model,
+            _resolve_key("XAI_API_KEY", api_key),
+        )
+
+    if name == "gemini":
+        from ai_arch_toolkit.core._providers._gemini import GeminiProvider
+
+        if base_url:
+            warnings.warn(f"base_url is not supported by {name} provider, ignoring", stacklevel=2)
+        return GeminiProvider(
+            model,
+            _resolve_key("GOOGLE_API_KEY", api_key),
         )
 
     raise NotImplementedError(f"Provider {name!r} is not yet implemented.")

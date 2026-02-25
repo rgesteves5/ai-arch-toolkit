@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from ai_arch_toolkit.core._tools import ToolGroup, prepare_tools
 from ai_arch_toolkit.core._tools._decorator import tool
 
@@ -76,8 +78,8 @@ class TestPrepareTools:
         assert len(result) == 1
         assert result[0]["name"] == "plain_fn"
 
-    def test_empty_list_returns_none(self):
-        assert prepare_tools([]) is None
+    def test_empty_list_returns_empty(self):
+        assert prepare_tools([]) == []
 
     def test_input_schema_key_used(self):
         """All prepared tools use input_schema (not parameters)."""
@@ -85,3 +87,21 @@ class TestPrepareTools:
         assert result is not None
         assert "input_schema" in result[0]
         assert "parameters" not in result[0]
+
+    def test_unsupported_item_warns_and_is_skipped(self):
+        with pytest.warns(UserWarning, match="Skipping unsupported tool entry"):
+            result = prepare_tools([get_weather, 123])
+        assert result is not None
+        assert len(result) == 1
+        assert result[0]["name"] == "get_weather"
+
+    def test_dict_missing_name_warns_and_skips(self):
+        bad = {"description": "No name", "input_schema": {"type": "object"}}
+        with pytest.warns(UserWarning, match="missing 'name'"):
+            result = prepare_tools([get_weather, bad])
+        assert result is not None
+        assert len(result) == 1
+
+    def test_invalid_tools_input_warns(self):
+        with pytest.warns(UserWarning, match="Unsupported tools input type"):
+            assert prepare_tools(123) is None
