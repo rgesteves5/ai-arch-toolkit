@@ -13,6 +13,5 @@ def test_core_exports_tool_helpers() -> None:
 
 def test_core_exports_pricing() -> None:
     assert hasattr(core, "pricing")
-    cost, known = core.pricing.estimate_cost("unknown-model", input_tokens=123)
-    assert cost == 0.0
-    assert known is False
+    cost = core.pricing.estimate_cost("unknown-model", input_tokens=123)
+    assert cost is None

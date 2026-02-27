@@ -305,8 +305,8 @@ class TestParseSdkResponse:
     def test_cost_is_computed(self):
         resp = _sdk_response(prompt_tokens=1000, candidates_tokens=500)
         r = _parse_sdk_response(resp, "gemini-2.0-flash")
-        # pricing may or may not have Gemini rates; cost_estimated should be set
-        assert isinstance(r.cost, float)
+        assert r.cost is not None
+        assert r.cost > 0
 
     def test_raw_is_preserved(self):
         resp = _sdk_response()

@@ -8,6 +8,7 @@ import warnings
 from collections.abc import AsyncIterator
 from typing import Any
 
+from ai_arch_toolkit.core._content import DocumentPart, ImagePart, _encode_b64, _is_url
 from ai_arch_toolkit.core._exceptions import APIError, RateLimitError
 from ai_arch_toolkit.core._pricing import _estimate_response_cost
 from ai_arch_toolkit.core._providers._base import (
@@ -42,6 +43,49 @@ _SDK_PARAMS = {
 # ---------------------------------------------------------------------------
 # Adapter helpers
 # ---------------------------------------------------------------------------
+
+
+def _content_to_sdk(content: Any) -> list[dict[str, Any]] | str:
+    """Convert multimodal content to OpenAI content blocks."""
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return str(content)
+
+    blocks: list[dict[str, Any]] = []
+    for part in content:
+        if isinstance(part, str):
+            blocks.append({"type": "text", "text": part})
+        elif isinstance(part, ImagePart):
+            if _is_url(part.source):
+                blocks.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": part.source},
+                    }
+                )
+            else:
+                b64 = _encode_b64(part.source)
+                blocks.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{part.media_type};base64,{b64}"},
+                    }
+                )
+        elif isinstance(part, DocumentPart):
+            b64 = _encode_b64(part.source)
+            blocks.append(
+                {
+                    "type": "file",
+                    "file": {
+                        "filename": part.name or "document",
+                        "file_data": f"data:{part.media_type};base64,{b64}",
+                    },
+                }
+            )
+        else:
+            blocks.append({"type": "text", "text": str(part)})
+    return blocks
 
 
 def _tool_to_sdk(tool: dict[str, Any]) -> dict[str, Any]:
@@ -102,7 +146,7 @@ def _messages_to_sdk(
                 }
             )
         else:
-            wire.append({"role": role, "content": msg.get("content", "")})
+            wire.append({"role": role, "content": _content_to_sdk(msg.get("content", ""))})
     return wire
 
 
@@ -166,7 +210,10 @@ def _parse_sdk_response(
             logger.warning("Failed to parse structured output as JSON")
 
     usage = _extract_usage(completion.usage) if completion.usage else Usage()
-    cost, cost_estimated = _estimate_response_cost(model, usage)
+    cost = _estimate_response_cost(model, usage)
+
+    # Extract logprobs if present
+    logprobs_data = getattr(choice, "logprobs", None)
 
     return Response(
         text=text.strip(),
@@ -174,10 +221,11 @@ def _parse_sdk_response(
         parsed=parsed,
         usage=usage,
         cost=cost,
-        cost_estimated=cost_estimated,
         stop_reason=choice.finish_reason or "",
         model=completion.model or model,
         raw=completion,
+        response_id=getattr(completion, "id", "") or "",
+        logprobs=logprobs_data,
     )
 
 
@@ -222,6 +270,9 @@ class OpenAIProvider(BaseProvider):
         thinking_effort = kwargs.pop("thinking_effort", None)
         thinking_budget = kwargs.pop("thinking_budget", None)
         output_schema: OutputSchema | None = kwargs.pop("output_schema", None)
+        tool_choice: str | None = kwargs.pop("tool_choice", None)
+        json_mode: bool = kwargs.pop("json_mode", False)
+        logprobs_flag: bool = kwargs.pop("logprobs", False)
 
         # Warn about unknown params
         unknown = set(kwargs) - _SDK_PARAMS
@@ -254,7 +305,34 @@ class OpenAIProvider(BaseProvider):
             sdk_kwargs["response_format"] = _build_output_schema_format(output_schema)
 
         if tools:
-            sdk_kwargs["tools"] = [_tool_to_sdk(t) for t in tools]
+            fn_tools = [_tool_to_sdk(t) for t in tools if not t.get("_server_tool")]
+            server_tools = [t for t in tools if t.get("_server_tool")]
+            if fn_tools:
+                sdk_kwargs["tools"] = fn_tools
+            for st in server_tools:
+                st_type = st["type"]
+                if st_type == "web_search":
+                    sdk_kwargs.setdefault("tools", []).append({"type": "web_search"})
+                elif st_type == "code_execution":
+                    sdk_kwargs.setdefault("tools", []).append({"type": "code_interpreter"})
+
+        # tool_choice
+        if tool_choice is not None:
+            if tool_choice in ("auto", "required", "none"):
+                sdk_kwargs["tool_choice"] = tool_choice
+            else:
+                sdk_kwargs["tool_choice"] = {
+                    "type": "function",
+                    "function": {"name": tool_choice},
+                }
+
+        # json_mode
+        if json_mode:
+            sdk_kwargs["response_format"] = {"type": "json_object"}
+
+        # logprobs
+        if logprobs_flag:
+            sdk_kwargs["logprobs"] = True
 
         return sdk_kwargs
 

@@ -8,6 +8,7 @@ import warnings
 from collections.abc import AsyncIterator
 from typing import Any
 
+from ai_arch_toolkit.core._content import CachePart, DocumentPart, ImagePart, _encode_b64, _is_url
 from ai_arch_toolkit.core._exceptions import APIError, RateLimitError
 from ai_arch_toolkit.core._pricing import _estimate_response_cost
 from ai_arch_toolkit.core._providers._base import (
@@ -20,7 +21,14 @@ from ai_arch_toolkit.core._providers._base import (
     parse_tool_args,
 )
 from ai_arch_toolkit.core._providers._imports import require_sdk
-from ai_arch_toolkit.core._response import OutputSchema, Response, ThinkingBlock, ToolCall, Usage
+from ai_arch_toolkit.core._response import (
+    Citation,
+    OutputSchema,
+    Response,
+    ThinkingBlock,
+    ToolCall,
+    Usage,
+)
 
 require_sdk("anthropic", "anthropic")
 import anthropic  # noqa: E402
@@ -30,10 +38,74 @@ logger = logging.getLogger(__name__)
 # Parameters safe to forward directly to the SDK.
 _SDK_PARAMS = {"temperature", "top_p", "top_k", "stop_sequences", "max_tokens"}
 
+# Anthropic server tool type identifiers (versioned by Anthropic).
+_SERVER_TOOL_TYPES: dict[str, str] = {
+    "web_search": "web_search_20250305",
+    "code_execution": "code_execution_20250522",
+}
+
 
 # ---------------------------------------------------------------------------
 # Adapter helpers — pure functions for message/tool/response conversion
 # ---------------------------------------------------------------------------
+
+
+def _content_to_sdk(content: Any) -> list[dict[str, Any]] | str:
+    """Convert multimodal content to Anthropic content blocks.
+
+    Returns a list of content blocks if multimodal, or a plain string.
+    """
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return str(content)
+
+    blocks: list[dict[str, Any]] = []
+    for part in content:
+        if isinstance(part, str):
+            blocks.append({"type": "text", "text": part})
+        elif isinstance(part, ImagePart):
+            if _is_url(part.source):
+                blocks.append(
+                    {
+                        "type": "image",
+                        "source": {"type": "url", "url": part.source},
+                    }
+                )
+            else:
+                blocks.append(
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": part.media_type,
+                            "data": _encode_b64(part.source),
+                        },
+                    }
+                )
+        elif isinstance(part, DocumentPart):
+            block: dict[str, Any] = {
+                "type": "document",
+                "source": {
+                    "type": "base64",
+                    "media_type": part.media_type,
+                    "data": _encode_b64(part.source),
+                },
+            }
+            if part.name:
+                block["name"] = part.name
+            blocks.append(block)
+        elif isinstance(part, CachePart):
+            blocks.append(
+                {
+                    "type": "text",
+                    "text": part.content,
+                    "cache_control": {"type": part.ttl},
+                }
+            )
+        else:
+            blocks.append({"type": "text", "text": str(part)})
+    return blocks
 
 
 def _tool_to_sdk(tool: dict[str, Any]) -> dict[str, Any]:
@@ -86,7 +158,13 @@ def _messages_to_sdk(
                 )
             wire.append({"role": "assistant", "content": content_blocks})
         else:
-            wire.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
+            raw_content = msg.get("content", "")
+            wire.append(
+                {
+                    "role": msg.get("role", "user"),
+                    "content": _content_to_sdk(raw_content),
+                }
+            )
     system_text = "\n\n".join(system_parts) if system_parts else None
     return system_text, wire
 
@@ -138,12 +216,24 @@ def _parse_sdk_response(
     text_parts: list[str] = []
     tool_calls: list[ToolCall] = []
     thinking_blocks: list[ThinkingBlock] = []
+    citations: list[Citation] = []
     parsed: Any = None
 
     for block in message.content:
         block_type = getattr(block, "type", "")
         if block_type == "text":
             text_parts.append(block.text)
+            # Extract citations from text blocks
+            for cite in getattr(block, "citations", None) or []:
+                citations.append(
+                    Citation(
+                        text=getattr(cite, "cited_text", ""),
+                        url=getattr(cite, "url", ""),
+                        title=getattr(cite, "title", ""),
+                        start_index=getattr(cite, "start_char_index", None),
+                        end_index=getattr(cite, "end_char_index", None),
+                    )
+                )
         elif block_type == "tool_use":
             tool_calls.append(ToolCall(id=block.id, name=block.name, input=dict(block.input)))
         elif block_type == "thinking":
@@ -158,7 +248,7 @@ def _parse_sdk_response(
             logger.warning("Failed to parse structured output as JSON")
 
     usage = _extract_usage(message.usage)
-    cost, cost_estimated = _estimate_response_cost(model, usage)
+    cost = _estimate_response_cost(model, usage)
 
     return Response(
         text=text,
@@ -167,10 +257,11 @@ def _parse_sdk_response(
         parsed=parsed,
         usage=usage,
         cost=cost,
-        cost_estimated=cost_estimated,
         stop_reason=message.stop_reason or "",
         model=message.model or model,
         raw=message,
+        response_id=getattr(message, "id", "") or "",
+        citations=tuple(citations),
     )
 
 
@@ -198,6 +289,29 @@ class AnthropicProvider(BaseProvider):
     async def close(self) -> None:
         await self._client.close()
 
+    async def count_tokens(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        system: str | None = None,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> int:
+        """Count tokens using Anthropic's count_tokens API."""
+        msg_system, wire = _messages_to_sdk(messages)
+        effective_system = system if system is not None else msg_system
+        sdk_kwargs: dict[str, Any] = {"model": self._model, "messages": wire}
+        if effective_system:
+            sdk_kwargs["system"] = effective_system
+        if tools:
+            fn_tools = [t for t in tools if not t.get("_server_tool")]
+            if fn_tools:
+                sdk_kwargs["tools"] = [_tool_to_sdk(t) for t in fn_tools]
+        try:
+            result = await self._client.messages.count_tokens(**sdk_kwargs)
+            return result.input_tokens
+        except anthropic.APIStatusError as exc:
+            raise APIError(exc.response.status_code, str(exc.body)) from exc
+
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
@@ -216,6 +330,9 @@ class AnthropicProvider(BaseProvider):
         thinking_effort = kwargs.pop("thinking_effort", None)
         thinking_budget = kwargs.pop("thinking_budget", None)
         output_schema: OutputSchema | None = kwargs.pop("output_schema", None)
+        tool_choice: str | None = kwargs.pop("tool_choice", None)
+        json_mode: bool = kwargs.pop("json_mode", False)
+        kwargs.pop("logprobs", None)  # Not supported by Anthropic
 
         # Warn about unknown params
         unknown = set(kwargs) - _SDK_PARAMS
@@ -248,7 +365,35 @@ class AnthropicProvider(BaseProvider):
             sdk_kwargs["output_config"] = _build_output_config(output_schema)
 
         if tools:
-            sdk_kwargs["tools"] = [_tool_to_sdk(t) for t in tools]
+            fn_tools = [_tool_to_sdk(t) for t in tools if not t.get("_server_tool")]
+            server_tools = [t for t in tools if t.get("_server_tool")]
+            all_tools = fn_tools
+            for st in server_tools:
+                sdk_type = _SERVER_TOOL_TYPES.get(st["type"])
+                if sdk_type:
+                    all_tools.append({"type": sdk_type})
+            if all_tools:
+                sdk_kwargs["tools"] = all_tools
+
+        # tool_choice
+        if tool_choice is not None:
+            if tool_choice == "auto":
+                sdk_kwargs["tool_choice"] = {"type": "auto"}
+            elif tool_choice == "required":
+                sdk_kwargs["tool_choice"] = {"type": "any"}
+            elif tool_choice == "none":
+                sdk_kwargs["tool_choice"] = {"type": "none"}
+            else:
+                sdk_kwargs["tool_choice"] = {"type": "tool", "name": tool_choice}
+
+        # json_mode — Anthropic has no native json_mode; append system instruction
+        if json_mode:
+            existing_system = sdk_kwargs.get("system", "")
+            suffix = "Respond with valid JSON only."
+            if existing_system:
+                sdk_kwargs["system"] = f"{existing_system}\n\n{suffix}"
+            else:
+                sdk_kwargs["system"] = suffix
 
         return sdk_kwargs
 
@@ -492,3 +637,75 @@ class AnthropicProvider(BaseProvider):
                 raise APIError(exc.response.status_code, str(exc.body)) from exc
 
         return _generate(), state
+
+    # ------------------------------------------------------------------
+    # batch
+    # ------------------------------------------------------------------
+
+    async def batch_submit(
+        self,
+        requests: list[dict[str, Any]],
+        **kwargs: Any,
+    ) -> str:
+        """Submit a batch via Anthropic's Message Batches API."""
+        batch_requests = []
+        for req in requests:
+            custom_id = req.get("custom_id", "")
+            messages = req.get("messages", [])
+            req_system = req.get("system")
+            tools = req.get("tools")
+            req_kwargs = req.get("kwargs", {})
+
+            _, wire = _messages_to_sdk(messages)
+            params: dict[str, Any] = {
+                "model": self._model,
+                "messages": wire,
+                "max_tokens": req_kwargs.get("max_tokens", 4096),
+            }
+            if req_system:
+                params["system"] = req_system
+            if tools:
+                fn_tools = [t for t in tools if not t.get("_server_tool")]
+                if fn_tools:
+                    params["tools"] = [_tool_to_sdk(t) for t in fn_tools]
+
+            batch_requests.append(
+                {
+                    "custom_id": custom_id,
+                    "params": params,
+                }
+            )
+
+        try:
+            result = await self._client.messages.batches.create(requests=batch_requests)
+            return result.id
+        except anthropic.APIStatusError as exc:
+            raise APIError(exc.response.status_code, str(exc.body)) from exc
+
+    async def batch_status(self, batch_id: str) -> str:
+        """Check batch status."""
+        try:
+            result = await self._client.messages.batches.retrieve(batch_id)
+            return result.processing_status
+        except anthropic.APIStatusError as exc:
+            raise APIError(exc.response.status_code, str(exc.body)) from exc
+
+    async def batch_results(self, batch_id: str) -> list[Any]:
+        """Retrieve completed batch results."""
+        from ai_arch_toolkit.core._batch import BatchResult
+
+        results: list[BatchResult] = []
+        try:
+            async for entry in await self._client.messages.batches.results(batch_id):
+                custom_id = getattr(entry, "custom_id", "")
+                result_data = getattr(entry, "result", None)
+                if result_data and getattr(result_data, "type", "") == "succeeded":
+                    message = result_data.message
+                    response = _parse_sdk_response(message, self._model)
+                    results.append(BatchResult(custom_id=custom_id, response=response))
+                else:
+                    error_msg = str(getattr(result_data, "error", "unknown error"))
+                    results.append(BatchResult(custom_id=custom_id, error=error_msg))
+        except anthropic.APIStatusError as exc:
+            raise APIError(exc.response.status_code, str(exc.body)) from exc
+        return results

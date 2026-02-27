@@ -86,20 +86,19 @@ class TestPricingRegistryReset:
 
 class TestEstimateCost:
     def test_known_model(self):
-        cost, known = pricing.estimate_cost(
+        cost = pricing.estimate_cost(
             "claude-sonnet-4-20250514", input_tokens=1000, output_tokens=500
         )
         expected = 3.0 * 1000 / 1_000_000 + 15.0 * 500 / 1_000_000
+        assert cost is not None
         assert abs(cost - expected) < 1e-10
-        assert known is True
 
     def test_unknown_model(self):
-        cost, known = pricing.estimate_cost("unknown-model", input_tokens=1000)
-        assert cost == 0.0
-        assert known is False
+        cost = pricing.estimate_cost("unknown-model", input_tokens=1000)
+        assert cost is None
 
     def test_cache_tokens(self):
-        cost, known = pricing.estimate_cost(
+        cost = pricing.estimate_cost(
             "claude-sonnet-4-20250514",
             input_tokens=1000,
             output_tokens=0,
@@ -107,53 +106,53 @@ class TestEstimateCost:
             cache_read_tokens=200,
         )
         expected = 3.0 * 1000 / 1_000_000 + 3.75 * 500 / 1_000_000 + 0.30 * 200 / 1_000_000
+        assert cost is not None
         assert abs(cost - expected) < 1e-10
-        assert known is True
 
     def test_cache_tokens_ignored_for_models_without_cache(self):
         # gpt-4o has no cache pricing (None) — cache tokens should not contribute
-        cost, _ = pricing.estimate_cost(
+        cost = pricing.estimate_cost(
             "gpt-4o-2024-08-06",
             input_tokens=1000,
             output_tokens=0,
             cache_write_tokens=500,
         )
         expected = 2.50 * 1000 / 1_000_000
+        assert cost is not None
         assert abs(cost - expected) < 1e-10
 
     def test_batch_pricing(self):
-        cost, known = pricing.estimate_cost(
+        cost = pricing.estimate_cost(
             "claude-sonnet-4-20250514",
             input_tokens=1000,
             output_tokens=500,
             is_batch=True,
         )
         expected = 1.50 * 1000 / 1_000_000 + 7.50 * 500 / 1_000_000
+        assert cost is not None
         assert abs(cost - expected) < 1e-10
-        assert known is True
 
     def test_batch_fallback_to_normal_pricing(self):
         # gpt-4o has no batch pricing (None) — should fall back to normal rates
-        cost, known = pricing.estimate_cost(
+        cost = pricing.estimate_cost(
             "gpt-4o-2024-08-06",
             input_tokens=1000,
             output_tokens=500,
             is_batch=True,
         )
         expected = 2.50 * 1000 / 1_000_000 + 10.0 * 500 / 1_000_000
+        assert cost is not None
         assert abs(cost - expected) < 1e-10
-        assert cost > 0.0
-        assert known is True
 
 
 class TestConvenienceEstimateCost:
-    def test_returns_just_float(self):
+    def test_returns_float_for_known(self):
         cost = estimate_cost("claude-sonnet-4-20250514", input_tokens=1000, output_tokens=500)
         assert isinstance(cost, float)
         assert cost > 0
 
-    def test_unknown_returns_zero(self):
-        assert estimate_cost("unknown-model", input_tokens=1000) == 0.0
+    def test_unknown_returns_none(self):
+        assert estimate_cost("unknown-model", input_tokens=1000) is None
 
 
 class TestLoad:

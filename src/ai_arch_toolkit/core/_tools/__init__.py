@@ -6,6 +6,7 @@ import warnings
 from collections.abc import Callable
 from typing import Any
 
+from ai_arch_toolkit.core._server_tools import ServerTool
 from ai_arch_toolkit.core._tools._decorator import tool
 from ai_arch_toolkit.core._tools._executor import async_execute_tool, execute_tool
 from ai_arch_toolkit.core._tools._group import ToolGroup
@@ -57,7 +58,9 @@ def prepare_tools(
 
     result: list[dict[str, Any]] = []
     for item in tools:
-        if isinstance(item, dict):
+        if isinstance(item, ServerTool):
+            result.append({"_server_tool": True, "type": item.type, **item.config})
+        elif isinstance(item, dict):
             if "name" not in item or not item["name"]:
                 warnings.warn(
                     "Tool dict missing 'name' field; skipping",

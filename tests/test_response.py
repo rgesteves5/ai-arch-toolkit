@@ -48,17 +48,18 @@ class TestResponse:
         r = Response()
         assert r.text == ""
         assert r.tool_calls == ()
-        assert r.cost == 0.0
-        assert r.cost_estimated is False
+        assert r.cost is None
         assert r.stop_reason == ""
         assert r.model == ""
         assert r.raw is None
 
-    def test_cost_estimated_flag(self):
-        r1 = Response(cost=0.003, cost_estimated=True)
-        assert r1.cost_estimated is True
-        r2 = Response(cost=0.0, cost_estimated=False)
-        assert r2.cost_estimated is False
+    def test_cost_none_when_unknown(self):
+        r = Response()
+        assert r.cost is None
+
+    def test_cost_float_when_known(self):
+        r = Response(cost=0.003)
+        assert r.cost == 0.003
 
     def test_shortcut_tokens(self):
         r = Response(usage=Usage(input_tokens=100, output_tokens=50))

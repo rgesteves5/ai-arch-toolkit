@@ -10,6 +10,7 @@ from typing import Any
 
 import grpc
 
+from ai_arch_toolkit.core._content import ImagePart
 from ai_arch_toolkit.core._exceptions import APIError, RateLimitError
 from ai_arch_toolkit.core._pricing import _estimate_response_cost
 from ai_arch_toolkit.core._providers._base import BaseProvider, StreamState, parse_tool_args
@@ -89,7 +90,22 @@ def _messages_to_sdk(
             sdk_msgs.append(xai_chat.assistant(msg.get("content", "")))
 
         else:
-            sdk_msgs.append(xai_chat.user(msg.get("content", "")))
+            raw_content = msg.get("content", "")
+            # xAI SDK only supports text; extract text from multimodal
+            if isinstance(raw_content, list):
+                text_parts = []
+                for part in raw_content:
+                    if isinstance(part, str):
+                        text_parts.append(part)
+                    elif isinstance(part, ImagePart):
+                        warnings.warn(
+                            "xAI does not support image input; image part dropped",
+                            stacklevel=3,
+                        )
+                    else:
+                        text_parts.append(str(part))
+                raw_content = "\n".join(text_parts)
+            sdk_msgs.append(xai_chat.user(raw_content))
 
     system_text = "\n\n".join(system_parts) if system_parts else None
     return sdk_msgs, system_text
@@ -163,7 +179,7 @@ def _parse_sdk_response(
             logger.warning("Failed to parse structured output as JSON")
 
     usage = _extract_usage(response.usage) if response.usage else Usage()
-    cost, cost_estimated = _estimate_response_cost(model, usage)
+    cost = _estimate_response_cost(model, usage)
 
     return Response(
         text=text.strip(),
@@ -172,10 +188,10 @@ def _parse_sdk_response(
         parsed=parsed,
         usage=usage,
         cost=cost,
-        cost_estimated=cost_estimated,
         stop_reason=response.finish_reason or "",
         model=model,
         raw=response,
+        response_id=getattr(response, "id", "") or "",
     )
 
 
@@ -246,6 +262,9 @@ class XAIProvider(BaseProvider):
                 stacklevel=4,
             )
         output_schema: OutputSchema | None = kwargs.pop("output_schema", None)
+        tool_choice: str | None = kwargs.pop("tool_choice", None)
+        json_mode: bool = kwargs.pop("json_mode", False)
+        kwargs.pop("logprobs", None)  # Not supported by xAI
 
         # Warn about unknown params
         unknown = set(kwargs) - _SDK_PARAMS
@@ -282,11 +301,37 @@ class XAIProvider(BaseProvider):
 
         # Tools
         if tools:
-            create_kwargs["tools"] = [_tool_to_sdk(t) for t in tools]
+            fn_tools = [_tool_to_sdk(t) for t in tools if not t.get("_server_tool")]
+            server_tools = [t for t in tools if t.get("_server_tool")]
+            all_tools = fn_tools
+            for st in server_tools:
+                st_type = st["type"]
+                if st_type == "web_search":
+                    all_tools.append(xai_chat.web_search())
+                elif st_type == "code_execution":
+                    all_tools.append(xai_chat.code_interpreter())
+            if all_tools:
+                create_kwargs["tools"] = all_tools
+
+        # tool_choice — xAI uses OpenAI-compatible format
+        if tool_choice is not None:
+            if tool_choice in ("auto", "required", "none"):
+                create_kwargs["tool_choice"] = tool_choice
+            else:
+                create_kwargs["tool_choice"] = {
+                    "type": "function",
+                    "function": {"name": tool_choice},
+                }
 
         # Structured output
         if output_schema:
             create_kwargs["response_format"] = _build_response_format(output_schema)
+
+        # json_mode
+        if json_mode:
+            rf = xai_chat.chat_pb2.ResponseFormat()
+            rf.format_type = xai_chat.chat_pb2.FormatType.FORMAT_TYPE_JSON_OBJECT
+            create_kwargs["response_format"] = rf
 
         return create_kwargs
 

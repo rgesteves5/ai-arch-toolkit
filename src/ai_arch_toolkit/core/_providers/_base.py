@@ -89,6 +89,32 @@ class BaseProvider(ABC):
 
         return _events(), state
 
+    async def batch_submit(
+        self,
+        requests: list[dict[str, Any]],
+        **kwargs: Any,
+    ) -> str:
+        """Submit a batch of requests. Returns a batch ID."""
+        raise NotImplementedError(f"{type(self).__name__} does not support batch API")
+
+    async def batch_status(self, batch_id: str) -> str:
+        """Check batch status. Returns status string."""
+        raise NotImplementedError(f"{type(self).__name__} does not support batch API")
+
+    async def batch_results(self, batch_id: str) -> list[Any]:
+        """Retrieve batch results."""
+        raise NotImplementedError(f"{type(self).__name__} does not support batch API")
+
+    async def count_tokens(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        system: str | None = None,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> int:
+        """Count tokens for the given messages. Override in providers that support it."""
+        raise NotImplementedError(f"{type(self).__name__} does not support token counting")
+
     # ------------------------------------------------------------------
     # Lifecycle — concrete no-ops, providers override if needed
     # ------------------------------------------------------------------

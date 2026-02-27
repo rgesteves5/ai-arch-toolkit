@@ -8,11 +8,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from ai_arch_toolkit.core._content import CachePart, DocumentPart, ImagePart
 from ai_arch_toolkit.core._exceptions import APIError, RateLimitError
 from ai_arch_toolkit.core._providers._anthropic import (
     AnthropicProvider,
     _build_output_config,
     _build_thinking_param,
+    _content_to_sdk,
     _extract_usage,
     _messages_to_sdk,
     _parse_sdk_response,
@@ -274,14 +276,13 @@ class TestParseSdkResponse:
     def test_cost_is_computed(self):
         msg = _sdk_message(input_tokens=1000, output_tokens=500)
         r = _parse_sdk_response(msg, "claude-sonnet-4-20250514")
+        assert r.cost is not None
         assert r.cost > 0
-        assert r.cost_estimated is True
 
     def test_cost_unknown_model(self):
         msg = _sdk_message(input_tokens=1000, output_tokens=500)
         r = _parse_sdk_response(msg, "unknown-model-v9")
-        assert r.cost == 0.0
-        assert r.cost_estimated is False
+        assert r.cost is None
 
     def test_cache_tokens(self):
         msg = _sdk_message(cache_creation_input_tokens=20, cache_read_input_tokens=10)
@@ -615,3 +616,71 @@ class TestAnthropicProviderStreamEvents:
         # Deltas are buffered and emitted as a single complete block on content_block_stop
         assert [e.thinking.text for e in thinking_events if e.thinking] == ["step1 step2"]
         assert [b.text for b in state.thinking] == ["step1 step2"]
+
+
+# ---------------------------------------------------------------------------
+# Multimodal content conversion
+# ---------------------------------------------------------------------------
+
+
+class TestContentToSdk:
+    def test_string_passthrough(self):
+        assert _content_to_sdk("hello") == "hello"
+
+    def test_image_url(self):
+        parts = [ImagePart(source="https://example.com/img.png", media_type="image/png")]
+        result = _content_to_sdk(parts)
+        assert result == [
+            {"type": "image", "source": {"type": "url", "url": "https://example.com/img.png"}}
+        ]
+
+    def test_image_b64(self):
+        parts = [ImagePart(source="abc123", media_type="image/jpeg")]
+        result = _content_to_sdk(parts)
+        assert result[0]["type"] == "image"
+        assert result[0]["source"]["type"] == "base64"
+        assert result[0]["source"]["media_type"] == "image/jpeg"
+        assert result[0]["source"]["data"] == "abc123"
+
+    def test_image_bytes(self):
+        parts = [ImagePart(source=b"\x89PNG", media_type="image/png")]
+        result = _content_to_sdk(parts)
+        assert result[0]["source"]["type"] == "base64"
+
+    def test_document(self):
+        parts = [DocumentPart(source="b64data", media_type="application/pdf", name="doc.pdf")]
+        result = _content_to_sdk(parts)
+        assert result[0]["type"] == "document"
+        assert result[0]["name"] == "doc.pdf"
+
+    def test_cache_part(self):
+        parts = [CachePart(content="cached text")]
+        result = _content_to_sdk(parts)
+        assert result[0] == {
+            "type": "text",
+            "text": "cached text",
+            "cache_control": {"type": "ephemeral"},
+        }
+
+    def test_mixed_content(self):
+        parts = [
+            "Describe this:",
+            ImagePart(source="https://example.com/img.png"),
+        ]
+        result = _content_to_sdk(parts)
+        assert len(result) == 2
+        assert result[0] == {"type": "text", "text": "Describe this:"}
+        assert result[1]["type"] == "image"
+
+    def test_multimodal_messages_to_sdk(self):
+        """Multimodal content flows through _messages_to_sdk."""
+        msgs = [
+            {
+                "role": "user",
+                "content": ["hello", ImagePart(source="https://img.com/a.png")],
+            }
+        ]
+        _, wire = _messages_to_sdk(msgs)
+        assert len(wire) == 1
+        assert isinstance(wire[0]["content"], list)
+        assert wire[0]["content"][0] == {"type": "text", "text": "hello"}

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import warnings
 from collections.abc import AsyncIterator
 from typing import Any
 
+from ai_arch_toolkit.core._content import DocumentPart, ImagePart, _is_url
 from ai_arch_toolkit.core._exceptions import APIError, RateLimitError
 from ai_arch_toolkit.core._pricing import _estimate_response_cost
 from ai_arch_toolkit.core._providers._base import (
@@ -18,7 +20,14 @@ from ai_arch_toolkit.core._providers._base import (
     _parse_retry_after,
 )
 from ai_arch_toolkit.core._providers._imports import require_sdk
-from ai_arch_toolkit.core._response import OutputSchema, Response, ThinkingBlock, ToolCall, Usage
+from ai_arch_toolkit.core._response import (
+    Citation,
+    OutputSchema,
+    Response,
+    ThinkingBlock,
+    ToolCall,
+    Usage,
+)
 
 require_sdk("google.genai", "gemini")
 from google import genai  # noqa: E402
@@ -43,6 +52,56 @@ _SDK_PARAMS = {
 # ---------------------------------------------------------------------------
 # Adapter helpers
 # ---------------------------------------------------------------------------
+
+
+def _content_parts_to_gemini(content: Any) -> list[types.Part]:
+    """Convert multimodal content to Gemini Part objects."""
+    if isinstance(content, str):
+        return [types.Part(text=content)]
+    if not isinstance(content, list):
+        return [types.Part(text=str(content))]
+
+    parts: list[types.Part] = []
+    for part in content:
+        if isinstance(part, str):
+            parts.append(types.Part(text=part))
+        elif isinstance(part, ImagePart):
+            if _is_url(part.source):
+                parts.append(
+                    types.Part(
+                        file_data=types.FileData(
+                            file_uri=part.source,
+                            mime_type=part.media_type,
+                        )
+                    )
+                )
+            else:
+                data = (
+                    part.source
+                    if isinstance(part.source, bytes)
+                    else base64.b64decode(part.source)
+                )
+                parts.append(
+                    types.Part(
+                        inline_data=types.Blob(
+                            data=data,
+                            mime_type=part.media_type,
+                        )
+                    )
+                )
+        elif isinstance(part, DocumentPart):
+            data = part.source if isinstance(part.source, bytes) else base64.b64decode(part.source)
+            parts.append(
+                types.Part(
+                    inline_data=types.Blob(
+                        data=data,
+                        mime_type=part.media_type,
+                    )
+                )
+            )
+        else:
+            parts.append(types.Part(text=str(part)))
+    return parts
 
 
 def _messages_to_sdk(
@@ -117,9 +176,9 @@ def _messages_to_sdk(
         # Regular message
         _flush_fn_responses()
         gemini_role = "model" if role == "assistant" else role
-        contents.append(
-            types.Content(role=gemini_role, parts=[types.Part(text=msg.get("content", ""))])
-        )
+        raw_content = msg.get("content", "")
+        parts_list = _content_parts_to_gemini(raw_content)
+        contents.append(types.Content(role=gemini_role, parts=parts_list))
 
     _flush_fn_responses()
     system_text = "\n\n".join(system_parts) if system_parts else None
@@ -213,11 +272,26 @@ def _parse_sdk_response(
             logger.warning("Failed to parse structured output as JSON")
 
     usage = _extract_usage(response.usage_metadata) if response.usage_metadata else Usage()
-    cost, cost_estimated = _estimate_response_cost(model, usage)
+    cost = _estimate_response_cost(model, usage)
 
     finish_reason = ""
     if candidate.finish_reason:
         finish_reason = str(candidate.finish_reason).replace("FinishReason.", "")
+
+    # Extract citations from grounding metadata
+    citations: list[Citation] = []
+    grounding = getattr(candidate, "grounding_metadata", None)
+    if grounding:
+        for chunk in getattr(grounding, "grounding_chunks", []) or []:
+            web = getattr(chunk, "web", None)
+            if web:
+                citations.append(
+                    Citation(
+                        text="",
+                        url=getattr(web, "uri", ""),
+                        title=getattr(web, "title", ""),
+                    )
+                )
 
     return Response(
         text=text,
@@ -226,10 +300,11 @@ def _parse_sdk_response(
         parsed=parsed,
         usage=usage,
         cost=cost,
-        cost_estimated=cost_estimated,
         stop_reason=finish_reason,
         model=getattr(response, "model_version", None) or model,
         raw=response,
+        response_id=getattr(response, "response_id", "") or "",
+        citations=tuple(citations),
     )
 
 
@@ -252,6 +327,30 @@ class GeminiProvider(BaseProvider):
     async def close(self) -> None:
         self._client.close()
 
+    async def count_tokens(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        system: str | None = None,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> int:
+        """Count tokens using Gemini's countTokens API."""
+        msg_system, contents = _messages_to_sdk(messages)
+        effective_system = system if system is not None else msg_system
+        cfg_kwargs: dict[str, Any] = {}
+        if effective_system:
+            cfg_kwargs["system_instruction"] = effective_system
+        config = types.GenerateContentConfig(**cfg_kwargs) if cfg_kwargs else None
+        try:
+            result = await self._client.aio.models.count_tokens(
+                model=self._model, contents=contents, config=config
+            )
+            return result.total_tokens
+        except genai_errors.ClientError as exc:
+            raise APIError(exc.code, str(exc)) from exc
+        except genai_errors.ServerError as exc:
+            raise APIError(exc.code, str(exc)) from exc
+
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
@@ -269,6 +368,9 @@ class GeminiProvider(BaseProvider):
         thinking_effort = kwargs.pop("thinking_effort", None)
         thinking_budget = kwargs.pop("thinking_budget", None)
         output_schema: OutputSchema | None = kwargs.pop("output_schema", None)
+        tool_choice: str | None = kwargs.pop("tool_choice", None)
+        json_mode: bool = kwargs.pop("json_mode", False)
+        kwargs.pop("logprobs", None)  # Not supported by Gemini
 
         # Translate max_tokens to Gemini's max_output_tokens
         if "max_tokens" in kwargs:
@@ -298,14 +400,47 @@ class GeminiProvider(BaseProvider):
 
         # Tools
         if tools:
-            cfg_kwargs["tools"] = [
-                types.Tool(function_declarations=[_tool_to_sdk(t) for t in tools])
-            ]
+            fn_tools = [t for t in tools if not t.get("_server_tool")]
+            server_tools = [t for t in tools if t.get("_server_tool")]
+            gemini_tools: list[Any] = []
+            if fn_tools:
+                gemini_tools.append(
+                    types.Tool(function_declarations=[_tool_to_sdk(t) for t in fn_tools])
+                )
+            for st in server_tools:
+                st_type = st["type"]
+                if st_type == "web_search":
+                    gemini_tools.append(types.Tool(google_search=types.GoogleSearch()))
+                elif st_type == "code_execution":
+                    gemini_tools.append(types.Tool(code_execution=types.ToolCodeExecution()))
+            if gemini_tools:
+                cfg_kwargs["tools"] = gemini_tools
+
+        # tool_choice
+        if tool_choice is not None:
+            mode_map = {"auto": "AUTO", "required": "ANY", "none": "NONE"}
+            if tool_choice in mode_map:
+                cfg_kwargs["tool_config"] = types.ToolConfig(
+                    function_calling_config=types.FunctionCallingConfig(
+                        mode=mode_map[tool_choice],
+                    )
+                )
+            else:
+                cfg_kwargs["tool_config"] = types.ToolConfig(
+                    function_calling_config=types.FunctionCallingConfig(
+                        mode="ANY",
+                        allowed_function_names=[tool_choice],
+                    )
+                )
 
         # Structured output
         if output_schema:
             cfg_kwargs["response_mime_type"] = "application/json"
             cfg_kwargs["response_json_schema"] = output_schema.schema
+
+        # json_mode
+        if json_mode:
+            cfg_kwargs["response_mime_type"] = "application/json"
 
         return types.GenerateContentConfig(**cfg_kwargs)
 

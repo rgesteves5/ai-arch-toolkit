@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import json
 from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
@@ -66,6 +68,17 @@ def _resolve_output_schema(schema: OutputSchema | type) -> OutputSchema:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class Citation:
+    """A citation from a web search or grounding result."""
+
+    text: str
+    url: str = ""
+    title: str = ""
+    start_index: int | None = None
+    end_index: int | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class Response:
     """Immutable LLM response with string-like convenience."""
 
@@ -74,11 +87,13 @@ class Response:
     thinking: tuple[ThinkingBlock, ...] = ()
     parsed: Any = None  # populated only when output_schema was requested
     usage: Usage = field(default_factory=Usage)
-    cost: float = 0.0
-    cost_estimated: bool = False
+    cost: float | None = None
     stop_reason: str = ""
     model: str = ""
     raw: Any = None
+    response_id: str = ""
+    logprobs: Any = None
+    citations: tuple[Citation, ...] = ()
 
     # --- shortcut properties ---
 
@@ -145,7 +160,7 @@ class StreamResponse:
         print(stream.response.cost)
     """
 
-    __slots__ = ("_aiter", "_chunks", "_finalizer", "_response")
+    __slots__ = ("_aiter", "_chunks", "_finalizer", "_partial_parsed", "_response")
 
     def __init__(
         self,
@@ -156,6 +171,7 @@ class StreamResponse:
         self._finalizer = finalizer
         self._response: Response | None = None
         self._chunks: list[str] = []
+        self._partial_parsed: Any = None
 
     def __aiter__(self) -> StreamResponse:
         return self
@@ -164,6 +180,10 @@ class StreamResponse:
         try:
             chunk = await self._aiter.__anext__()
             self._chunks.append(chunk)
+            # Attempt incremental JSON parsing
+            text = "".join(self._chunks)
+            with contextlib.suppress(json.JSONDecodeError, ValueError):
+                self._partial_parsed = json.loads(text)
             return chunk
         except StopAsyncIteration:
             self._response = self._finalizer("".join(self._chunks))
@@ -173,6 +193,11 @@ class StreamResponse:
     def response(self) -> Response | None:
         """Available after stream is fully consumed. ``None`` during iteration."""
         return self._response
+
+    @property
+    def partial_parsed(self) -> Any:
+        """Latest successfully parsed partial JSON, or None."""
+        return self._partial_parsed
 
     async def __aenter__(self) -> StreamResponse:
         return self

@@ -17,7 +17,6 @@ def _make_finalizer():
             text=text,
             usage=Usage(input_tokens=10, output_tokens=5),
             cost=0.001,
-            cost_estimated=True,
             stop_reason="end_turn",
             model="test-model",
         )

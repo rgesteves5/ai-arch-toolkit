@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from typing import Any, ClassVar
 
 from ai_arch_toolkit.core._content import user
+from ai_arch_toolkit.core._exceptions import APIError
+from ai_arch_toolkit.core._middleware import Request, _run_aafter, _run_abefore
 from ai_arch_toolkit.core._pricing import _estimate_response_cost
 from ai_arch_toolkit.core._providers import create_provider
 from ai_arch_toolkit.core._response import (
@@ -16,9 +19,12 @@ from ai_arch_toolkit.core._response import (
     Usage,
     _resolve_output_schema,
 )
+from ai_arch_toolkit.core._retry import RetryConfig, with_retry
 from ai_arch_toolkit.core._sync import _run_sync, _stream_sync
 from ai_arch_toolkit.core._tools import prepare_tools
 from ai_arch_toolkit.core._tools._group import ToolGroup
+
+logger = logging.getLogger(__name__)
 
 
 class _StateRef:
@@ -45,6 +51,9 @@ class LLM:
         max_tokens: int = 4096,
         api_key: str | None = None,
         base_url: str | None = None,
+        retry: RetryConfig | bool | None = None,
+        middleware: list[Any] | None = None,
+        fallback: str | None = None,
         **kwargs: Any,
     ) -> None:
         self._model = model
@@ -54,6 +63,12 @@ class LLM:
             **kwargs,
         }
         self._provider = create_provider(model, api_key=api_key, base_url=base_url)
+        self._retry: RetryConfig | None = RetryConfig() if retry is True else retry
+        self._middleware: list[Any] = list(middleware) if middleware else []
+        self._fallback_provider = (
+            create_provider(fallback, api_key=api_key, base_url=base_url) if fallback else None
+        )
+        self._fallback_model = fallback
 
     _REPR_DEFAULTS: ClassVar[dict[str, Any]] = {"temperature": 0.0, "max_tokens": 4096}
 
@@ -69,8 +84,10 @@ class LLM:
     # ------------------------------------------------------------------
 
     async def close(self) -> None:
-        """Close the underlying provider client."""
+        """Close the underlying provider client(s)."""
         await self._provider.close()
+        if self._fallback_provider:
+            await self._fallback_provider.close()
 
     async def __aenter__(self) -> LLM:
         return self
@@ -89,7 +106,7 @@ class LLM:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _normalize(messages: str | list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _normalize(messages: str | list[dict[str, Any]] | list) -> list[dict[str, Any]]:
         """Accept a bare string as shorthand for a single user message."""
         if isinstance(messages, str):
             return [user(messages)]
@@ -107,6 +124,9 @@ class LLM:
         thinking_effort: str | None,
         thinking_budget: int | None,
         output_schema: OutputSchema | type | None,
+        tool_choice: str | None,
+        json_mode: bool,
+        logprobs: bool,
         extra: dict[str, Any],
     ) -> dict[str, Any]:
         """Build kwargs to forward to the provider."""
@@ -115,6 +135,8 @@ class LLM:
             raise ValueError("thinking_effort must be a non-empty string")
         if thinking_budget is not None and thinking_budget < 0:
             raise ValueError(f"thinking_budget must be non-negative, got {thinking_budget}")
+        if json_mode and output_schema is not None:
+            raise ValueError("json_mode and output_schema are mutually exclusive")
         if thinking:
             kwargs["thinking"] = True
         if thinking_effort is not None:
@@ -123,6 +145,12 @@ class LLM:
             kwargs["thinking_budget"] = thinking_budget
         if output_schema is not None:
             kwargs["output_schema"] = _resolve_output_schema(output_schema)
+        if tool_choice is not None:
+            kwargs["tool_choice"] = tool_choice
+        if json_mode:
+            kwargs["json_mode"] = True
+        if logprobs:
+            kwargs["logprobs"] = True
         return kwargs
 
     # ------------------------------------------------------------------
@@ -139,6 +167,9 @@ class LLM:
         thinking_effort: str | None = None,
         thinking_budget: int | None = None,
         output_schema: OutputSchema | type | None = None,
+        tool_choice: str | None = None,
+        json_mode: bool = False,
+        logprobs: bool = False,
         **kwargs: Any,
     ) -> Response:
         """Send messages and return a Response."""
@@ -150,11 +181,57 @@ class LLM:
             thinking_effort=thinking_effort,
             thinking_budget=thinking_budget,
             output_schema=output_schema,
+            tool_choice=tool_choice,
+            json_mode=json_mode,
+            logprobs=logprobs,
             extra=merged,
         )
-        return await self._provider.complete(
-            normalized, system=system, tools=wire_tools, **provider_kwargs
-        )
+        # Middleware before hooks
+        req: Request | None = None
+        if self._middleware:
+            req = Request(
+                messages=normalized,
+                system=system,
+                tools=wire_tools,
+                model=self._model,
+                kwargs=provider_kwargs,
+            )
+            req = await _run_abefore(self._middleware, req)
+            normalized = req.messages
+            system = req.system
+            wire_tools = req.tools
+            provider_kwargs = req.kwargs
+
+        async def _call() -> Response:
+            return await self._provider.complete(
+                normalized, system=system, tools=wire_tools, **provider_kwargs
+            )
+
+        try:
+            if self._retry:
+                response = await with_retry(_call, self._retry)
+            else:
+                response = await _call()
+        except APIError:
+            if not self._fallback_provider:
+                raise
+            logger.info("Primary provider failed, trying fallback: %s", self._fallback_model)
+
+            async def _fallback_call() -> Response:
+                return await self._fallback_provider.complete(  # type: ignore[union-attr]
+                    normalized, system=system, tools=wire_tools, **provider_kwargs
+                )
+
+            if self._retry:
+                response = await with_retry(_fallback_call, self._retry)
+            else:
+                response = await _fallback_call()
+
+        # Middleware after hooks
+        if self._middleware and req is not None:
+            response = await _run_aafter(self._middleware, req, response)
+
+        return response
 
     def stream(
         self,
@@ -166,9 +243,16 @@ class LLM:
         thinking_effort: str | None = None,
         thinking_budget: int | None = None,
         output_schema: OutputSchema | type | None = None,
+        tool_choice: str | None = None,
+        json_mode: bool = False,
+        logprobs: bool = False,
         **kwargs: Any,
     ) -> StreamResponse:
-        """Stream text chunks, with metadata available after consumption."""
+        """Stream text chunks, with metadata available after consumption.
+
+        .. todo:: Add middleware (before/after), retry (stream setup), and
+           fallback support to match ``complete()``.
+        """
         normalized = self._normalize(messages)
         merged = self._merge_kwargs(**kwargs)
         wire_tools = prepare_tools(tools)
@@ -177,6 +261,9 @@ class LLM:
             thinking_effort=thinking_effort,
             thinking_budget=thinking_budget,
             output_schema=output_schema,
+            tool_choice=tool_choice,
+            json_mode=json_mode,
+            logprobs=logprobs,
             extra=merged,
         )
         aiter, state = self._provider.stream(
@@ -187,14 +274,13 @@ class LLM:
         def _finalize(text: str) -> Response:
             usage = state.usage or Usage()
             thinking_blocks = tuple(getattr(state, "thinking", []))
-            cost, cost_estimated = _estimate_response_cost(model, usage)
+            cost = _estimate_response_cost(model, usage)
             return Response(
                 text=text,
                 tool_calls=tuple(state.tool_calls),
                 thinking=thinking_blocks,
                 usage=usage,
                 cost=cost,
-                cost_estimated=cost_estimated,
                 stop_reason=state.stop_reason,
                 model=state.model or model,
                 raw=state.raw,
@@ -211,6 +297,60 @@ class LLM:
         return await self.complete(messages, **kwargs)
 
     # ------------------------------------------------------------------
+    # Batch API
+    # ------------------------------------------------------------------
+
+    async def batch_submit(self, requests: list[dict[str, Any]]) -> str:
+        """Submit a batch of requests. Returns a batch ID."""
+        return await self._provider.batch_submit(requests)
+
+    async def batch_status(self, batch_id: str) -> str:
+        """Check batch processing status."""
+        return await self._provider.batch_status(batch_id)
+
+    async def batch_results(self, batch_id: str) -> list[Any]:
+        """Retrieve batch results."""
+        return await self._provider.batch_results(batch_id)
+
+    def batch_submit_sync(self, requests: list[dict[str, Any]]) -> str:
+        """Synchronous version of ``batch_submit()``."""
+        return _run_sync(self.batch_submit(requests))
+
+    def batch_status_sync(self, batch_id: str) -> str:
+        """Synchronous version of ``batch_status()``."""
+        return _run_sync(self.batch_status(batch_id))
+
+    def batch_results_sync(self, batch_id: str) -> list[Any]:
+        """Synchronous version of ``batch_results()``."""
+        return _run_sync(self.batch_results(batch_id))
+
+    # ------------------------------------------------------------------
+    # Token counting
+    # ------------------------------------------------------------------
+
+    async def count_tokens(
+        self,
+        messages: str | list[dict[str, Any]],
+        *,
+        system: str | None = None,
+        tools: list[dict[str, Any]] | ToolGroup | Callable[..., Any] | None = None,
+    ) -> int:
+        """Count tokens for the given messages (provider-dependent)."""
+        normalized = self._normalize(messages)
+        wire_tools = prepare_tools(tools)
+        return await self._provider.count_tokens(normalized, system=system, tools=wire_tools)
+
+    def count_tokens_sync(
+        self,
+        messages: str | list[dict[str, Any]],
+        *,
+        system: str | None = None,
+        tools: list[dict[str, Any]] | ToolGroup | Callable[..., Any] | None = None,
+    ) -> int:
+        """Synchronous version of ``count_tokens()``."""
+        return _run_sync(self.count_tokens(messages, system=system, tools=tools))
+
+    # ------------------------------------------------------------------
     # Sync wrappers
     # ------------------------------------------------------------------
 
@@ -224,6 +364,9 @@ class LLM:
         thinking_effort: str | None = None,
         thinking_budget: int | None = None,
         output_schema: OutputSchema | type | None = None,
+        tool_choice: str | None = None,
+        json_mode: bool = False,
+        logprobs: bool = False,
         **kwargs: Any,
     ) -> Response:
         """Synchronous version of ``complete()``."""
@@ -236,6 +379,9 @@ class LLM:
                 thinking_effort=thinking_effort,
                 thinking_budget=thinking_budget,
                 output_schema=output_schema,
+                tool_choice=tool_choice,
+                json_mode=json_mode,
+                logprobs=logprobs,
                 **kwargs,
             )
         )
@@ -250,6 +396,9 @@ class LLM:
         thinking_effort: str | None = None,
         thinking_budget: int | None = None,
         output_schema: OutputSchema | type | None = None,
+        tool_choice: str | None = None,
+        json_mode: bool = False,
+        logprobs: bool = False,
         **kwargs: Any,
     ) -> SyncStreamResponse:
         """Synchronous version of ``stream()``."""
@@ -261,6 +410,9 @@ class LLM:
             thinking_effort=thinking_effort,
             thinking_budget=thinking_budget,
             output_schema=output_schema,
+            tool_choice=tool_choice,
+            json_mode=json_mode,
+            logprobs=logprobs,
             extra=merged,
         )
 
@@ -281,14 +433,13 @@ class LLM:
             usage = (state.usage if state else None) or Usage()
             tool_calls = tuple(state.tool_calls) if state else ()
             thinking_blocks = tuple(getattr(state, "thinking", [])) if state else ()
-            cost, cost_estimated = _estimate_response_cost(model, usage)
+            cost = _estimate_response_cost(model, usage)
             return Response(
                 text=text,
                 tool_calls=tool_calls,
                 thinking=thinking_blocks,
                 usage=usage,
                 cost=cost,
-                cost_estimated=cost_estimated,
                 stop_reason=getattr(state, "stop_reason", ""),
                 model=getattr(state, "model", "") or model,
                 raw=getattr(state, "raw", None),

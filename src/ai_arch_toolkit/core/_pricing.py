@@ -90,16 +90,15 @@ class PricingRegistry:
         cache_read_tokens: int = 0,
         *,
         is_batch: bool = False,
-    ) -> tuple[float, bool]:
+    ) -> float | None:
         """Estimate cost in USD.
 
         Returns:
-            ``(cost, known)``: cost in USD, and whether pricing data exists.
-            Unknown models return ``(0.0, False)``.
+            Cost in USD, or ``None`` if no pricing data exists for the model.
         """
         p = self.get(model)
         if p is None:
-            return 0.0, False
+            return None
 
         per_m = 1_000_000
 
@@ -117,7 +116,7 @@ class PricingRegistry:
         if cache_read_tokens > 0 and p.cache_read is not None:
             total += p.cache_read * cache_read_tokens / per_m
 
-        return total, True
+        return total
 
     # ── Load ──
 
@@ -151,7 +150,7 @@ class PricingRegistry:
 pricing = PricingRegistry()
 
 
-def _estimate_response_cost(model: str, usage: Any) -> tuple[float, bool]:
+def _estimate_response_cost(model: str, usage: Any) -> float | None:
     """Estimate response cost from a ``Usage``-like object."""
     return pricing.estimate_cost(
         model,
@@ -170,9 +169,9 @@ def estimate_cost(
     cache_read_tokens: int = 0,
     *,
     is_batch: bool = False,
-) -> float:
-    """Convenience wrapper — returns just the cost (not the known flag)."""
-    cost, _ = pricing.estimate_cost(
+) -> float | None:
+    """Convenience wrapper around the global pricing registry."""
+    return pricing.estimate_cost(
         model,
         input_tokens,
         output_tokens,
@@ -180,4 +179,3 @@ def estimate_cost(
         cache_read_tokens,
         is_batch=is_batch,
     )
-    return cost

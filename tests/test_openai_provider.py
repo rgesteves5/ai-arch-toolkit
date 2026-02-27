@@ -268,8 +268,8 @@ class TestParseSdkResponse:
     def test_cost_is_computed(self):
         comp = _sdk_completion(prompt_tokens=1000, completion_tokens=500)
         r = _parse_sdk_response(comp, "gpt-4o")
+        assert r.cost is not None
         assert r.cost > 0
-        assert r.cost_estimated is True
 
     def test_structured_output_parsed(self):
         schema = OutputSchema(name="Person", schema={"type": "object"})

@@ -455,3 +455,58 @@ class TestStreamThinking:
         assert stream.response is not None
         assert len(stream.response.thinking) == 1
         assert stream.response.thinking[0].text == "Let me think..."
+
+
+# ---------------------------------------------------------------------------
+# tool_choice + json_mode
+# ---------------------------------------------------------------------------
+
+
+class TestToolChoiceParam:
+    @patch("ai_arch_toolkit.core._llm.create_provider")
+    async def test_tool_choice_forwarded(self, mock_create):
+        mock_provider = AsyncMock()
+        mock_provider.complete.return_value = Response(text="ok")
+        mock_create.return_value = mock_provider
+
+        llm = LLM("claude-sonnet-4-20250514", api_key="test")
+        await llm.complete("Hi", tool_choice="required")
+        call_kwargs = mock_provider.complete.call_args[1]
+        assert call_kwargs["tool_choice"] == "required"
+
+    @patch("ai_arch_toolkit.core._llm.create_provider")
+    async def test_tool_choice_specific_name(self, mock_create):
+        mock_provider = AsyncMock()
+        mock_provider.complete.return_value = Response(text="ok")
+        mock_create.return_value = mock_provider
+
+        llm = LLM("claude-sonnet-4-20250514", api_key="test")
+        await llm.complete("Hi", tool_choice="get_weather")
+        call_kwargs = mock_provider.complete.call_args[1]
+        assert call_kwargs["tool_choice"] == "get_weather"
+
+
+class TestJsonModeParam:
+    @patch("ai_arch_toolkit.core._llm.create_provider")
+    async def test_json_mode_forwarded(self, mock_create):
+        mock_provider = AsyncMock()
+        mock_provider.complete.return_value = Response(text='{"key": "value"}')
+        mock_create.return_value = mock_provider
+
+        llm = LLM("gpt-4o", api_key="test")
+        await llm.complete("Give me JSON", json_mode=True)
+        call_kwargs = mock_provider.complete.call_args[1]
+        assert call_kwargs["json_mode"] is True
+
+    def test_json_mode_and_output_schema_raises(self):
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            LLM._prepare_provider_kwargs(
+                thinking=False,
+                thinking_effort=None,
+                thinking_budget=None,
+                output_schema=OutputSchema(name="test", schema={"type": "object"}),
+                tool_choice=None,
+                json_mode=True,
+                logprobs=False,
+                extra={},
+            )
