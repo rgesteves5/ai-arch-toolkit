@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from ai_arch_toolkit.agents._base import AgentEvent, BaseAgent, _add_usage
-from ai_arch_toolkit.core._content import tool_result, user
+from ai_arch_toolkit.core._content import Content, tool_result, user
 from ai_arch_toolkit.core._response import Usage
 
 
@@ -21,7 +21,7 @@ class ReActAgent(BaseAgent):
     3. Repeat until no tool calls remain or a stop condition is met.
     """
 
-    async def _run_loop(self, task: str, **kwargs: Any) -> AsyncIterator[AgentEvent]:
+    async def _run_loop(self, task: Content, **kwargs: Any) -> AsyncIterator[AgentEvent]:
         messages: list[dict[str, Any]] = [user(task)]
         total_usage = Usage()
         start = time.monotonic()

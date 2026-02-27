@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any, Literal, overload
 
-from ai_arch_toolkit.core._content import tool_result
+from ai_arch_toolkit.core._content import Content, tool_result
 from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._response import Response, ToolCall, Usage
 from ai_arch_toolkit.core._sync import _run_sync, _stream_sync
@@ -121,7 +121,7 @@ class BaseAgent(ABC):
         self.config = config or AgentConfig()
 
     @abstractmethod
-    async def _run_loop(self, task: str, **kwargs: Any) -> AsyncIterator[AgentEvent]:
+    async def _run_loop(self, task: Content, **kwargs: Any) -> AsyncIterator[AgentEvent]:
         """Core loop — yield AgentEvent objects.
 
         The final ``step_end`` event MUST have ``stop_reason`` set.
@@ -136,16 +136,16 @@ class BaseAgent(ABC):
 
     @overload
     async def run(
-        self, task: str, *, stream: Literal[False] = ..., **kwargs: Any
+        self, task: Content, *, stream: Literal[False] = ..., **kwargs: Any
     ) -> AgentResult: ...
 
     @overload
     async def run(
-        self, task: str, *, stream: Literal[True], **kwargs: Any
+        self, task: Content, *, stream: Literal[True], **kwargs: Any
     ) -> AsyncIterator[AgentEvent]: ...
 
     async def run(
-        self, task: str, *, stream: bool = False, **kwargs: Any
+        self, task: Content, *, stream: bool = False, **kwargs: Any
     ) -> AgentResult | AsyncIterator[AgentEvent]:
         if stream:
             return self._run_loop(task, **kwargs)
@@ -157,16 +157,16 @@ class BaseAgent(ABC):
 
     @overload
     def run_sync(
-        self, task: str, *, stream: Literal[False] = ..., **kwargs: Any
+        self, task: Content, *, stream: Literal[False] = ..., **kwargs: Any
     ) -> AgentResult: ...
 
     @overload
     def run_sync(
-        self, task: str, *, stream: Literal[True], **kwargs: Any
+        self, task: Content, *, stream: Literal[True], **kwargs: Any
     ) -> Iterator[AgentEvent]: ...
 
     def run_sync(
-        self, task: str, *, stream: bool = False, **kwargs: Any
+        self, task: Content, *, stream: bool = False, **kwargs: Any
     ) -> AgentResult | Iterator[AgentEvent]:
         if stream:
             return _stream_sync(lambda: self._run_loop(task, **kwargs))

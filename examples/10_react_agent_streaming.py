@@ -3,43 +3,15 @@
 Use run(stream=True) or run_sync(stream=True) to observe each event as
 the agent reasons. This is useful for building live UIs, logging, or
 debugging multi-step reasoning.
+
+Uses real toolkit tools: wikipedia_search, wikipedia_article, and math_eval.
 """
 
 from ai_arch_toolkit.agents import AgentConfig, ReActAgent
-from ai_arch_toolkit.core import LLM, ToolGroup, tool
+from ai_arch_toolkit.core import LLM, ToolGroup
+from ai_arch_toolkit.toolkit.tools import math_eval, wikipedia_article, wikipedia_search
 
-
-@tool
-def search(query: str) -> str:
-    """Search for information.
-
-    Args:
-        query: The search query.
-    """
-    results = {
-        "python creator": "Guido van Rossum created Python in 1991.",
-        "rust creator": "Graydon Hoare created Rust at Mozilla in 2010.",
-    }
-    for key, value in results.items():
-        if key in query.lower():
-            return value
-    return f"No results for: {query}"
-
-
-@tool
-def calculate(expression: str) -> str:
-    """Evaluate a math expression.
-
-    Args:
-        expression: A math expression, e.g. "2024 - 1991".
-    """
-    try:
-        return str(eval(expression, {"__builtins__": {}}))
-    except Exception as e:
-        return f"Error: {e}"
-
-
-tools = ToolGroup(search, calculate)
+tools = ToolGroup(wikipedia_search, wikipedia_article, math_eval)
 llm = LLM("gpt-4.1-nano")
 
 agent = ReActAgent(
@@ -59,12 +31,12 @@ for event in agent.run_sync("Who created Python and how old is the language?", s
     elif event.type == "tool_call":
         print(f"  Tool call: {event.tool_name}({event.tool_args})")
     elif event.type == "tool_result":
-        print(f"  Result: {event.result}")
+        print(f"  Result: {event.result[:120]}...")
     elif event.type == "error":
         print(f"  Error: {event.error}")
     elif event.type == "step_end":
         if event.response:
-            print(f"  Response: {event.response.text[:100]}...")
+            print(f"  Response: {event.response.text[:120]}...")
         if event.stop_reason:
             print(f"  [stop_reason={event.stop_reason}]")
 
