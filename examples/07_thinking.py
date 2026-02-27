@@ -17,8 +17,8 @@ resp = llm.complete_sync(
     thinking_budget=2048,
 )
 if resp.thinking:
-    print(f"[Thinking ({len(resp.thinking[0].text)} chars)]: {resp.thinking[0].text[:200]}...")
-print("\nAnswer:", resp.text[:300], "...\n")
+    print(f"[Thinking ({len(resp.thinking[0].text)} chars)]: {resp.thinking[0].text}")
+print("\nAnswer:", resp.text, "\n")
 
 # --- Extended thinking with effort level ---
 print("=== Extended Thinking (thinking_effort='medium') ===")
@@ -31,5 +31,5 @@ resp2 = llm.complete_sync(
     max_tokens=16384,
 )
 if resp2.thinking:
-    print(f"[Thinking ({len(resp2.thinking[0].text)} chars)]: {resp2.thinking[0].text[:200]}...")
+    print(f"[Thinking ({len(resp2.thinking[0].text)} chars)]: {resp2.thinking[0].text}")
 print("\nAnswer:", resp2.text)

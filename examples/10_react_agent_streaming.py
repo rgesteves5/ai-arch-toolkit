@@ -31,12 +31,12 @@ for event in agent.run_sync("Who created Python and how old is the language?", s
     elif event.type == "tool_call":
         print(f"  Tool call: {event.tool_name}({event.tool_args})")
     elif event.type == "tool_result":
-        print(f"  Result: {event.result[:120]}...")
+        print(f"  Result: {event.result}")
     elif event.type == "error":
         print(f"  Error: {event.error}")
     elif event.type == "step_end":
         if event.response:
-            print(f"  Response: {event.response.text[:120]}...")
+            print(f"  Response: {event.response.text}")
         if event.stop_reason:
             print(f"  [stop_reason={event.stop_reason}]")
 

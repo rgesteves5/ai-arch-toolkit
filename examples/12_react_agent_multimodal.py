@@ -49,12 +49,12 @@ for event in agent.run_sync(task, stream=True):
     elif event.type == "tool_call":
         print(f"  Tool: {event.tool_name}({event.tool_args})")
     elif event.type == "tool_result":
-        print(f"  Result: {event.result[:120]}...")
+        print(f"  Result: {event.result}")
     elif event.type == "error":
         print(f"  Error: {event.error}")
     elif event.type == "step_end":
         if event.response:
-            print(f"  Answer: {event.response.text[:200]}...")
+            print(f"  Answer: {event.response.text}")
         if event.stop_reason:
             print(f"\n[stop_reason={event.stop_reason}]")
 
