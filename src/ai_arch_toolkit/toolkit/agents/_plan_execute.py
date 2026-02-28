@@ -10,7 +10,14 @@ from typing import Any
 from ai_arch_toolkit.core._content import Content, user
 from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._tools._group import ToolGroup
-from ai_arch_toolkit.toolkit.agents._base import AgentConfig, AgentEvent, BaseAgent
+from ai_arch_toolkit.toolkit.agents._base import (
+    AgentConfig,
+    AgentEvent,
+    BaseAgent,
+    PhaseConfig,
+    _resolve_llm,
+    _resolve_tools,
+)
 from ai_arch_toolkit.toolkit.agents._react import ReActAgent
 
 # ---------------------------------------------------------------------------
@@ -39,6 +46,9 @@ class PlanExecuteConfig:
     planner_system: str = _DEFAULT_PLANNER_SYSTEM
     solver_system: str = _DEFAULT_SOLVER_SYSTEM
     max_replans: int = 1
+    planner: PhaseConfig | None = None
+    executor: PhaseConfig | None = None
+    solver: PhaseConfig | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -73,13 +83,23 @@ class PlanExecuteAgent(BaseAgent):
     async def _run_loop(self, task: Content, **kwargs: Any) -> AsyncIterator[AgentEvent]:
         task_str = task if isinstance(task, str) else str(task)
         step_num = 0
+        user_sys = self.config.system
 
-        # Augment planner system with tool descriptions
+        # Resolve phase overrides once (loop-invariant).
+        planner_llm = _resolve_llm(self.plan_execute.planner, self.llm)
+        exec_llm = _resolve_llm(self.plan_execute.executor, self.llm)
+        exec_tools = _resolve_tools(self.plan_execute.executor, self.tools)
+        solver_llm = _resolve_llm(self.plan_execute.solver, self.llm)
+
+        # Augment planner system with tool descriptions.
+        # Use the executor's resolved tools so the plan matches what's available.
         tool_lines: list[str] = []
-        for defn in self.tools.definitions:
+        for defn in exec_tools.definitions:
             desc = defn.get("description", "")
             tool_lines.append(f"- {defn['name']}: {desc}")
         augmented_planner = self.plan_execute.planner_system + "\n".join(tool_lines)
+        if user_sys:
+            augmented_planner = user_sys + "\n\n" + augmented_planner
 
         planned_steps: list[str] = []
         results: list[str] = []
@@ -92,7 +112,7 @@ class PlanExecuteAgent(BaseAgent):
             step_num += 1
             yield AgentEvent(type="step_start", step=step_num)
 
-            plan_response = await self.llm.complete(
+            plan_response = await planner_llm.complete(
                 [user(task_str)],
                 system=augmented_planner,
             )
@@ -111,7 +131,10 @@ class PlanExecuteAgent(BaseAgent):
                 yield AgentEvent(type="step_start", step=step_num)
 
                 # Build context with prior results
-                context_parts: list[str] = [f"Current step: {planned_step}"]
+                context_parts: list[str] = []
+                if user_sys:
+                    context_parts.append(user_sys)
+                context_parts.append(f"Current step: {planned_step}")
                 if results:
                     context_parts.append(
                         "Previous results:\n"
@@ -128,7 +151,7 @@ class PlanExecuteAgent(BaseAgent):
                     parallel_tool_calls=self.config.parallel_tool_calls,
                     llm_kwargs=self.config.llm_kwargs,
                 )
-                inner = ReActAgent(self.llm, self.tools, config=inner_config)
+                inner = ReActAgent(exec_llm, exec_tools, config=inner_config)
 
                 last_answer = ""
                 inner_stop: str | None = None
@@ -202,9 +225,13 @@ class PlanExecuteAgent(BaseAgent):
             f"Produce a final answer."
         )
 
-        solve_response = await self.llm.complete(
+        solver_system = self.plan_execute.solver_system
+        if user_sys:
+            solver_system = user_sys + "\n\n" + solver_system
+
+        solve_response = await solver_llm.complete(
             [user(solver_msg)],
-            system=self.plan_execute.solver_system,
+            system=solver_system,
             output_schema=self.config.output_schema,
             **self.config.llm_kwargs,
         )

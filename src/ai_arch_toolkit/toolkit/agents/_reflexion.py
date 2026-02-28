@@ -9,7 +9,14 @@ from typing import Any
 from ai_arch_toolkit.core._content import Content, user
 from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._tools._group import ToolGroup
-from ai_arch_toolkit.toolkit.agents._base import AgentConfig, AgentEvent, BaseAgent
+from ai_arch_toolkit.toolkit.agents._base import (
+    AgentConfig,
+    AgentEvent,
+    BaseAgent,
+    PhaseConfig,
+    _resolve_llm,
+    _resolve_tools,
+)
 from ai_arch_toolkit.toolkit.agents._react import ReActAgent
 
 # ---------------------------------------------------------------------------
@@ -31,6 +38,8 @@ class ReflexionConfig:
     threshold: float = 0.7
     evaluator: Callable[[str, str], float]
     reflect_system: str = _DEFAULT_REFLECT_SYSTEM
+    executor: PhaseConfig | None = None
+    reflector: PhaseConfig | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -68,6 +77,9 @@ class ReflexionAgent(BaseAgent):
         # which produces a lossy repr.  Reflexion evaluation and reflection
         # prompts are text-based, so this agent works best with str tasks.
         task_str = task if isinstance(task, str) else str(task)
+        exec_llm = _resolve_llm(self.reflexion.executor, self.llm)
+        exec_tools = _resolve_tools(self.reflexion.executor, self.tools)
+        reflect_llm = _resolve_llm(self.reflexion.reflector, self.llm)
 
         for _attempt in range(self.reflexion.max_retries):
             # Build inner system prompt with reflections
@@ -90,7 +102,7 @@ class ReflexionAgent(BaseAgent):
                 llm_kwargs=self.config.llm_kwargs,
                 output_schema=self.config.output_schema,
             )
-            inner = ReActAgent(self.llm, self.tools, config=inner_config)
+            inner = ReActAgent(exec_llm, exec_tools, config=inner_config)
 
             # Stream inner events, re-numbering steps
             last_response = None
@@ -159,7 +171,7 @@ class ReflexionAgent(BaseAgent):
                 f"Score: {score:.2f} (threshold: {self.reflexion.threshold:.2f})\n\n"
                 "What went wrong and how should the next attempt improve?"
             )
-            response = await self.llm.complete(
+            response = await reflect_llm.complete(
                 [user(reflect_prompt)],
                 system=self.reflexion.reflect_system,
             )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
@@ -11,7 +12,13 @@ from ai_arch_toolkit.core._content import Content, user
 from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._response import ToolCall
 from ai_arch_toolkit.core._tools._group import ToolGroup
-from ai_arch_toolkit.toolkit.agents._base import AgentConfig, AgentEvent, BaseAgent
+from ai_arch_toolkit.toolkit.agents._base import (
+    AgentConfig,
+    AgentEvent,
+    BaseAgent,
+    PhaseConfig,
+    _resolve_llm,
+)
 
 # ---------------------------------------------------------------------------
 # Config
@@ -40,6 +47,8 @@ class ReWOOConfig:
 
     planner_system: str = _DEFAULT_PLANNER_SYSTEM
     solver_system: str = _DEFAULT_SOLVER_SYSTEM
+    planner: PhaseConfig | None = None
+    solver: PhaseConfig | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -74,10 +83,12 @@ class ReWOOAgent(BaseAgent):
         self.rewoo = rewoo or ReWOOConfig()
 
     async def _run_loop(self, task: Content, **kwargs: Any) -> AsyncIterator[AgentEvent]:
-        # NOTE: multimodal Content is converted via str() — lossy for non-str
-        # tasks.  ReWOO's text-based plan/solve prompts work best with str.
         task_str = task if isinstance(task, str) else str(task)
         step_num = 0
+        start = time.monotonic()
+
+        # Prepend user system prompt to agent-specific systems
+        user_sys = self.config.system
 
         # ---------------------------------------------------------------
         # Phase 1: Plan
@@ -90,14 +101,17 @@ class ReWOOAgent(BaseAgent):
         for defn in self.tools.definitions:
             desc = defn.get("description", "")
             tool_lines.append(f"- {defn['name']}: {desc}")
-        augmented_system = self.rewoo.planner_system + "\n".join(tool_lines)
+        planner_system = self.rewoo.planner_system + "\n".join(tool_lines)
+        if user_sys:
+            planner_system = user_sys + "\n\n" + planner_system
 
         # llm_kwargs (e.g. thinking) are intentionally NOT forwarded to the
         # planner — it only needs to produce a structured plan, not reason
         # deeply.  The solver call does forward llm_kwargs.
-        plan_response = await self.llm.complete(
+        planner_llm = _resolve_llm(self.rewoo.planner, self.llm)
+        plan_response = await planner_llm.complete(
             [user(task_str)],
-            system=augmented_system,
+            system=planner_system,
         )
         yield AgentEvent(type="step_end", step=step_num, response=plan_response)
 
@@ -111,6 +125,11 @@ class ReWOOAgent(BaseAgent):
         evidence: dict[str, str] = {}
 
         for eid, tool_name, raw_args in plan_steps:
+            # --- stop conditions ---
+            if self._check_timeout(start):
+                yield AgentEvent(type="step_end", step=step_num + 1, stop_reason="timeout")
+                return
+
             step_num += 1
             yield AgentEvent(type="step_start", step=step_num)
 
@@ -166,9 +185,14 @@ class ReWOOAgent(BaseAgent):
         evidence_block = "\n".join(f"{ref}: {val}" for ref, val in sorted(evidence.items()))
         solver_msg = f"Task: {task_str}\n\nEvidence:\n{evidence_block}\n\nProduce a final answer."
 
-        solve_response = await self.llm.complete(
+        solver_system = self.rewoo.solver_system
+        if user_sys:
+            solver_system = user_sys + "\n\n" + solver_system
+
+        solver_llm = _resolve_llm(self.rewoo.solver, self.llm)
+        solve_response = await solver_llm.complete(
             [user(solver_msg)],
-            system=self.rewoo.solver_system,
+            system=solver_system,
             output_schema=self.config.output_schema,
             **self.config.llm_kwargs,
         )

@@ -26,6 +26,24 @@ type StopReason = Literal["completed", "max_iterations", "timeout", "budget_exha
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class PhaseConfig:
+    """Optional per-phase overrides for LLM and tools."""
+
+    llm: LLM | None = None
+    tools: ToolGroup | None = None
+
+
+def _resolve_llm(phase: PhaseConfig | None, default: LLM) -> LLM:
+    """Return the phase-specific LLM or the default."""
+    return phase.llm if phase is not None and phase.llm is not None else default
+
+
+def _resolve_tools(phase: PhaseConfig | None, default: ToolGroup) -> ToolGroup:
+    """Return the phase-specific ToolGroup or the default."""
+    return phase.tools if phase is not None and phase.tools is not None else default
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class AgentConfig:
     """Configuration shared by all agent architectures."""
 

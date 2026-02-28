@@ -30,7 +30,7 @@ Two layers under `src/ai_arch_toolkit/`:
 ai_arch_toolkit/
 ├── core/          # Stateless async-first foundation — providers, LLM, tools, content
 ├── toolkit/       # Convenience utilities — agents, 25 pre-built tools, run_tools
-│   ├── agents/    # Agent architectures (ReAct, Reflexion, ReWOO, PlanExecute, ToT, LATS)
+│   ├── agents/    # Agent architectures (ReAct, Reflexion, ReWOO, PlanExecute, ToT, LATS, SelfDiscovery, LLMCompiler)
 │   └── tools/     # Pre-built tools (weather, geo, news, etc.)
 └── __init__.py    # Re-exports from core/ + toolkit/
 ```
@@ -63,8 +63,10 @@ Built on core/ primitives (`LLM`, `Response`, `ToolGroup`, `Usage`, `ToolCall`, 
 - **`_plan_execute.py`**: `PlanExecuteAgent` + `PlanExecuteConfig` — Numbered step plan → per-step ReAct execution → Solve. Optional replanning on failure.
 - **`_tot.py`**: `ToTAgent` + `ToTConfig` — Tree of Thoughts with DFS/BFS search. Generate-evaluate-expand loop.
 - **`_lats.py`**: `LATSAgent` + `LATSConfig` — Language Agent Tree Search (MCTS). UCT selection, ReAct rollouts, evaluation, backpropagation, reflection.
+- **`_self_discovery.py`**: `SelfDiscoveryAgent` + `SelfDiscoveryConfig` — Select reasoning modules → Adapt → Operationalize → Solve via inner ReAct. 10 default reasoning strategies.
+- **`_llm_compiler.py`**: `LLMCompilerAgent` + `LLMCompilerConfig` — Plan DAG → Parallel execute via asyncio.gather → Join → Optional replan. Topological task scheduling.
 - Task input accepts `Content` (str or multimodal list) for vision+tools use cases.
-- Agent-specific configs (`ReflexionConfig`, `ReWOOConfig`, `PlanExecuteConfig`, `ToTConfig`, `LATSConfig`) are standalone dataclasses — not inheriting from `AgentConfig`. Passed via separate constructor kwarg.
+- Agent-specific configs (`ReflexionConfig`, `ReWOOConfig`, `PlanExecuteConfig`, `ToTConfig`, `LATSConfig`, `SelfDiscoveryConfig`, `LLMCompilerConfig`) are standalone dataclasses — not inheriting from `AgentConfig`. Passed via separate constructor kwarg.
 
 #### Tools (`toolkit/tools/`)
 

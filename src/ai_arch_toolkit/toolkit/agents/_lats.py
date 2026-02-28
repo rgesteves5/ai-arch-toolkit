@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import re
+import time
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -11,7 +12,14 @@ from typing import Any
 from ai_arch_toolkit.core._content import Content, user
 from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._tools._group import ToolGroup
-from ai_arch_toolkit.toolkit.agents._base import AgentConfig, AgentEvent, BaseAgent
+from ai_arch_toolkit.toolkit.agents._base import (
+    AgentConfig,
+    AgentEvent,
+    BaseAgent,
+    PhaseConfig,
+    _resolve_llm,
+    _resolve_tools,
+)
 from ai_arch_toolkit.toolkit.agents._react import ReActAgent
 
 # ---------------------------------------------------------------------------
@@ -41,8 +49,12 @@ class LATSConfig:
     n_candidates: int = 5
     max_rollouts: int = 10
     exploration_weight: float = 1.41
-    evaluator: Callable[[str, str], float] | None = None
+    evaluator_fn: Callable[[str, str], float] | None = None
     evaluator_system: str = _DEFAULT_EVALUATOR_SYSTEM
+    rollout: PhaseConfig | None = None
+    evaluator: PhaseConfig | None = None
+    solver: PhaseConfig | None = None
+    reflector: PhaseConfig | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -128,8 +140,19 @@ class LATSAgent(BaseAgent):
         task_str = task if isinstance(task, str) else str(task)
         root = _Node(state=task_str)
         step_num = 0
+        start = time.monotonic()
+        rollout_llm = _resolve_llm(self.lats.rollout, self.llm)
+        rollout_tools = _resolve_tools(self.lats.rollout, self.tools)
+        eval_llm = _resolve_llm(self.lats.evaluator, self.llm)
+        solver_llm = _resolve_llm(self.lats.solver, self.llm)
+        reflector_llm = _resolve_llm(self.lats.reflector, self.llm)
 
         for _rollout in range(self.lats.max_rollouts):
+            # --- outer stop conditions ---
+            if self._check_timeout(start):
+                yield AgentEvent(type="step_end", step=step_num + 1, stop_reason="timeout")
+                return
+
             # SELECT
             node = _select_uct(root, self.lats.exploration_weight)
 
@@ -150,7 +173,7 @@ class LATSAgent(BaseAgent):
                 parallel_tool_calls=self.config.parallel_tool_calls,
                 llm_kwargs=self.config.llm_kwargs,
             )
-            inner = ReActAgent(self.llm, self.tools, config=inner_config)
+            inner = ReActAgent(rollout_llm, rollout_tools, config=inner_config)
 
             last_answer = ""
             inner_stop: str | None = None
@@ -194,10 +217,10 @@ class LATSAgent(BaseAgent):
                 return
 
             # EVALUATE
-            if self.lats.evaluator:
-                score = self.lats.evaluator(task_str, last_answer)
+            if self.lats.evaluator_fn:
+                score = self.lats.evaluator_fn(task_str, last_answer)
             else:
-                eval_response = await self.llm.complete(
+                eval_response = await eval_llm.complete(
                     [
                         user(
                             f"Task: {task_str}\n\nAnswer: {last_answer}\n\n"
@@ -222,13 +245,14 @@ class LATSAgent(BaseAgent):
                 step_num += 1
                 yield AgentEvent(type="step_start", step=step_num)
                 # Final answer via solver
-                final_response = await self.llm.complete(
+                final_response = await solver_llm.complete(
                     [
                         user(
                             f"Task: {task_str}\n\nBest answer: {last_answer}\n\n"
                             f"Produce a final, polished answer."
                         )
                     ],
+                    system=self.config.system or None,
                     output_schema=self.config.output_schema,
                     **self.config.llm_kwargs,
                 )
@@ -242,7 +266,7 @@ class LATSAgent(BaseAgent):
 
             # REFLECT on low scores
             if score < 0.5:
-                reflect_response = await self.llm.complete(
+                reflect_response = await reflector_llm.complete(
                     [
                         user(
                             f"Task: {task_str}\n\nAttempted answer: {last_answer}\n\n"

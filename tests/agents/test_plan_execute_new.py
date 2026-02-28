@@ -277,9 +277,7 @@ async def test_budget_exhaustion_propagation(monkeypatch):
     tools = ToolGroup(lookup)
     llm = AsyncMock()
     llm.complete = AsyncMock(side_effect=responses)
-    agent = PlanExecuteAgent(
-        llm, tools, config=AgentConfig(timeout=0.001, max_iterations=10)
-    )
+    agent = PlanExecuteAgent(llm, tools, config=AgentConfig(timeout=0.001, max_iterations=10))
     result = await agent.run("Test budget")
 
     assert result.stop_reason == "timeout"

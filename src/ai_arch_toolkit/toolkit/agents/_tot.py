@@ -13,7 +13,14 @@ from ai_arch_toolkit.core._content import Content, user
 from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._response import Usage
 from ai_arch_toolkit.core._tools._group import ToolGroup
-from ai_arch_toolkit.toolkit.agents._base import AgentConfig, AgentEvent, BaseAgent, _add_usage
+from ai_arch_toolkit.toolkit.agents._base import (
+    AgentConfig,
+    AgentEvent,
+    BaseAgent,
+    PhaseConfig,
+    _add_usage,
+    _resolve_llm,
+)
 
 # ---------------------------------------------------------------------------
 # Config
@@ -50,6 +57,9 @@ class ToTConfig:
     max_depth: int = 3
     evaluator_system: str = _DEFAULT_EVALUATOR_SYSTEM
     strategy: Literal["dfs", "bfs"] = "dfs"
+    generator: PhaseConfig | None = None
+    evaluator: PhaseConfig | None = None
+    solver: PhaseConfig | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -84,6 +94,9 @@ class ToTAgent(BaseAgent):
         start = time.monotonic()
         frontier: deque[tuple[str, int]] = deque()  # (state, depth)
         frontier.append((task_str, 0))
+        gen_llm = _resolve_llm(self.tot.generator, self.llm)
+        eval_llm = _resolve_llm(self.tot.evaluator, self.llm)
+        solver_llm = _resolve_llm(self.tot.solver, self.llm)
 
         while frontier and step_num < self.config.max_iterations:
             # --- stop conditions ---
@@ -107,7 +120,7 @@ class ToTAgent(BaseAgent):
 
             if depth >= self.tot.max_depth:
                 # At max depth, produce final answer from this state
-                final_response = await self.llm.complete(
+                final_response = await solver_llm.complete(
                     [
                         user(
                             f"Based on the following reasoning, produce a final answer.\n\n"
@@ -127,7 +140,7 @@ class ToTAgent(BaseAgent):
                 return
 
             # Generate candidates
-            gen_response = await self.llm.complete(
+            gen_response = await gen_llm.complete(
                 [
                     user(
                         f"Generate {self.tot.n_candidates} candidate next thoughts for "
@@ -144,7 +157,7 @@ class ToTAgent(BaseAgent):
             # Evaluate candidates
             scored: list[tuple[float, str]] = []
             for candidate in candidates:
-                eval_response = await self.llm.complete(
+                eval_response = await eval_llm.complete(
                     [
                         user(
                             f"Task: {task_str}\n\n"
@@ -167,7 +180,7 @@ class ToTAgent(BaseAgent):
                 if best_score >= 0.9:
                     step_num += 1
                     yield AgentEvent(type="step_start", step=step_num)
-                    final_response = await self.llm.complete(
+                    final_response = await solver_llm.complete(
                         [
                             user(
                                 f"Based on the following reasoning, produce a final answer.\n\n"

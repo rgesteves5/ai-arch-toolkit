@@ -36,7 +36,7 @@ def _make_agent(
         llm,
         tools,
         config=config or AgentConfig(),
-        lats=lats or LATSConfig(evaluator=lambda _t, _a: 0.5),
+        lats=lats or LATSConfig(evaluator_fn=lambda _t, _a: 0.5),
     )
 
 
@@ -52,7 +52,7 @@ async def test_finds_solution_first_rollout():
     ]
     agent = _make_agent(
         responses,
-        lats=LATSConfig(evaluator=lambda _t, _a: 0.95),
+        lats=LATSConfig(evaluator_fn=lambda _t, _a: 0.95),
     )
     result = await agent.run("What is 6*7?")
 
@@ -79,7 +79,7 @@ async def test_multiple_rollouts():
     ]
     agent = _make_agent(
         responses,
-        lats=LATSConfig(evaluator=evaluator, max_rollouts=5),
+        lats=LATSConfig(evaluator_fn=evaluator, max_rollouts=5),
     )
     result = await agent.run("Solve this")
 
@@ -100,7 +100,7 @@ async def test_all_rollouts_exhausted():
     ]
     agent = _make_agent(
         responses,
-        lats=LATSConfig(evaluator=lambda _t, _a: 0.3, max_rollouts=2),
+        lats=LATSConfig(evaluator_fn=lambda _t, _a: 0.3, max_rollouts=2),
     )
     result = await agent.run("Impossible task")
 
@@ -125,7 +125,7 @@ async def test_external_evaluator():
     ]
     agent = _make_agent(
         responses,
-        lats=LATSConfig(evaluator=tracking_eval),
+        lats=LATSConfig(evaluator_fn=tracking_eval),
     )
     result = await agent.run("Test task")
 
@@ -192,7 +192,7 @@ async def test_reflection_on_low_score():
     scores = iter([0.2, 0.95])
     agent = _make_agent(
         responses,
-        lats=LATSConfig(evaluator=lambda _t, _a: next(scores), max_rollouts=5),
+        lats=LATSConfig(evaluator_fn=lambda _t, _a: next(scores), max_rollouts=5),
     )
     result = await agent.run("Test reflection")
 
@@ -211,7 +211,7 @@ def test_run_sync():
     ]
     agent = _make_agent(
         responses,
-        lats=LATSConfig(evaluator=lambda _t, _a: 0.95),
+        lats=LATSConfig(evaluator_fn=lambda _t, _a: 0.95),
     )
     result = agent.run_sync("Sync test")
 
@@ -234,7 +234,7 @@ async def test_llm_based_evaluator():
     agent = _make_agent(
         responses,
         config=AgentConfig(),
-        lats=LATSConfig(evaluator=None, max_rollouts=5),  # no external evaluator
+        lats=LATSConfig(evaluator_fn=None, max_rollouts=5),  # no external evaluator
     )
     result = await agent.run("Test LLM eval")
 
@@ -264,7 +264,7 @@ async def test_mid_range_score_no_reflection():
     ]
     agent = _make_agent(
         responses,
-        lats=LATSConfig(evaluator=evaluator, max_rollouts=2),
+        lats=LATSConfig(evaluator_fn=evaluator, max_rollouts=2),
     )
     result = await agent.run("Mid score test")
 
@@ -332,7 +332,7 @@ async def test_custom_evaluator_system():
     agent = _make_agent(
         responses,
         config=AgentConfig(),
-        lats=LATSConfig(evaluator=None, evaluator_system=custom_sys, max_rollouts=5),
+        lats=LATSConfig(evaluator_fn=None, evaluator_system=custom_sys, max_rollouts=5),
     )
     await agent.run("Test custom eval system")
 

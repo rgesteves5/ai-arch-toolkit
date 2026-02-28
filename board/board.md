@@ -27,6 +27,12 @@ loop with configurable candidates, depth, and evaluation.
 **LATSAgent** — Language Agent Tree Search (MCTS). UCT selection, ReAct rollouts,
 LLM/external evaluation, backpropagation, reflection on failures.
 
+**SelfDiscoveryAgent** — Select reasoning modules → Adapt → Operationalize → Solve
+via inner ReAct. 10 default reasoning strategies from the Self-Discover paper.
+
+**LLMCompilerAgent** — Plan DAG → Parallel execute (asyncio.gather) → Join.
+Topological task scheduling with optional replanning on insufficient results.
+
 **Rich Streaming Events** — `StreamEvent`, `RichStreamResponse`,
 `SyncRichStreamResponse` at core/ layer. Text, thinking, tool_call event kinds.
 
