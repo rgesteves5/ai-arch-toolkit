@@ -6,10 +6,9 @@ import json
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any
 
-from ai_arch_toolkit.core._response import Response, ThinkingBlock, ToolCall, Usage
+from ai_arch_toolkit.core._response import Response, StreamEvent, ThinkingBlock, ToolCall, Usage
 
 logger = logging.getLogger(__name__)
 
@@ -146,16 +145,6 @@ class StreamState:
         self.raw: Any = None
         self.tool_calls: list[ToolCall] = []
         self.thinking: list[ThinkingBlock] = []
-
-
-@dataclass(frozen=True, slots=True)
-class StreamEvent:
-    """Structured streaming event."""
-
-    kind: Literal["text", "thinking", "tool_call"]
-    text: str = ""
-    thinking: ThinkingBlock | None = None
-    tool_call: ToolCall | None = None
 
 
 def parse_tool_args(raw_args: str | dict[str, Any]) -> dict[str, Any]:

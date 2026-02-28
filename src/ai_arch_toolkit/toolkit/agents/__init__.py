@@ -10,9 +10,12 @@ from ai_arch_toolkit.toolkit.agents._base import (
     BaseAgent,
     StopReason,
 )
+from ai_arch_toolkit.toolkit.agents._lats import LATSAgent, LATSConfig
+from ai_arch_toolkit.toolkit.agents._plan_execute import PlanExecuteAgent, PlanExecuteConfig
 from ai_arch_toolkit.toolkit.agents._react import ReActAgent
 from ai_arch_toolkit.toolkit.agents._reflexion import ReflexionAgent, ReflexionConfig
 from ai_arch_toolkit.toolkit.agents._rewoo import ReWOOAgent, ReWOOConfig
+from ai_arch_toolkit.toolkit.agents._tot import ToTAgent, ToTConfig
 
 __all__ = [
     "AgentConfig",
@@ -20,10 +23,16 @@ __all__ = [
     "AgentResult",
     "AgentStep",
     "BaseAgent",
+    "LATSAgent",
+    "LATSConfig",
+    "PlanExecuteAgent",
+    "PlanExecuteConfig",
     "ReActAgent",
     "ReWOOAgent",
     "ReWOOConfig",
     "ReflexionAgent",
     "ReflexionConfig",
     "StopReason",
+    "ToTAgent",
+    "ToTConfig",
 ]

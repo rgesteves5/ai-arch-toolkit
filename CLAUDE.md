@@ -30,7 +30,7 @@ Two layers under `src/ai_arch_toolkit/`:
 ai_arch_toolkit/
 ├── core/          # Stateless async-first foundation — providers, LLM, tools, content
 ├── toolkit/       # Convenience utilities — agents, 25 pre-built tools, run_tools
-│   ├── agents/    # Agent architectures (ReAct, Reflexion, ReWOO)
+│   ├── agents/    # Agent architectures (ReAct, Reflexion, ReWOO, PlanExecute, ToT, LATS)
 │   └── tools/     # Pre-built tools (weather, geo, news, etc.)
 └── __init__.py    # Re-exports from core/ + toolkit/
 ```
@@ -39,9 +39,9 @@ ai_arch_toolkit/
 
 The stateless, async-first foundation. All new code should build on this.
 
-- **`_llm.py`**: `LLM` class — user-facing facade. `complete()` / `stream()` (async) with `complete_sync()` / `stream_sync()` wrappers. Accepts `Content` (str or multimodal parts).
+- **`_llm.py`**: `LLM` class — user-facing facade. `complete()` / `stream()` / `stream_events()` (async) with `complete_sync()` / `stream_sync()` / `stream_events_sync()` wrappers. Accepts `Content` (str or multimodal parts). Stream methods support fallback + middleware.
 - **`_content.py`**: Message constructors (`user()`, `assistant()`, `system()`, `tool_result()`) and multimodal types (`ImagePart`, `DocumentPart`, `CachePart`). `type Content = str | list[ContentPart]`.
-- **`_response.py`**: `Response`, `Usage`, `ToolCall`, `ThinkingBlock`, `Citation`, `OutputSchema`, `StreamResponse`, `SyncStreamResponse`.
+- **`_response.py`**: `Response`, `Usage`, `ToolCall`, `ThinkingBlock`, `Citation`, `OutputSchema`, `StreamResponse`, `SyncStreamResponse`, `StreamEvent`, `RichStreamResponse`, `SyncRichStreamResponse`.
 - **`_providers/`**: `BaseProvider` ABC → `AnthropicProvider`, `OpenAIProvider`, `XAIProvider`, `GeminiProvider`. Factory: `create_provider()` routes by model prefix (`claude-` → Anthropic, `gpt-`/`o1-`/`o3-`/`o4-` → OpenAI, `grok-` → xAI, `gemini-` → Gemini).
 - **`_tools/`**: `@tool` decorator (auto-generates JSON Schema from type hints + Google-style docstrings), `ToolGroup` (collection with execute/async_execute), `infer_schema()`, `prepare_tools()`.
 - **`_pricing.py`**: `PricingRegistry` with `_default_pricing.toml`. Access via `pricing` singleton.
@@ -60,8 +60,11 @@ Built on core/ primitives (`LLM`, `Response`, `ToolGroup`, `Usage`, `ToolCall`, 
 - **`_react.py`**: `ReActAgent` — Thought → Action → Observation loop. `_run_loop()` is a pure async generator yielding `AgentEvent`; callbacks fire in `_consume()`.
 - **`_reflexion.py`**: `ReflexionAgent` + `ReflexionConfig` — wraps ReActAgent in a retry loop with self-critique. Evaluator callback scores each attempt; below-threshold triggers reflection + retry.
 - **`_rewoo.py`**: `ReWOOAgent` + `ReWOOConfig` — Plan with `#E{n}` placeholders → Execute tools → Solve. Three-phase architecture.
+- **`_plan_execute.py`**: `PlanExecuteAgent` + `PlanExecuteConfig` — Numbered step plan → per-step ReAct execution → Solve. Optional replanning on failure.
+- **`_tot.py`**: `ToTAgent` + `ToTConfig` — Tree of Thoughts with DFS/BFS search. Generate-evaluate-expand loop.
+- **`_lats.py`**: `LATSAgent` + `LATSConfig` — Language Agent Tree Search (MCTS). UCT selection, ReAct rollouts, evaluation, backpropagation, reflection.
 - Task input accepts `Content` (str or multimodal list) for vision+tools use cases.
-- Agent-specific configs (`ReflexionConfig`, `ReWOOConfig`) are standalone dataclasses — not inheriting from `AgentConfig`. Passed via separate constructor kwarg.
+- Agent-specific configs (`ReflexionConfig`, `ReWOOConfig`, `PlanExecuteConfig`, `ToTConfig`, `LATSConfig`) are standalone dataclasses — not inheriting from `AgentConfig`. Passed via separate constructor kwarg.
 
 #### Tools (`toolkit/tools/`)
 
@@ -96,7 +99,7 @@ Built on core/ primitives (`LLM`, `Response`, `ToolGroup`, `Usage`, `ToolCall`, 
 
 ## Provider-Specific Gotchas
 
-- **Anthropic**: `input_schema` for tools (not `parameters`), `system` is a top-level field (not a message role), supports extended thinking.
+- **Anthropic**: `input_schema` for tools (not `parameters`), `system` is a top-level field (not a message role), supports extended thinking. Native structured output via `output_config` (not tool trick).
 - **Gemini**: `contents`/`parts` structure (not `messages`/`content`), uses NDJSON streaming (not SSE).
 - **OpenAI**: Chat Completions and Responses API — both have provider implementations.
 - **xAI**: Separate provider (not OpenAI-compat), API key via `XAI_API_KEY`.

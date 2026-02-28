@@ -8,13 +8,21 @@ from typing import Any, ClassVar
 
 from ai_arch_toolkit.core._content import user
 from ai_arch_toolkit.core._exceptions import APIError
-from ai_arch_toolkit.core._middleware import Request, _run_aafter, _run_abefore
+from ai_arch_toolkit.core._middleware import (
+    Request,
+    _run_aafter,
+    _run_abefore,
+    _run_after,
+    _run_before,
+)
 from ai_arch_toolkit.core._pricing import _estimate_response_cost
 from ai_arch_toolkit.core._providers import create_provider
 from ai_arch_toolkit.core._response import (
     OutputSchema,
     Response,
+    RichStreamResponse,
     StreamResponse,
+    SyncRichStreamResponse,
     SyncStreamResponse,
     Usage,
     _resolve_output_schema,
@@ -233,6 +241,28 @@ class LLM:
 
         return response
 
+    def _build_stream_finalizer(self, state: Any) -> Callable[[str], Response]:
+        """Build a finalization callback for stream wrappers."""
+        model = self._model
+
+        def _finalize(text: str) -> Response:
+            usage = state.usage or Usage()
+            thinking_blocks = tuple(getattr(state, "thinking", []))
+            cost = _estimate_response_cost(model, usage)
+            resp = Response(
+                text=text,
+                tool_calls=tuple(state.tool_calls),
+                thinking=thinking_blocks,
+                usage=usage,
+                cost=cost,
+                stop_reason=state.stop_reason,
+                model=state.model or model,
+                raw=state.raw,
+            )
+            return resp
+
+        return _finalize
+
     def stream(
         self,
         messages: str | list[dict[str, Any]],
@@ -248,11 +278,7 @@ class LLM:
         logprobs: bool = False,
         **kwargs: Any,
     ) -> StreamResponse:
-        """Stream text chunks, with metadata available after consumption.
-
-        .. todo:: Add middleware (before/after), retry (stream setup), and
-           fallback support to match ``complete()``.
-        """
+        """Stream text chunks, with metadata available after consumption."""
         normalized = self._normalize(messages)
         merged = self._merge_kwargs(**kwargs)
         wire_tools = prepare_tools(tools)
@@ -266,27 +292,184 @@ class LLM:
             logprobs=logprobs,
             extra=merged,
         )
-        aiter, state = self._provider.stream(
-            normalized, system=system, tools=wire_tools, **provider_kwargs
+
+        # Middleware before hooks
+        req: Request | None = None
+        if self._middleware:
+            req = Request(
+                messages=normalized,
+                system=system,
+                tools=wire_tools,
+                model=self._model,
+                kwargs=provider_kwargs,
+            )
+            req = _run_before(self._middleware, req)
+            normalized = req.messages
+            system = req.system
+            wire_tools = req.tools
+            provider_kwargs = req.kwargs
+
+        try:
+            aiter, state = self._provider.stream(
+                normalized, system=system, tools=wire_tools, **provider_kwargs
+            )
+        except APIError:
+            if not self._fallback_provider:
+                raise
+            logger.info("Primary stream failed, trying fallback: %s", self._fallback_model)
+            aiter, state = self._fallback_provider.stream(
+                normalized, system=system, tools=wire_tools, **provider_kwargs
+            )
+
+        finalizer = self._build_stream_finalizer(state)
+
+        if self._middleware and req is not None:
+            inner_finalizer = finalizer
+            mw_list = self._middleware
+            mw_req = req
+
+            def _mw_finalize(text: str) -> Response:
+                resp = inner_finalizer(text)
+                return _run_after(mw_list, mw_req, resp)
+
+            finalizer = _mw_finalize
+
+        return StreamResponse(aiter, finalizer)
+
+    def stream_events(
+        self,
+        messages: str | list[dict[str, Any]],
+        *,
+        system: str | None = None,
+        tools: list[dict[str, Any]] | ToolGroup | Callable[..., Any] | None = None,
+        thinking: bool = False,
+        thinking_effort: str | None = None,
+        thinking_budget: int | None = None,
+        output_schema: OutputSchema | type | None = None,
+        tool_choice: str | None = None,
+        json_mode: bool = False,
+        logprobs: bool = False,
+        **kwargs: Any,
+    ) -> RichStreamResponse:
+        """Stream structured events (text, thinking, tool_call)."""
+        normalized = self._normalize(messages)
+        merged = self._merge_kwargs(**kwargs)
+        wire_tools = prepare_tools(tools)
+        provider_kwargs = self._prepare_provider_kwargs(
+            thinking=thinking,
+            thinking_effort=thinking_effort,
+            thinking_budget=thinking_budget,
+            output_schema=output_schema,
+            tool_choice=tool_choice,
+            json_mode=json_mode,
+            logprobs=logprobs,
+            extra=merged,
         )
+
+        # Middleware before hooks
+        req: Request | None = None
+        if self._middleware:
+            req = Request(
+                messages=normalized,
+                system=system,
+                tools=wire_tools,
+                model=self._model,
+                kwargs=provider_kwargs,
+            )
+            req = _run_before(self._middleware, req)
+            normalized = req.messages
+            system = req.system
+            wire_tools = req.tools
+            provider_kwargs = req.kwargs
+
+        try:
+            aiter, state = self._provider.stream_events(
+                normalized, system=system, tools=wire_tools, **provider_kwargs
+            )
+        except APIError:
+            if not self._fallback_provider:
+                raise
+            logger.info("Primary stream_events failed, trying fallback: %s", self._fallback_model)
+            aiter, state = self._fallback_provider.stream_events(
+                normalized, system=system, tools=wire_tools, **provider_kwargs
+            )
+
+        finalizer = self._build_stream_finalizer(state)
+
+        if self._middleware and req is not None:
+            inner_finalizer = finalizer
+            mw_list = self._middleware
+            mw_req = req
+
+            def _mw_finalize(text: str) -> Response:
+                resp = inner_finalizer(text)
+                return _run_after(mw_list, mw_req, resp)
+
+            finalizer = _mw_finalize
+
+        return RichStreamResponse(aiter, finalizer)
+
+    def stream_events_sync(
+        self,
+        messages: str | list[dict[str, Any]],
+        *,
+        system: str | None = None,
+        tools: list[dict[str, Any]] | ToolGroup | Callable[..., Any] | None = None,
+        thinking: bool = False,
+        thinking_effort: str | None = None,
+        thinking_budget: int | None = None,
+        output_schema: OutputSchema | type | None = None,
+        tool_choice: str | None = None,
+        json_mode: bool = False,
+        logprobs: bool = False,
+        **kwargs: Any,
+    ) -> SyncRichStreamResponse:
+        """Synchronous version of ``stream_events()``."""
+        normalized = self._normalize(messages)
+        merged = self._merge_kwargs(**kwargs)
+        wire_tools = prepare_tools(tools)
+        provider_kwargs = self._prepare_provider_kwargs(
+            thinking=thinking,
+            thinking_effort=thinking_effort,
+            thinking_budget=thinking_budget,
+            output_schema=output_schema,
+            tool_choice=tool_choice,
+            json_mode=json_mode,
+            logprobs=logprobs,
+            extra=merged,
+        )
+
+        state_ref = _StateRef()
+
+        def _async_factory():
+            aiter, state = self._provider.stream_events(
+                normalized, system=system, tools=wire_tools, **provider_kwargs
+            )
+            state_ref.value = state
+            return aiter
+
+        sync_iter = _stream_sync(_async_factory)
+
         model = self._model
 
         def _finalize(text: str) -> Response:
-            usage = state.usage or Usage()
-            thinking_blocks = tuple(getattr(state, "thinking", []))
+            state = state_ref.value
+            usage = (state.usage if state else None) or Usage()
+            tool_calls = tuple(state.tool_calls) if state else ()
+            thinking_blocks = tuple(getattr(state, "thinking", [])) if state else ()
             cost = _estimate_response_cost(model, usage)
             return Response(
                 text=text,
-                tool_calls=tuple(state.tool_calls),
+                tool_calls=tool_calls,
                 thinking=thinking_blocks,
                 usage=usage,
                 cost=cost,
-                stop_reason=state.stop_reason,
-                model=state.model or model,
-                raw=state.raw,
+                stop_reason=getattr(state, "stop_reason", ""),
+                model=getattr(state, "model", "") or model,
+                raw=getattr(state, "raw", None),
             )
 
-        return StreamResponse(aiter, _finalize)
+        return SyncRichStreamResponse(sync_iter, _finalize)
 
     async def __call__(
         self,

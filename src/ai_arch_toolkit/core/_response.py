@@ -6,7 +6,7 @@ import contextlib
 import json
 from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 
 @dataclass(frozen=True, slots=True)
@@ -248,3 +248,103 @@ class SyncStreamResponse:
     def __exit__(self, *args: Any) -> None:
         if self._response is None:
             self._response = self._finalizer("".join(self._chunks))
+
+
+# ---------------------------------------------------------------------------
+# Rich streaming event wrappers
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class StreamEvent:
+    """Structured streaming event (text chunk, thinking block, or tool call)."""
+
+    kind: Literal["text", "thinking", "tool_call"]
+    text: str = ""
+    thinking: ThinkingBlock | None = None
+    tool_call: ToolCall | None = None
+
+
+class RichStreamResponse:
+    """Async-iterable stream of ``StreamEvent`` with finalized ``Response``.
+
+    Usage::
+
+        stream = llm.stream_events("Hello")
+        async for event in stream:
+            if event.kind == "text":
+                print(event.text, end="")
+        print(stream.response.cost)
+    """
+
+    __slots__ = ("_aiter", "_finalizer", "_response", "_text_chunks")
+
+    def __init__(
+        self,
+        aiter: AsyncIterator[StreamEvent],
+        finalizer: Callable[[str], Response],
+    ) -> None:
+        self._aiter = aiter
+        self._finalizer = finalizer
+        self._response: Response | None = None
+        self._text_chunks: list[str] = []
+
+    def __aiter__(self) -> RichStreamResponse:
+        return self
+
+    async def __anext__(self) -> StreamEvent:
+        try:
+            event = await self._aiter.__anext__()
+            if event.kind == "text":
+                self._text_chunks.append(event.text)
+            return event
+        except StopAsyncIteration:
+            self._response = self._finalizer("".join(self._text_chunks))
+            raise
+
+    @property
+    def response(self) -> Response | None:
+        """Available after stream is fully consumed. ``None`` during iteration."""
+        return self._response
+
+    async def __aenter__(self) -> RichStreamResponse:
+        return self
+
+    async def __aexit__(self, *args: Any) -> None:
+        if self._response is None:
+            self._response = self._finalizer("".join(self._text_chunks))
+
+
+class SyncRichStreamResponse:
+    """Sync-iterable stream of ``StreamEvent`` with finalized ``Response``."""
+
+    __slots__ = ("_finalizer", "_iter", "_response", "_text_chunks")
+
+    def __init__(
+        self,
+        sync_iter: Iterator[StreamEvent],
+        finalizer: Callable[[str], Response],
+    ) -> None:
+        self._iter = sync_iter
+        self._finalizer = finalizer
+        self._response: Response | None = None
+        self._text_chunks: list[str] = []
+
+    @property
+    def response(self) -> Response | None:
+        """Available after stream is fully consumed. ``None`` during iteration."""
+        return self._response
+
+    def __iter__(self) -> Iterator[StreamEvent]:
+        for event in self._iter:
+            if event.kind == "text":
+                self._text_chunks.append(event.text)
+            yield event
+        self._response = self._finalizer("".join(self._text_chunks))
+
+    def __enter__(self) -> SyncRichStreamResponse:
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        if self._response is None:
+            self._response = self._finalizer("".join(self._text_chunks))

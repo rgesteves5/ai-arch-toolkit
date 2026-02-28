@@ -18,17 +18,32 @@ configurable threshold and max retries.
 **ReWOOAgent** — Plan → Execute → Solve. Placeholder substitution, tool execution,
 solver with output_schema forwarding.
 
+**PlanExecuteAgent** — Plan numbered steps → Execute via inner ReAct → Solve.
+Configurable replanning on failure.
+
+**ToTAgent** — Tree of Thoughts with DFS/BFS search. Generate-evaluate-expand
+loop with configurable candidates, depth, and evaluation.
+
+**LATSAgent** — Language Agent Tree Search (MCTS). UCT selection, ReAct rollouts,
+LLM/external evaluation, backpropagation, reflection on failures.
+
+**Rich Streaming Events** — `StreamEvent`, `RichStreamResponse`,
+`SyncRichStreamResponse` at core/ layer. Text, thinking, tool_call event kinds.
+
+**Stream Fallback + Middleware** — `stream()` and `stream_events()` now support
+provider fallback on `APIError` and middleware before/after hooks.
+
+**Anthropic Native Structured Output** — Verified: uses `output_config` with
+`json_schema` natively (not tool trick). Verification tests added.
+
+**Documentation Site** — mkdocs with getting-started guide, updated landing page,
+nav with Getting Started, UV Guide, API Docs.
+
 ## In Progress
 
 _(none)_
 
 ## Next
-
-- More agent architectures (PlanExecute, ToT, LATS)
-- Anthropic native structured output (replace tool trick)
-- Rich streaming events (StreamEvent type, real-time thinking)
-- Batch + Fallback on core/ layer
-- Documentation site (mkdocs)
 
 ## Future
 
