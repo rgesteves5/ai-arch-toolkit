@@ -5,67 +5,102 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build & Development Commands
 
 ```bash
-uv sync --dev                          # Install all dev dependencies
-uv run pytest                          # Run full test suite
-uv run pytest tests/llm/test_client.py # Run a single test file
-uv run pytest -k "test_chat_basic"     # Run tests matching a pattern
-uv run ruff check src tests examples   # Lint
-uv run ruff check --fix src tests      # Auto-fix lint issues (import sorting, etc.)
-uv run ruff format src tests           # Auto-format
-uv run python examples/01_hello_world.py  # Run an example
+uv sync --dev                            # Install all dev dependencies
+uv run pytest                            # Run full test suite
+uv run pytest tests/test_content.py      # Run a single test file
+uv run pytest -k "test_chat_basic"       # Run tests matching a pattern
+uv run ruff check src tests examples     # Lint
+uv run ruff check --fix src tests        # Auto-fix lint issues (import sorting, etc.)
+uv run ruff format src tests examples    # Auto-format
+uv run python examples/01_hello_world.py # Run an example (needs API keys in .env)
 
 # Documentation
-uv sync --group docs                   # Install docs dependencies
-uv run mkdocs serve                    # Local docs server
+uv sync --group docs                     # Install docs dependencies
+uv run mkdocs serve                      # Local docs server
 uv run pdoc ai_arch_toolkit -o site/api  # Generate API docs
 ```
 
+Running examples requires API keys. Load them with `set -a && source .env && set +a` or see `docs/uv-guide.md`.
+
 ## Architecture
 
-**Three subpackages** under `src/ai_arch_toolkit/`: `llm/`, `tools/`, `agents/`. The top-level `__init__.py` re-exports all public symbols for flat imports (`from ai_arch_toolkit import Client, Tool, ReActAgent`).
+Two layers under `src/ai_arch_toolkit/`:
 
-### LLM layer
+```
+ai_arch_toolkit/
+├── core/          # Stateless async-first foundation — providers, LLM, tools, content
+├── toolkit/       # Convenience utilities — agents, 25 pre-built tools, run_tools
+│   ├── agents/    # Agent architectures (ReAct, Reflexion, ReWOO)
+│   └── tools/     # Pre-built tools (weather, geo, news, etc.)
+└── __init__.py    # Re-exports from core/ + toolkit/
+```
 
-- **Types** (`llm/_types.py`): All data types are frozen dataclasses — `Message`, `Response`, `Tool`, `ToolCall`, `Usage`, multimodal parts (`ImagePart`, `AudioPart`, `DocumentPart`), `StreamEvent`, `ThinkingConfig`/`ThinkingBlock`. The `Content` type alias is `str | tuple[ContentPart, ...]`.
-- **Providers** (`llm/_providers/`): `BaseProvider` ABC defines `complete`, `stream`, `stream_events` + async variants. Implementations: `_anthropic.py`, `_openai_compat.py` (covers openai/xai/mistral via `OPENAI_COMPAT_PROVIDERS` dict), `_gemini.py`, `_openai_responses.py`, `_xai_responses.py`. Factory is `create_provider()` in `_providers/__init__.py`.
-- **Client** (`llm/_client.py`, `llm/_async_client.py`): User-facing facades wrapping providers. Accept `str` or `Sequence[Message | ToolResult]`. Middleware pipeline runs `before`/`after` hooks on every request.
-- **HTTP** (`llm/_http.py`, `llm/_async_http.py`): `post_json`, `stream_sse`, `stream_ndjson` helpers with `RetryConfig`. Sync uses `requests`, async uses `httpx`.
-- **Middleware** (`llm/_middleware.py`): `Middleware` Protocol with `before`/`after`/`abefore`/`aafter`. `Request` dataclass carries operation context. Implementations: `_tracing.py`, `_guardrails.py`, `_cache.py`, `_cost.py`.
-- **Utilities**: `_templates.py` (prompt templates), `_output_parsing.py` (JSON/list extraction), `_tokens.py` (token estimation), `_memory.py` (conversation memory), `_fallback.py` (fallback client).
+### Core layer (`core/`)
 
-### Tools layer
+The stateless, async-first foundation. All new code should build on this.
 
-- `tools/_registry.py`: `ToolRegistry` — register/execute/async_execute functions, produces `Tool` definitions for LLM APIs.
-- `tools/_decorator.py`: `@tool` decorator auto-generates `Tool` JSON Schema from type hints + Google-style docstrings. Attaches `__tool__` attribute.
+- **`_llm.py`**: `LLM` class — user-facing facade. `complete()` / `stream()` (async) with `complete_sync()` / `stream_sync()` wrappers. Accepts `Content` (str or multimodal parts).
+- **`_content.py`**: Message constructors (`user()`, `assistant()`, `system()`, `tool_result()`) and multimodal types (`ImagePart`, `DocumentPart`, `CachePart`). `type Content = str | list[ContentPart]`.
+- **`_response.py`**: `Response`, `Usage`, `ToolCall`, `ThinkingBlock`, `Citation`, `OutputSchema`, `StreamResponse`, `SyncStreamResponse`.
+- **`_providers/`**: `BaseProvider` ABC → `AnthropicProvider`, `OpenAIProvider`, `XAIProvider`, `GeminiProvider`. Factory: `create_provider()` routes by model prefix (`claude-` → Anthropic, `gpt-`/`o1-`/`o3-`/`o4-` → OpenAI, `grok-` → xAI, `gemini-` → Gemini).
+- **`_tools/`**: `@tool` decorator (auto-generates JSON Schema from type hints + Google-style docstrings), `ToolGroup` (collection with execute/async_execute), `infer_schema()`, `prepare_tools()`.
+- **`_pricing.py`**: `PricingRegistry` with `_default_pricing.toml`. Access via `pricing` singleton.
+- **`_sync.py`**: `_run_sync()` and `_stream_sync()` helpers used by LLM and agents.
+- **`_middleware.py`**: `Middleware` Protocol with `before`/`after` hooks, `Request` dataclass.
+- **`_retry.py`**: `RetryConfig` + `with_retry()` for exponential backoff.
+- **`_server_tools.py`**: `ServerTool`, `code_execution()`, `web_search()` for provider-hosted tools.
 
-### Agents layer
+### Toolkit layer (`toolkit/`)
 
-- `agents/_base.py`: `BaseAgent` ABC with `run()`, `async_run()`, `run_stream()`. Common types: `AgentConfig`, `AgentStep`, `AgentResult`, `AgentEvent`.
-- Eight implementations: `_react.py`, `_rewoo.py`, `_reflexion.py`, `_plan_execute.py`, `_compiler.py`, `_tot.py`, `_lats.py`, `_self_discovery.py`.
-- `agents/_parsing.py`: Shared `parse_numbered_items` + `parse_score` used by ToT and LATS.
+#### Agents (`toolkit/agents/`)
+
+Built on core/ primitives (`LLM`, `Response`, `ToolGroup`, `Usage`, `ToolCall`, `tool_result()`).
+
+- **`_base.py`**: `BaseAgent` ABC, `AgentConfig`, `AgentEvent`, `AgentStep`, `AgentResult`, `StopReason`. Async-first with sync wrappers. `@overload` on `run()` / `run_sync()` for `stream: bool` type narrowing.
+- **`_react.py`**: `ReActAgent` — Thought → Action → Observation loop. `_run_loop()` is a pure async generator yielding `AgentEvent`; callbacks fire in `_consume()`.
+- **`_reflexion.py`**: `ReflexionAgent` + `ReflexionConfig` — wraps ReActAgent in a retry loop with self-critique. Evaluator callback scores each attempt; below-threshold triggers reflection + retry.
+- **`_rewoo.py`**: `ReWOOAgent` + `ReWOOConfig` — Plan with `#E{n}` placeholders → Execute tools → Solve. Three-phase architecture.
+- Task input accepts `Content` (str or multimodal list) for vision+tools use cases.
+- Agent-specific configs (`ReflexionConfig`, `ReWOOConfig`) are standalone dataclasses — not inheriting from `AgentConfig`. Passed via separate constructor kwarg.
+
+#### Tools (`toolkit/tools/`)
+
+25 pre-built tools across 11 files, all using stdlib only (zero pip deps). Categories: datetime, math, text, filesystem, shell, JSON/CSV, web, weather (Open-Meteo), knowledge (Wikipedia, Free Dictionary), geo (geocoding, IP lookup, country info), news (Hacker News). All use `@tool` decorator from core/.
+
+#### Runner
+
+`_runner.py`: `run_tools()` / `run_tools_sync()` convenience wrappers.
+
+**Import convention**: New code should import from `ai_arch_toolkit.core` or `ai_arch_toolkit.toolkit.agents`.
 
 ## Testing Patterns
 
-- `tests/conftest.py`: `MockResponse` (mimics `requests.Response` with `json()`, `iter_lines()`, context manager), `mock_post` fixture (monkeypatches `requests.post`), `weather_tool` fixture.
-- Client/provider tests use `@patch("ai_arch_toolkit.llm._client.create_provider")` — note the `.llm.` in the path.
-- SSE test data: prefix lines with `"data: "`. Gemini NDJSON tests: plain JSON strings.
-- Agent tests: mock `Client` with `MagicMock`, set `client.chat.side_effect` with pre-built `Response` objects.
-- pytest-asyncio with `asyncio_mode = "auto"` — no `@pytest.mark.asyncio` needed.
+- **Config**: pytest-asyncio with `asyncio_mode = "auto"` — no `@pytest.mark.asyncio` needed.
+- **Test layout**: `tests/` (core tests), `tests/agents/` (agent tests), `tests/toolkit/` (toolkit tool tests).
+- **Core test fixtures** (`tests/conftest.py`): `MockResponse` class (mimics `requests.Response`), `mock_post` fixture, `weather_tool` fixture.
+- **Agent test fixtures** (`tests/agents/conftest.py`): `make_response()`, `make_tool_call()` factories. Mock `LLM` with `AsyncMock`, set `llm.complete.side_effect` with pre-built `Response` objects.
+- **Toolkit tests**: Mock `urllib.request.urlopen` for API tools. Use `tmp_path` for filesystem tools.
+- **Patch paths**: Use the module where the symbol is imported, e.g. `@patch("ai_arch_toolkit.core._providers._openai.post_json")`.
+- **SSE mocks**: prefix lines with `"data: "`. Gemini NDJSON: plain JSON strings.
 
 ## Code Conventions
 
 - Python 3.13+, `from __future__ import annotations` in every file.
-- Ruff line length: 99. Run `ruff format` after edits — it reformats dict literals, multi-line calls, etc.
-- All dataclasses use `frozen=True, slots=True`.
-- `type` aliases (PEP 695 style) for union types: `type Content = str | tuple[ContentPart, ...]`.
-- Internal modules prefixed with `_` (e.g., `llm/_types.py`); public API is via top-level re-exports only.
-
-## Research Docs
-
-`research/` contains standalone Markdown reference guides (LLM API guide, agent architectures, Python best practices, graph algorithms). These are separate from the Python package.
+- Ruff line length: 99. Always run `ruff format` after edits.
+- All dataclasses: `frozen=True, slots=True` (add `kw_only=True` for 3+ fields).
+- PEP 695 `type` aliases: `type Content = str | list[ContentPart]`, `type StopReason = Literal[...]`.
+- `__all__` in every `__init__.py`.
+- Internal modules prefixed with `_`; public API via `__init__.py` re-exports only.
+- Google-style docstrings — no type info repeated (type hints suffice).
+- Toolkit tools return error strings (never raise) for graceful agent handling.
 
 ## Provider-Specific Gotchas
 
-- Anthropic: `input_schema` for tools (not `parameters`), `system` is a top-level field (not a message role).
-- Gemini: `contents`/`parts` structure (not `messages`/`content`), uses NDJSON streaming (not SSE).
-- OpenAI has two API surfaces: Chat Completions and Responses API — both have provider implementations.
+- **Anthropic**: `input_schema` for tools (not `parameters`), `system` is a top-level field (not a message role), supports extended thinking.
+- **Gemini**: `contents`/`parts` structure (not `messages`/`content`), uses NDJSON streaming (not SSE).
+- **OpenAI**: Chat Completions and Responses API — both have provider implementations.
+- **xAI**: Separate provider (not OpenAI-compat), API key via `XAI_API_KEY`.
+
+## Research Docs
+
+`research/` contains standalone Markdown reference guides (LLM API guide, agent architectures, Python best practices, graph algorithms). Separate from the Python package.

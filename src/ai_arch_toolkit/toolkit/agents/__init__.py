@@ -1,21 +1,18 @@
-"""Convenience utilities built on core — reduces boilerplate."""
+"""Agents — architecture implementations built on core/ primitives."""
 
 from __future__ import annotations
 
-from ai_arch_toolkit.toolkit._runner import run_tools, run_tools_sync
-from ai_arch_toolkit.toolkit.agents import (
+from ai_arch_toolkit.toolkit.agents._base import (
     AgentConfig,
     AgentEvent,
     AgentResult,
     AgentStep,
     BaseAgent,
-    ReActAgent,
-    ReflexionAgent,
-    ReflexionConfig,
-    ReWOOAgent,
-    ReWOOConfig,
     StopReason,
 )
+from ai_arch_toolkit.toolkit.agents._react import ReActAgent
+from ai_arch_toolkit.toolkit.agents._reflexion import ReflexionAgent, ReflexionConfig
+from ai_arch_toolkit.toolkit.agents._rewoo import ReWOOAgent, ReWOOConfig
 
 __all__ = [
     "AgentConfig",
@@ -29,6 +26,4 @@ __all__ = [
     "ReflexionAgent",
     "ReflexionConfig",
     "StopReason",
-    "run_tools",
-    "run_tools_sync",
 ]

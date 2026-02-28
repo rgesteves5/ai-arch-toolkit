@@ -10,8 +10,8 @@ look up relevant facts and provide a well-rounded answer.
 
 from pathlib import Path
 
-from ai_arch_toolkit.agents import AgentConfig, ReActAgent
 from ai_arch_toolkit.core import LLM, ToolGroup, image
+from ai_arch_toolkit.toolkit.agents import AgentConfig, ReActAgent
 from ai_arch_toolkit.toolkit.tools import wikipedia_article, wikipedia_search
 
 tools = ToolGroup(wikipedia_search, wikipedia_article)

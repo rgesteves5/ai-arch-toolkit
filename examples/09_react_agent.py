@@ -7,8 +7,8 @@ cycle until the model produces a final answer or a stop condition fires.
 Uses real toolkit tools: get_weather (Open-Meteo) and geocode (free API).
 """
 
-from ai_arch_toolkit.agents import AgentConfig, ReActAgent
 from ai_arch_toolkit.core import LLM, ToolGroup
+from ai_arch_toolkit.toolkit.agents import AgentConfig, ReActAgent
 from ai_arch_toolkit.toolkit.tools import geocode, get_weather
 
 tools = ToolGroup(get_weather, geocode)

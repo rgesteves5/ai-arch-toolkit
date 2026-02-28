@@ -10,7 +10,7 @@ from typing import Any, Literal, overload
 
 from ai_arch_toolkit.core._content import Content, tool_result
 from ai_arch_toolkit.core._llm import LLM
-from ai_arch_toolkit.core._response import Response, ToolCall, Usage
+from ai_arch_toolkit.core._response import OutputSchema, Response, ToolCall, Usage
 from ai_arch_toolkit.core._sync import _run_sync, _stream_sync
 from ai_arch_toolkit.core._tools._group import ToolGroup
 
@@ -36,6 +36,8 @@ class AgentConfig:
     tool_choice: str | None = None
     parallel_tool_calls: bool = True
     on_event: Callable[[AgentEvent], None] | None = None
+    llm_kwargs: dict[str, Any] = field(default_factory=dict)
+    output_schema: OutputSchema | type | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -69,6 +71,7 @@ class AgentResult:
     """Final output of an agent run."""
 
     answer: str
+    parsed: Any = None
     steps: tuple[AgentStep, ...] = ()
     total_usage: Usage = field(default_factory=Usage)
     total_cost: float = 0.0
@@ -242,8 +245,13 @@ class BaseAgent(ABC):
                     )
                 )
 
+        parsed = None
+        if steps and steps[-1].response:
+            parsed = steps[-1].response.parsed
+
         return AgentResult(
             answer=answer,
+            parsed=parsed,
             steps=tuple(steps),
             total_usage=total_usage,
             total_cost=total_cost,

@@ -53,7 +53,7 @@ class TestCsvRead:
 
     def test_truncation(self, tmp_path):
         f = tmp_path / "big.csv"
-        lines = ["id,value"] + [f"{i},{i*10}" for i in range(200)]
+        lines = ["id,value"] + [f"{i},{i * 10}" for i in range(200)]
         f.write_text("\n".join(lines))
         result = csv_read(str(f), max_rows=5)
         assert "Showing 5" in result

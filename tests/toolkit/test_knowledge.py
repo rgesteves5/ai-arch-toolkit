@@ -23,14 +23,16 @@ def _mock_urlopen(data):
 class TestWikipediaSearch:
     @patch("ai_arch_toolkit.toolkit.tools._knowledge.urllib.request.urlopen")
     def test_returns_results(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen({
-            "query": {
-                "search": [
-                    {"title": "Python", "snippet": "A <b>programming</b> language."},
-                    {"title": "Monty Python", "snippet": "A comedy group."},
-                ]
+        mock_urlopen.return_value = _mock_urlopen(
+            {
+                "query": {
+                    "search": [
+                        {"title": "Python", "snippet": "A <b>programming</b> language."},
+                        {"title": "Monty Python", "snippet": "A comedy group."},
+                    ]
+                }
             }
-        })
+        )
         result = wikipedia_search("Python")
         assert "Python" in result
         assert "programming" in result
@@ -52,28 +54,26 @@ class TestWikipediaSearch:
 class TestWikipediaArticle:
     @patch("ai_arch_toolkit.toolkit.tools._knowledge.urllib.request.urlopen")
     def test_returns_extract(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen({
-            "query": {
-                "pages": {"123": {"title": "Python", "extract": "Python is a language."}}
-            }
-        })
+        mock_urlopen.return_value = _mock_urlopen(
+            {"query": {"pages": {"123": {"title": "Python", "extract": "Python is a language."}}}}
+        )
         result = wikipedia_article("Python")
         assert "Python" in result
         assert "language" in result
 
     @patch("ai_arch_toolkit.toolkit.tools._knowledge.urllib.request.urlopen")
     def test_missing_article(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen({
-            "query": {"pages": {"-1": {"title": "Xyz", "missing": ""}}}
-        })
+        mock_urlopen.return_value = _mock_urlopen(
+            {"query": {"pages": {"-1": {"title": "Xyz", "missing": ""}}}}
+        )
         result = wikipedia_article("Xyz")
         assert "not found" in result.lower()
 
     @patch("ai_arch_toolkit.toolkit.tools._knowledge.urllib.request.urlopen")
     def test_truncation(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen({
-            "query": {"pages": {"1": {"title": "Big", "extract": "x" * 10000}}}
-        })
+        mock_urlopen.return_value = _mock_urlopen(
+            {"query": {"pages": {"1": {"title": "Big", "extract": "x" * 10000}}}}
+        )
         result = wikipedia_article("Big", max_chars=100)
         assert "Truncated" in result
 
@@ -81,14 +81,20 @@ class TestWikipediaArticle:
 class TestDefineWord:
     @patch("ai_arch_toolkit.toolkit.tools._knowledge.urllib.request.urlopen")
     def test_returns_definition(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen([{
-            "word": "test",
-            "phonetic": "/tɛst/",
-            "meanings": [{
-                "partOfSpeech": "noun",
-                "definitions": [{"definition": "A procedure for evaluation."}],
-            }],
-        }])
+        mock_urlopen.return_value = _mock_urlopen(
+            [
+                {
+                    "word": "test",
+                    "phonetic": "/tɛst/",
+                    "meanings": [
+                        {
+                            "partOfSpeech": "noun",
+                            "definitions": [{"definition": "A procedure for evaluation."}],
+                        }
+                    ],
+                }
+            ]
+        )
         result = define_word("test")
         assert "test" in result
         assert "noun" in result
@@ -99,8 +105,6 @@ class TestDefineWord:
         import urllib.error
         from io import BytesIO
 
-        mock_urlopen.side_effect = urllib.error.HTTPError(
-            "url", 404, "Not Found", {}, BytesIO()
-        )
+        mock_urlopen.side_effect = urllib.error.HTTPError("url", 404, "Not Found", {}, BytesIO())
         result = define_word("xyzzzz")
         assert "not found" in result.lower()

@@ -7,8 +7,8 @@ debugging multi-step reasoning.
 Uses real toolkit tools: wikipedia_search, wikipedia_article, and math_eval.
 """
 
-from ai_arch_toolkit.agents import AgentConfig, ReActAgent
 from ai_arch_toolkit.core import LLM, ToolGroup
+from ai_arch_toolkit.toolkit.agents import AgentConfig, ReActAgent
 from ai_arch_toolkit.toolkit.tools import math_eval, wikipedia_article, wikipedia_search
 
 tools = ToolGroup(wikipedia_search, wikipedia_article, math_eval)

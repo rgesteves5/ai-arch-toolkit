@@ -4,10 +4,15 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock
 
-from ai_arch_toolkit.agents._base import AgentConfig, AgentEvent, AgentResult, _add_usage
-from ai_arch_toolkit.agents._react import ReActAgent
-from ai_arch_toolkit.core._response import Response, Usage
+from ai_arch_toolkit.core._response import OutputSchema, Response, Usage
 from ai_arch_toolkit.core._tools._group import ToolGroup
+from ai_arch_toolkit.toolkit.agents._base import (
+    AgentConfig,
+    AgentEvent,
+    AgentResult,
+    _add_usage,
+)
+from ai_arch_toolkit.toolkit.agents._react import ReActAgent
 from tests.agents.conftest import make_response, make_tool_call
 
 # ---------------------------------------------------------------------------
@@ -128,7 +133,7 @@ async def test_max_iterations():
 
 
 async def test_timeout(monkeypatch):
-    import ai_arch_toolkit.agents._react as react_mod
+    import ai_arch_toolkit.toolkit.agents._react as react_mod
 
     # Make monotonic() return increasing values so (now - start) > timeout
     _counter = {"n": 0}
@@ -406,3 +411,57 @@ async def test_tool_call_id_in_step():
     step = result.steps[0]
     assert step.tool_calls[0].id == "tc_abc"
     assert step.tool_results[0]["tool_use_id"] == "tc_abc"
+
+
+# ---------------------------------------------------------------------------
+# 18. llm_kwargs forwarded to LLM.complete()
+# ---------------------------------------------------------------------------
+
+
+async def test_llm_kwargs_forwarded():
+    agent = _make_agent(
+        [make_response(text="ok")],
+        config=AgentConfig(llm_kwargs={"thinking": True, "thinking_budget": 2048}),
+    )
+    await agent.run("Test llm_kwargs")
+
+    call_kwargs = agent.llm.complete.call_args
+    assert call_kwargs.kwargs["thinking"] is True
+    assert call_kwargs.kwargs["thinking_budget"] == 2048
+
+
+# ---------------------------------------------------------------------------
+# 19. output_schema forwarded + parsed flows to AgentResult
+# ---------------------------------------------------------------------------
+
+
+async def test_structured_output():
+    parsed_data = {"city": "Tokyo", "temp": 22}
+    resp = Response(
+        text='{"city": "Tokyo", "temp": 22}',
+        usage=Usage(input_tokens=10, output_tokens=5),
+        cost=0.001,
+        parsed=parsed_data,
+    )
+    schema = OutputSchema(name="Weather", schema={"type": "object"})
+    agent = _make_agent(
+        [resp],
+        config=AgentConfig(output_schema=schema),
+    )
+    result = await agent.run("Get weather")
+
+    assert result.parsed == parsed_data
+    call_kwargs = agent.llm.complete.call_args
+    assert call_kwargs.kwargs["output_schema"] is schema
+
+
+# ---------------------------------------------------------------------------
+# 20. parsed is None when no output_schema configured
+# ---------------------------------------------------------------------------
+
+
+async def test_parsed_none_without_schema():
+    agent = _make_agent([make_response(text="plain text")])
+    result = await agent.run("No schema")
+
+    assert result.parsed is None

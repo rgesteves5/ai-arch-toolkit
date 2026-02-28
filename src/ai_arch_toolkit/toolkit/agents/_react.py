@@ -7,9 +7,9 @@ import time
 from collections.abc import AsyncIterator
 from typing import Any
 
-from ai_arch_toolkit.agents._base import AgentEvent, BaseAgent, _add_usage
 from ai_arch_toolkit.core._content import Content, tool_result, user
 from ai_arch_toolkit.core._response import Usage
+from ai_arch_toolkit.toolkit.agents._base import AgentEvent, BaseAgent, _add_usage
 
 
 class ReActAgent(BaseAgent):
@@ -45,6 +45,8 @@ class ReActAgent(BaseAgent):
                     system=self.config.system or None,
                     tools=self.tools,
                     tool_choice=self.config.tool_choice,
+                    output_schema=self.config.output_schema,
+                    **self.config.llm_kwargs,
                 )
             except Exception as exc:
                 yield AgentEvent(type="error", step=step_num, error=str(exc))

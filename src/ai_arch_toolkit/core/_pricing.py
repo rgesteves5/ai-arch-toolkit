@@ -46,7 +46,7 @@ class PricingRegistry:
             default_path = Path(__file__).parent / "_default_pricing.toml"
             if default_path.exists():
                 self._load_toml(default_path)
-        except Exception:
+        except (OSError, tomllib.TOMLDecodeError):
             logger.warning("Failed to load default pricing table", exc_info=True)
 
     # ── Registration ──

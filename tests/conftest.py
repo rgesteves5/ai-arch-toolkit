@@ -7,21 +7,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from ai_arch_toolkit._legacy.llm._types import Tool
-
-
-@pytest.fixture
-def weather_tool() -> Tool:
-    return Tool(
-        name="get_weather",
-        description="Get current weather for a city",
-        parameters={
-            "type": "object",
-            "properties": {"city": {"type": "string"}},
-            "required": ["city"],
-        },
-    )
-
 
 class MockResponse:
     """Mimics ``requests.Response`` for testing post_json / stream_sse / stream_ndjson."""
