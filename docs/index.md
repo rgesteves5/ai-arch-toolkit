@@ -7,7 +7,7 @@ A lightweight, unified LLM client and agent architecture toolkit for Python.
 - **Multi-provider LLM client** — Anthropic, OpenAI, Gemini, xAI via a single `LLM` class
 - **Async-first** with convenient sync wrappers
 - **Tool system** — `@tool` decorator with auto-generated JSON Schema, 25 pre-built tools
-- **Agent architectures** — ReAct, Reflexion, ReWOO, PlanExecute, Tree of Thoughts, LATS
+- **Agent architectures** — ReAct, Reflexion, ReWOO, PlanExecute, Tree of Thoughts, LATS, Self-Discovery, LLM Compiler
 - **Structured output** — native JSON mode + Pydantic model support
 - **Streaming** — text chunks and rich structured events (thinking, tool calls)
 - **Middleware** — before/after hooks for caching, cost tracking, guardrails

@@ -117,6 +117,8 @@ The toolkit includes several agent architectures:
 - **PlanExecuteAgent** — Numbered plan, per-step ReAct, solve
 - **ToTAgent** — Tree of Thoughts (DFS/BFS search)
 - **LATSAgent** — Language Agent Tree Search (MCTS)
+- **SelfDiscoveryAgent** — Select reasoning modules, adapt, operationalize, solve
+- **LLMCompilerAgent** — Plan a DAG, parallel execute, join
 
 ## Next Steps
 
