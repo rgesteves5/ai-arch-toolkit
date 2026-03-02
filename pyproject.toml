@@ -14,11 +14,13 @@ dependencies = []
 anthropic = ["anthropic>=0.40"]
 openai = ["openai>=1.50"]
 gemini = ["google-genai>=1.0"]
+graph = ["networkx>=3.0"]
 all = [
     "ai-arch-toolkit[anthropic]",
     "ai-arch-toolkit[openai]",
     "ai-arch-toolkit[gemini]",
     "ai-arch-toolkit[xai]",
+    "ai-arch-toolkit[graph]",
 ]
 dev = [
     "pytest>=8.0",
@@ -29,6 +31,7 @@ dev = [
     "openai>=1.50",
     "google-genai>=1.0",
     "xai-sdk>=1.7.0",
+    "networkx>=3.0",
 ]
 docs = ["mkdocs>=1.6", "pdoc>=15.0"]
 telemetry = ["opentelemetry-api>=1.27"]
