@@ -28,6 +28,21 @@ class Usage:
     cache_read_tokens: int = 0
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Attempt:
+    """Record of a single LLM call attempt (successful or failed)."""
+
+    model: str
+    status: Literal["ok", "failed"]
+    error: str | None = None
+    error_type: str | None = None
+    status_code: int | None = None
+    usage: Usage | None = None
+    duration: float = 0.0
+    timestamp: float = 0.0
+    retry_number: int = 0
+
+
 @dataclass(frozen=True, slots=True)
 class ThinkingBlock:
     """A thinking/reasoning block from the model."""
@@ -94,6 +109,7 @@ class Response:
     response_id: str = ""
     logprobs: Any = None
     citations: tuple[Citation, ...] = ()
+    attempts: tuple[Attempt, ...] = ()
 
     # --- shortcut properties ---
 

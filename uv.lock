@@ -13,6 +13,7 @@ all = [
     { name = "google-genai" },
     { name = "networkx" },
     { name = "openai" },
+    { name = "pyyaml" },
     { name = "xai-sdk" },
 ]
 anthropic = [
@@ -26,6 +27,7 @@ dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
+    { name = "pyyaml" },
     { name = "ruff" },
     { name = "xai-sdk" },
 ]
@@ -48,6 +50,9 @@ telemetry = [
 xai = [
     { name = "xai-sdk" },
 ]
+yaml = [
+    { name = "pyyaml" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -56,6 +61,7 @@ requires-dist = [
     { name = "ai-arch-toolkit", extras = ["graph"], marker = "extra == 'all'" },
     { name = "ai-arch-toolkit", extras = ["openai"], marker = "extra == 'all'" },
     { name = "ai-arch-toolkit", extras = ["xai"], marker = "extra == 'all'" },
+    { name = "ai-arch-toolkit", extras = ["yaml"], marker = "extra == 'all'" },
     { name = "anthropic", marker = "extra == 'anthropic'", specifier = ">=0.40" },
     { name = "anthropic", marker = "extra == 'dev'", specifier = ">=0.40" },
     { name = "google-genai", marker = "extra == 'dev'", specifier = ">=1.0" },
@@ -70,11 +76,13 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=6.0" },
+    { name = "pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
+    { name = "pyyaml", marker = "extra == 'yaml'", specifier = ">=6.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.9" },
     { name = "xai-sdk", marker = "extra == 'dev'", specifier = ">=1.7.0" },
     { name = "xai-sdk", marker = "extra == 'xai'", specifier = ">=1.7.0" },
 ]
-provides-extras = ["anthropic", "openai", "gemini", "graph", "all", "dev", "docs", "telemetry", "xai"]
+provides-extras = ["anthropic", "openai", "gemini", "graph", "yaml", "all", "dev", "docs", "telemetry", "xai"]
 
 [[package]]
 name = "aiohappyeyeballs"

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import dataclasses
 import logging
-from collections.abc import Callable
+import time
+from collections.abc import Awaitable, Callable
 from typing import Any, ClassVar
 
 from ai_arch_toolkit.core._content import user
@@ -18,6 +20,7 @@ from ai_arch_toolkit.core._middleware import (
 from ai_arch_toolkit.core._pricing import _estimate_response_cost
 from ai_arch_toolkit.core._providers import create_provider
 from ai_arch_toolkit.core._response import (
+    Attempt,
     OutputSchema,
     Response,
     RichStreamResponse,
@@ -34,14 +37,82 @@ from ai_arch_toolkit.core._tools._group import ToolGroup
 
 logger = logging.getLogger(__name__)
 
+PROVIDER_ERRORS: tuple[type[Exception], ...] = (
+    APIError,
+    ConnectionError,  # subclass of OSError, listed explicitly for clarity
+    TimeoutError,
+    OSError,
+)
 
-class _StateRef:
-    """Mutable container for stream state (replaces list hack)."""
 
-    __slots__ = ("value",)
+def _normalize_fallbacks(
+    fallback: str | LLM | list[str | LLM] | None,
+    api_key: str | None,
+    base_url: str | None,
+) -> tuple[list[LLM], list[LLM]]:
+    """Normalize fallback param into (all_fallbacks, owned_fallbacks).
 
-    def __init__(self) -> None:
-        self.value: Any = None
+    Strings are converted to new ``LLM`` instances (owned for lifecycle).
+    Nested fallbacks are flattened into the parent chain.
+
+    .. note:: Flattening **clears** the nested LLM's ``_fallbacks`` list so
+       that the parent owns the full chain. Passing the same ``LLM`` instance
+       as a nested fallback to multiple parents is not supported — only the
+       first parent will receive the nested chain.
+    """
+    if fallback is None:
+        return [], []
+    items: list[str | LLM] = fallback if isinstance(fallback, list) else [fallback]
+    all_fbs: list[LLM] = []
+    owned: list[LLM] = []
+    for item in items:
+        if isinstance(item, str):
+            fb = LLM(item, api_key=api_key, base_url=base_url)
+            all_fbs.append(fb)
+            owned.append(fb)
+        else:
+            all_fbs.append(item)
+        # Flatten nested fallbacks from the just-added LLM
+        fb_llm = all_fbs[-1]
+        if fb_llm._fallbacks:
+            # Copy before clearing — .extend() reads before the mutation
+            all_fbs.extend(list(fb_llm._fallbacks))
+            owned.extend(list(fb_llm._owned_fallbacks))
+            fb_llm._fallbacks = []
+            fb_llm._owned_fallbacks = []
+    return all_fbs, owned
+
+
+def _wrap_stream_with_attempts(
+    stream: StreamResponse,
+    parent_attempts: list[Attempt],
+) -> StreamResponse:
+    """Wrap a fallback's StreamResponse to prepend parent attempts."""
+    original_finalizer = stream._finalizer
+    snapshot = tuple(parent_attempts)  # snapshot — list may still be live
+
+    def _new_finalizer(text: str) -> Response:
+        resp = original_finalizer(text)
+        return dataclasses.replace(resp, attempts=snapshot + resp.attempts)
+
+    stream._finalizer = _new_finalizer
+    return stream
+
+
+def _wrap_rich_stream_with_attempts(
+    stream: RichStreamResponse,
+    parent_attempts: list[Attempt],
+) -> RichStreamResponse:
+    """Wrap a fallback's RichStreamResponse to prepend parent attempts."""
+    original_finalizer = stream._finalizer
+    snapshot = tuple(parent_attempts)  # snapshot — list may still be live
+
+    def _new_finalizer(text: str) -> Response:
+        resp = original_finalizer(text)
+        return dataclasses.replace(resp, attempts=snapshot + resp.attempts)
+
+    stream._finalizer = _new_finalizer
+    return stream
 
 
 class LLM:
@@ -61,7 +132,8 @@ class LLM:
         base_url: str | None = None,
         retry: RetryConfig | bool | None = None,
         middleware: list[Any] | None = None,
-        fallback: str | None = None,
+        fallback: str | LLM | list[str | LLM] | None = None,
+        fallback_on: tuple[type[Exception], ...] | None = None,
         **kwargs: Any,
     ) -> None:
         self._model = model
@@ -73,19 +145,21 @@ class LLM:
         self._provider = create_provider(model, api_key=api_key, base_url=base_url)
         self._retry: RetryConfig | None = RetryConfig() if retry is True else retry
         self._middleware: list[Any] = list(middleware) if middleware else []
-        self._fallback_provider = (
-            create_provider(fallback, api_key=api_key, base_url=base_url) if fallback else None
+        self._fallback_on = fallback_on or PROVIDER_ERRORS
+        self._fallbacks, self._owned_fallbacks = _normalize_fallbacks(
+            fallback, api_key=api_key, base_url=base_url
         )
-        self._fallback_model = fallback
 
     _REPR_DEFAULTS: ClassVar[dict[str, Any]] = {"temperature": 0.0, "max_tokens": 4096}
 
     def __repr__(self) -> str:
         non_default = {k: v for k, v in self._defaults.items() if v != self._REPR_DEFAULTS.get(k)}
-        params = ", ".join(f"{k}={v!r}" for k, v in non_default.items())
-        if params:
-            return f"LLM(model={self._model!r}, {params})"
-        return f"LLM(model={self._model!r})"
+        parts = [f"model={self._model!r}"]
+        parts.extend(f"{k}={v!r}" for k, v in non_default.items())
+        if self._fallbacks:
+            fb_models = [fb._model for fb in self._fallbacks]
+            parts.append(f"fallback={fb_models!r}")
+        return f"LLM({', '.join(parts)})"
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -94,8 +168,8 @@ class LLM:
     async def close(self) -> None:
         """Close the underlying provider client(s)."""
         await self._provider.close()
-        if self._fallback_provider:
-            await self._fallback_provider.close()
+        for fb in self._owned_fallbacks:
+            await fb.close()
 
     async def __aenter__(self) -> LLM:
         return self
@@ -162,6 +236,78 @@ class LLM:
         return kwargs
 
     # ------------------------------------------------------------------
+    # Internal: attempt tracking + fallback helpers
+    # ------------------------------------------------------------------
+
+    async def _try_with_tracking(
+        self,
+        call: Callable[[], Awaitable[Response]],
+        model: str,
+        retry: RetryConfig | None,
+        attempts: list[Attempt],
+    ) -> Response:
+        """Execute *call* with optional retry, recording each attempt."""
+        retry_number = 0
+
+        async def _tracked() -> Response:
+            nonlocal retry_number
+            t0 = time.time()
+            try:
+                response = await call()
+                attempts.append(
+                    Attempt(
+                        model=model,
+                        status="ok",
+                        usage=response.usage,
+                        duration=time.time() - t0,
+                        timestamp=t0,
+                        retry_number=retry_number,
+                    )
+                )
+                return response
+            except Exception as exc:
+                attempts.append(
+                    Attempt(
+                        model=model,
+                        status="failed",
+                        error=str(exc),
+                        error_type=type(exc).__name__,
+                        status_code=getattr(exc, "status_code", None),
+                        duration=time.time() - t0,
+                        timestamp=t0,
+                        retry_number=retry_number,
+                    )
+                )
+                raise
+            finally:
+                retry_number += 1
+
+        if retry:
+            return await with_retry(_tracked, retry)
+        return await _tracked()
+
+    async def _try_fallbacks(
+        self,
+        messages: str | list[dict[str, Any]],
+        *,
+        attempts: list[Attempt],
+        last_error: Exception,
+        **kwargs: Any,
+    ) -> Response:
+        """Walk fallback chain, delegating full complete() to each."""
+        last_exc = last_error
+        for i, fb in enumerate(self._fallbacks):
+            logger.info("Fallback %d/%d: trying %s", i + 1, len(self._fallbacks), fb._model)
+            try:
+                response = await fb.complete(messages, **kwargs)
+                # Merge fallback's tracked attempts into ours
+                attempts.extend(response.attempts)
+                return response
+            except self._fallback_on as exc:
+                last_exc = exc
+        raise last_exc
+
+    # ------------------------------------------------------------------
     # Async API
     # ------------------------------------------------------------------
 
@@ -215,31 +361,34 @@ class LLM:
                 normalized, system=system, tools=wire_tools, **provider_kwargs
             )
 
+        attempts: list[Attempt] = []
+
         try:
-            if self._retry:
-                response = await with_retry(_call, self._retry)
-            else:
-                response = await _call()
-        except APIError:
-            if not self._fallback_provider:
+            response = await self._try_with_tracking(_call, self._model, self._retry, attempts)
+        except self._fallback_on as primary_err:
+            if not self._fallbacks:
                 raise
-            logger.info("Primary provider failed, trying fallback: %s", self._fallback_model)
-
-            async def _fallback_call() -> Response:
-                return await self._fallback_provider.complete(  # type: ignore[union-attr]
-                    normalized, system=system, tools=wire_tools, **provider_kwargs
-                )
-
-            if self._retry:
-                response = await with_retry(_fallback_call, self._retry)
-            else:
-                response = await _fallback_call()
+            response = await self._try_fallbacks(
+                messages,
+                attempts=attempts,
+                last_error=primary_err,
+                system=system,
+                tools=tools,
+                thinking=thinking,
+                thinking_effort=thinking_effort,
+                thinking_budget=thinking_budget,
+                output_schema=output_schema,
+                tool_choice=tool_choice,
+                json_mode=json_mode,
+                logprobs=logprobs,
+                **kwargs,
+            )
 
         # Middleware after hooks
         if self._middleware and req is not None:
             response = await _run_aafter(self._middleware, req, response)
 
-        return response
+        return dataclasses.replace(response, attempts=tuple(attempts))
 
     def _build_stream_finalizer(self, state: Any) -> Callable[[str], Response]:
         """Build a finalization callback for stream wrappers."""
@@ -309,22 +458,85 @@ class LLM:
             wire_tools = req.tools
             provider_kwargs = req.kwargs
 
+        attempts: list[Attempt] = []
+        t0 = time.time()
+
         try:
             aiter, state = self._provider.stream(
                 normalized, system=system, tools=wire_tools, **provider_kwargs
             )
-        except APIError:
-            if not self._fallback_provider:
-                raise
-            logger.info("Primary stream failed, trying fallback: %s", self._fallback_model)
-            aiter, state = self._fallback_provider.stream(
-                normalized, system=system, tools=wire_tools, **provider_kwargs
+            # usage is not available until stream consumption (finalizer fills it)
+            attempts.append(
+                Attempt(
+                    model=self._model,
+                    status="ok",
+                    timestamp=t0,
+                    duration=time.time() - t0,
+                )
             )
+        except self._fallback_on as exc:
+            attempts.append(
+                Attempt(
+                    model=self._model,
+                    status="failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                    status_code=getattr(exc, "status_code", None),
+                    timestamp=t0,
+                    duration=time.time() - t0,
+                )
+            )
+            if not self._fallbacks:
+                raise
+            # Walk fallback chain — each fallback handles its own middleware
+            last_exc: Exception = exc
+            for i, fb in enumerate(self._fallbacks):
+                logger.info(
+                    "Fallback stream %d/%d: trying %s",
+                    i + 1,
+                    len(self._fallbacks),
+                    fb._model,
+                )
+                try:
+                    fb_stream = fb.stream(
+                        messages,
+                        system=system,
+                        tools=tools,
+                        thinking=thinking,
+                        thinking_effort=thinking_effort,
+                        thinking_budget=thinking_budget,
+                        output_schema=output_schema,
+                        tool_choice=tool_choice,
+                        json_mode=json_mode,
+                        logprobs=logprobs,
+                        **kwargs,
+                    )
+                    return _wrap_stream_with_attempts(fb_stream, attempts)
+                except self._fallback_on as fb_exc:
+                    attempts.append(
+                        Attempt(
+                            model=fb._model,
+                            status="failed",
+                            error=str(fb_exc),
+                            error_type=type(fb_exc).__name__,
+                            status_code=getattr(fb_exc, "status_code", None),
+                            timestamp=time.time(),
+                        )
+                    )
+                    last_exc = fb_exc
+            raise last_exc from None
 
         finalizer = self._build_stream_finalizer(state)
+        parent_attempts = attempts
+
+        def _attempt_finalizer(text: str) -> Response:
+            resp = finalizer(text)
+            return dataclasses.replace(resp, attempts=tuple(parent_attempts))
+
+        actual_finalizer = _attempt_finalizer
 
         if self._middleware and req is not None:
-            inner_finalizer = finalizer
+            inner_finalizer = actual_finalizer
             mw_list = self._middleware
             mw_req = req
 
@@ -332,9 +544,9 @@ class LLM:
                 resp = inner_finalizer(text)
                 return _run_after(mw_list, mw_req, resp)
 
-            finalizer = _mw_finalize
+            actual_finalizer = _mw_finalize
 
-        return StreamResponse(aiter, finalizer)
+        return StreamResponse(aiter, actual_finalizer)
 
     def stream_events(
         self,
@@ -382,22 +594,84 @@ class LLM:
             wire_tools = req.tools
             provider_kwargs = req.kwargs
 
+        attempts: list[Attempt] = []
+        t0 = time.time()
+
         try:
             aiter, state = self._provider.stream_events(
                 normalized, system=system, tools=wire_tools, **provider_kwargs
             )
-        except APIError:
-            if not self._fallback_provider:
-                raise
-            logger.info("Primary stream_events failed, trying fallback: %s", self._fallback_model)
-            aiter, state = self._fallback_provider.stream_events(
-                normalized, system=system, tools=wire_tools, **provider_kwargs
+            # usage is not available until stream consumption (finalizer fills it)
+            attempts.append(
+                Attempt(
+                    model=self._model,
+                    status="ok",
+                    timestamp=t0,
+                    duration=time.time() - t0,
+                )
             )
+        except self._fallback_on as exc:
+            attempts.append(
+                Attempt(
+                    model=self._model,
+                    status="failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                    status_code=getattr(exc, "status_code", None),
+                    timestamp=t0,
+                    duration=time.time() - t0,
+                )
+            )
+            if not self._fallbacks:
+                raise
+            last_exc: Exception = exc
+            for i, fb in enumerate(self._fallbacks):
+                logger.info(
+                    "Fallback stream_events %d/%d: trying %s",
+                    i + 1,
+                    len(self._fallbacks),
+                    fb._model,
+                )
+                try:
+                    fb_stream = fb.stream_events(
+                        messages,
+                        system=system,
+                        tools=tools,
+                        thinking=thinking,
+                        thinking_effort=thinking_effort,
+                        thinking_budget=thinking_budget,
+                        output_schema=output_schema,
+                        tool_choice=tool_choice,
+                        json_mode=json_mode,
+                        logprobs=logprobs,
+                        **kwargs,
+                    )
+                    return _wrap_rich_stream_with_attempts(fb_stream, attempts)
+                except self._fallback_on as fb_exc:
+                    attempts.append(
+                        Attempt(
+                            model=fb._model,
+                            status="failed",
+                            error=str(fb_exc),
+                            error_type=type(fb_exc).__name__,
+                            status_code=getattr(fb_exc, "status_code", None),
+                            timestamp=time.time(),
+                        )
+                    )
+                    last_exc = fb_exc
+            raise last_exc from None
 
         finalizer = self._build_stream_finalizer(state)
+        parent_attempts = attempts
+
+        def _attempt_finalizer(text: str) -> Response:
+            resp = finalizer(text)
+            return dataclasses.replace(resp, attempts=tuple(parent_attempts))
+
+        actual_finalizer = _attempt_finalizer
 
         if self._middleware and req is not None:
-            inner_finalizer = finalizer
+            inner_finalizer = actual_finalizer
             mw_list = self._middleware
             mw_req = req
 
@@ -405,9 +679,9 @@ class LLM:
                 resp = inner_finalizer(text)
                 return _run_after(mw_list, mw_req, resp)
 
-            finalizer = _mw_finalize
+            actual_finalizer = _mw_finalize
 
-        return RichStreamResponse(aiter, finalizer)
+        return RichStreamResponse(aiter, actual_finalizer)
 
     def stream_events_sync(
         self,
@@ -425,10 +699,10 @@ class LLM:
         **kwargs: Any,
     ) -> SyncRichStreamResponse:
         """Synchronous version of ``stream_events()``."""
-        normalized = self._normalize(messages)
-        merged = self._merge_kwargs(**kwargs)
-        wire_tools = prepare_tools(tools)
-        provider_kwargs = self._prepare_provider_kwargs(
+        rich_stream = self.stream_events(
+            messages,
+            system=system,
+            tools=tools,
             thinking=thinking,
             thinking_effort=thinking_effort,
             thinking_budget=thinking_budget,
@@ -436,40 +710,10 @@ class LLM:
             tool_choice=tool_choice,
             json_mode=json_mode,
             logprobs=logprobs,
-            extra=merged,
+            **kwargs,
         )
-
-        state_ref = _StateRef()
-
-        def _async_factory():
-            aiter, state = self._provider.stream_events(
-                normalized, system=system, tools=wire_tools, **provider_kwargs
-            )
-            state_ref.value = state
-            return aiter
-
-        sync_iter = _stream_sync(_async_factory)
-
-        model = self._model
-
-        def _finalize(text: str) -> Response:
-            state = state_ref.value
-            usage = (state.usage if state else None) or Usage()
-            tool_calls = tuple(state.tool_calls) if state else ()
-            thinking_blocks = tuple(getattr(state, "thinking", [])) if state else ()
-            cost = _estimate_response_cost(model, usage)
-            return Response(
-                text=text,
-                tool_calls=tool_calls,
-                thinking=thinking_blocks,
-                usage=usage,
-                cost=cost,
-                stop_reason=getattr(state, "stop_reason", ""),
-                model=getattr(state, "model", "") or model,
-                raw=getattr(state, "raw", None),
-            )
-
-        return SyncRichStreamResponse(sync_iter, _finalize)
+        sync_iter = _stream_sync(lambda: rich_stream._aiter)
+        return SyncRichStreamResponse(sync_iter, rich_stream._finalizer)
 
     async def __call__(
         self,
@@ -585,10 +829,10 @@ class LLM:
         **kwargs: Any,
     ) -> SyncStreamResponse:
         """Synchronous version of ``stream()``."""
-        normalized = self._normalize(messages)
-        merged = self._merge_kwargs(**kwargs)
-        wire_tools = prepare_tools(tools)
-        provider_kwargs = self._prepare_provider_kwargs(
+        async_stream = self.stream(
+            messages,
+            system=system,
+            tools=tools,
             thinking=thinking,
             thinking_effort=thinking_effort,
             thinking_budget=thinking_budget,
@@ -596,36 +840,7 @@ class LLM:
             tool_choice=tool_choice,
             json_mode=json_mode,
             logprobs=logprobs,
-            extra=merged,
+            **kwargs,
         )
-
-        state_ref = _StateRef()
-        model = self._model
-
-        def _async_factory():
-            aiter, state = self._provider.stream(
-                normalized, system=system, tools=wire_tools, **provider_kwargs
-            )
-            state_ref.value = state
-            return aiter
-
-        sync_iter = _stream_sync(_async_factory)
-
-        def _finalize(text: str) -> Response:
-            state = state_ref.value
-            usage = (state.usage if state else None) or Usage()
-            tool_calls = tuple(state.tool_calls) if state else ()
-            thinking_blocks = tuple(getattr(state, "thinking", [])) if state else ()
-            cost = _estimate_response_cost(model, usage)
-            return Response(
-                text=text,
-                tool_calls=tool_calls,
-                thinking=thinking_blocks,
-                usage=usage,
-                cost=cost,
-                stop_reason=getattr(state, "stop_reason", ""),
-                model=getattr(state, "model", "") or model,
-                raw=getattr(state, "raw", None),
-            )
-
-        return SyncStreamResponse(sync_iter, _finalize)
+        sync_iter = _stream_sync(lambda: async_stream._aiter)
+        return SyncStreamResponse(sync_iter, async_stream._finalizer)

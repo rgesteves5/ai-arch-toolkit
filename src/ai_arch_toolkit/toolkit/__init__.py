@@ -27,6 +27,7 @@ from ai_arch_toolkit.toolkit.agents import (
     ToTAgent,
     ToTConfig,
 )
+from ai_arch_toolkit.toolkit.knowledge import KnowledgeEntry, KnowledgeRegistry
 from ai_arch_toolkit.toolkit.memory import (
     BruteForceIndex,
     GraphBackend,
@@ -44,6 +45,16 @@ from ai_arch_toolkit.toolkit.memory import (
     conversational,
     memory_tools,
 )
+from ai_arch_toolkit.toolkit.pipeline import (
+    LocalExecutor,
+    PhaseExecutor,
+    PhaseResult,
+    Pipeline,
+    PipelineContext,
+    PipelineResult,
+    run_phase,
+    run_phases,
+)
 
 __all__ = [
     "AgentConfig",
@@ -54,14 +65,22 @@ __all__ = [
     "BruteForceIndex",
     "GraphBackend",
     "GraphStore",
+    "KnowledgeEntry",
+    "KnowledgeRegistry",
     "LATSAgent",
     "LATSConfig",
     "LLMCompilerAgent",
     "LLMCompilerConfig",
+    "LocalExecutor",
     "MemoryMiddleware",
     "MemoryPreset",
     "Node",
     "PhaseConfig",
+    "PhaseExecutor",
+    "PhaseResult",
+    "Pipeline",
+    "PipelineContext",
+    "PipelineResult",
     "PlanExecuteAgent",
     "PlanExecuteConfig",
     "PropertyView",
@@ -83,6 +102,8 @@ __all__ = [
     "cognitive",
     "conversational",
     "memory_tools",
+    "run_phase",
+    "run_phases",
     "run_tools",
     "run_tools_sync",
 ]

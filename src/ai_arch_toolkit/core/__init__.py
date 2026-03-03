@@ -24,6 +24,7 @@ from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._middleware import Middleware, Request
 from ai_arch_toolkit.core._pricing import pricing
 from ai_arch_toolkit.core._response import (
+    Attempt,
     Citation,
     OutputSchema,
     Response,
@@ -53,6 +54,7 @@ if not any(isinstance(h, logging.NullHandler) for h in _pkg_logger.handlers):
 __all__ = [
     "LLM",
     "APIError",
+    "Attempt",
     "BatchRequest",
     "BatchResult",
     "CachePart",

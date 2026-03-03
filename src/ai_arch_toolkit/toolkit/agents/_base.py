@@ -10,7 +10,7 @@ from typing import Any, Literal, overload
 
 from ai_arch_toolkit.core._content import Content, tool_result
 from ai_arch_toolkit.core._llm import LLM
-from ai_arch_toolkit.core._response import OutputSchema, Response, ToolCall, Usage
+from ai_arch_toolkit.core._response import Attempt, OutputSchema, Response, ToolCall, Usage
 from ai_arch_toolkit.core._sync import _run_sync, _stream_sync
 from ai_arch_toolkit.core._tools._group import ToolGroup
 
@@ -94,6 +94,7 @@ class AgentResult:
     total_usage: Usage = field(default_factory=Usage)
     total_cost: float = 0.0
     stop_reason: StopReason = "completed"
+    all_attempts: tuple[Attempt, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +222,7 @@ class BaseAgent(ABC):
         steps: list[AgentStep] = []
         total_usage = Usage()
         total_cost = 0.0
+        all_attempts: list[Attempt] = []
         stop_reason: StopReason = "completed"
         answer = ""
 
@@ -238,6 +240,7 @@ class BaseAgent(ABC):
                     resp = event.response
                     total_usage = _add_usage(total_usage, resp.usage)
                     total_cost += resp.cost or 0.0
+                    all_attempts.extend(resp.attempts)
                     steps.append(
                         AgentStep(
                             step=event.step,
@@ -274,4 +277,5 @@ class BaseAgent(ABC):
             total_usage=total_usage,
             total_cost=total_cost,
             stop_reason=stop_reason,
+            all_attempts=tuple(all_attempts),
         )
