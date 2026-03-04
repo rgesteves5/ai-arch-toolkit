@@ -533,7 +533,23 @@ class LLM:
                         logprobs=logprobs,
                         **kwargs,
                     )
-                    return _wrap_stream_with_attempts(fb_stream, attempts)
+                    wrapped = _wrap_stream_with_attempts(fb_stream, attempts)
+                    # Apply parent middleware after hooks to fallback stream
+                    if self._middleware and req is not None:
+                        _fin = wrapped._finalizer
+                        _mw = self._middleware
+                        _rq = req
+
+                        def _mw_fb_finalize(
+                            text: str,
+                            fin: Any = _fin,
+                            mw: Any = _mw,
+                            rq: Any = _rq,
+                        ) -> Response:
+                            return _run_after(mw, rq, fin(text))
+
+                        wrapped._finalizer = _mw_fb_finalize
+                    return wrapped
                 except self._fallback_on as fb_exc:
                     attempts.append(
                         Attempt(
@@ -668,7 +684,22 @@ class LLM:
                         logprobs=logprobs,
                         **kwargs,
                     )
-                    return _wrap_rich_stream_with_attempts(fb_stream, attempts)
+                    wrapped = _wrap_rich_stream_with_attempts(fb_stream, attempts)
+                    if self._middleware and req is not None:
+                        _fin = wrapped._finalizer
+                        _mw = self._middleware
+                        _rq = req
+
+                        def _mw_fb_finalize(
+                            text: str,
+                            fin: Any = _fin,
+                            mw: Any = _mw,
+                            rq: Any = _rq,
+                        ) -> Response:
+                            return _run_after(mw, rq, fin(text))
+
+                        wrapped._finalizer = _mw_fb_finalize
+                    return wrapped
                 except self._fallback_on as fb_exc:
                     attempts.append(
                         Attempt(
