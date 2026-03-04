@@ -1,15 +1,15 @@
-"""04 — Structured Output (OpenAI).
+"""04 — Structured Output.
 
-Use JsonSchema to enforce a strict response format and parse the result.
+Use OutputSchema to enforce a strict JSON response format.
+The parsed result is available via response.parsed.
 """
 
-import json
+from ai_arch_toolkit import LLM
+from ai_arch_toolkit.core import OutputSchema
 
-from ai_arch_toolkit import Client, JsonSchema
+llm = LLM("gpt-4.1-nano")
 
-client = Client("openai", model="gpt-5-nano")
-
-schema = JsonSchema(
+schema = OutputSchema(
     name="book_recommendations",
     schema={
         "type": "object",
@@ -34,12 +34,14 @@ schema = JsonSchema(
     },
 )
 
-response = client.chat(
+response = llm.complete_sync(
     "Recommend 3 classic science fiction novels.",
-    json_schema=schema,
+    output_schema=schema,
 )
 
-data = json.loads(response.text)
-for book in data["books"]:
-    print(f"  {book['title']} by {book['author']} ({book['year']})")
-    print(f"    → {book['reason']}\n")
+if response.parsed:
+    for book in response.parsed["books"]:
+        print(f"  {book['title']} by {book['author']} ({book['year']})")
+        print(f"    → {book['reason']}\n")
+else:
+    print("Raw:", response.text)

@@ -1,0 +1,899 @@
+"""User-facing LLM class — stateless function: content → content."""
+
+from __future__ import annotations
+
+import dataclasses
+import logging
+import time
+from collections.abc import Awaitable, Callable
+from typing import Any, ClassVar
+
+from ai_arch_toolkit.core._content import user
+from ai_arch_toolkit.core._exceptions import APIError
+from ai_arch_toolkit.core._middleware import (
+    Request,
+    _run_aafter,
+    _run_abefore,
+    _run_after,
+    _run_before,
+)
+from ai_arch_toolkit.core._pricing import _estimate_response_cost
+from ai_arch_toolkit.core._providers import create_provider
+from ai_arch_toolkit.core._response import (
+    Attempt,
+    OutputSchema,
+    Response,
+    RichStreamResponse,
+    StreamResponse,
+    SyncRichStreamResponse,
+    SyncStreamResponse,
+    Usage,
+    _resolve_output_schema,
+)
+from ai_arch_toolkit.core._retry import RetryConfig, with_retry
+from ai_arch_toolkit.core._sync import _run_sync, _stream_sync
+from ai_arch_toolkit.core._tools import prepare_tools
+from ai_arch_toolkit.core._tools._group import ToolGroup
+
+logger = logging.getLogger(__name__)
+
+PROVIDER_ERRORS: tuple[type[Exception], ...] = (
+    APIError,
+    ConnectionError,  # subclass of OSError, listed explicitly for clarity
+    TimeoutError,
+    OSError,
+)
+
+
+def _normalize_fallbacks(
+    fallback: str | LLM | list[str | LLM] | None,
+    api_key: str | None,
+    base_url: str | None,
+) -> tuple[list[LLM], list[LLM]]:
+    """Normalize fallback param into (all_fallbacks, owned_fallbacks).
+
+    Strings are converted to new ``LLM`` instances (owned for lifecycle).
+    Nested fallbacks are flattened into the parent chain.
+
+    .. note:: Flattening **clears** the nested LLM's ``_fallbacks`` list so
+       that the parent owns the full chain. Passing the same ``LLM`` instance
+       as a nested fallback to multiple parents is not supported — only the
+       first parent will receive the nested chain.
+    """
+    if fallback is None:
+        return [], []
+    items: list[str | LLM] = fallback if isinstance(fallback, list) else [fallback]
+    all_fbs: list[LLM] = []
+    owned: list[LLM] = []
+    for item in items:
+        if isinstance(item, str):
+            fb = LLM(item, api_key=api_key, base_url=base_url)
+            all_fbs.append(fb)
+            owned.append(fb)
+        else:
+            all_fbs.append(item)
+        # Flatten nested fallbacks from the just-added LLM
+        fb_llm = all_fbs[-1]
+        if fb_llm._fallbacks:
+            # Copy before clearing — .extend() reads before the mutation
+            all_fbs.extend(list(fb_llm._fallbacks))
+            owned.extend(list(fb_llm._owned_fallbacks))
+            fb_llm._fallbacks = []
+            fb_llm._owned_fallbacks = []
+    return all_fbs, owned
+
+
+def _wrap_stream_with_attempts(
+    stream: StreamResponse,
+    parent_attempts: list[Attempt],
+) -> StreamResponse:
+    """Wrap a fallback's StreamResponse to prepend parent attempts."""
+    original_finalizer = stream._finalizer
+    snapshot = tuple(parent_attempts)  # snapshot — list may still be live
+
+    def _new_finalizer(text: str) -> Response:
+        resp = original_finalizer(text)
+        return dataclasses.replace(resp, attempts=snapshot + resp.attempts)
+
+    stream._finalizer = _new_finalizer
+    return stream
+
+
+def _wrap_rich_stream_with_attempts(
+    stream: RichStreamResponse,
+    parent_attempts: list[Attempt],
+) -> RichStreamResponse:
+    """Wrap a fallback's RichStreamResponse to prepend parent attempts."""
+    original_finalizer = stream._finalizer
+    snapshot = tuple(parent_attempts)  # snapshot — list may still be live
+
+    def _new_finalizer(text: str) -> Response:
+        resp = original_finalizer(text)
+        return dataclasses.replace(resp, attempts=snapshot + resp.attempts)
+
+    stream._finalizer = _new_finalizer
+    return stream
+
+
+class LLM:
+    """Lightweight LLM client.
+
+    Async-first with convenient sync wrappers.
+    Supports context managers for client reuse.
+    """
+
+    def __init__(
+        self,
+        model: str,
+        *,
+        temperature: float = 0.0,
+        max_tokens: int = 4096,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        timeout: float | None = None,
+        retry: RetryConfig | bool | None = None,
+        middleware: list[Any] | None = None,
+        fallback: str | LLM | list[str | LLM] | None = None,
+        fallback_on: tuple[type[Exception], ...] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        if not (0.0 <= temperature <= 2.0):
+            raise ValueError(f"temperature must be between 0.0 and 2.0, got {temperature}")
+        if not isinstance(max_tokens, int) or max_tokens <= 0:
+            raise ValueError(f"max_tokens must be a positive integer, got {max_tokens}")
+        if timeout is not None and timeout <= 0:
+            raise ValueError(f"timeout must be positive, got {timeout}")
+
+        self._model = model
+        self._timeout = timeout
+        self._defaults: dict[str, Any] = {
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            **kwargs,
+        }
+        self._provider = create_provider(
+            model, api_key=api_key, base_url=base_url, timeout=timeout
+        )
+        self._retry: RetryConfig | None = RetryConfig() if retry is True else retry
+        self._middleware: list[Any] = list(middleware) if middleware else []
+        self._fallback_on = fallback_on or PROVIDER_ERRORS
+        self._fallbacks, self._owned_fallbacks = _normalize_fallbacks(
+            fallback, api_key=api_key, base_url=base_url
+        )
+
+    _REPR_DEFAULTS: ClassVar[dict[str, Any]] = {"temperature": 0.0, "max_tokens": 4096}
+
+    def __repr__(self) -> str:
+        non_default = {k: v for k, v in self._defaults.items() if v != self._REPR_DEFAULTS.get(k)}
+        parts = [f"model={self._model!r}"]
+        parts.extend(f"{k}={v!r}" for k, v in non_default.items())
+        if self._timeout is not None:
+            parts.append(f"timeout={self._timeout!r}")
+        if self._fallbacks:
+            fb_models = [fb._model for fb in self._fallbacks]
+            parts.append(f"fallback={fb_models!r}")
+        return f"LLM({', '.join(parts)})"
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    async def close(self) -> None:
+        """Close the underlying provider client(s)."""
+        await self._provider.close()
+        for fb in self._owned_fallbacks:
+            await fb.close()
+
+    async def __aenter__(self) -> LLM:
+        return self
+
+    async def __aexit__(self, *args: Any) -> None:
+        await self.close()
+
+    def __enter__(self) -> LLM:
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        _run_sync(self.close())
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _normalize(messages: str | list[dict[str, Any]] | list) -> list[dict[str, Any]]:
+        """Accept a bare string as shorthand for a single user message."""
+        if isinstance(messages, str):
+            return [user(messages)]
+        if not isinstance(messages, list):
+            raise TypeError(
+                f"messages must be a string or list of dicts, got {type(messages).__name__}"
+            )
+        for i, msg in enumerate(messages):
+            if not isinstance(msg, dict):
+                raise TypeError(f"messages[{i}] must be a dict, got {type(msg).__name__}")
+            if "role" not in msg:
+                raise ValueError(f"messages[{i}] missing required 'role' key")
+        return messages
+
+    def _merge_kwargs(self, **kwargs: Any) -> dict[str, Any]:
+        merged = dict(self._defaults)
+        merged.update({k: v for k, v in kwargs.items() if v is not None})
+        return merged
+
+    @staticmethod
+    def _prepare_provider_kwargs(
+        *,
+        thinking: bool,
+        thinking_effort: str | None,
+        thinking_budget: int | None,
+        output_schema: OutputSchema | type | None,
+        tool_choice: str | None,
+        json_mode: bool,
+        logprobs: bool,
+        extra: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Build kwargs to forward to the provider."""
+        kwargs = dict(extra)
+        if thinking_effort is not None and not thinking_effort:
+            raise ValueError("thinking_effort must be a non-empty string")
+        if thinking_budget is not None and thinking_budget < 0:
+            raise ValueError(f"thinking_budget must be non-negative, got {thinking_budget}")
+        if json_mode and output_schema is not None:
+            raise ValueError("json_mode and output_schema are mutually exclusive")
+        if thinking:
+            kwargs["thinking"] = True
+        if thinking_effort is not None:
+            kwargs["thinking_effort"] = thinking_effort
+        if thinking_budget is not None:
+            kwargs["thinking_budget"] = thinking_budget
+        if output_schema is not None:
+            kwargs["output_schema"] = _resolve_output_schema(output_schema)
+        if tool_choice is not None:
+            kwargs["tool_choice"] = tool_choice
+        if json_mode:
+            kwargs["json_mode"] = True
+        if logprobs:
+            kwargs["logprobs"] = True
+        return kwargs
+
+    # ------------------------------------------------------------------
+    # Internal: attempt tracking + fallback helpers
+    # ------------------------------------------------------------------
+
+    async def _try_with_tracking(
+        self,
+        call: Callable[[], Awaitable[Response]],
+        model: str,
+        retry: RetryConfig | None,
+        attempts: list[Attempt],
+    ) -> Response:
+        """Execute *call* with optional retry, recording each attempt."""
+        retry_number = 0
+
+        async def _tracked() -> Response:
+            nonlocal retry_number
+            t0 = time.time()
+            try:
+                response = await call()
+                attempts.append(
+                    Attempt(
+                        model=model,
+                        status="ok",
+                        usage=response.usage,
+                        duration=time.time() - t0,
+                        timestamp=t0,
+                        retry_number=retry_number,
+                    )
+                )
+                return response
+            except Exception as exc:
+                attempts.append(
+                    Attempt(
+                        model=model,
+                        status="failed",
+                        error=str(exc),
+                        error_type=type(exc).__name__,
+                        status_code=getattr(exc, "status_code", None),
+                        duration=time.time() - t0,
+                        timestamp=t0,
+                        retry_number=retry_number,
+                    )
+                )
+                raise
+            finally:
+                retry_number += 1
+
+        if retry:
+            return await with_retry(_tracked, retry)
+        return await _tracked()
+
+    async def _try_fallbacks(
+        self,
+        messages: str | list[dict[str, Any]],
+        *,
+        attempts: list[Attempt],
+        last_error: Exception,
+        **kwargs: Any,
+    ) -> Response:
+        """Walk fallback chain, delegating full complete() to each."""
+        last_exc = last_error
+        for i, fb in enumerate(self._fallbacks):
+            logger.info("Fallback %d/%d: trying %s", i + 1, len(self._fallbacks), fb._model)
+            try:
+                response = await fb.complete(messages, **kwargs)
+                # Merge fallback's tracked attempts into ours
+                attempts.extend(response.attempts)
+                return response
+            except self._fallback_on as exc:
+                last_exc = exc
+        raise last_exc
+
+    # ------------------------------------------------------------------
+    # Async API
+    # ------------------------------------------------------------------
+
+    async def complete(
+        self,
+        messages: str | list[dict[str, Any]],
+        *,
+        system: str | None = None,
+        tools: list[dict[str, Any]] | ToolGroup | Callable[..., Any] | None = None,
+        thinking: bool = False,
+        thinking_effort: str | None = None,
+        thinking_budget: int | None = None,
+        output_schema: OutputSchema | type | None = None,
+        tool_choice: str | None = None,
+        json_mode: bool = False,
+        logprobs: bool = False,
+        **kwargs: Any,
+    ) -> Response:
+        """Send messages and return a Response."""
+        normalized = self._normalize(messages)
+        merged = self._merge_kwargs(**kwargs)
+        wire_tools = prepare_tools(tools)
+        provider_kwargs = self._prepare_provider_kwargs(
+            thinking=thinking,
+            thinking_effort=thinking_effort,
+            thinking_budget=thinking_budget,
+            output_schema=output_schema,
+            tool_choice=tool_choice,
+            json_mode=json_mode,
+            logprobs=logprobs,
+            extra=merged,
+        )
+        # Middleware before hooks
+        req: Request | None = None
+        if self._middleware:
+            req = Request(
+                messages=normalized,
+                system=system,
+                tools=wire_tools,
+                model=self._model,
+                kwargs=provider_kwargs,
+            )
+            req = await _run_abefore(self._middleware, req)
+            normalized = req.messages
+            system = req.system
+            wire_tools = req.tools
+            provider_kwargs = req.kwargs
+
+        async def _call() -> Response:
+            return await self._provider.complete(
+                normalized, system=system, tools=wire_tools, **provider_kwargs
+            )
+
+        attempts: list[Attempt] = []
+
+        try:
+            response = await self._try_with_tracking(_call, self._model, self._retry, attempts)
+        except self._fallback_on as primary_err:
+            if not self._fallbacks:
+                raise
+            response = await self._try_fallbacks(
+                messages,
+                attempts=attempts,
+                last_error=primary_err,
+                system=system,
+                tools=tools,
+                thinking=thinking,
+                thinking_effort=thinking_effort,
+                thinking_budget=thinking_budget,
+                output_schema=output_schema,
+                tool_choice=tool_choice,
+                json_mode=json_mode,
+                logprobs=logprobs,
+                **kwargs,
+            )
+
+        # Middleware after hooks
+        if self._middleware and req is not None:
+            response = await _run_aafter(self._middleware, req, response)
+
+        return dataclasses.replace(response, attempts=tuple(attempts))
+
+    def _build_stream_finalizer(self, state: Any) -> Callable[[str], Response]:
+        """Build a finalization callback for stream wrappers."""
+        model = self._model
+
+        def _finalize(text: str) -> Response:
+            usage = state.usage or Usage()
+            thinking_blocks = tuple(getattr(state, "thinking", []))
+            cost = _estimate_response_cost(model, usage)
+            resp = Response(
+                text=text,
+                tool_calls=tuple(state.tool_calls),
+                thinking=thinking_blocks,
+                usage=usage,
+                cost=cost,
+                stop_reason=state.stop_reason,
+                model=state.model or model,
+                raw=state.raw,
+            )
+            return resp
+
+        return _finalize
+
+    def stream(
+        self,
+        messages: str | list[dict[str, Any]],
+        *,
+        system: str | None = None,
+        tools: list[dict[str, Any]] | ToolGroup | Callable[..., Any] | None = None,
+        thinking: bool = False,
+        thinking_effort: str | None = None,
+        thinking_budget: int | None = None,
+        output_schema: OutputSchema | type | None = None,
+        tool_choice: str | None = None,
+        json_mode: bool = False,
+        logprobs: bool = False,
+        **kwargs: Any,
+    ) -> StreamResponse:
+        """Stream text chunks, with metadata available after consumption."""
+        normalized = self._normalize(messages)
+        merged = self._merge_kwargs(**kwargs)
+        wire_tools = prepare_tools(tools)
+        provider_kwargs = self._prepare_provider_kwargs(
+            thinking=thinking,
+            thinking_effort=thinking_effort,
+            thinking_budget=thinking_budget,
+            output_schema=output_schema,
+            tool_choice=tool_choice,
+            json_mode=json_mode,
+            logprobs=logprobs,
+            extra=merged,
+        )
+
+        # Middleware before hooks
+        req: Request | None = None
+        if self._middleware:
+            req = Request(
+                messages=normalized,
+                system=system,
+                tools=wire_tools,
+                model=self._model,
+                kwargs=provider_kwargs,
+            )
+            req = _run_before(self._middleware, req)
+            normalized = req.messages
+            system = req.system
+            wire_tools = req.tools
+            provider_kwargs = req.kwargs
+
+        attempts: list[Attempt] = []
+        t0 = time.time()
+
+        try:
+            aiter, state = self._provider.stream(
+                normalized, system=system, tools=wire_tools, **provider_kwargs
+            )
+            # usage is not available until stream consumption (finalizer fills it)
+            attempts.append(
+                Attempt(
+                    model=self._model,
+                    status="ok",
+                    timestamp=t0,
+                    duration=time.time() - t0,
+                )
+            )
+        except self._fallback_on as exc:
+            attempts.append(
+                Attempt(
+                    model=self._model,
+                    status="failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                    status_code=getattr(exc, "status_code", None),
+                    timestamp=t0,
+                    duration=time.time() - t0,
+                )
+            )
+            if not self._fallbacks:
+                raise
+            # Walk fallback chain — each fallback handles its own middleware
+            last_exc: Exception = exc
+            for i, fb in enumerate(self._fallbacks):
+                logger.info(
+                    "Fallback stream %d/%d: trying %s",
+                    i + 1,
+                    len(self._fallbacks),
+                    fb._model,
+                )
+                try:
+                    fb_stream = fb.stream(
+                        messages,
+                        system=system,
+                        tools=tools,
+                        thinking=thinking,
+                        thinking_effort=thinking_effort,
+                        thinking_budget=thinking_budget,
+                        output_schema=output_schema,
+                        tool_choice=tool_choice,
+                        json_mode=json_mode,
+                        logprobs=logprobs,
+                        **kwargs,
+                    )
+                    wrapped = _wrap_stream_with_attempts(fb_stream, attempts)
+                    # Apply parent middleware after hooks to fallback stream
+                    if self._middleware and req is not None:
+                        _fin = wrapped._finalizer
+                        _mw = self._middleware
+                        _rq = req
+
+                        def _mw_fb_finalize(
+                            text: str,
+                            fin: Any = _fin,
+                            mw: Any = _mw,
+                            rq: Any = _rq,
+                        ) -> Response:
+                            return _run_after(mw, rq, fin(text))
+
+                        wrapped._finalizer = _mw_fb_finalize
+                    return wrapped
+                except self._fallback_on as fb_exc:
+                    attempts.append(
+                        Attempt(
+                            model=fb._model,
+                            status="failed",
+                            error=str(fb_exc),
+                            error_type=type(fb_exc).__name__,
+                            status_code=getattr(fb_exc, "status_code", None),
+                            timestamp=time.time(),
+                        )
+                    )
+                    last_exc = fb_exc
+            raise last_exc from None
+
+        finalizer = self._build_stream_finalizer(state)
+        parent_attempts = attempts
+
+        def _attempt_finalizer(text: str) -> Response:
+            resp = finalizer(text)
+            return dataclasses.replace(resp, attempts=tuple(parent_attempts))
+
+        actual_finalizer = _attempt_finalizer
+
+        if self._middleware and req is not None:
+            inner_finalizer = actual_finalizer
+            mw_list = self._middleware
+            mw_req = req
+
+            def _mw_finalize(text: str) -> Response:
+                resp = inner_finalizer(text)
+                return _run_after(mw_list, mw_req, resp)
+
+            actual_finalizer = _mw_finalize
+
+        return StreamResponse(aiter, actual_finalizer)
+
+    def stream_events(
+        self,
+        messages: str | list[dict[str, Any]],
+        *,
+        system: str | None = None,
+        tools: list[dict[str, Any]] | ToolGroup | Callable[..., Any] | None = None,
+        thinking: bool = False,
+        thinking_effort: str | None = None,
+        thinking_budget: int | None = None,
+        output_schema: OutputSchema | type | None = None,
+        tool_choice: str | None = None,
+        json_mode: bool = False,
+        logprobs: bool = False,
+        **kwargs: Any,
+    ) -> RichStreamResponse:
+        """Stream structured events (text, thinking, tool_call)."""
+        normalized = self._normalize(messages)
+        merged = self._merge_kwargs(**kwargs)
+        wire_tools = prepare_tools(tools)
+        provider_kwargs = self._prepare_provider_kwargs(
+            thinking=thinking,
+            thinking_effort=thinking_effort,
+            thinking_budget=thinking_budget,
+            output_schema=output_schema,
+            tool_choice=tool_choice,
+            json_mode=json_mode,
+            logprobs=logprobs,
+            extra=merged,
+        )
+
+        # Middleware before hooks
+        req: Request | None = None
+        if self._middleware:
+            req = Request(
+                messages=normalized,
+                system=system,
+                tools=wire_tools,
+                model=self._model,
+                kwargs=provider_kwargs,
+            )
+            req = _run_before(self._middleware, req)
+            normalized = req.messages
+            system = req.system
+            wire_tools = req.tools
+            provider_kwargs = req.kwargs
+
+        attempts: list[Attempt] = []
+        t0 = time.time()
+
+        try:
+            aiter, state = self._provider.stream_events(
+                normalized, system=system, tools=wire_tools, **provider_kwargs
+            )
+            # usage is not available until stream consumption (finalizer fills it)
+            attempts.append(
+                Attempt(
+                    model=self._model,
+                    status="ok",
+                    timestamp=t0,
+                    duration=time.time() - t0,
+                )
+            )
+        except self._fallback_on as exc:
+            attempts.append(
+                Attempt(
+                    model=self._model,
+                    status="failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                    status_code=getattr(exc, "status_code", None),
+                    timestamp=t0,
+                    duration=time.time() - t0,
+                )
+            )
+            if not self._fallbacks:
+                raise
+            last_exc: Exception = exc
+            for i, fb in enumerate(self._fallbacks):
+                logger.info(
+                    "Fallback stream_events %d/%d: trying %s",
+                    i + 1,
+                    len(self._fallbacks),
+                    fb._model,
+                )
+                try:
+                    fb_stream = fb.stream_events(
+                        messages,
+                        system=system,
+                        tools=tools,
+                        thinking=thinking,
+                        thinking_effort=thinking_effort,
+                        thinking_budget=thinking_budget,
+                        output_schema=output_schema,
+                        tool_choice=tool_choice,
+                        json_mode=json_mode,
+                        logprobs=logprobs,
+                        **kwargs,
+                    )
+                    wrapped = _wrap_rich_stream_with_attempts(fb_stream, attempts)
+                    if self._middleware and req is not None:
+                        _fin = wrapped._finalizer
+                        _mw = self._middleware
+                        _rq = req
+
+                        def _mw_fb_finalize(
+                            text: str,
+                            fin: Any = _fin,
+                            mw: Any = _mw,
+                            rq: Any = _rq,
+                        ) -> Response:
+                            return _run_after(mw, rq, fin(text))
+
+                        wrapped._finalizer = _mw_fb_finalize
+                    return wrapped
+                except self._fallback_on as fb_exc:
+                    attempts.append(
+                        Attempt(
+                            model=fb._model,
+                            status="failed",
+                            error=str(fb_exc),
+                            error_type=type(fb_exc).__name__,
+                            status_code=getattr(fb_exc, "status_code", None),
+                            timestamp=time.time(),
+                        )
+                    )
+                    last_exc = fb_exc
+            raise last_exc from None
+
+        finalizer = self._build_stream_finalizer(state)
+        parent_attempts = attempts
+
+        def _attempt_finalizer(text: str) -> Response:
+            resp = finalizer(text)
+            return dataclasses.replace(resp, attempts=tuple(parent_attempts))
+
+        actual_finalizer = _attempt_finalizer
+
+        if self._middleware and req is not None:
+            inner_finalizer = actual_finalizer
+            mw_list = self._middleware
+            mw_req = req
+
+            def _mw_finalize(text: str) -> Response:
+                resp = inner_finalizer(text)
+                return _run_after(mw_list, mw_req, resp)
+
+            actual_finalizer = _mw_finalize
+
+        return RichStreamResponse(aiter, actual_finalizer)
+
+    def stream_events_sync(
+        self,
+        messages: str | list[dict[str, Any]],
+        *,
+        system: str | None = None,
+        tools: list[dict[str, Any]] | ToolGroup | Callable[..., Any] | None = None,
+        thinking: bool = False,
+        thinking_effort: str | None = None,
+        thinking_budget: int | None = None,
+        output_schema: OutputSchema | type | None = None,
+        tool_choice: str | None = None,
+        json_mode: bool = False,
+        logprobs: bool = False,
+        **kwargs: Any,
+    ) -> SyncRichStreamResponse:
+        """Synchronous version of ``stream_events()``."""
+        rich_stream = self.stream_events(
+            messages,
+            system=system,
+            tools=tools,
+            thinking=thinking,
+            thinking_effort=thinking_effort,
+            thinking_budget=thinking_budget,
+            output_schema=output_schema,
+            tool_choice=tool_choice,
+            json_mode=json_mode,
+            logprobs=logprobs,
+            **kwargs,
+        )
+        sync_iter = _stream_sync(lambda: rich_stream._aiter)
+        return SyncRichStreamResponse(sync_iter, rich_stream._finalizer)
+
+    async def __call__(
+        self,
+        messages: str | list[dict[str, Any]],
+        **kwargs: Any,
+    ) -> Response:
+        """Alias for ``complete()``."""
+        return await self.complete(messages, **kwargs)
+
+    # ------------------------------------------------------------------
+    # Batch API
+    # ------------------------------------------------------------------
+
+    async def batch_submit(self, requests: list[dict[str, Any]]) -> str:
+        """Submit a batch of requests. Returns a batch ID."""
+        return await self._provider.batch_submit(requests)
+
+    async def batch_status(self, batch_id: str) -> str:
+        """Check batch processing status."""
+        return await self._provider.batch_status(batch_id)
+
+    async def batch_results(self, batch_id: str) -> list[Any]:
+        """Retrieve batch results."""
+        return await self._provider.batch_results(batch_id)
+
+    def batch_submit_sync(self, requests: list[dict[str, Any]]) -> str:
+        """Synchronous version of ``batch_submit()``."""
+        return _run_sync(self.batch_submit(requests))
+
+    def batch_status_sync(self, batch_id: str) -> str:
+        """Synchronous version of ``batch_status()``."""
+        return _run_sync(self.batch_status(batch_id))
+
+    def batch_results_sync(self, batch_id: str) -> list[Any]:
+        """Synchronous version of ``batch_results()``."""
+        return _run_sync(self.batch_results(batch_id))
+
+    # ------------------------------------------------------------------
+    # Token counting
+    # ------------------------------------------------------------------
+
+    async def count_tokens(
+        self,
+        messages: str | list[dict[str, Any]],
+        *,
+        system: str | None = None,
+        tools: list[dict[str, Any]] | ToolGroup | Callable[..., Any] | None = None,
+    ) -> int:
+        """Count tokens for the given messages (provider-dependent)."""
+        normalized = self._normalize(messages)
+        wire_tools = prepare_tools(tools)
+        return await self._provider.count_tokens(normalized, system=system, tools=wire_tools)
+
+    def count_tokens_sync(
+        self,
+        messages: str | list[dict[str, Any]],
+        *,
+        system: str | None = None,
+        tools: list[dict[str, Any]] | ToolGroup | Callable[..., Any] | None = None,
+    ) -> int:
+        """Synchronous version of ``count_tokens()``."""
+        return _run_sync(self.count_tokens(messages, system=system, tools=tools))
+
+    # ------------------------------------------------------------------
+    # Sync wrappers
+    # ------------------------------------------------------------------
+
+    def complete_sync(
+        self,
+        messages: str | list[dict[str, Any]],
+        *,
+        system: str | None = None,
+        tools: list[dict[str, Any]] | ToolGroup | Callable[..., Any] | None = None,
+        thinking: bool = False,
+        thinking_effort: str | None = None,
+        thinking_budget: int | None = None,
+        output_schema: OutputSchema | type | None = None,
+        tool_choice: str | None = None,
+        json_mode: bool = False,
+        logprobs: bool = False,
+        **kwargs: Any,
+    ) -> Response:
+        """Synchronous version of ``complete()``."""
+        return _run_sync(
+            self.complete(
+                messages,
+                system=system,
+                tools=tools,
+                thinking=thinking,
+                thinking_effort=thinking_effort,
+                thinking_budget=thinking_budget,
+                output_schema=output_schema,
+                tool_choice=tool_choice,
+                json_mode=json_mode,
+                logprobs=logprobs,
+                **kwargs,
+            )
+        )
+
+    def stream_sync(
+        self,
+        messages: str | list[dict[str, Any]],
+        *,
+        system: str | None = None,
+        tools: list[dict[str, Any]] | ToolGroup | Callable[..., Any] | None = None,
+        thinking: bool = False,
+        thinking_effort: str | None = None,
+        thinking_budget: int | None = None,
+        output_schema: OutputSchema | type | None = None,
+        tool_choice: str | None = None,
+        json_mode: bool = False,
+        logprobs: bool = False,
+        **kwargs: Any,
+    ) -> SyncStreamResponse:
+        """Synchronous version of ``stream()``."""
+        async_stream = self.stream(
+            messages,
+            system=system,
+            tools=tools,
+            thinking=thinking,
+            thinking_effort=thinking_effort,
+            thinking_budget=thinking_budget,
+            output_schema=output_schema,
+            tool_choice=tool_choice,
+            json_mode=json_mode,
+            logprobs=logprobs,
+            **kwargs,
+        )
+        sync_iter = _stream_sync(lambda: async_stream._aiter)
+        return SyncStreamResponse(sync_iter, async_stream._finalizer)

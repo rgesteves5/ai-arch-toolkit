@@ -1,24 +1,24 @@
-"""02 — Multi-turn Conversation (Anthropic).
+"""02 — Multi-turn Conversation.
 
-Build a conversation with explicit Message objects, use a system prompt,
+Build a conversation with plain dict messages, use a system prompt,
 and continue the conversation by appending the assistant's reply.
 """
 
-from ai_arch_toolkit import Client, Message
+from ai_arch_toolkit import LLM, user
 
-client = Client("anthropic", model="claude-haiku-4-5-20251001")
+llm = LLM("claude-haiku-4-5-20251001")
 
 messages = [
-    Message(role="user", content="My name is Alice. What's a fun fact about space?"),
+    user("My name is Alice. What's a fun fact about space?"),
 ]
 
 # First turn
-resp = client.chat(messages, system="You are a friendly science tutor.")
+resp = llm.complete_sync(messages, system="You are a friendly science tutor.")
 print("Assistant:", resp.text)
 
 # Continue the conversation — append the assistant reply, then a follow-up
 messages.append(resp.to_message())
-messages.append(Message(role="user", content="Can you remind me of my name?"))
+messages.append(user("Can you remind me of my name?"))
 
-resp2 = client.chat(messages, system="You are a friendly science tutor.")
+resp2 = llm.complete_sync(messages, system="You are a friendly science tutor.")
 print("\nAssistant:", resp2.text)

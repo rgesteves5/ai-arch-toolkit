@@ -5,5 +5,6 @@ theme:
   name: mkdocs
 nav:
   - Home: index.md
-  - API Docs: api.md
+  - Getting Started: getting-started.md
   - UV Guide: uv-guide.md
+  - API Docs: api.md

@@ -1,52 +1,35 @@
-"""07 — Thinking / Extended Reasoning (Anthropic).
+"""07 — Thinking / Extended Reasoning.
 
-Extended Thinking lets the model reason step-by-step before answering.
-Claude 4.5 models use budget_tokens to control reasoning depth.
-Claude 4.6 models also support adaptive effort levels ("low"/"medium"/"high").
-
-Important: Anthropic requires max_tokens > budget_tokens. The provider
-defaults to max_tokens=4096, so pass a larger max_tokens when using
-big thinking budgets.
+Extended thinking lets the model reason step-by-step before answering.
+Control reasoning depth with thinking_budget (token count) or
+thinking_effort (string level like "low", "medium", "high").
 """
 
-from ai_arch_toolkit import APIError, Client, ThinkingConfig
+from ai_arch_toolkit import LLM
 
-client = Client("anthropic", model="claude-haiku-4-5")
+llm = LLM("claude-haiku-4-5-20251001")
 
-# --- Extended thinking with a small budget ---
-print("=== Extended Thinking (budget_tokens=2048) ===")
-resp = client.chat(
+# --- Extended thinking with a token budget ---
+print("=== Extended Thinking (thinking_budget=2048) ===")
+resp = llm.complete_sync(
     "What are the philosophical implications of Gödel's incompleteness theorems?",
-    thinking=ThinkingConfig(budget_tokens=2048),
+    thinking=True,
+    thinking_budget=2048,
 )
 if resp.thinking:
-    print(f"[Thinking ({len(resp.thinking)} chars)]: {resp.thinking[:200]}...")
-print("\nAnswer:", resp.text[:300], "...\n")
+    print(f"[Thinking ({len(resp.thinking[0].text)} chars)]: {resp.thinking[0].text}")
+print("\nAnswer:", resp.text, "\n")
 
-# --- Extended thinking with a larger budget ---
-# Note: max_tokens must be greater than budget_tokens (default max_tokens is 4096)
-print("=== Extended Thinking (budget_tokens=4096) ===")
-resp2 = client.chat(
+# --- Extended thinking with effort level ---
+print("=== Extended Thinking (thinking_effort='medium') ===")
+resp2 = llm.complete_sync(
     "Solve step by step: If a train travels 120 km in 1.5 hours, "
     "then stops for 30 minutes, then travels 80 km in 1 hour, "
     "what is the average speed for the entire journey?",
-    thinking=ThinkingConfig(budget_tokens=4096),
-    max_tokens=8192,
+    thinking=True,
+    thinking_effort="medium",
+    max_tokens=16384,
 )
 if resp2.thinking:
-    print(f"[Thinking ({len(resp2.thinking)} chars)]: {resp2.thinking[:200]}...")
+    print(f"[Thinking ({len(resp2.thinking[0].text)} chars)]: {resp2.thinking[0].text}")
 print("\nAnswer:", resp2.text)
-
-# --- Adaptive effort mode (for models that support effort levels) ---
-print("\n=== Adaptive Thinking (effort='high') ===")
-try:
-    resp3 = client.chat(
-        "Give me a concise but rigorous argument for why compilers matter.",
-        thinking=ThinkingConfig(effort="high"),
-    )
-except APIError as exc:
-    print(f"Adaptive effort not supported by this model/account: {exc}")
-else:
-    if resp3.thinking:
-        print(f"[Thinking ({len(resp3.thinking)} chars)]: {resp3.thinking[:200]}...")
-    print("\nAnswer:", resp3.text)
