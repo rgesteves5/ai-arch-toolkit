@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
 from ai_arch_toolkit.core._response import Response
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -39,6 +42,7 @@ class Middleware(Protocol):
 def _run_before(middleware: list[Any], request: Request) -> Request:
     """Run all ``before`` hooks in order."""
     for mw in middleware:
+        logger.debug("middleware before: %s", type(mw).__name__)
         request = mw.before(request)
     return request
 
@@ -46,6 +50,7 @@ def _run_before(middleware: list[Any], request: Request) -> Request:
 def _run_after(middleware: list[Any], request: Request, response: Response) -> Response:
     """Run all ``after`` hooks in reverse order."""
     for mw in reversed(middleware):
+        logger.debug("middleware after: %s", type(mw).__name__)
         response = mw.after(request, response)
     return response
 
@@ -53,6 +58,7 @@ def _run_after(middleware: list[Any], request: Request, response: Response) -> R
 async def _run_abefore(middleware: list[Any], request: Request) -> Request:
     """Run async ``abefore`` hooks, falling back to sync ``before``."""
     for mw in middleware:
+        logger.debug("middleware abefore: %s", type(mw).__name__)
         if hasattr(mw, "abefore"):
             request = await mw.abefore(request)
         else:
@@ -63,6 +69,7 @@ async def _run_abefore(middleware: list[Any], request: Request) -> Request:
 async def _run_aafter(middleware: list[Any], request: Request, response: Response) -> Response:
     """Run async ``aafter`` hooks in reverse, falling back to sync ``after``."""
     for mw in reversed(middleware):
+        logger.debug("middleware aafter: %s", type(mw).__name__)
         if hasattr(mw, "aafter"):
             response = await mw.aafter(request, response)
         else:

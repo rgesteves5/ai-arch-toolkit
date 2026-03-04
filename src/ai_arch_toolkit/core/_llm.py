@@ -130,19 +130,30 @@ class LLM:
         max_tokens: int = 4096,
         api_key: str | None = None,
         base_url: str | None = None,
+        timeout: float | None = None,
         retry: RetryConfig | bool | None = None,
         middleware: list[Any] | None = None,
         fallback: str | LLM | list[str | LLM] | None = None,
         fallback_on: tuple[type[Exception], ...] | None = None,
         **kwargs: Any,
     ) -> None:
+        if not (0.0 <= temperature <= 2.0):
+            raise ValueError(f"temperature must be between 0.0 and 2.0, got {temperature}")
+        if not isinstance(max_tokens, int) or max_tokens <= 0:
+            raise ValueError(f"max_tokens must be a positive integer, got {max_tokens}")
+        if timeout is not None and timeout <= 0:
+            raise ValueError(f"timeout must be positive, got {timeout}")
+
         self._model = model
+        self._timeout = timeout
         self._defaults: dict[str, Any] = {
             "temperature": temperature,
             "max_tokens": max_tokens,
             **kwargs,
         }
-        self._provider = create_provider(model, api_key=api_key, base_url=base_url)
+        self._provider = create_provider(
+            model, api_key=api_key, base_url=base_url, timeout=timeout
+        )
         self._retry: RetryConfig | None = RetryConfig() if retry is True else retry
         self._middleware: list[Any] = list(middleware) if middleware else []
         self._fallback_on = fallback_on or PROVIDER_ERRORS
@@ -156,6 +167,8 @@ class LLM:
         non_default = {k: v for k, v in self._defaults.items() if v != self._REPR_DEFAULTS.get(k)}
         parts = [f"model={self._model!r}"]
         parts.extend(f"{k}={v!r}" for k, v in non_default.items())
+        if self._timeout is not None:
+            parts.append(f"timeout={self._timeout!r}")
         if self._fallbacks:
             fb_models = [fb._model for fb in self._fallbacks]
             parts.append(f"fallback={fb_models!r}")
@@ -192,6 +205,15 @@ class LLM:
         """Accept a bare string as shorthand for a single user message."""
         if isinstance(messages, str):
             return [user(messages)]
+        if not isinstance(messages, list):
+            raise TypeError(
+                f"messages must be a string or list of dicts, got {type(messages).__name__}"
+            )
+        for i, msg in enumerate(messages):
+            if not isinstance(msg, dict):
+                raise TypeError(f"messages[{i}] must be a dict, got {type(msg).__name__}")
+            if "role" not in msg:
+                raise ValueError(f"messages[{i}] missing required 'role' key")
         return messages
 
     def _merge_kwargs(self, **kwargs: Any) -> dict[str, Any]:

@@ -41,6 +41,12 @@ class ReflexionConfig:
     executor: PhaseConfig | None = None
     reflector: PhaseConfig | None = None
 
+    def __post_init__(self) -> None:
+        if self.max_retries < 0:
+            raise ValueError(f"max_retries must be >= 0, got {self.max_retries}")
+        if not (0.0 <= self.threshold <= 1.0):
+            raise ValueError(f"threshold must be between 0.0 and 1.0, got {self.threshold}")
+
 
 # ---------------------------------------------------------------------------
 # Agent

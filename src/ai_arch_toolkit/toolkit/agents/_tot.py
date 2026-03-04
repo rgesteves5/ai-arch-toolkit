@@ -61,6 +61,14 @@ class ToTConfig:
     evaluator: PhaseConfig | None = None
     solver: PhaseConfig | None = None
 
+    def __post_init__(self) -> None:
+        if self.n_candidates <= 0:
+            raise ValueError(f"n_candidates must be positive, got {self.n_candidates}")
+        if self.max_depth <= 0:
+            raise ValueError(f"max_depth must be positive, got {self.max_depth}")
+        if self.strategy not in ("dfs", "bfs"):
+            raise ValueError(f"strategy must be 'dfs' or 'bfs', got {self.strategy!r}")
+
 
 # ---------------------------------------------------------------------------
 # Agent

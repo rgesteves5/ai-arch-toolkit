@@ -53,3 +53,4 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = ["integration: marks tests as integration tests (require API keys)"]

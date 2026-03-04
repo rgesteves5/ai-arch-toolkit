@@ -50,6 +50,10 @@ class PlanExecuteConfig:
     executor: PhaseConfig | None = None
     solver: PhaseConfig | None = None
 
+    def __post_init__(self) -> None:
+        if self.max_replans < 0:
+            raise ValueError(f"max_replans must be >= 0, got {self.max_replans}")
+
 
 # ---------------------------------------------------------------------------
 # Agent

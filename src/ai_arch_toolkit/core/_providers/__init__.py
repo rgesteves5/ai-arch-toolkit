@@ -49,6 +49,7 @@ def create_provider(
     *,
     api_key: str | None = None,
     base_url: str | None = None,
+    timeout: float | None = None,
 ) -> BaseProvider:
     """Create a provider instance from a model string."""
     name = _detect_provider(model)
@@ -60,6 +61,7 @@ def create_provider(
             model,
             _resolve_key("ANTHROPIC_API_KEY", api_key),
             base_url=base_url,
+            timeout=timeout,
         )
 
     if name == "openai":
@@ -69,6 +71,7 @@ def create_provider(
             model,
             _resolve_key("OPENAI_API_KEY", api_key),
             base_url=base_url,
+            timeout=timeout,
         )
 
     if name == "xai":
@@ -79,6 +82,7 @@ def create_provider(
         return XAIProvider(
             model,
             _resolve_key("XAI_API_KEY", api_key),
+            timeout=timeout,
         )
 
     if name == "gemini":
@@ -89,6 +93,7 @@ def create_provider(
         return GeminiProvider(
             model,
             _resolve_key("GOOGLE_API_KEY", api_key),
+            timeout=timeout,
         )
 
     raise NotImplementedError(f"Provider {name!r} is not yet implemented.")

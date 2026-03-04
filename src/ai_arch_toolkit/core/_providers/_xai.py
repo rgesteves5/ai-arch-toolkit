@@ -232,9 +232,16 @@ class XAIProvider(BaseProvider):
         self,
         model: str,
         api_key: str,
+        *,
+        timeout: float | None = None,
     ) -> None:
         self._model = model
         self._client = xai_sdk.AsyncClient(api_key=api_key)
+        if timeout is not None:
+            warnings.warn(
+                "timeout is not directly supported by xAI gRPC client, ignoring",
+                stacklevel=2,
+            )
 
     async def close(self) -> None:
         await self._client.close()
@@ -355,6 +362,7 @@ class XAIProvider(BaseProvider):
             sdk_msgs, system=effective_system, tools=tools, **kwargs
         )
 
+        logger.debug("complete start model=%s messages=%d", self._model, len(messages))
         try:
             chat = self._client.chat.create(**create_kwargs)
             response = await chat.sample()
@@ -364,7 +372,14 @@ class XAIProvider(BaseProvider):
                 raise RateLimitError(status_code, exc.details() or str(exc)) from exc
             raise APIError(status_code, exc.details() or str(exc)) from exc
 
-        return _parse_sdk_response(response, self._model, output_schema=output_schema)
+        resp = _parse_sdk_response(response, self._model, output_schema=output_schema)
+        logger.debug(
+            "complete done model=%s tokens_in=%d tokens_out=%d",
+            self._model,
+            resp.usage.input_tokens,
+            resp.usage.output_tokens,
+        )
+        return resp
 
     # ------------------------------------------------------------------
     # stream
@@ -385,6 +400,7 @@ class XAIProvider(BaseProvider):
             sdk_msgs, system=effective_system, tools=tools, **kwargs
         )
 
+        logger.debug("stream start model=%s", self._model)
         state = StreamState()
         state.model = self._model
 

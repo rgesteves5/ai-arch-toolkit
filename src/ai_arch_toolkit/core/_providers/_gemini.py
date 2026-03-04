@@ -320,9 +320,14 @@ class GeminiProvider(BaseProvider):
         self,
         model: str,
         api_key: str,
+        *,
+        timeout: float | None = None,
     ) -> None:
         self._model = model
-        self._client = genai.Client(api_key=api_key)
+        client_kwargs: dict[str, Any] = {"api_key": api_key}
+        if timeout is not None:
+            client_kwargs["http_options"] = {"timeout": timeout}
+        self._client = genai.Client(**client_kwargs)
 
     async def close(self) -> None:
         self._client.close()
@@ -461,6 +466,7 @@ class GeminiProvider(BaseProvider):
         effective_system = system if system is not None else msg_system
         config = self._build_config(system=effective_system, tools=tools, **kwargs)
 
+        logger.debug("complete start model=%s messages=%d", self._model, len(messages))
         try:
             response = await self._client.aio.models.generate_content(
                 model=self._model,
@@ -481,7 +487,14 @@ class GeminiProvider(BaseProvider):
         except genai_errors.ServerError as exc:
             raise APIError(exc.code, str(exc)) from exc
 
-        return _parse_sdk_response(response, self._model, output_schema=output_schema)
+        resp = _parse_sdk_response(response, self._model, output_schema=output_schema)
+        logger.debug(
+            "complete done model=%s tokens_in=%d tokens_out=%d",
+            self._model,
+            resp.usage.input_tokens,
+            resp.usage.output_tokens,
+        )
+        return resp
 
     # ------------------------------------------------------------------
     # stream
@@ -499,6 +512,7 @@ class GeminiProvider(BaseProvider):
         effective_system = system if system is not None else msg_system
         config = self._build_config(system=effective_system, tools=tools, **kwargs)
 
+        logger.debug("stream start model=%s", self._model)
         state = StreamState()
         state.model = self._model
 

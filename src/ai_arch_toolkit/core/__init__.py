@@ -23,6 +23,7 @@ from ai_arch_toolkit.core._exceptions import APIError, RateLimitError
 from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._middleware import Middleware, Request
 from ai_arch_toolkit.core._pricing import pricing
+from ai_arch_toolkit.core._rate_limit import RateLimitMiddleware
 from ai_arch_toolkit.core._response import (
     Attempt,
     Citation,
@@ -37,6 +38,8 @@ from ai_arch_toolkit.core._response import (
 )
 from ai_arch_toolkit.core._retry import RetryConfig
 from ai_arch_toolkit.core._server_tools import ServerTool, code_execution, web_search
+from ai_arch_toolkit.core._sync import configure_sync_timeouts
+from ai_arch_toolkit.core._telemetry import TracingMiddleware
 from ai_arch_toolkit.core._tools import (
     ToolGroup,
     async_execute_tool,
@@ -66,6 +69,7 @@ __all__ = [
     "Middleware",
     "OutputSchema",
     "RateLimitError",
+    "RateLimitMiddleware",
     "Request",
     "Response",
     "RetryConfig",
@@ -76,11 +80,13 @@ __all__ = [
     "ThinkingBlock",
     "ToolCall",
     "ToolGroup",
+    "TracingMiddleware",
     "Usage",
     "assistant",
     "async_execute_tool",
     "cache",
     "code_execution",
+    "configure_sync_timeouts",
     "document",
     "execute_tool",
     "image",

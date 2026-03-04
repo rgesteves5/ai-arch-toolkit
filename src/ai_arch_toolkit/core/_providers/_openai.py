@@ -243,12 +243,17 @@ class OpenAIProvider(BaseProvider):
         api_key: str,
         *,
         base_url: str | None = None,
+        timeout: float | None = None,
     ) -> None:
         self._model = model
-        self._client = openai.AsyncOpenAI(
-            api_key=api_key,
-            base_url=base_url,
-        )
+        client_kwargs: dict[str, Any] = {"api_key": api_key}
+        if base_url:
+            client_kwargs["base_url"] = base_url
+        if timeout is not None:
+            import httpx
+
+            client_kwargs["timeout"] = httpx.Timeout(timeout)
+        self._client = openai.AsyncOpenAI(**client_kwargs)
 
     async def close(self) -> None:
         await self._client.close()
@@ -352,6 +357,7 @@ class OpenAIProvider(BaseProvider):
         wire = _messages_to_sdk(messages, system=system)
         sdk_kwargs = self._build_sdk_kwargs(wire, tools=tools, **kwargs)
 
+        logger.debug("complete start model=%s messages=%d", self._model, len(messages))
         try:
             completion = await self._client.chat.completions.create(**sdk_kwargs)
         except openai.RateLimitError as exc:
@@ -367,7 +373,14 @@ class OpenAIProvider(BaseProvider):
                 str(exc.body),
             ) from exc
 
-        return _parse_sdk_response(completion, self._model, output_schema=output_schema)
+        resp = _parse_sdk_response(completion, self._model, output_schema=output_schema)
+        logger.debug(
+            "complete done model=%s tokens_in=%d tokens_out=%d",
+            self._model,
+            resp.usage.input_tokens,
+            resp.usage.output_tokens,
+        )
+        return resp
 
     # ------------------------------------------------------------------
     # stream
@@ -384,6 +397,7 @@ class OpenAIProvider(BaseProvider):
         wire = _messages_to_sdk(messages, system=system)
         sdk_kwargs = self._build_sdk_kwargs(wire, tools=tools, **kwargs)
 
+        logger.debug("stream start model=%s", self._model)
         state = StreamState()
         state.model = self._model
 
@@ -469,3 +483,144 @@ class OpenAIProvider(BaseProvider):
                 ) from exc
 
         return _generate(), state
+
+    # ------------------------------------------------------------------
+    # batch
+    # ------------------------------------------------------------------
+
+    async def batch_submit(
+        self,
+        requests: list[dict[str, Any]],
+        **kwargs: Any,
+    ) -> str:
+        """Submit a batch via OpenAI's Batch API."""
+        import io
+
+        lines: list[str] = []
+        for req in requests:
+            custom_id = req.get("custom_id", "")
+            messages = req.get("messages", [])
+            req_system = req.get("system")
+            tools = req.get("tools")
+            req_kwargs = req.get("kwargs", {})
+
+            wire = _messages_to_sdk(messages, system=req_system)
+            body: dict[str, Any] = {
+                "model": self._model,
+                "messages": wire,
+                "max_tokens": req_kwargs.get("max_tokens", 4096),
+            }
+            if tools:
+                fn_tools = [t for t in tools if not t.get("_server_tool")]
+                if fn_tools:
+                    body["tools"] = [_tool_to_sdk(t) for t in fn_tools]
+
+            lines.append(
+                json.dumps(
+                    {
+                        "custom_id": custom_id,
+                        "method": "POST",
+                        "url": "/v1/chat/completions",
+                        "body": body,
+                    }
+                )
+            )
+
+        content = "\n".join(lines)
+        try:
+            file = await self._client.files.create(
+                file=io.BytesIO(content.encode()), purpose="batch"
+            )
+            batch = await self._client.batches.create(
+                input_file_id=file.id,
+                endpoint="/v1/chat/completions",
+                completion_window="24h",
+            )
+            return batch.id
+        except openai.APIStatusError as exc:
+            raise APIError(
+                exc.response.status_code if exc.response else 500,
+                str(exc.body),
+            ) from exc
+
+    async def batch_status(self, batch_id: str) -> str:
+        """Check batch status."""
+        try:
+            batch = await self._client.batches.retrieve(batch_id)
+            return batch.status
+        except openai.APIStatusError as exc:
+            raise APIError(
+                exc.response.status_code if exc.response else 500,
+                str(exc.body),
+            ) from exc
+
+    async def batch_results(self, batch_id: str) -> list[Any]:
+        """Retrieve completed batch results."""
+        from ai_arch_toolkit.core._batch import BatchResult
+
+        try:
+            batch = await self._client.batches.retrieve(batch_id)
+            if not batch.output_file_id:
+                return []
+            file_response = await self._client.files.content(batch.output_file_id)
+            raw_text = file_response.text
+        except openai.APIStatusError as exc:
+            raise APIError(
+                exc.response.status_code if exc.response else 500,
+                str(exc.body),
+            ) from exc
+
+        results: list[BatchResult] = []
+        for line in raw_text.strip().splitlines():
+            if not line.strip():
+                continue
+            entry = json.loads(line)
+            custom_id = entry.get("custom_id", "")
+            resp_body = entry.get("response", {}).get("body")
+            error = entry.get("error")
+            if error:
+                results.append(BatchResult(custom_id=custom_id, error=str(error)))
+            elif resp_body:
+                response = self._parse_batch_response(resp_body)
+                results.append(BatchResult(custom_id=custom_id, response=response))
+            else:
+                results.append(BatchResult(custom_id=custom_id, error="empty response"))
+        return results
+
+    def _parse_batch_response(self, body: dict[str, Any]) -> Response:
+        """Build a Response from a raw batch response body dict."""
+        choices = body.get("choices", [])
+        if not choices:
+            return Response(raw=body, model=self._model)
+
+        choice = choices[0]
+        message = choice.get("message", {})
+        text = (message.get("content") or "").strip()
+
+        tool_calls: list[ToolCall] = []
+        for tc in message.get("tool_calls") or []:
+            fn = tc.get("function", {})
+            tool_calls.append(
+                ToolCall(
+                    id=tc.get("id", ""),
+                    name=fn.get("name", ""),
+                    input=parse_tool_args(fn.get("arguments", "{}")),
+                )
+            )
+
+        raw_usage = body.get("usage", {})
+        usage = Usage(
+            input_tokens=raw_usage.get("prompt_tokens", 0),
+            output_tokens=raw_usage.get("completion_tokens", 0),
+        )
+        cost = _estimate_response_cost(self._model, usage)
+
+        return Response(
+            text=text,
+            tool_calls=tuple(tool_calls),
+            usage=usage,
+            cost=cost,
+            stop_reason=choice.get("finish_reason", ""),
+            model=body.get("model", self._model),
+            raw=body,
+        )

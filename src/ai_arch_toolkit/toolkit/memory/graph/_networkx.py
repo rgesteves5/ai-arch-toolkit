@@ -84,11 +84,7 @@ class NetworkXBackend:
 
     async def add_edge(self, edge: Edge) -> None:
         if edge.source not in self._graph or edge.target not in self._graph:
-            missing = [
-                nid
-                for nid in (edge.source, edge.target)
-                if nid not in self._graph
-            ]
+            missing = [nid for nid in (edge.source, edge.target) if nid not in self._graph]
             msg = f"Cannot add edge — node(s) not found: {missing}"
             raise ValueError(msg)
         self._graph.add_edge(

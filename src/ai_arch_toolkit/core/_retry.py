@@ -22,6 +22,14 @@ class RetryConfig:
     max_delay: float = 60.0
     retry_on_status: tuple[int, ...] = (429, 500, 502, 503, 504)
 
+    def __post_init__(self) -> None:
+        if self.max_retries < 0:
+            raise ValueError(f"max_retries must be >= 0, got {self.max_retries}")
+        if self.base_delay <= 0:
+            raise ValueError(f"base_delay must be positive, got {self.base_delay}")
+        if self.max_delay <= 0:
+            raise ValueError(f"max_delay must be positive, got {self.max_delay}")
+
 
 def _is_retryable(exc: Exception, config: RetryConfig) -> bool:
     """Check if an exception is retryable."""

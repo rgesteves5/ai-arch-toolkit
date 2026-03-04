@@ -55,6 +55,10 @@ class LLMCompilerConfig:
     executor: PhaseConfig | None = None
     joiner: PhaseConfig | None = None
 
+    def __post_init__(self) -> None:
+        if self.max_replans < 0:
+            raise ValueError(f"max_replans must be >= 0, got {self.max_replans}")
+
 
 # ---------------------------------------------------------------------------
 # Internal types

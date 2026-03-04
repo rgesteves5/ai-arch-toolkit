@@ -279,12 +279,15 @@ class AnthropicProvider(BaseProvider):
         api_key: str,
         *,
         base_url: str | None = None,
+        timeout: float | None = None,
     ) -> None:
         self._model = model
-        self._client = anthropic.AsyncAnthropic(
-            api_key=api_key,
-            base_url=base_url,
-        )
+        client_kwargs: dict[str, Any] = {"api_key": api_key}
+        if base_url:
+            client_kwargs["base_url"] = base_url
+        if timeout is not None:
+            client_kwargs["timeout"] = timeout
+        self._client = anthropic.AsyncAnthropic(**client_kwargs)
 
     async def close(self) -> None:
         await self._client.close()
@@ -415,6 +418,7 @@ class AnthropicProvider(BaseProvider):
 
         sdk_kwargs = self._build_sdk_kwargs(wire, system=effective_system, tools=tools, **kwargs)
 
+        logger.debug("complete start model=%s messages=%d", self._model, len(messages))
         try:
             message = await self._client.messages.create(**sdk_kwargs)
         except anthropic.RateLimitError as exc:
@@ -427,7 +431,14 @@ class AnthropicProvider(BaseProvider):
         except anthropic.APIStatusError as exc:
             raise APIError(exc.response.status_code, str(exc.body)) from exc
 
-        return _parse_sdk_response(message, self._model, output_schema=output_schema)
+        resp = _parse_sdk_response(message, self._model, output_schema=output_schema)
+        logger.debug(
+            "complete done model=%s tokens_in=%d tokens_out=%d",
+            self._model,
+            resp.usage.input_tokens,
+            resp.usage.output_tokens,
+        )
+        return resp
 
     # ------------------------------------------------------------------
     # stream
@@ -447,6 +458,7 @@ class AnthropicProvider(BaseProvider):
 
         sdk_kwargs = self._build_sdk_kwargs(wire, system=effective_system, tools=tools, **kwargs)
 
+        logger.debug("stream start model=%s", self._model)
         state = StreamState()
         state.model = self._model
 

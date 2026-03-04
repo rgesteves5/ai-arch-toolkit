@@ -56,6 +56,14 @@ class LATSConfig:
     solver: PhaseConfig | None = None
     reflector: PhaseConfig | None = None
 
+    def __post_init__(self) -> None:
+        if self.n_candidates <= 0:
+            raise ValueError(f"n_candidates must be positive, got {self.n_candidates}")
+        if self.max_rollouts <= 0:
+            raise ValueError(f"max_rollouts must be positive, got {self.max_rollouts}")
+        if self.exploration_weight < 0:
+            raise ValueError(f"exploration_weight must be >= 0, got {self.exploration_weight}")
+
 
 # ---------------------------------------------------------------------------
 # MCTS Node

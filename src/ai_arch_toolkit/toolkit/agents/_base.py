@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Callable, Iterator
@@ -13,6 +14,8 @@ from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._response import Attempt, OutputSchema, Response, ToolCall, Usage
 from ai_arch_toolkit.core._sync import _run_sync, _stream_sync
 from ai_arch_toolkit.core._tools._group import ToolGroup
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Type aliases
@@ -56,6 +59,14 @@ class AgentConfig:
     on_event: Callable[[AgentEvent], None] | None = None
     llm_kwargs: dict[str, Any] = field(default_factory=dict)
     output_schema: OutputSchema | type | None = None
+
+    def __post_init__(self) -> None:
+        if self.max_iterations <= 0:
+            raise ValueError(f"max_iterations must be positive, got {self.max_iterations}")
+        if self.timeout is not None and self.timeout <= 0:
+            raise ValueError(f"timeout must be positive, got {self.timeout}")
+        if self.max_tokens is not None and self.max_tokens <= 0:
+            raise ValueError(f"max_tokens must be positive, got {self.max_tokens}")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -233,7 +244,10 @@ class BaseAgent(ABC):
         async for event in aiter:
             self._fire(event)
 
-            if event.type == "step_end":
+            if event.type == "step_start":
+                logger.info("Agent step %d started", event.step)
+            elif event.type == "step_end":
+                logger.info("Agent step %d ended reason=%s", event.step, event.stop_reason)
                 if event.stop_reason is not None:
                     stop_reason = event.stop_reason
                 if event.response is not None:
