@@ -97,6 +97,28 @@ class Graph:
             return len(self._type_index[type])
         return await self._backend.count_nodes(type=type)
 
+    async def has(self, node_id: NodeID) -> bool:
+        """Check if a node exists."""
+        return await self._backend.get_node(node_id) is not None
+
+    async def degree(self, node_id: NodeID) -> int:
+        """Get the degree (in + out) of a node."""
+        edges = await self._backend.get_edges(node_id, direction="both")
+        return len(edges)
+
+    async def node_count(self) -> int:
+        """Count all nodes."""
+        return await self._backend.count_nodes()
+
+    async def edge_count(self) -> int:
+        """Count all edges."""
+        all_edges = await self._list_all_edges()
+        return len(all_edges)
+
+    async def is_empty(self) -> bool:
+        """Check if the graph has no nodes."""
+        return await self._backend.count_nodes() == 0
+
     # --- Async edge ops ---
 
     async def connect(
@@ -130,6 +152,27 @@ class Graph:
 
     async def disconnect(self, source: NodeID, target: NodeID, relation: str) -> bool:
         return await self._backend.remove_edge(source, target, relation)
+
+    async def get_edges_between(
+        self, source: NodeID, target: NodeID, *, relation: str | None = None
+    ) -> Sequence[Edge]:
+        """Get all edges between two specific nodes."""
+        out_edges = await self._backend.get_edges(source, direction="out", relation=relation)
+        return [e for e in out_edges if e.target == target]
+
+    async def list_edges(self, *, relation: str | None = None) -> Sequence[Edge]:
+        """List all edges in the graph, optionally filtered by relation."""
+        return await self._list_all_edges(relation=relation)
+
+    # --- Internal helpers ---
+
+    async def _list_all_edges(self, *, relation: str | None = None) -> list[Edge]:
+        """Collect all outgoing edges from every node."""
+        nodes = await self._backend.list_nodes()
+        result: list[Edge] = []
+        for n in nodes:
+            result.extend(await self._backend.get_edges(n.id, direction="out", relation=relation))
+        return result
 
     # --- Async traversal + algorithms ---
 
@@ -171,6 +214,105 @@ class Graph:
             msg = "Backend does not implement GraphAlgorithms"
             raise TypeError(msg)
         return await self._backend.connected_components(relation=relation)
+
+    async def find_all_paths(
+        self, source: NodeID, target: NodeID, *, max_depth: int | None = None
+    ) -> Sequence[Sequence[NodeID]]:
+        """Find all simple paths between two nodes."""
+        if not isinstance(self._backend, GraphAlgorithms):
+            msg = "Backend does not implement GraphAlgorithms"
+            raise TypeError(msg)
+        return await self._backend.find_all_paths(source, target, max_depth=max_depth)
+
+    async def get_ancestors(self, node_id: NodeID) -> set[NodeID]:
+        """Get all ancestors of a node (nodes that can reach it)."""
+        if not isinstance(self._backend, GraphAlgorithms):
+            msg = "Backend does not implement GraphAlgorithms"
+            raise TypeError(msg)
+        return await self._backend.ancestors(node_id)
+
+    async def get_descendants(self, node_id: NodeID) -> set[NodeID]:
+        """Get all descendants of a node (nodes reachable from it)."""
+        if not isinstance(self._backend, GraphAlgorithms):
+            msg = "Backend does not implement GraphAlgorithms"
+            raise TypeError(msg)
+        return await self._backend.descendants(node_id)
+
+    async def get_subgraph(self, node_ids: Sequence[NodeID]) -> Graph:
+        """Extract a subgraph containing only the specified nodes."""
+        if not isinstance(self._backend, GraphAlgorithms):
+            msg = "Backend does not implement GraphAlgorithms"
+            raise TypeError(msg)
+        sub_backend = await self._backend.subgraph(node_ids)
+        return Graph(sub_backend)
+
+    async def get_ego_graph(self, node_id: NodeID, *, radius: int = 1) -> Graph:
+        """Get the ego graph (neighborhood) of a node."""
+        if not isinstance(self._backend, GraphAlgorithms):
+            msg = "Backend does not implement GraphAlgorithms"
+            raise TypeError(msg)
+        ego_backend = await self._backend.ego_graph(node_id, radius=radius)
+        return Graph(ego_backend)
+
+    async def pagerank(self, *, alpha: float = 0.85) -> dict[NodeID, float]:
+        """Compute PageRank scores for all nodes."""
+        if not isinstance(self._backend, GraphAlgorithms):
+            msg = "Backend does not implement GraphAlgorithms"
+            raise TypeError(msg)
+        return await self._backend.pagerank(alpha=alpha)
+
+    # --- Facade-only methods ---
+
+    async def get_orphan_nodes(self) -> Sequence[Node[Any]]:
+        """Get nodes with no edges (degree 0)."""
+        nodes = await self._backend.list_nodes()
+        # Build connected set in one pass over edges instead of per-node degree calls
+        edges = await self._list_all_edges()
+        connected: set[NodeID] = set()
+        for e in edges:
+            connected.add(e.source)
+            connected.add(e.target)
+        return [n for n in nodes if n.id not in connected]
+
+    async def get_stats(self) -> dict[str, Any]:
+        """Get summary statistics about the graph."""
+        nodes = await self._backend.list_nodes()
+        type_counts: dict[str, int] = {}
+        for n in nodes:
+            type_counts[n.type] = type_counts.get(n.type, 0) + 1
+        edges = await self._list_all_edges()
+        relation_counts: dict[str, int] = {}
+        for e in edges:
+            relation_counts[e.relation] = relation_counts.get(e.relation, 0) + 1
+        return {
+            "node_count": len(nodes),
+            "edge_count": len(edges),
+            "node_types": type_counts,
+            "edge_relations": relation_counts,
+        }
+
+    async def filter_nodes(self, predicate: Callable[[Node[Any]], bool]) -> Sequence[Node[Any]]:
+        """Filter nodes by a predicate function."""
+        nodes = await self._backend.list_nodes()
+        return [n for n in nodes if predicate(n)]
+
+    async def filter_edges(self, predicate: Callable[[Edge], bool]) -> Sequence[Edge]:
+        """Filter edges by a predicate function."""
+        edges = await self._list_all_edges()
+        return [e for e in edges if predicate(e)]
+
+    async def copy(self, backend: GraphBackend | None = None) -> Graph:
+        """Create a deep copy of the graph.
+
+        Args:
+            backend: Backend for the copy. Required for backends with constructor
+                arguments. Defaults to creating a new instance of the same type
+                (only works for zero-arg constructors).
+        """
+        data = await self.to_dict()
+        if backend is None:
+            backend = type(self._backend)()
+        return await Graph.from_dict(data, backend)
 
     # --- Async bulk ---
 
@@ -351,6 +493,64 @@ class Graph:
         self, *, relation: str | None = None
     ) -> Sequence[Sequence[NodeID]]:
         return _run_sync(self.connected_components(relation=relation))
+
+    def has_sync(self, node_id: NodeID) -> bool:
+        return _run_sync(self.has(node_id))
+
+    def degree_sync(self, node_id: NodeID) -> int:
+        return _run_sync(self.degree(node_id))
+
+    def get_edges_between_sync(
+        self, source: NodeID, target: NodeID, *, relation: str | None = None
+    ) -> Sequence[Edge]:
+        return _run_sync(self.get_edges_between(source, target, relation=relation))
+
+    def list_edges_sync(self, *, relation: str | None = None) -> Sequence[Edge]:
+        return _run_sync(self.list_edges(relation=relation))
+
+    def node_count_sync(self) -> int:
+        return _run_sync(self.node_count())
+
+    def edge_count_sync(self) -> int:
+        return _run_sync(self.edge_count())
+
+    def is_empty_sync(self) -> bool:
+        return _run_sync(self.is_empty())
+
+    def get_orphan_nodes_sync(self) -> Sequence[Node[Any]]:
+        return _run_sync(self.get_orphan_nodes())
+
+    def get_stats_sync(self) -> dict[str, Any]:
+        return _run_sync(self.get_stats())
+
+    def filter_nodes_sync(self, predicate: Callable[[Node[Any]], bool]) -> Sequence[Node[Any]]:
+        return _run_sync(self.filter_nodes(predicate))
+
+    def filter_edges_sync(self, predicate: Callable[[Edge], bool]) -> Sequence[Edge]:
+        return _run_sync(self.filter_edges(predicate))
+
+    def copy_sync(self, backend: GraphBackend | None = None) -> Graph:
+        return _run_sync(self.copy(backend))
+
+    def find_all_paths_sync(
+        self, source: NodeID, target: NodeID, *, max_depth: int | None = None
+    ) -> Sequence[Sequence[NodeID]]:
+        return _run_sync(self.find_all_paths(source, target, max_depth=max_depth))
+
+    def get_ancestors_sync(self, node_id: NodeID) -> set[NodeID]:
+        return _run_sync(self.get_ancestors(node_id))
+
+    def get_descendants_sync(self, node_id: NodeID) -> set[NodeID]:
+        return _run_sync(self.get_descendants(node_id))
+
+    def get_subgraph_sync(self, node_ids: Sequence[NodeID]) -> Graph:
+        return _run_sync(self.get_subgraph(node_ids))
+
+    def get_ego_graph_sync(self, node_id: NodeID, *, radius: int = 1) -> Graph:
+        return _run_sync(self.get_ego_graph(node_id, radius=radius))
+
+    def pagerank_sync(self, *, alpha: float = 0.85) -> dict[NodeID, float]:
+        return _run_sync(self.pagerank(alpha=alpha))
 
     def clear_sync(self, *, type: NodeType | None = None) -> int:
         return _run_sync(self.clear(type=type))
