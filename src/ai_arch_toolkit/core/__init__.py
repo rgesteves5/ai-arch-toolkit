@@ -40,6 +40,12 @@ from ai_arch_toolkit.core._retry import RetryConfig
 from ai_arch_toolkit.core._server_tools import ServerTool, code_execution, web_search
 from ai_arch_toolkit.core._sync import configure_sync_timeouts
 from ai_arch_toolkit.core._telemetry import TracingMiddleware
+from ai_arch_toolkit.core._tokens import (
+    chars_to_tokens,
+    count_tokens_local,
+    count_tokens_local_batch,
+    tokens_to_chars,
+)
 from ai_arch_toolkit.core._tools import (
     ToolGroup,
     async_execute_tool,
@@ -109,8 +115,11 @@ __all__ = [
     "assistant",
     "async_execute_tool",
     "cache",
+    "chars_to_tokens",
     "code_execution",
     "configure_sync_timeouts",
+    "count_tokens_local",
+    "count_tokens_local_batch",
     "document",
     "execute_tool",
     "image",
@@ -118,6 +127,7 @@ __all__ = [
     "prepare_tools",
     "pricing",
     "system",
+    "tokens_to_chars",
     "tool",
     "tool_result",
     "user",
