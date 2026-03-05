@@ -48,6 +48,23 @@ from ai_arch_toolkit.core._tools import (
     prepare_tools,
     tool,
 )
+from ai_arch_toolkit.core.graph import (
+    Edge as GraphEdge,
+)
+from ai_arch_toolkit.core.graph import (
+    Graph,
+    NodeID,
+    NodeType,
+)
+from ai_arch_toolkit.core.graph import (
+    GraphAlgorithms as GraphAlgorithmsProto,
+)
+from ai_arch_toolkit.core.graph import (
+    GraphBackend as GraphBackendProto,
+)
+from ai_arch_toolkit.core.graph import (
+    Node as GraphNode,
+)
 
 # Keep package logger configured on import.
 _pkg_logger = logging.getLogger("ai_arch_toolkit")
@@ -65,8 +82,15 @@ __all__ = [
     "Content",
     "ContentPart",
     "DocumentPart",
+    "Graph",
+    "GraphAlgorithmsProto",
+    "GraphBackendProto",
+    "GraphEdge",
+    "GraphNode",
     "ImagePart",
     "Middleware",
+    "NodeID",
+    "NodeType",
     "OutputSchema",
     "RateLimitError",
     "RateLimitMiddleware",

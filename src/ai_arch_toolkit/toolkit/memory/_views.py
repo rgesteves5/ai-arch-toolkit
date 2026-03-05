@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import Any
 
+from ai_arch_toolkit.core.graph import Direction
 from ai_arch_toolkit.toolkit.memory._types import (
     Edge,
     Node,
@@ -130,7 +131,7 @@ class RelationalView:
         self,
         node_id: NodeID,
         *,
-        direction: str = "out",
+        direction: Direction = "out",
         relation: str | None = None,
     ) -> Sequence[Edge]:
         return await self._store.edges(node_id, direction=direction, relation=relation)

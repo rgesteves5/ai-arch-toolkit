@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from ai_arch_toolkit.toolkit.memory.graph._backends import GraphAlgorithms, GraphBackend
+from ai_arch_toolkit.toolkit.memory.graph._backends import (
+    GraphAlgorithms,
+    GraphBackend,
+    MemoryBackend,
+)
 from ai_arch_toolkit.toolkit.memory.graph._index import BruteForceIndex, VectorIndex
 from ai_arch_toolkit.toolkit.memory.graph._store import GraphStore
 
@@ -14,5 +18,6 @@ __all__ = [
     "GraphAlgorithms",
     "GraphBackend",
     "GraphStore",
+    "MemoryBackend",
     "VectorIndex",
 ]

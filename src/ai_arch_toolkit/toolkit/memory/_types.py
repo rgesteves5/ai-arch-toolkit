@@ -8,8 +8,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-type NodeID = str
-type NodeType = str
+from ai_arch_toolkit.core.graph import Edge, NodeID, NodeType  # noqa: F401
+
 type EmbedFn = Callable[[str], Awaitable[list[float]]]
 
 
@@ -38,17 +38,6 @@ class Node:
     confidence: float = 1.0
     # Provenance
     source: str = "unknown"
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class Edge:
-    """A directed edge between two nodes."""
-
-    source: NodeID
-    target: NodeID
-    relation: str
-    weight: float = 1.0
-    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

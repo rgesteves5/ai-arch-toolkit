@@ -1,51 +1,24 @@
-"""Graph backend and algorithm protocols."""
+"""Graph backend and algorithm protocols — re-exported from core."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 from typing import Protocol, runtime_checkable
 
-from ai_arch_toolkit.toolkit.memory._types import Edge, Node, NodeID, NodeType
+from ai_arch_toolkit.core.graph import (  # noqa: F401
+    GraphAlgorithms,
+    GraphBackend,
+)
+from ai_arch_toolkit.toolkit.memory._types import Node, NodeType
 
 
 @runtime_checkable
-class GraphBackend(Protocol):
-    """Protocol for graph storage backends.
+class MemoryBackend(Protocol):
+    """Extended backend protocol for memory-specific search operations.
 
-    All methods are async. Implementations must structurally match this protocol.
+    Backends used by GraphStore must implement both ``GraphBackend`` (from core)
+    and these additional search methods.
     """
-
-    # --- Node operations ---
-
-    async def add_node(self, node: Node) -> None: ...
-
-    async def get_node(self, node_id: NodeID) -> Node | None: ...
-
-    async def update_node(self, node_id: NodeID, **attrs: object) -> Node | None: ...
-
-    async def remove_node(self, node_id: NodeID) -> bool: ...
-
-    async def list_nodes(
-        self, *, type: NodeType | None = None, limit: int | None = None
-    ) -> Sequence[Node]: ...
-
-    async def count_nodes(self, *, type: NodeType | None = None) -> int: ...
-
-    # --- Edge operations ---
-
-    async def add_edge(self, edge: Edge) -> None: ...
-
-    async def get_edges(
-        self,
-        node_id: NodeID,
-        *,
-        direction: str = "out",
-        relation: str | None = None,
-    ) -> Sequence[Edge]: ...
-
-    async def remove_edge(self, source: NodeID, target: NodeID, relation: str) -> bool: ...
-
-    # --- Search ---
 
     async def search_content(
         self, query: str, *, type: NodeType | None = None, k: int = 5
@@ -54,34 +27,3 @@ class GraphBackend(Protocol):
     async def search_similar(
         self, embedding: list[float], *, type: NodeType | None = None, k: int = 5
     ) -> Sequence[Node] | None: ...
-
-    # --- Traversal ---
-
-    async def neighbors(
-        self, node_id: NodeID, *, depth: int = 1, relation: str | None = None
-    ) -> Sequence[Node]: ...
-
-    # --- Bulk ---
-
-    async def clear(self, *, type: NodeType | None = None) -> int: ...
-
-
-@runtime_checkable
-class GraphAlgorithms(Protocol):
-    """Optional protocol for graph algorithms (BFS, DFS, etc.)."""
-
-    async def bfs(self, start: NodeID, *, relation: str | None = None) -> Sequence[Node]: ...
-
-    async def dfs(self, start: NodeID, *, relation: str | None = None) -> Sequence[Node]: ...
-
-    async def shortest_path(
-        self, source: NodeID, target: NodeID, *, relation: str | None = None
-    ) -> Sequence[Node] | None: ...
-
-    async def centrality(self, *, relation: str | None = None) -> dict[NodeID, float]: ...
-
-    async def connected_components(
-        self, *, relation: str | None = None
-    ) -> Sequence[Sequence[NodeID]]: ...
-
-    async def subgraph(self, node_ids: Sequence[NodeID]) -> GraphBackend: ...
