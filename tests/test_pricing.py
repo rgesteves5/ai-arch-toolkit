@@ -34,15 +34,30 @@ class TestPricingRegistryDefaults:
     def test_has_gpt5_models(self):
         assert pricing.has("gpt-5")
         assert pricing.has("gpt-5-mini")
+        assert pricing.has("gpt-5-nano")
+        assert pricing.has("gpt-5.2")
+        assert pricing.has("gpt-5.2-pro")
+        assert pricing.has("gpt-5-pro")
 
-    def test_has_gemini_25_and_grok_models(self):
+    def test_has_gemini_models(self):
+        assert pricing.has("gemini-3.1-pro-preview-20260301")
+        assert pricing.has("gemini-3-flash-preview")
         assert pricing.has("gemini-2.5-flash")
         assert pricing.has("gemini-2.5-pro")
+        assert pricing.has("gemini-2.0-flash-lite")
+
+    def test_has_o_series_models(self):
+        assert pricing.has("o3-pro")
+        assert pricing.has("o3-deep-research")
+        assert pricing.has("o4-mini-deep-research")
+        assert pricing.has("o1-pro")
         assert pricing.has("grok-3")
 
     def test_has_grok4_models(self):
         assert pricing.has("grok-4")
-        assert pricing.has("grok-4-1-fast")
+        assert pricing.has("grok-4-1-fast-reasoning")
+        assert pricing.has("grok-4-fast-reasoning")
+        assert pricing.has("grok-code-fast-1")
 
     def test_unknown_model(self):
         assert not pricing.has("unknown-model-v1")
@@ -85,8 +100,46 @@ class TestPricingRegistryGet:
     def test_o3_updated_pricing(self):
         p = pricing.get("o3")
         assert p is not None
-        assert p.input == 2.0  # updated from $10
-        assert p.output == 8.0  # updated from $40
+        assert p.input == 2.0
+        assert p.output == 8.0
+        assert p.batch_input == 1.0
+        assert p.cache_read == 0.50
+
+    def test_gpt5_family_prefix_match(self):
+        # gpt-5.2 is more specific than gpt-5
+        p52 = pricing.get("gpt-5.2")
+        p5 = pricing.get("gpt-5")
+        assert p52 is not None
+        assert p5 is not None
+        assert p52.input == 1.75  # gpt-5.2
+        assert p5.input == 1.25  # gpt-5 / gpt-5.1
+
+    def test_gpt4o_has_cache_and_batch(self):
+        p = pricing.get("gpt-4o-2024-08-06")
+        assert p is not None
+        assert p.cache_read == 1.25
+        assert p.batch_input == 1.25
+        assert p.batch_output == 5.0
+
+    def test_gemini_25_pro_long_context(self):
+        p = pricing.get("gemini-2.5-pro-latest")
+        assert p is not None
+        assert p.long_context_threshold == 200_000
+        assert p.long_context_input == 2.50
+        assert p.long_context_output == 15.0
+
+    def test_gemini_20_flash_updated(self):
+        p = pricing.get("gemini-2.0-flash")
+        assert p is not None
+        assert p.input == 0.15
+        assert p.output == 0.60
+
+    def test_grok_code_fast(self):
+        p = pricing.get("grok-code-fast-1")
+        assert p is not None
+        assert p.input == 0.20
+        assert p.output == 1.50
+        assert p.cache_read == 0.02
 
 
 class TestPricingRegistryRegister:
@@ -148,14 +201,14 @@ class TestEstimateCost:
         assert abs(cost - expected) < 1e-10
 
     def test_cache_tokens_ignored_for_models_without_cache(self):
-        # gpt-4o has no cache pricing (None) — cache tokens should not contribute
+        # gpt-4-turbo has no cache pricing (None) — cache tokens should not contribute
         cost = pricing.estimate_cost(
-            "gpt-4o-2024-08-06",
+            "gpt-4-turbo-2024-04-09",
             input_tokens=1000,
             output_tokens=0,
             cache_write_tokens=500,
         )
-        expected = 2.50 * 1000 / 1_000_000
+        expected = 10.0 * 1000 / 1_000_000
         assert cost is not None
         assert abs(cost - expected) < 1e-10
 
@@ -171,14 +224,14 @@ class TestEstimateCost:
         assert abs(cost - expected) < 1e-10
 
     def test_batch_fallback_to_normal_pricing(self):
-        # gpt-4o has no batch pricing (None) — should fall back to normal rates
+        # gpt-4-turbo has no batch pricing (None) — should fall back to normal rates
         cost = pricing.estimate_cost(
-            "gpt-4o-2024-08-06",
+            "gpt-4-turbo-2024-04-09",
             input_tokens=1000,
             output_tokens=500,
             is_batch=True,
         )
-        expected = 2.50 * 1000 / 1_000_000 + 10.0 * 500 / 1_000_000
+        expected = 10.0 * 1000 / 1_000_000 + 30.0 * 500 / 1_000_000
         assert cost is not None
         assert abs(cost - expected) < 1e-10
 
@@ -403,7 +456,7 @@ class TestLoad:
 class TestModelPricingNone:
     def test_none_semantics(self):
         # Models without cache/batch have None, not 0.0
-        p = pricing.get("gpt-4o-2024-08-06")
+        p = pricing.get("gpt-4-turbo-2024-04-09")
         assert p is not None
         assert p.cache_write is None
         assert p.cache_read is None
