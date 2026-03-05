@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from ai_arch_toolkit.core.graph import Direction
 from ai_arch_toolkit.toolkit.memory._types import (
     Edge,
     EmbedFn,
@@ -18,7 +19,11 @@ from ai_arch_toolkit.toolkit.memory._types import (
     SearchResult,
     _now_utc,
 )
-from ai_arch_toolkit.toolkit.memory.graph._backends import GraphAlgorithms, GraphBackend
+from ai_arch_toolkit.toolkit.memory.graph._backends import (
+    GraphAlgorithms,
+    GraphBackend,
+    MemoryBackend,
+)
 from ai_arch_toolkit.toolkit.memory.graph._index import BruteForceIndex, VectorIndex
 
 
@@ -40,12 +45,12 @@ class GraphStore:
 
     def __init__(
         self,
-        backend: GraphBackend,
+        backend: GraphBackend & MemoryBackend,
         *,
         embed: EmbedFn | None = None,
         index: VectorIndex | None = None,
     ) -> None:
-        self._backend = backend
+        self._backend: GraphBackend & MemoryBackend = backend
         self._embed = embed
         self._index: VectorIndex | None = index
         if embed is not None and index is None:
@@ -186,7 +191,7 @@ class GraphStore:
         self,
         node_id: NodeID,
         *,
-        direction: str = "out",
+        direction: Direction = "out",
         relation: str | None = None,
     ) -> Sequence[Edge]:
         return await self._backend.get_edges(node_id, direction=direction, relation=relation)
