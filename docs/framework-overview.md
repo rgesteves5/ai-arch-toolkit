@@ -11,6 +11,10 @@ This document summarizes the **ai-arch-toolkit** package: its structure, feature
 3. A **tool layer** (`@tool` decorator + `ToolGroup`) for LLM function calling
 4. **Eight agent architectures** built on the same core primitives
 5. **25 pre-built tools** (weather, geo, news, knowledge, filesystem, etc.)
+6. A **general-purpose graph layer** (`Graph`, `Node[T]`, `Edge`, algorithms)
+7. **Graph-backed memory** for agents (search, views, middleware, presets)
+8. **Pipeline system** for sequential phase execution with context accumulation
+9. **Knowledge registry** for prompt-injectable reference data
 
 The public API is re-exported from the top level:
 
@@ -71,6 +75,19 @@ llm = LLM("grok-2")                    # xAI
 | `_sync.py` | `_run_sync()` and `_stream_sync()` helpers used by LLM and agents |
 | `_exceptions.py` | `APIError`, `RateLimitError` |
 
+### Graph Layer (`core/graph/`)
+
+General-purpose graph with typed nodes, directed edges, and pluggable backends.
+
+- **`Node[T]`** — generic node (`id`, `type`, `content: T`, `metadata`). Frozen dataclass.
+- **`Edge`** — directed edge (`source`, `target`, `relation`, `weight`, `metadata`). Frozen dataclass.
+- **`Graph`** — primary facade. Async-first with `_sync` wrappers. Type-indexed node lookup, persistence (`save`/`load`/`to_dict`/`from_dict`).
+- **`GraphBackend`** protocol — storage interface (node/edge CRUD, neighbors, clear).
+- **`GraphAlgorithms`** protocol — optional algorithms (BFS, DFS, shortest path, centrality, connected components, subgraph, find_all_paths, ancestors, descendants, ego_graph, PageRank).
+- **`NetworkXBackend`** — default in-memory implementation (requires `networkx`, import-guarded).
+
+`Graph` facade methods include: `add`, `get`, `update`, `remove`, `connect`, `disconnect`, `has`, `degree`, `node_count`, `edge_count`, `is_empty`, `list_edges`, `get_edges_between`, `filter_nodes`, `filter_edges`, `get_orphan_nodes`, `get_stats`, `copy`, `neighbors`, `bfs`, `dfs`, `shortest_path`, `find_all_paths`, `get_ancestors`, `get_descendants`, `get_subgraph`, `get_ego_graph`, `pagerank`, `centrality`, `connected_components`. All async methods have `_sync` counterparts.
+
 ---
 
 ## 2. Toolkit Layer (`toolkit/`)
@@ -124,6 +141,34 @@ All use `@tool` decorator from core/. All return error strings (never raise) for
 
 `_runner.py`: `run_tools()` / `run_tools_sync()` convenience wrappers for single-shot tool execution loops.
 
+### Memory (`toolkit/memory/`)
+
+Graph-backed memory for LLM agents, built on `core/graph/`.
+
+- **`GraphStore`** — wraps `Graph` with memory-specific `Node` (adds `timestamp`, `source`, `confidence`, `access_count`, `last_accessed`, `embedding`), keyword/vector search, and access tracking.
+- **Views**: `TemporalView` (recent, since), `RelationalView` (neighbors, path), `PropertyView` (by_confidence, by_source, most_accessed), `SimilarityView` (vector search).
+- **`MemoryMiddleware`** — auto-injects relevant memories into LLM context.
+- **Presets**: `conversational()` and `cognitive()` for common configurations.
+- **`memory_tools()`** — generates `@tool`-decorated functions for agent use.
+
+### Pipeline (`toolkit/pipeline/`)
+
+Sequential phase execution with context accumulation.
+
+- **`Pipeline`** — takes named phase functions, runs them in order via `run()` or streams via `iter()`.
+- **`PipelineContext`** — accumulates artifacts, provenance, and metadata across phases.
+- **`PhaseResult`** — supports `ok`/`failed`/`partial`/`skipped` statuses.
+- Features: `stop_on_failure`, `stop_on_partial`, `run_from()` resume, token tracking.
+
+### Knowledge (`toolkit/knowledge/`)
+
+Sync in-memory registry for prompt-injectable reference data.
+
+- **`KnowledgeRegistry`** — stores `KnowledgeEntry` items with category, tags, and format.
+- Querying: `by_category()`, `by_tags()` (match_all or match_any).
+- **`as_context()`** — builds prompt strings with separator/transform.
+- Loaders: `load_text()`, `load_json()`, `load_toml()`, `load_yaml()`, `load_markdown()`, `load_directory()` (flat or recursive).
+
 ---
 
 ## 3. Project Layout
@@ -137,6 +182,11 @@ src/ai_arch_toolkit/
 │   ├── _response.py     # Response, Usage, ToolCall, streaming types
 │   ├── _providers/      # BaseProvider → Anthropic, OpenAI, xAI, Gemini
 │   ├── _tools/          # @tool decorator, ToolGroup, schema inference
+│   ├── graph/           # General-purpose graph layer
+│   │   ├── _types.py    # Node[T], Edge, NodeID, Direction
+│   │   ├── _backends.py # GraphBackend, GraphAlgorithms protocols
+│   │   ├── _store.py    # Graph facade
+│   │   └── _networkx.py # NetworkXBackend (import-guarded)
 │   ├── _middleware.py    # Middleware protocol
 │   ├── _retry.py        # RetryConfig, exponential backoff
 │   ├── _pricing.py      # Model pricing registry
@@ -156,13 +206,16 @@ src/ai_arch_toolkit/
     │   ├── _self_discovery.py
     │   └── _llm_compiler.py
     ├── tools/           # 25 pre-built tools (11 modules)
+    ├── memory/          # Graph-backed memory (GraphStore, views, search)
+    ├── pipeline/        # Sequential phase execution
+    ├── knowledge/       # Knowledge registry + loaders
     └── _runner.py       # run_tools() convenience wrapper
 ```
 
 Supporting directories:
 
-- **`examples/`** — 27 examples (01–27): hello world, streaming, tools, each agent, middleware, server tools, etc.
-- **`tests/`** — core tests, `tests/agents/` (agent tests), `tests/toolkit/` (toolkit tool tests)
+- **`examples/`** — 36 examples (01–36): hello world, streaming, tools, agents, middleware, server tools, memory, pipelines, knowledge, fallback chains
+- **`tests/`** — `tests/` (core), `tests/agents/`, `tests/toolkit/`, `tests/graph/`, `tests/memory/`, `tests/pipeline/`, `tests/knowledge/`
 - **`research/`** — standalone Markdown reference guides (not part of the package)
 - **`docs/`** — MkDocs site source
 
@@ -184,6 +237,10 @@ Supporting directories:
 | **Pricing** | Per-model pricing registry with cost tracking on `Response`. |
 | **Batch** | `BatchRequest` / `BatchResult` for batch API jobs. |
 | **Agents** | 8 architectures with shared base, event streaming, per-phase customization. |
+| **Graph** | `Graph` facade with `Node[T]`/`Edge`, algorithms (BFS, DFS, PageRank, etc.), persistence. |
+| **Memory** | `GraphStore` with keyword/vector search, temporal/relational/property views, middleware. |
+| **Pipeline** | Sequential phase execution, context accumulation, streaming, resume, failure handling. |
+| **Knowledge** | `KnowledgeRegistry` with category/tag filtering, context building, file loaders. |
 | **Server tools** | `code_execution()`, `web_search()` for provider-hosted capabilities. |
 
 ---

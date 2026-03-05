@@ -120,6 +120,42 @@ The toolkit includes several agent architectures:
 - **SelfDiscoveryAgent** — Select reasoning modules, adapt, operationalize, solve
 - **LLMCompilerAgent** — Plan a DAG, parallel execute, join
 
+## Graph
+
+Build typed, directed graphs with algorithms and persistence:
+
+```python
+from ai_arch_toolkit import Graph, GraphNode
+from ai_arch_toolkit.core.graph._networkx import NetworkXBackend
+
+g = Graph(NetworkXBackend())
+
+# Add typed nodes
+alice = g.add_sync(GraphNode(id="alice", type="person", content="Alice"))
+bob = g.add_sync(GraphNode(id="bob", type="person", content="Bob"))
+proj = g.add_sync(GraphNode(id="p1", type="project", content="Website"))
+
+# Connect with typed edges
+g.connect_sync("alice", "p1", "WORKS_ON")
+g.connect_sync("bob", "p1", "WORKS_ON")
+g.connect_sync("alice", "bob", "KNOWS")
+
+# Query
+print(g.has_sync("alice"))          # True
+print(g.degree_sync("alice"))       # 2
+print(g.node_count_sync())          # 3
+print(g.get_stats_sync())           # {node_count: 3, edge_count: 3, ...}
+
+# Algorithms
+pr = g.pagerank_sync()              # {alice: 0.33, bob: 0.38, p1: 0.29}
+desc = g.get_descendants_sync("alice")  # {bob, p1}
+
+# Persistence
+g.save_sync("my_graph.json")
+```
+
+See `examples/28_memory_graph_basics.py` for the memory layer built on top of this.
+
 ## Next Steps
 
 - See `examples/` for complete working examples

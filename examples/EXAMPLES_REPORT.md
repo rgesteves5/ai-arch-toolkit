@@ -1,6 +1,6 @@
-# Pipeline & Knowledge Examples — Execution Report
+# Examples 28–36 — Execution Report
 
-**Date:** 2026-03-03
+**Date:** 2026-03-05
 **Branch:** `refactor/clean_project`
 **Runtime:** Python 3.13, macOS Darwin 25.3.0
 
@@ -10,11 +10,119 @@
 
 | # | Example | Type | API Key | Status | Duration |
 |---|---------|------|---------|--------|----------|
+| 28 | Memory Graph Basics | Memory | No | OK | <1ms |
+| 29 | Memory Middleware | Memory + LLM | Yes (OpenAI) | OK | ~3s |
+| 30 | Memory Agent Tools | Memory + Agent | Yes (OpenAI) | OK | ~5s |
 | 31 | Pipeline Basics | Pipeline | No | OK | <1ms |
 | 32 | Pipeline Streaming & Resume | Pipeline | No | OK | <1ms |
 | 33 | Pipeline with LLM | Pipeline + LLM | Yes (OpenAI) | OK | 7.47s |
 | 34 | Knowledge Registry | Knowledge | No | OK | <1ms |
 | 35 | Knowledge Loaders | Knowledge | No | OK | <1ms |
+| 36 | Fallback Chains & Attempts | LLM + Agent | Yes (OpenAI) | OK | ~5s |
+
+---
+
+## Example 28: Memory Graph Basics
+
+**File:** `examples/28_memory_graph_basics.py`
+**Features demonstrated:** `GraphStore` creation, adding typed nodes (fact, event, rule), keyword search, edge creation, `TemporalView`, `RelationalView`, `PropertyView`, access tracking, `composite_score`, persistence (save/load)
+
+### Store Configuration
+
+| Property | Value |
+|----------|-------|
+| Backend | `NetworkXBackend` (memory) |
+| Embedding function | None (keyword search only) |
+| API keys required | No |
+| Node types | fact (3), event (2), rule (1) |
+| Edges | 3 (RELATED_TO, TRIGGERED_LOOKUP ×2) |
+
+### Features Exercised
+
+| Feature | Method | Notes |
+|---------|--------|-------|
+| Add nodes | `store.add(node)` | 6 nodes with different types and metadata |
+| Count by type | `store.count(type='fact')` | Filtered counting |
+| Keyword search | `store.search("Python")` | No embeddings needed |
+| Connect nodes | `store.connect(src, tgt, relation)` | With optional metadata |
+| Temporal view | `TemporalView.recent(k=5)`, `.since(hours=1)` | Filtered by node_type="event" |
+| Relational view | `RelationalView.neighbors(id, depth=1)`, `.path(src, tgt)` | Graph traversal |
+| Property view | `PropertyView.by_confidence()`, `.by_source()`, `.most_accessed()` | Attribute filtering |
+| Access tracking | `store.get(id)` bumps `access_count` and `last_accessed` | Auto-incremented |
+| Composite scoring | `composite_score(result, recency_half_life_hours=24)` | Combines relevance + recency |
+| Persistence | `store.save(path)` / `GraphStore.load(path, backend)` | JSON round-trip preserves nodes + edges |
+
+---
+
+## Example 29: Memory Middleware
+
+**File:** `examples/29_memory_middleware.py`
+**Features demonstrated:** Embedding function, `MemoryMiddleware` with `SimilarityView` (find) and `TemporalView` (record), auto-injection into system prompt, auto-recording of interactions, `cognitive()` preset
+
+### Configuration
+
+| Property | Value |
+|----------|-------|
+| Backend | `NetworkXBackend` (memory) |
+| Embedding function | Hash-based 64-dim vectors (demo stand-in) |
+| Model | `gpt-4.1-nano` (OpenAI) |
+| Middleware | `MemoryMiddleware` |
+| Pre-seeded nodes | 4 (1 preference, 3 facts) |
+| LLM calls | 3 |
+
+### Middleware Wiring
+
+| Component | Role | Configuration |
+|-----------|------|---------------|
+| `SimilarityView` | Find relevant memories (before hook) | `node_type="fact"`, `k=3` |
+| `TemporalView` | Record interactions (after hook) | `node_type="interaction"` |
+| `MemoryMiddleware` | Orchestrate find/record | `header="What you know about this user:"` |
+
+### Cognitive Preset
+
+The `cognitive()` preset creates views inspired by human memory:
+
+| View | Purpose |
+|------|---------|
+| `semantic` | Vector similarity search across facts |
+| `episodic` | Temporal view of interactions |
+| `procedural` | Rules and procedures |
+
+---
+
+## Example 30: Memory Agent Tools
+
+**File:** `examples/30_memory_agent_tools.py`
+**Features demonstrated:** `memory_tools()` generating a `ToolGroup` with 4 tools (remember, recall, explore_memory, forget), `ReActAgent` using memory tools, combining memory with agent reasoning
+
+### Configuration
+
+| Property | Value |
+|----------|-------|
+| Backend | `NetworkXBackend` (memory) |
+| Embedding function | Hash-based 64-dim vectors |
+| Model | `gpt-4.1-nano` (OpenAI) |
+| Agent | `ReActAgent` |
+| Max iterations | 6 |
+| Pre-seeded nodes | 3 (2 facts, 1 preference) |
+| Pre-seeded edges | 1 (SAME_PROJECT) |
+
+### Memory Tools
+
+| Tool | Purpose |
+|------|---------|
+| `remember` | Store new information as a node |
+| `recall` | Search memory by keyword/embedding |
+| `explore_memory` | Traverse graph neighbors to understand relations |
+| `forget` | Remove a node from memory |
+
+### Agent Tasks
+
+| Task | Exercises |
+|------|-----------|
+| "What do you know about Project Apollo?" | `recall` — keyword search |
+| "Remember this: Project Apollo's deadline is March 15th" | `remember` — add new node |
+| "What's the deployment procedure?" | `recall` — search preferences |
 
 ---
 
@@ -313,54 +421,87 @@ Use the above guidelines for all responses.
 
 ---
 
+## Example 36: Fallback Chains & Attempt Tracking
+
+**File:** `examples/36_fallback_chains_and_attempts.py`
+**Features demonstrated:** Fallback chains (string and LLM instance), multi-model chains, retry + fallback interaction, `Attempt` tracking on `Response`, streaming with fallback, agent-level `all_attempts`, custom `fallback_on`, nested fallback flattening
+
+### Scenarios
+
+| # | Scenario | Configuration | Key Feature |
+|---|----------|---------------|-------------|
+| 1 | Basic fallback | `fallback="gpt-4.1-mini"` (string) | Backward-compatible single string |
+| 2 | Multi-model chain | `fallback=[LLM(...), LLM(...)]` | Independent configs per fallback |
+| 3 | Retry + fallback | `retry=RetryConfig(max_retries=2)` + fallback | Retry exhaustion triggers fallback |
+| 4 | Attempt tracking | `response.attempts` inspection | Full history: model, status, duration, tokens |
+| 5 | Streaming + fallback | `stream_sync()` with fallback chain | Attempts available on `stream.response` |
+| 6 | Agent attempts | `result.all_attempts` on `AgentResult` | Aggregated across all agent steps |
+| 7 | Custom `fallback_on` | `fallback_on=(APIError, TimeoutError)` | Control which errors trigger fallback |
+| 8 | Nested flattening | `LLM("a", fallback=LLM("b", fallback="c"))` | Nested chains extracted into flat list |
+
+### Attempt Object Fields
+
+| Field | Description |
+|-------|-------------|
+| `model` | Model name used for the attempt |
+| `status` | `"ok"` or `"error"` |
+| `duration` | Wall-clock time in seconds |
+| `timestamp` | Unix timestamp |
+| `retry_number` | 0-based retry index |
+| `usage` | Token usage (if successful) |
+| `error` | Error message (if failed) |
+| `error_type` | Error class name (if failed) |
+
+---
+
 ## Cross-Example Summary
 
 ### Features Covered
 
-| Feature | Ex. 31 | Ex. 32 | Ex. 33 | Ex. 34 | Ex. 35 |
-|---------|--------|--------|--------|--------|--------|
-| `Pipeline()` constructor | x | x | x | | |
-| `Pipeline.run()` | x | x | x | | |
-| `Pipeline.iter()` | | x | x | | |
-| `Pipeline.run_from()` | | x | | | |
-| `PipelineContext` data/metadata | x | x | x | | |
-| `PipelineContext.require()` | x | | x | | |
-| `PipelineContext.provenance` | x | | x | | |
-| `PhaseResult.ok()` | x | x | x | | |
-| `PhaseResult.failed()` | | x | | | |
-| `PhaseResult.partial()` | | x | | | |
-| `PhaseResult.skipped()` | | x | | | |
-| `stop_on_failure` | | x | | | |
-| `stop_on_partial` | | x | | | |
-| Early break from `iter()` | | x | | | |
-| Token tracking / accumulation | | x | x | | |
-| Warnings aggregation | x | x | | | |
-| LLM integration | | | x | | |
-| `KnowledgeRegistry.register()` | | | | x | x |
-| `KnowledgeRegistry.require()` | | | | x | x |
-| `by_category()` | | | | x | |
-| `by_tags()` (match_all/any) | | | | x | |
-| `as_context()` | | | | x | x |
-| `as_context()` + transform | | | | x | x |
-| `load_text()` | | | | | x |
-| `load_json()` | | | | | x |
-| `load_toml()` | | | | | x |
-| `load_markdown()` | | | | | x |
-| `load_directory()` flat | | | | | x |
-| `load_directory()` recursive | | | | | x |
+| Feature | 28 | 29 | 30 | 31 | 32 | 33 | 34 | 35 | 36 |
+|---------|----|----|----|----|----|----|----|----|-----|
+| `GraphStore` creation | x | x | x | | | | | | |
+| `store.add()` / `store.search()` | x | x | x | | | | | | |
+| `store.connect()` / `store.edges()` | x | | x | | | | | | |
+| `TemporalView` | x | x | | | | | | | |
+| `RelationalView` | x | | | | | | | | |
+| `PropertyView` | x | | | | | | | | |
+| `SimilarityView` | | x | | | | | | | |
+| `composite_score()` | x | | | | | | | | |
+| Persistence (save/load) | x | | | | | | | | |
+| `MemoryMiddleware` | | x | | | | | | | |
+| `cognitive()` preset | | x | | | | | | | |
+| `memory_tools()` | | | x | | | | | | |
+| `ReActAgent` | | | x | | | | | | x |
+| `Pipeline()` constructor | | | | x | x | x | | | |
+| `Pipeline.run()` | | | | x | x | x | | | |
+| `Pipeline.iter()` | | | | | x | x | | | |
+| `Pipeline.run_from()` | | | | | x | | | | |
+| `PipelineContext` data/metadata | | | | x | x | x | | | |
+| `PhaseResult.ok/failed/partial/skipped` | | | | x | x | x | | | |
+| `stop_on_failure` / `stop_on_partial` | | | | | x | | | | |
+| Token tracking / accumulation | | | | | x | x | | | |
+| `KnowledgeRegistry.register()` | | | | | | | x | x | |
+| `by_category()` / `by_tags()` | | | | | | | x | | |
+| `as_context()` / transform | | | | | | | x | x | |
+| `load_text/json/toml/markdown()` | | | | | | | | x | |
+| `load_directory()` flat/recursive | | | | | | | | x | |
+| Fallback chains | | | | | | | | | x |
+| `Attempt` tracking | | | | | | | | | x |
+| `RetryConfig` + fallback | | | | | | | | | x |
+| Streaming with fallback | | | | | | | | | x |
+| Agent `all_attempts` | | | | | | | | | x |
+| Custom `fallback_on` | | | | | | | | | x |
 
 ### API Usage Summary
 
 | Metric | Value |
 |--------|-------|
-| Total LLM calls | 3 (example 33 only) |
+| Total LLM calls (API-dependent) | ~15 (ex. 29: 3, ex. 30: ~6, ex. 33: 3, ex. 36: ~8) |
 | Provider | OpenAI |
-| Model | gpt-4.1-nano |
-| Total input tokens | 193 |
-| Total output tokens | 233 |
-| Total tokens | 426 |
-| Estimated cost | ~$0.00011 |
-| Agent architectures used | None (raw pipeline) |
-| Tools called | None |
+| Model | gpt-4.1-nano (primary), gpt-4.1-mini (fallback) |
+| Agent architectures used | ReActAgent (ex. 30, 36) |
+| Memory tools called | remember, recall, explore_memory (ex. 30) |
 | Knowledge entries created | 5 (ex. 34) + 4+4+7 (ex. 35) = 20 |
 | Files loaded | 11 (across ex. 35 scenarios) |
+| Memory nodes created | 6 (ex. 28) + 4 (ex. 29) + 3 (ex. 30) = 13 |

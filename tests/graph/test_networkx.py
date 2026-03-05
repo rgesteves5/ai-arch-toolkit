@@ -170,6 +170,137 @@ class TestAlgorithms:
         assert len(bfs) == 2  # n0 + n1 only
 
 
+class TestNewBackendMethods:
+    async def test_has_node(self, backend: NetworkXBackend):
+        await backend.add_node(Node(id="n1"))
+        assert await backend.has_node("n1") is True
+
+    async def test_has_node_missing(self, backend: NetworkXBackend):
+        assert await backend.has_node("nope") is False
+
+    async def test_degree(self, backend: NetworkXBackend):
+        await backend.add_node(Node(id="a"))
+        await backend.add_node(Node(id="b"))
+        await backend.add_edge(Edge(source="a", target="b", relation="R"))
+        assert await backend.degree("a") == 1  # out
+        assert await backend.degree("b") == 1  # in
+
+    async def test_degree_missing(self, backend: NetworkXBackend):
+        assert await backend.degree("nope") == 0
+
+    async def test_get_edges_between(self, backend: NetworkXBackend):
+        await backend.add_node(Node(id="a"))
+        await backend.add_node(Node(id="b"))
+        await backend.add_edge(Edge(source="a", target="b", relation="KNOWS"))
+        await backend.add_edge(Edge(source="a", target="b", relation="LIKES"))
+        edges = await backend.get_edges_between("a", "b")
+        assert len(edges) == 2
+
+    async def test_get_edges_between_with_relation(self, backend: NetworkXBackend):
+        await backend.add_node(Node(id="a"))
+        await backend.add_node(Node(id="b"))
+        await backend.add_edge(Edge(source="a", target="b", relation="KNOWS"))
+        await backend.add_edge(Edge(source="a", target="b", relation="LIKES"))
+        edges = await backend.get_edges_between("a", "b", relation="KNOWS")
+        assert len(edges) == 1
+        assert edges[0].relation == "KNOWS"
+
+    async def test_get_edges_between_missing_nodes(self, backend: NetworkXBackend):
+        assert await backend.get_edges_between("a", "b") == []
+
+    async def test_list_edges(self, backend: NetworkXBackend):
+        await backend.add_node(Node(id="a"))
+        await backend.add_node(Node(id="b"))
+        await backend.add_edge(Edge(source="a", target="b", relation="KNOWS"))
+        await backend.add_edge(Edge(source="a", target="b", relation="LIKES"))
+        edges = await backend.list_edges()
+        assert len(edges) == 2
+
+    async def test_list_edges_filter_relation(self, backend: NetworkXBackend):
+        await backend.add_node(Node(id="a"))
+        await backend.add_node(Node(id="b"))
+        await backend.add_edge(Edge(source="a", target="b", relation="KNOWS"))
+        await backend.add_edge(Edge(source="a", target="b", relation="LIKES"))
+        edges = await backend.list_edges(relation="KNOWS")
+        assert len(edges) == 1
+
+    async def test_edge_count(self, backend: NetworkXBackend):
+        await backend.add_node(Node(id="a"))
+        await backend.add_node(Node(id="b"))
+        assert await backend.edge_count() == 0
+        await backend.add_edge(Edge(source="a", target="b", relation="R"))
+        assert await backend.edge_count() == 1
+
+
+class TestNewAlgorithms:
+    async def test_find_all_paths(self, backend: NetworkXBackend):
+        for i in range(4):
+            await backend.add_node(Node(id=f"n{i}"))
+        await backend.add_edge(Edge(source="n0", target="n1", relation="R"))
+        await backend.add_edge(Edge(source="n1", target="n3", relation="R"))
+        await backend.add_edge(Edge(source="n0", target="n2", relation="R"))
+        await backend.add_edge(Edge(source="n2", target="n3", relation="R"))
+        paths = await backend.find_all_paths("n0", "n3")
+        assert len(paths) == 2
+
+    async def test_find_all_paths_with_max_depth(self, backend: NetworkXBackend):
+        for i in range(4):
+            await backend.add_node(Node(id=f"n{i}"))
+        await backend.add_edge(Edge(source="n0", target="n1", relation="R"))
+        await backend.add_edge(Edge(source="n1", target="n3", relation="R"))
+        await backend.add_edge(Edge(source="n0", target="n2", relation="R"))
+        await backend.add_edge(Edge(source="n2", target="n3", relation="R"))
+        paths = await backend.find_all_paths("n0", "n3", max_depth=1)
+        assert len(paths) == 0  # all paths need depth >= 2
+
+    async def test_find_all_paths_missing(self, backend: NetworkXBackend):
+        assert await backend.find_all_paths("a", "b") == []
+
+    async def test_ancestors(self, backend: NetworkXBackend):
+        for i in range(3):
+            await backend.add_node(Node(id=f"n{i}"))
+        await backend.add_edge(Edge(source="n0", target="n1", relation="R"))
+        await backend.add_edge(Edge(source="n1", target="n2", relation="R"))
+        anc = await backend.ancestors("n2")
+        assert anc == {"n0", "n1"}
+
+    async def test_ancestors_missing(self, backend: NetworkXBackend):
+        assert await backend.ancestors("nope") == set()
+
+    async def test_descendants(self, backend: NetworkXBackend):
+        for i in range(3):
+            await backend.add_node(Node(id=f"n{i}"))
+        await backend.add_edge(Edge(source="n0", target="n1", relation="R"))
+        await backend.add_edge(Edge(source="n1", target="n2", relation="R"))
+        desc = await backend.descendants("n0")
+        assert desc == {"n1", "n2"}
+
+    async def test_descendants_missing(self, backend: NetworkXBackend):
+        assert await backend.descendants("nope") == set()
+
+    async def test_ego_graph(self, backend: NetworkXBackend):
+        for i in range(4):
+            await backend.add_node(Node(id=f"n{i}"))
+        await backend.add_edge(Edge(source="n0", target="n1", relation="R"))
+        await backend.add_edge(Edge(source="n1", target="n2", relation="R"))
+        await backend.add_edge(Edge(source="n2", target="n3", relation="R"))
+        ego = await backend.ego_graph("n0", radius=1)
+        assert await ego.count_nodes() == 2  # n0 + n1
+
+    async def test_ego_graph_missing(self, backend: NetworkXBackend):
+        ego = await backend.ego_graph("nope")
+        assert await ego.count_nodes() == 0
+
+    async def test_pagerank(self, backend: NetworkXBackend):
+        for i in range(3):
+            await backend.add_node(Node(id=f"n{i}"))
+        await backend.add_edge(Edge(source="n0", target="n1", relation="R"))
+        await backend.add_edge(Edge(source="n1", target="n2", relation="R"))
+        pr = await backend.pagerank()
+        assert len(pr) == 3
+        assert all(v > 0 for v in pr.values())
+
+
 class TestBulk:
     async def test_clear_all(self, backend: NetworkXBackend):
         await backend.add_node(Node(id="a"))

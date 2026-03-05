@@ -1,6 +1,6 @@
 # ai-arch-toolkit
 
-Lightweight unified LLM client for OpenAI, Anthropic, xAI, Gemini, Mistral, and Groq — plus a tool registry, 8 agent architectures, and batch APIs.
+Lightweight unified LLM client for OpenAI, Anthropic, xAI, and Gemini — plus 8 agent architectures, a graph layer, graph-backed memory, pipelines, and a knowledge registry.
 
 ## Quick Start
 

@@ -28,11 +28,18 @@ Two layers under `src/ai_arch_toolkit/`:
 
 ```
 ai_arch_toolkit/
-├── core/          # Stateless async-first foundation — providers, LLM, tools, content
-├── toolkit/       # Convenience utilities — agents, 25 pre-built tools, run_tools
-│   ├── agents/    # Agent architectures (ReAct, Reflexion, ReWOO, PlanExecute, ToT, LATS, SelfDiscovery, LLMCompiler)
-│   └── tools/     # Pre-built tools (weather, geo, news, etc.)
-└── __init__.py    # Re-exports from core/ + toolkit/
+├── core/              # Stateless async-first foundation
+│   ├── _llm.py        # LLM facade
+│   ├── _providers/    # Anthropic, OpenAI, xAI, Gemini
+│   ├── _tools/        # @tool decorator, ToolGroup
+│   └── graph/         # General-purpose graph: Node[T], Edge, Graph, protocols
+├── toolkit/           # Convenience utilities built on core/
+│   ├── agents/        # 8 agent architectures
+│   ├── tools/         # 25 pre-built tools (weather, geo, news, etc.)
+│   ├── memory/        # Graph-backed memory for agents (GraphStore, views, search)
+│   ├── pipeline/      # Sequential phase execution with context accumulation
+│   └── knowledge/     # Sync registry for prompt-injectable reference data
+└── __init__.py        # Re-exports from core/ + toolkit/
 ```
 
 ### Core layer (`core/`)
@@ -49,6 +56,7 @@ The stateless, async-first foundation. All new code should build on this.
 - **`_middleware.py`**: `Middleware` Protocol with `before`/`after` hooks, `Request` dataclass.
 - **`_retry.py`**: `RetryConfig` + `with_retry()` for exponential backoff.
 - **`_server_tools.py`**: `ServerTool`, `code_execution()`, `web_search()` for provider-hosted tools.
+- **`graph/`**: General-purpose graph layer. `Node[T]`, `Edge` (frozen dataclasses), `Graph` facade (async-first with `_sync` wrappers). Protocols: `GraphBackend` (storage), `GraphAlgorithms` (BFS, DFS, shortest path, PageRank, etc.). Default backend: `NetworkXBackend` (import-guarded, requires `[graph]` extra). `Graph` exposes: node/edge CRUD, `has()`, `degree()`, `node_count()`, `edge_count()`, `list_edges()`, `filter_nodes()`, `filter_edges()`, `get_orphan_nodes()`, `get_stats()`, `copy()`, traversals (BFS, DFS, shortest path, find_all_paths, ancestors, descendants, ego_graph, PageRank, centrality, connected components, subgraph), persistence (`save`/`load`/`to_dict`/`from_dict`).
 
 ### Toolkit layer (`toolkit/`)
 
@@ -72,6 +80,18 @@ Built on core/ primitives (`LLM`, `Response`, `ToolGroup`, `Usage`, `ToolCall`, 
 
 25 pre-built tools across 11 files, all using stdlib only (zero pip deps). Categories: datetime, math, text, filesystem, shell, JSON/CSV, web, weather (Open-Meteo), knowledge (Wikipedia, Free Dictionary), geo (geocoding, IP lookup, country info), news (Hacker News). All use `@tool` decorator from core/.
 
+#### Memory (`toolkit/memory/`)
+
+Graph-backed memory for LLM agents, built on `core/graph/`. `GraphStore` wraps `Graph` with memory-specific `Node` (adds `timestamp`, `source`, `confidence`, `access_count`, `last_accessed`, `embedding`), keyword/vector search, and access tracking. Views: `TemporalView` (recent, since), `RelationalView` (neighbors, path), `PropertyView` (by_confidence, by_source, most_accessed), `SimilarityView` (vector search). `MemoryMiddleware` auto-injects relevant memories into LLM context. Presets: `conversational()`, `cognitive()`. `memory_tools()` generates `@tool`-decorated functions for agent use.
+
+#### Pipeline (`toolkit/pipeline/`)
+
+Sequential phase execution with context accumulation. `Pipeline` takes named phase functions, runs them in order via `run()` or streams via `iter()`. `PipelineContext` accumulates artifacts and provenance across phases. `PhaseResult` supports `ok`/`failed`/`partial`/`skipped` statuses. Features: `stop_on_failure`, `stop_on_partial`, `run_from()` resume, token tracking.
+
+#### Knowledge (`toolkit/knowledge/`)
+
+Sync in-memory registry for prompt-injectable reference data. `KnowledgeRegistry` stores `KnowledgeEntry` items with category/tags/format. Querying via `by_category()`, `by_tags()`. `as_context()` builds prompt strings with separator/transform. Loaders: `load_text()`, `load_json()`, `load_toml()`, `load_yaml()`, `load_markdown()`, `load_directory()` (flat or recursive).
+
 #### Runner
 
 `_runner.py`: `run_tools()` / `run_tools_sync()` convenience wrappers.
@@ -81,7 +101,7 @@ Built on core/ primitives (`LLM`, `Response`, `ToolGroup`, `Usage`, `ToolCall`, 
 ## Testing Patterns
 
 - **Config**: pytest-asyncio with `asyncio_mode = "auto"` — no `@pytest.mark.asyncio` needed.
-- **Test layout**: `tests/` (core tests), `tests/agents/` (agent tests), `tests/toolkit/` (toolkit tool tests).
+- **Test layout**: `tests/` (core tests), `tests/agents/` (agent tests), `tests/toolkit/` (toolkit tool tests), `tests/graph/` (core graph tests), `tests/memory/` (memory tests), `tests/pipeline/` (pipeline tests), `tests/knowledge/` (knowledge tests).
 - **Core test fixtures** (`tests/conftest.py`): `MockResponse` class (mimics `requests.Response`), `mock_post` fixture, `weather_tool` fixture.
 - **Agent test fixtures** (`tests/agents/conftest.py`): `make_response()`, `make_tool_call()` factories. Mock `LLM` with `AsyncMock`, set `llm.complete.side_effect` with pre-built `Response` objects.
 - **Toolkit tests**: Mock `urllib.request.urlopen` for API tools. Use `tmp_path` for filesystem tools.

@@ -151,6 +151,39 @@ class NetworkXBackend:
             self._graph.remove_node(nid)
         return len(to_remove)
 
+    # --- Extended queries ---
+
+    async def has_node(self, node_id: NodeID) -> bool:
+        return node_id in self._graph
+
+    async def degree(self, node_id: NodeID) -> int:
+        if node_id not in self._graph:
+            return 0
+        return self._graph.degree(node_id)
+
+    async def get_edges_between(
+        self, source: NodeID, target: NodeID, *, relation: str | None = None
+    ) -> Sequence[Edge]:
+        if not self._graph.has_node(source) or not self._graph.has_node(target):
+            return []
+        edges: list[Edge] = []
+        for _, _, data in self._graph.edges(source, data=True):
+            e: Edge = data["edge"]
+            if e.target == target and (relation is None or e.relation == relation):
+                edges.append(e)
+        return edges
+
+    async def list_edges(self, *, relation: str | None = None) -> Sequence[Edge]:
+        edges: list[Edge] = []
+        for _, _, data in self._graph.edges(data=True):
+            e: Edge = data["edge"]
+            if relation is None or e.relation == relation:
+                edges.append(e)
+        return edges
+
+    async def edge_count(self) -> int:
+        return self._graph.number_of_edges()
+
     # --- Graph algorithms ---
 
     async def bfs(self, start: NodeID, *, relation: str | None = None) -> Sequence[Node[Any]]:
@@ -234,3 +267,57 @@ class NetworkXBackend:
         sub = self._graph.subgraph(node_ids).copy()
         new._graph = sub
         return new
+
+    async def find_all_paths(
+        self, source: NodeID, target: NodeID, *, max_depth: int | None = None
+    ) -> Sequence[Sequence[NodeID]]:
+        if source not in self._graph or target not in self._graph:
+            return []
+        cutoff = max_depth if max_depth is not None else len(self._graph)
+        return list(nx.all_simple_paths(self._graph, source, target, cutoff=cutoff))
+
+    async def ancestors(self, node_id: NodeID) -> set[NodeID]:
+        if node_id not in self._graph:
+            return set()
+        return nx.ancestors(self._graph, node_id)
+
+    async def descendants(self, node_id: NodeID) -> set[NodeID]:
+        if node_id not in self._graph:
+            return set()
+        return nx.descendants(self._graph, node_id)
+
+    async def ego_graph(self, node_id: NodeID, *, radius: int = 1) -> NetworkXBackend:
+        new = NetworkXBackend()
+        if node_id not in self._graph:
+            return new
+        sub = nx.ego_graph(self._graph, node_id, radius=radius)
+        new._graph = nx.MultiDiGraph(sub)
+        return new
+
+    async def pagerank(
+        self, *, alpha: float = 0.85, max_iter: int = 100, tol: float = 1e-6
+    ) -> dict[NodeID, float]:
+        nodes = list(self._graph.nodes())
+        n = len(nodes)
+        if n == 0:
+            return {}
+        rank = {node: 1.0 / n for node in nodes}
+        # Cache out-degrees for efficiency
+        out_deg = {node: self._graph.out_degree(node) for node in nodes}
+        for _ in range(max_iter):
+            # Dangling nodes redistribute rank equally to all nodes
+            dangling_sum = sum(rank[node] for node in nodes if out_deg[node] == 0)
+            new_rank: dict[NodeID, float] = {}
+            for node in nodes:
+                incoming = sum(
+                    rank[pred] / out_deg[pred]
+                    for pred in self._graph.predecessors(node)
+                    if out_deg[pred] > 0
+                )
+                new_rank[node] = (1 - alpha) / n + alpha * (incoming + dangling_sum / n)
+            # Check convergence (L1 norm)
+            diff = sum(abs(new_rank[node] - rank[node]) for node in nodes)
+            rank = new_rank
+            if diff < n * tol:
+                break
+        return rank

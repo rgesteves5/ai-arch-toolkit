@@ -151,6 +151,181 @@ class TestAlgorithms:
             await g.connected_components()
 
 
+class TestNewFacadeMethods:
+    async def test_has(self, graph: Graph):
+        await graph.add(Node(id="n1"))
+        assert await graph.has("n1") is True
+        assert await graph.has("nope") is False
+
+    async def test_degree(self, graph: Graph):
+        await graph.add(Node(id="a"))
+        await graph.add(Node(id="b"))
+        await graph.connect("a", "b", "R")
+        assert await graph.degree("a") == 1
+        assert await graph.degree("nope") == 0
+
+    async def test_get_edges_between(self, graph: Graph):
+        await graph.add(Node(id="a"))
+        await graph.add(Node(id="b"))
+        await graph.connect("a", "b", "KNOWS")
+        await graph.connect("a", "b", "LIKES")
+        edges = await graph.get_edges_between("a", "b")
+        assert len(edges) == 2
+        edges_filtered = await graph.get_edges_between("a", "b", relation="KNOWS")
+        assert len(edges_filtered) == 1
+
+    async def test_list_edges(self, graph: Graph):
+        await graph.add(Node(id="a"))
+        await graph.add(Node(id="b"))
+        await graph.connect("a", "b", "KNOWS")
+        await graph.connect("a", "b", "LIKES")
+        all_edges = await graph.list_edges()
+        assert len(all_edges) == 2
+        filtered = await graph.list_edges(relation="KNOWS")
+        assert len(filtered) == 1
+
+    async def test_get_orphan_nodes(self, graph: Graph):
+        await graph.add(Node(id="a"))
+        await graph.add(Node(id="b"))
+        await graph.add(Node(id="c"))
+        await graph.connect("a", "b", "R")
+        orphans = await graph.get_orphan_nodes()
+        assert len(orphans) == 1
+        assert orphans[0].id == "c"
+
+    async def test_get_stats(self, graph: Graph):
+        await graph.add(Node(id="a", type="person"))
+        await graph.add(Node(id="b", type="place"))
+        await graph.connect("a", "b", "VISITS")
+        stats = await graph.get_stats()
+        assert stats["node_count"] == 2
+        assert stats["edge_count"] == 1
+        assert stats["node_types"] == {"person": 1, "place": 1}
+        assert stats["edge_relations"] == {"VISITS": 1}
+
+    async def test_filter_nodes(self, graph: Graph):
+        await graph.add(Node(id="a", type="person"))
+        await graph.add(Node(id="b", type="place"))
+        await graph.add(Node(id="c", type="person"))
+        people = await graph.filter_nodes(lambda n: n.type == "person")
+        assert len(people) == 2
+
+    async def test_filter_edges(self, graph: Graph):
+        await graph.add(Node(id="a"))
+        await graph.add(Node(id="b"))
+        await graph.connect("a", "b", "KNOWS", weight=0.5)
+        await graph.connect("a", "b", "LIKES", weight=0.9)
+        strong = await graph.filter_edges(lambda e: e.weight > 0.7)
+        assert len(strong) == 1
+        assert strong[0].relation == "LIKES"
+
+    async def test_copy(self, graph: Graph):
+        await graph.add(Node(id="a"))
+        await graph.add(Node(id="b"))
+        await graph.connect("a", "b", "R")
+        clone = await graph.copy()
+        assert await clone.count() == 2
+        edges = await clone.edges("a")
+        assert len(edges) == 1
+        # Verify independence
+        await graph.remove("a")
+        assert await clone.has("a") is True
+
+    async def test_node_count_edge_count_is_empty(self, graph: Graph):
+        assert await graph.is_empty() is True
+        assert await graph.node_count() == 0
+        assert await graph.edge_count() == 0
+        await graph.add(Node(id="a"))
+        await graph.add(Node(id="b"))
+        await graph.connect("a", "b", "R")
+        assert await graph.node_count() == 2
+        assert await graph.edge_count() == 1
+        assert await graph.is_empty() is False
+
+
+class TestNewAlgorithmFacade:
+    async def test_find_all_paths(self, graph: Graph):
+        for i in range(4):
+            await graph.add(Node(id=f"n{i}"))
+        await graph.connect("n0", "n1", "R")
+        await graph.connect("n1", "n3", "R")
+        await graph.connect("n0", "n2", "R")
+        await graph.connect("n2", "n3", "R")
+        paths = await graph.find_all_paths("n0", "n3")
+        assert len(paths) == 2
+
+    async def test_get_ancestors(self, graph: Graph):
+        for i in range(3):
+            await graph.add(Node(id=f"n{i}"))
+        await graph.connect("n0", "n1", "R")
+        await graph.connect("n1", "n2", "R")
+        anc = await graph.get_ancestors("n2")
+        assert anc == {"n0", "n1"}
+
+    async def test_get_descendants(self, graph: Graph):
+        for i in range(3):
+            await graph.add(Node(id=f"n{i}"))
+        await graph.connect("n0", "n1", "R")
+        await graph.connect("n1", "n2", "R")
+        desc = await graph.get_descendants("n0")
+        assert desc == {"n1", "n2"}
+
+    async def test_get_subgraph(self, graph: Graph):
+        for i in range(3):
+            await graph.add(Node(id=f"n{i}"))
+        await graph.connect("n0", "n1", "R")
+        sub = await graph.get_subgraph(["n0", "n1"])
+        assert await sub.count() == 2
+        assert isinstance(sub, Graph)
+
+    async def test_get_ego_graph(self, graph: Graph):
+        for i in range(4):
+            await graph.add(Node(id=f"n{i}"))
+        await graph.connect("n0", "n1", "R")
+        await graph.connect("n1", "n2", "R")
+        await graph.connect("n2", "n3", "R")
+        ego = await graph.get_ego_graph("n0", radius=1)
+        assert isinstance(ego, Graph)
+        assert await ego.count() == 2  # n0 + n1
+
+    async def test_pagerank(self, graph: Graph):
+        for i in range(3):
+            await graph.add(Node(id=f"n{i}"))
+        await graph.connect("n0", "n1", "R")
+        await graph.connect("n1", "n2", "R")
+        pr = await graph.pagerank()
+        assert len(pr) == 3
+        assert all(v > 0 for v in pr.values())
+
+    async def test_algorithms_raise_without_support(self):
+        class MinimalBackend:
+            async def add_node(self, node): ...
+            async def get_node(self, node_id): ...
+            async def update_node(self, node_id, **attrs): ...
+            async def remove_node(self, node_id): ...
+            async def list_nodes(self, *, type=None, limit=None): ...
+            async def count_nodes(self, *, type=None): ...
+            async def add_edge(self, edge): ...
+            async def get_edges(self, node_id, *, direction="out", relation=None): ...
+            async def remove_edge(self, source, target, relation): ...
+            async def neighbors(self, node_id, *, depth=1, relation=None): ...
+            async def clear(self, *, type=None): ...
+
+        g = Graph(MinimalBackend())  # type: ignore[arg-type]
+        with pytest.raises(TypeError, match="GraphAlgorithms"):
+            await g.find_all_paths("a", "b")
+        with pytest.raises(TypeError, match="GraphAlgorithms"):
+            await g.get_ancestors("a")
+        with pytest.raises(TypeError, match="GraphAlgorithms"):
+            await g.get_descendants("a")
+        with pytest.raises(TypeError, match="GraphAlgorithms"):
+            await g.get_subgraph(["a"])
+        with pytest.raises(TypeError, match="GraphAlgorithms"):
+            await g.get_ego_graph("a")
+        with pytest.raises(TypeError, match="GraphAlgorithms"):
+            await g.pagerank()
+
+
 class TestPersistence:
     async def test_to_dict_from_dict(self, graph: Graph):
         await graph.add(Node(id="n1", type="person", content={"name": "Alice"}))
