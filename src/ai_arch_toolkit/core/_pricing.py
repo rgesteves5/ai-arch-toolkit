@@ -11,7 +11,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class ModelPricing:
     """USD per 1M tokens."""
 
@@ -21,6 +21,13 @@ class ModelPricing:
     cache_read: float | None = None
     batch_input: float | None = None
     batch_output: float | None = None
+    # Long context pricing (exceeding threshold triggers premium rates)
+    long_context_threshold: int | None = None
+    long_context_input: float | None = None
+    long_context_output: float | None = None
+    # Fast mode pricing
+    fast_input: float | None = None
+    fast_output: float | None = None
 
 
 class PricingRegistry:
@@ -90,8 +97,11 @@ class PricingRegistry:
         cache_read_tokens: int = 0,
         *,
         is_batch: bool = False,
+        is_fast: bool = False,
     ) -> float | None:
         """Estimate cost in USD.
+
+        Priority: ``is_fast`` > ``is_batch`` > long-context > standard.
 
         Returns:
             Cost in USD, or ``None`` if no pricing data exists for the model.
@@ -101,10 +111,21 @@ class PricingRegistry:
             return None
 
         per_m = 1_000_000
+        total_input = input_tokens + cache_write_tokens + cache_read_tokens
 
-        if is_batch:
+        if is_fast and p.fast_input is not None:
+            inp = p.fast_input
+            out = p.fast_output if p.fast_output is not None else p.output
+        elif is_batch:
             inp = p.batch_input if p.batch_input is not None else p.input
             out = p.batch_output if p.batch_output is not None else p.output
+        elif (
+            p.long_context_threshold is not None
+            and total_input > p.long_context_threshold
+            and p.long_context_input is not None
+        ):
+            inp = p.long_context_input
+            out = p.long_context_output if p.long_context_output is not None else p.output
         else:
             inp = p.input
             out = p.output
@@ -138,6 +159,11 @@ class PricingRegistry:
                     cache_read=values.get("cache_read"),
                     batch_input=values.get("batch_input"),
                     batch_output=values.get("batch_output"),
+                    long_context_threshold=values.get("long_context_threshold"),
+                    long_context_input=values.get("long_context_input"),
+                    long_context_output=values.get("long_context_output"),
+                    fast_input=values.get("fast_input"),
+                    fast_output=values.get("fast_output"),
                 )
 
     def reset(self) -> None:
@@ -169,6 +195,7 @@ def estimate_cost(
     cache_read_tokens: int = 0,
     *,
     is_batch: bool = False,
+    is_fast: bool = False,
 ) -> float | None:
     """Convenience wrapper around the global pricing registry."""
     return pricing.estimate_cost(
@@ -178,4 +205,5 @@ def estimate_cost(
         cache_write_tokens,
         cache_read_tokens,
         is_batch=is_batch,
+        is_fast=is_fast,
     )

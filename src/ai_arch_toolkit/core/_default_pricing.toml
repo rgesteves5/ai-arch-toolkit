@@ -1,8 +1,82 @@
 # Default pricing table — USD per 1M tokens
-# Last updated: 2026-02-25
+# Last updated: 2026-03-05
 # Override with: pricing.load("your_file.toml") or pricing.register(...)
+# Known simplification: cache_write uses Anthropic's 5-min TTL tier (1.25x input).
+# The 1-hour tier (2x input) can be overridden via pricing.register().
 
-# Claude 4 / 4.5
+# ── Claude 4.6 ──
+
+[claude-opus-4-6]
+input = 5.0
+output = 25.0
+cache_write = 6.25
+cache_read = 0.50
+batch_input = 2.50
+batch_output = 12.50
+long_context_threshold = 200_000
+long_context_input = 10.0
+long_context_output = 37.50
+fast_input = 30.0
+fast_output = 150.0
+
+[claude-sonnet-4-6]
+input = 3.0
+output = 15.0
+cache_write = 3.75
+cache_read = 0.30
+batch_input = 1.50
+batch_output = 7.50
+long_context_threshold = 200_000
+long_context_input = 6.0
+long_context_output = 22.50
+
+# ── Claude 4.5 ──
+
+[claude-opus-4-5]
+input = 5.0
+output = 25.0
+cache_write = 6.25
+cache_read = 0.50
+batch_input = 2.50
+batch_output = 12.50
+long_context_threshold = 200_000
+long_context_input = 10.0
+long_context_output = 37.50
+
+[claude-sonnet-4-5]
+input = 3.0
+output = 15.0
+cache_write = 3.75
+cache_read = 0.30
+batch_input = 1.50
+batch_output = 7.50
+long_context_threshold = 200_000
+long_context_input = 6.0
+long_context_output = 22.50
+
+[claude-haiku-4-5]
+input = 1.0
+output = 5.0
+cache_write = 1.25
+cache_read = 0.10
+batch_input = 0.50
+batch_output = 2.50
+
+# ── Claude 4.1 ──
+
+[claude-opus-4-1]
+input = 15.0
+output = 75.0
+cache_write = 18.75
+cache_read = 1.50
+batch_input = 7.50
+batch_output = 37.50
+long_context_threshold = 200_000
+long_context_input = 30.0
+long_context_output = 112.50
+
+# ── Claude 4.0 (fallback for claude-opus-4-20250514 etc.) ──
+
 [claude-opus-4]
 input = 15.0
 output = 75.0
@@ -18,6 +92,9 @@ cache_write = 3.75
 cache_read = 0.30
 batch_input = 1.5
 batch_output = 7.5
+long_context_threshold = 200_000
+long_context_input = 6.0
+long_context_output = 22.50
 
 [claude-haiku-4]
 input = 0.80
@@ -27,7 +104,8 @@ cache_read = 0.08
 batch_input = 0.40
 batch_output = 2.0
 
-# Claude 3.5
+# ── Claude 3.5 ──
+
 [claude-3-5-sonnet]
 input = 3.0
 output = 15.0
@@ -44,7 +122,8 @@ cache_read = 0.08
 batch_input = 0.40
 batch_output = 2.0
 
-# Claude 3
+# ── Claude 3 ──
+
 [claude-3-opus]
 input = 15.0
 output = 75.0
@@ -65,7 +144,37 @@ output = 1.25
 cache_write = 0.30
 cache_read = 0.03
 
-# GPT-4o
+# ── GPT-4.1 family ──
+
+["gpt-4.1-nano"]
+input = 0.10
+output = 0.40
+cache_read = 0.025
+
+["gpt-4.1-mini"]
+input = 0.40
+output = 1.60
+cache_read = 0.10
+
+["gpt-4.1"]
+input = 2.0
+output = 8.0
+cache_read = 0.50
+
+# ── GPT-5 ──
+
+["gpt-5-mini"]
+input = 0.25
+output = 2.0
+cache_read = 0.025
+
+["gpt-5"]
+input = 1.25
+output = 10.0
+cache_read = 0.125
+
+# ── GPT-4o ──
+
 [gpt-4o-mini]
 input = 0.15
 output = 0.60
@@ -78,7 +187,8 @@ output = 10.0
 input = 10.0
 output = 30.0
 
-# o-series
+# ── o-series ──
+
 [o4-mini]
 input = 1.10
 output = 4.40
@@ -88,8 +198,9 @@ input = 1.10
 output = 4.40
 
 [o3]
-input = 10.0
-output = 40.0
+input = 2.0
+output = 8.0
+cache_read = 0.50
 
 [o1-mini]
 input = 3.0
@@ -99,7 +210,8 @@ output = 12.0
 input = 15.0
 output = 60.0
 
-# Gemini
+# ── Gemini ──
+
 ["gemini-2.5-pro"]
 input = 1.25
 output = 10.0
@@ -124,7 +236,18 @@ output = 5.0
 input = 0.075
 output = 0.30
 
-# xAI Grok
+# ── xAI Grok ──
+
+[grok-4]
+input = 3.0
+output = 15.0
+cache_read = 0.75
+
+["grok-4-1-fast"]
+input = 0.20
+output = 0.50
+cache_read = 0.05
+
 [grok-3]
 input = 3.0
 output = 15.0
