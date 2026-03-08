@@ -1,11 +1,11 @@
-"""14 — Middleware Agent.
+"""14 — Middleware with ReAct Flow.
 
-Shows how LLM middleware fires on every call inside a ReActAgent loop.
+Shows how LLM middleware fires on every call inside a react_flow loop.
 A CostLogger middleware tracks token usage across all LLM invocations.
 """
 
-from ai_arch_toolkit.core import LLM, Request, Response, ToolGroup
-from ai_arch_toolkit.toolkit.agents import AgentConfig, ReActAgent
+from ai_arch_toolkit import LLM, Request, Response, State, ToolGroup
+from ai_arch_toolkit.toolkit.agents import react_flow, react_initial_state
 from ai_arch_toolkit.toolkit.tools import geocode, get_weather
 
 
@@ -33,20 +33,19 @@ logger = CostLogger()
 tools = ToolGroup(get_weather, geocode)
 llm = LLM("gpt-4.1-nano", middleware=[logger])
 
-agent = ReActAgent(
+flow = react_flow(
     llm,
     tools,
-    config=AgentConfig(
-        system="You are a helpful assistant. Use tools to answer questions.",
-        max_iterations=5,
-    ),
+    system="You are a helpful assistant. Use tools to answer questions.",
+    max_iterations=5,
 )
 
-print("Running agent...\n")
-result = agent.run_sync("What's the weather in Tokyo and Paris?")
+print("Running flow...\n")
+state = State(operational=react_initial_state("What's the weather in Tokyo and Paris?"))
+result = flow.run_sync(state)
 
-print(f"\nAnswer: {result.answer}")
-print(f"Steps: {len(result.steps)}")
+print(f"\nAnswer: {state['response'].text}")
+print(f"Steps: {len(result.trace.steps)}")
 print("\nMiddleware summary:")
 print(f"  Total LLM calls: {len(logger.calls)}")
 total_in = sum(c["input"] for c in logger.calls)

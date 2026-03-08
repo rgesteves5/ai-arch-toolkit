@@ -1,9 +1,9 @@
-"""Memory tools for agents — deliberate remember, recall, explore, forget.
+"""Memory tools with ReAct Flow — deliberate remember, recall, explore, forget.
 
 Demonstrates:
   - memory_tools() creating a ToolGroup with 4 memory tools
-  - ReActAgent using memory tools alongside regular tools
-  - Agent remembering facts, recalling them later, and exploring the graph
+  - react_flow using memory tools alongside regular tools
+  - Flow remembering facts, recalling them later, and exploring the graph
   - Combining memory tools with other toolkit tools
 
 Requires: OPENAI_API_KEY (or change the model to your provider).
@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import asyncio
 
-from ai_arch_toolkit import LLM
-from ai_arch_toolkit.toolkit.agents import AgentConfig, ReActAgent
+from ai_arch_toolkit import LLM, State
+from ai_arch_toolkit.toolkit.agents import react_flow, react_initial_state
 from ai_arch_toolkit.toolkit.memory import GraphStore, Node, memory_tools
 from ai_arch_toolkit.toolkit.memory.graph._networkx import NetworkXBackend
 
@@ -70,20 +70,18 @@ async def main() -> None:
     mem_tools = memory_tools(store)
     print(f"Memory tools: {mem_tools}\n")
 
-    # --- 3. Create agent with memory tools ---
+    # --- 3. Create flow with memory tools ---
     llm = LLM("gpt-4.1-nano")
-    agent = ReActAgent(
-        llm=llm,
-        tools=mem_tools,
-        config=AgentConfig(
-            system=(
-                "You are a helpful assistant with access to a memory graph. "
-                "Use recall to search your memory before answering questions. "
-                "Use remember to store important new information. "
-                "Use explore_memory to understand how memories relate to each other."
-            ),
-            max_iterations=6,
+    flow = react_flow(
+        llm,
+        mem_tools,
+        system=(
+            "You are a helpful assistant with access to a memory graph. "
+            "Use recall to search your memory before answering questions. "
+            "Use remember to store important new information. "
+            "Use explore_memory to understand how memories relate to each other."
         ),
+        max_iterations=6,
     )
 
     # --- 4. Run tasks that exercise memory ---
@@ -95,9 +93,10 @@ async def main() -> None:
 
     for task in tasks:
         print(f"Task: {task}")
-        result = agent.run_sync(task)
-        print(f"Answer: {result.answer[:300]}")
-        print(f"Steps: {len(result.steps)}, Cost: ${result.total_cost:.4f}\n")
+        state = State(operational=react_initial_state(task))
+        result = flow.run_sync(state)
+        print(f"Answer: {state['response'].text[:300]}")
+        print(f"Steps: {len(result.trace.steps)}, Cost: ${result.total_cost:.4f}\n")
 
     # --- 5. Show final memory state ---
     print("--- Final Memory State ---")

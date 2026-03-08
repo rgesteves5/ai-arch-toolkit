@@ -1,4 +1,4 @@
-"""Unit tests for input validation across LLM, RetryConfig, and AgentConfig."""
+"""Unit tests for input validation across LLM and RetryConfig."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ import pytest
 
 from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._retry import RetryConfig
-from ai_arch_toolkit.toolkit.agents._base import AgentConfig
 
 # ---------------------------------------------------------------------------
 # LLM.__init__() validation
@@ -94,24 +93,3 @@ class TestRetryConfigValidation:
     def test_max_delay_negative(self):
         with pytest.raises(ValueError, match="max_delay must be positive"):
             RetryConfig(max_delay=-1.0)
-
-
-# ---------------------------------------------------------------------------
-# AgentConfig validation
-# ---------------------------------------------------------------------------
-
-
-class TestAgentConfigValidation:
-    """Validate AgentConfig __post_init__ guards."""
-
-    def test_max_iterations_zero(self):
-        with pytest.raises(ValueError, match="max_iterations must be positive"):
-            AgentConfig(max_iterations=0)
-
-    def test_timeout_negative(self):
-        with pytest.raises(ValueError, match="timeout must be positive"):
-            AgentConfig(timeout=-1.0)
-
-    def test_max_tokens_zero(self):
-        with pytest.raises(ValueError, match="max_tokens must be positive"):
-            AgentConfig(max_tokens=0)

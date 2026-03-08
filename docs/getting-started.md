@@ -44,10 +44,11 @@ response = llm.complete_sync(
 print(response.text)
 ```
 
-### ReAct Agent
+### ReAct Flow
 
 ```python
-from ai_arch_toolkit import LLM, ReActAgent, AgentConfig, ToolGroup, tool
+from ai_arch_toolkit import LLM, State, ToolGroup, tool
+from ai_arch_toolkit.toolkit.agents import react_flow, react_initial_state
 
 @tool
 def search(query: str) -> str:
@@ -56,11 +57,11 @@ def search(query: str) -> str:
 
 llm = LLM("claude-sonnet-4-20250514")
 tools = ToolGroup(search)
-config = AgentConfig(max_iterations=5)
 
-agent = ReActAgent(llm, tools, config=config)
-result = agent.run_sync("Find the population of Tokyo")
-print(result.answer)
+flow = react_flow(llm, tools, max_iterations=5)
+state = State(operational=react_initial_state("Find the population of Tokyo"))
+result = flow.run_sync(state)
+print(state["response"].text)
 ```
 
 ### Streaming
@@ -109,16 +110,18 @@ llm = LLM("grok-2")
 
 ## Agent Architectures
 
-The toolkit includes several agent architectures:
+The toolkit includes 8 agent architectures as Flow factories:
 
-- **ReActAgent** — Thought-Action-Observation loop
-- **ReflexionAgent** — ReAct with self-critique retry
-- **ReWOOAgent** — Plan with placeholders, execute, solve
-- **PlanExecuteAgent** — Numbered plan, per-step ReAct, solve
-- **ToTAgent** — Tree of Thoughts (DFS/BFS search)
-- **LATSAgent** — Language Agent Tree Search (MCTS)
-- **SelfDiscoveryAgent** — Select reasoning modules, adapt, operationalize, solve
-- **LLMCompilerAgent** — Plan a DAG, parallel execute, join
+- **`react_flow()`** — Thought-Action-Observation loop
+- **`reflexion_flow()`** — ReAct with self-critique retry
+- **`rewoo_flow()`** — Plan with placeholders, execute, solve
+- **`plan_execute_flow()`** — Numbered plan, per-step ReAct, solve
+- **`tot_flow()`** — Tree of Thoughts (DFS/BFS search)
+- **`lats_flow()`** — Language Agent Tree Search (MCTS)
+- **`self_discovery_flow()`** — Select reasoning modules, adapt, operationalize, solve
+- **`llm_compiler_flow()`** — Plan a DAG, parallel execute, join
+
+Each factory returns a `Flow` and has a companion `*_initial_state(task)` helper.
 
 ## Graph
 

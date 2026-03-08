@@ -22,6 +22,7 @@ from ai_arch_toolkit.core._content import (
 from ai_arch_toolkit.core._exceptions import APIError, RateLimitError
 from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._middleware import Middleware, Request
+from ai_arch_toolkit.core._policy import OnExhausted, OnLowConfidence, OnTimeout, Policy
 from ai_arch_toolkit.core._pricing import pricing
 from ai_arch_toolkit.core._rate_limit import RateLimitMiddleware
 from ai_arch_toolkit.core._response import (
@@ -38,6 +39,9 @@ from ai_arch_toolkit.core._response import (
 )
 from ai_arch_toolkit.core._retry import RetryConfig
 from ai_arch_toolkit.core._server_tools import ServerTool, code_execution, web_search
+from ai_arch_toolkit.core._state import MergeConflictError, MergeStrategy, State, StateSnapshot
+from ai_arch_toolkit.core._step import Result, Step, StepFn
+from ai_arch_toolkit.core._step_engine import execute_step
 from ai_arch_toolkit.core._sync import configure_sync_timeouts
 from ai_arch_toolkit.core._telemetry import TracingMiddleware
 from ai_arch_toolkit.core._tokens import (
@@ -54,6 +58,7 @@ from ai_arch_toolkit.core._tools import (
     prepare_tools,
     tool,
 )
+from ai_arch_toolkit.core._trace import PolicyDecision, StepTrace, Trace
 from ai_arch_toolkit.core.graph import (
     Edge as GraphEdge,
 )
@@ -94,22 +99,36 @@ __all__ = [
     "GraphEdge",
     "GraphNode",
     "ImagePart",
+    "MergeConflictError",
+    "MergeStrategy",
     "Middleware",
     "NodeID",
     "NodeType",
+    "OnExhausted",
+    "OnLowConfidence",
+    "OnTimeout",
     "OutputSchema",
+    "Policy",
+    "PolicyDecision",
     "RateLimitError",
     "RateLimitMiddleware",
     "Request",
     "Response",
+    "Result",
     "RetryConfig",
     "RichStreamResponse",
     "ServerTool",
+    "State",
+    "StateSnapshot",
+    "Step",
+    "StepFn",
+    "StepTrace",
     "StreamEvent",
     "SyncRichStreamResponse",
     "ThinkingBlock",
     "ToolCall",
     "ToolGroup",
+    "Trace",
     "TracingMiddleware",
     "Usage",
     "assistant",
@@ -121,6 +140,7 @@ __all__ = [
     "count_tokens_local",
     "count_tokens_local_batch",
     "document",
+    "execute_step",
     "execute_tool",
     "image",
     "infer_schema",

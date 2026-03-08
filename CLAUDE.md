@@ -34,10 +34,11 @@ ai_arch_toolkit/
 │   ├── _tools/        # @tool decorator, ToolGroup
 │   └── graph/         # General-purpose graph: Node[T], Edge, Graph, protocols
 ├── toolkit/           # Convenience utilities built on core/
-│   ├── agents/        # 8 agent architectures
+│   ├── agents/        # 8 agent architectures as Flow factories
+│   │   └── flows/     # react_flow, reflexion_flow, rewoo_flow, etc.
+│   ├── flow/          # Flow orchestration (Flow, FlowStep, FlowResult, FlowEvent)
 │   ├── tools/         # 25 pre-built tools (weather, geo, news, etc.)
 │   ├── memory/        # Graph-backed memory for agents (GraphStore, views, search)
-│   ├── pipeline/      # Sequential phase execution with context accumulation
 │   └── knowledge/     # Sync registry for prompt-injectable reference data
 └── __init__.py        # Re-exports from core/ + toolkit/
 ```
@@ -60,21 +61,27 @@ The stateless, async-first foundation. All new code should build on this.
 
 ### Toolkit layer (`toolkit/`)
 
-#### Agents (`toolkit/agents/`)
+#### Agent Flows (`toolkit/agents/flows/`)
 
-Built on core/ primitives (`LLM`, `Response`, `ToolGroup`, `Usage`, `ToolCall`, `tool_result()`).
+Eight agent architectures as **Flow factories** built on core/ primitives (`LLM`, `ToolGroup`, `State`, `Step`, `Result`). Each factory returns a `Flow` and has a companion `*_initial_state(task)` helper.
 
-- **`_base.py`**: `BaseAgent` ABC, `AgentConfig`, `AgentEvent`, `AgentStep`, `AgentResult`, `StopReason`. Async-first with sync wrappers. `@overload` on `run()` / `run_sync()` for `stream: bool` type narrowing.
-- **`_react.py`**: `ReActAgent` — Thought → Action → Observation loop. `_run_loop()` is a pure async generator yielding `AgentEvent`; callbacks fire in `_consume()`.
-- **`_reflexion.py`**: `ReflexionAgent` + `ReflexionConfig` — wraps ReActAgent in a retry loop with self-critique. Evaluator callback scores each attempt; below-threshold triggers reflection + retry.
-- **`_rewoo.py`**: `ReWOOAgent` + `ReWOOConfig` — Plan with `#E{n}` placeholders → Execute tools → Solve. Three-phase architecture.
-- **`_plan_execute.py`**: `PlanExecuteAgent` + `PlanExecuteConfig` — Numbered step plan → per-step ReAct execution → Solve. Optional replanning on failure.
-- **`_tot.py`**: `ToTAgent` + `ToTConfig` — Tree of Thoughts with DFS/BFS search. Generate-evaluate-expand loop.
-- **`_lats.py`**: `LATSAgent` + `LATSConfig` — Language Agent Tree Search (MCTS). UCT selection, ReAct rollouts, evaluation, backpropagation, reflection.
-- **`_self_discovery.py`**: `SelfDiscoveryAgent` + `SelfDiscoveryConfig` — Select reasoning modules → Adapt → Operationalize → Solve via inner ReAct. 10 default reasoning strategies.
-- **`_llm_compiler.py`**: `LLMCompilerAgent` + `LLMCompilerConfig` — Plan DAG → Parallel execute via asyncio.gather → Join → Optional replan. Topological task scheduling.
+- **`react_flow()`**: Cyclic LLM → tool execution loop. Params: `system`, `max_iterations`, `parallel_tool_calls`, `timeout`, `policy`, `llm_kwargs`.
+- **`reflexion_flow()`**: Inner ReAct with evaluate + reflect retry. Requires `evaluator: Callable[[str, str], float]`, `threshold`, `max_retries`.
+- **`rewoo_flow()`**: Plan with `#E{n}` placeholders → Execute tools → Solve. Three-phase.
+- **`plan_execute_flow()`**: Numbered plan → per-step ReAct → Solve. `max_replans`.
+- **`tot_flow()`**: Tree of Thoughts with DFS/BFS search. `n_candidates`, `max_depth`, `strategy`.
+- **`lats_flow()`**: Language Agent Tree Search (MCTS). `n_candidates`, `max_rollouts`, `exploration_weight`.
+- **`self_discovery_flow()`**: Select reasoning modules → Adapt → Operationalize → Solve via inner ReAct.
+- **`llm_compiler_flow()`**: Plan DAG → Parallel execute → Join. `max_replans`.
 - Task input accepts `Content` (str or multimodal list) for vision+tools use cases.
-- Agent-specific configs (`ReflexionConfig`, `ReWOOConfig`, `PlanExecuteConfig`, `ToTConfig`, `LATSConfig`, `SelfDiscoveryConfig`, `LLMCompilerConfig`) are standalone dataclasses — not inheriting from `AgentConfig`. Passed via separate constructor kwarg.
+
+Usage pattern:
+```python
+flow = react_flow(llm, tools, max_iterations=5)
+state = State(operational=react_initial_state("your task"))
+result = flow.run_sync(state)
+answer = state["response"].text
+```
 
 #### Tools (`toolkit/tools/`)
 
@@ -83,10 +90,6 @@ Built on core/ primitives (`LLM`, `Response`, `ToolGroup`, `Usage`, `ToolCall`, 
 #### Memory (`toolkit/memory/`)
 
 Graph-backed memory for LLM agents, built on `core/graph/`. `GraphStore` wraps `Graph` with memory-specific `Node` (adds `timestamp`, `source`, `confidence`, `access_count`, `last_accessed`, `embedding`), keyword/vector search, and access tracking. Views: `TemporalView` (recent, since), `RelationalView` (neighbors, path), `PropertyView` (by_confidence, by_source, most_accessed), `SimilarityView` (vector search). `MemoryMiddleware` auto-injects relevant memories into LLM context. Presets: `conversational()`, `cognitive()`. `memory_tools()` generates `@tool`-decorated functions for agent use.
-
-#### Pipeline (`toolkit/pipeline/`)
-
-Sequential phase execution with context accumulation. `Pipeline` takes named phase functions, runs them in order via `run()` or streams via `iter()`. `PipelineContext` accumulates artifacts and provenance across phases. `PhaseResult` supports `ok`/`failed`/`partial`/`skipped` statuses. Features: `stop_on_failure`, `stop_on_partial`, `run_from()` resume, token tracking.
 
 #### Knowledge (`toolkit/knowledge/`)
 
@@ -101,7 +104,7 @@ Sync in-memory registry for prompt-injectable reference data. `KnowledgeRegistry
 ## Testing Patterns
 
 - **Config**: pytest-asyncio with `asyncio_mode = "auto"` — no `@pytest.mark.asyncio` needed.
-- **Test layout**: `tests/` (core tests), `tests/agents/` (agent tests), `tests/toolkit/` (toolkit tool tests), `tests/graph/` (core graph tests), `tests/memory/` (memory tests), `tests/pipeline/` (pipeline tests), `tests/knowledge/` (knowledge tests).
+- **Test layout**: `tests/` (core tests), `tests/agents/flows/` (agent flow tests), `tests/toolkit/` (toolkit tool tests), `tests/graph/` (core graph tests), `tests/memory/` (memory tests), `tests/flow/` (flow tests), `tests/knowledge/` (knowledge tests).
 - **Core test fixtures** (`tests/conftest.py`): `MockResponse` class (mimics `requests.Response`), `mock_post` fixture, `weather_tool` fixture.
 - **Agent test fixtures** (`tests/agents/conftest.py`): `make_response()`, `make_tool_call()` factories. Mock `LLM` with `AsyncMock`, set `llm.complete.side_effect` with pre-built `Response` objects.
 - **Toolkit tests**: Mock `urllib.request.urlopen` for API tools. Use `tmp_path` for filesystem tools.

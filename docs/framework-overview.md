@@ -9,17 +9,20 @@ This document summarizes the **ai-arch-toolkit** package: its structure, feature
 1. A **unified async-first LLM facade** across multiple providers
 2. **Middleware** with before/after hooks for caching, cost tracking, guardrails
 3. A **tool layer** (`@tool` decorator + `ToolGroup`) for LLM function calling
-4. **Eight agent architectures** built on the same core primitives
-5. **25 pre-built tools** (weather, geo, news, knowledge, filesystem, etc.)
-6. A **general-purpose graph layer** (`Graph`, `Node[T]`, `Edge`, algorithms)
-7. **Graph-backed memory** for agents (search, views, middleware, presets)
-8. **Pipeline system** for sequential phase execution with context accumulation
+4. A **Flow orchestration system** — composable Steps, Policies, Traces, and Scopes
+5. **Eight agent architectures** as Flow factories built on the same core primitives
+6. **25 pre-built tools** (weather, geo, news, knowledge, filesystem, etc.)
+7. A **general-purpose graph layer** (`Graph`, `Node[T]`, `Edge`, algorithms)
+8. **Graph-backed memory** for agents (search, views, middleware, presets)
 9. **Knowledge registry** for prompt-injectable reference data
 
 The public API is re-exported from the top level:
 
 ```python
-from ai_arch_toolkit import LLM, ReActAgent, tool, ToolGroup, AgentConfig, ...
+from ai_arch_toolkit import LLM, tool, ToolGroup, ...
+from ai_arch_toolkit.core import State, Step, Result, Policy
+from ai_arch_toolkit.toolkit.flow import Flow, FlowStep, Scope
+from ai_arch_toolkit.toolkit.agents.flows import react_flow, react_initial_state, ...
 ```
 
 ---
@@ -63,6 +66,18 @@ llm = LLM("grok-2")                    # xAI
 - **`ToolGroup`**: collection with `execute()` / `async_execute()`.
 - **`infer_schema()`**, **`prepare_tools()`** for manual schema work.
 
+### Flow Primitives
+
+Core primitives for the Flow orchestration system:
+
+| Module | Purpose |
+|--------|---------|
+| `_state.py` | `State`, `StateSnapshot`, `MergeStrategy` — 4-layer mutable container |
+| `_step.py` | `Step`, `StepFn`, `Result` — named async functions with structured output |
+| `_policy.py` | `Policy` — retry, timeout, confidence thresholds, cost limits |
+| `_trace.py` | `Trace`, `StepTrace`, `PolicyDecision` — full execution records |
+| `_step_engine.py` | `execute_step()` — single-step execution with policy enforcement |
+
 ### Other Core Modules
 
 | Module | Purpose |
@@ -86,7 +101,7 @@ General-purpose graph with typed nodes, directed edges, and pluggable backends.
 - **`GraphAlgorithms`** protocol — optional algorithms (BFS, DFS, shortest path, centrality, connected components, subgraph, find_all_paths, ancestors, descendants, ego_graph, PageRank).
 - **`NetworkXBackend`** — default in-memory implementation (requires `networkx`, import-guarded).
 
-`Graph` facade methods include: `add`, `get`, `update`, `remove`, `connect`, `disconnect`, `has`, `degree`, `node_count`, `edge_count`, `is_empty`, `list_edges`, `get_edges_between`, `filter_nodes`, `filter_edges`, `get_orphan_nodes`, `get_stats`, `copy`, `neighbors`, `bfs`, `dfs`, `shortest_path`, `find_all_paths`, `get_ancestors`, `get_descendants`, `get_subgraph`, `get_ego_graph`, `pagerank`, `centrality`, `connected_components`. All async methods have `_sync` counterparts.
+See [Graph Layer](graph.md) for full documentation.
 
 ---
 
@@ -94,28 +109,38 @@ General-purpose graph with typed nodes, directed edges, and pluggable backends.
 
 Convenience utilities built on core/ primitives.
 
-### Agents (`toolkit/agents/`)
+### Flow Orchestration (`toolkit/flow/`)
 
-All agents inherit **`BaseAgent`** (`_base.py`). They take an **`LLM`**, a **`ToolGroup`**, and an optional **`AgentConfig`**. Async-first with sync wrappers (`run()` / `run_sync()`). Streaming via `run(stream=True)`.
+Composable orchestration framework built on core/ primitives. See [Flow Architecture](flow-architecture.md) for details.
 
-**Common types**: `AgentConfig`, `AgentEvent`, `AgentStep`, `AgentResult`, `StopReason`.
+- **`Flow`** — composes Steps into sequential, cyclic, or DAG execution graphs.
+- **`FlowStep`** — wraps a Step with optional `when` conditions and `after` dependencies.
+- **`FlowResult`** — total cost, duration, usage, and full Trace.
+- **`FlowEvent`** — streaming events (`flow_start`, `step_start`, `step_end`, `step_skipped`, `flow_end`).
+- **`Scope`** — controls what keys a Step can see (include/exclude/transform/enrich).
+- **`execute_flow()`** / **`iter_flow()`** — execution and streaming entry points.
 
-**Per-phase customization**: `PhaseConfig` allows overriding the LLM and/or tools for individual phases of multi-phase agents. All fields default to `None` (falls back to the agent-level default).
+Three execution modes (auto-detected):
+- **Sequential**: steps run in order
+- **Cyclic**: steps loop with `when` conditions (requires `max_iterations`)
+- **DAG**: steps with `after` dependencies run in parallel where possible
 
-| Agent | Architecture | Phases |
-|-------|-------------|--------|
-| **ReActAgent** | Thought → Action → Observation loop | single-phase |
-| **ReflexionAgent** | ReAct with self-critique retry loop | executor, reflector |
-| **ReWOOAgent** | Plan with `#E{n}` placeholders → Execute tools → Solve | planner, solver |
-| **PlanExecuteAgent** | Numbered plan → per-step ReAct → Solve | planner, executor, solver |
-| **ToTAgent** | Tree of Thoughts (DFS/BFS search) | generator, evaluator, solver |
-| **LATSAgent** | Language Agent Tree Search (MCTS + ReAct rollouts) | rollout, evaluator, solver, reflector |
-| **SelfDiscoveryAgent** | Select reasoning modules → Adapt → Operationalize → Solve | reasoning, solver |
-| **LLMCompilerAgent** | Plan DAG → Parallel execute → Join → Optional replan | planner, executor, joiner |
+### Agent Flows (`toolkit/agents/flows/`)
 
-Agent-specific configs (`ReflexionConfig`, `ReWOOConfig`, `PlanExecuteConfig`, `ToTConfig`, `LATSConfig`, `SelfDiscoveryConfig`, `LLMCompilerConfig`) are standalone frozen dataclasses passed via separate constructor kwargs.
+All 8 agent architectures implemented as **Flow factories**. See [Agents and Capabilities](agents-and-capabilities.md).
 
-All agents return `AgentResult` with `answer`, `parsed`, `steps`, `total_usage`, `total_cost`, `stop_reason`.
+| Flow Factory | Architecture | Phases |
+|-------------|-------------|--------|
+| `react_flow()` | Thought → Action → Observation loop | single-phase |
+| `reflexion_flow()` | ReAct with self-critique retry loop | attempt, evaluate, reflect |
+| `rewoo_flow()` | Plan with `#E{n}` → Execute → Solve | plan, execute, solve |
+| `plan_execute_flow()` | Numbered plan → per-step ReAct → Solve | plan_and_execute, solve |
+| `tot_flow()` | Tree of Thoughts (DFS/BFS search) | search_step |
+| `lats_flow()` | Language Agent Tree Search (MCTS + ReAct) | mcts_rollout |
+| `self_discovery_flow()` | Select reasoning modules → Adapt → Solve | select, adapt, operationalize, solve |
+| `llm_compiler_flow()` | Plan DAG → Parallel execute → Join | compile |
+
+Each factory has a companion `*_initial_state(task)` helper that creates the initial operational dict.
 
 ### Pre-built Tools (`toolkit/tools/`)
 
@@ -151,15 +176,6 @@ Graph-backed memory for LLM agents, built on `core/graph/`.
 - **Presets**: `conversational()` and `cognitive()` for common configurations.
 - **`memory_tools()`** — generates `@tool`-decorated functions for agent use.
 
-### Pipeline (`toolkit/pipeline/`)
-
-Sequential phase execution with context accumulation.
-
-- **`Pipeline`** — takes named phase functions, runs them in order via `run()` or streams via `iter()`.
-- **`PipelineContext`** — accumulates artifacts, provenance, and metadata across phases.
-- **`PhaseResult`** — supports `ok`/`failed`/`partial`/`skipped` statuses.
-- Features: `stop_on_failure`, `stop_on_partial`, `run_from()` resume, token tracking.
-
 ### Knowledge (`toolkit/knowledge/`)
 
 Sync in-memory registry for prompt-injectable reference data.
@@ -180,6 +196,11 @@ src/ai_arch_toolkit/
 │   ├── _llm.py          # LLM facade
 │   ├── _content.py      # Messages, multimodal types
 │   ├── _response.py     # Response, Usage, ToolCall, streaming types
+│   ├── _state.py        # State, StateSnapshot, MergeStrategy
+│   ├── _step.py         # Step, StepFn, Result
+│   ├── _policy.py       # Policy (retry, timeout, confidence, cost)
+│   ├── _trace.py        # Trace, StepTrace, PolicyDecision
+│   ├── _step_engine.py  # execute_step() — policy-enforced execution
 │   ├── _providers/      # BaseProvider → Anthropic, OpenAI, xAI, Gemini
 │   ├── _tools/          # @tool decorator, ToolGroup, schema inference
 │   ├── graph/           # General-purpose graph layer
@@ -195,27 +216,30 @@ src/ai_arch_toolkit/
 │   ├── _sync.py         # Async-to-sync bridging
 │   └── _exceptions.py   # APIError, RateLimitError
 └── toolkit/             # Convenience utilities built on core/
-    ├── agents/          # 8 agent architectures
-    │   ├── _base.py     # BaseAgent, AgentConfig, PhaseConfig, AgentEvent/Step/Result
-    │   ├── _react.py    # ReActAgent
-    │   ├── _reflexion.py
-    │   ├── _rewoo.py
-    │   ├── _plan_execute.py
-    │   ├── _tot.py
-    │   ├── _lats.py
-    │   ├── _self_discovery.py
-    │   └── _llm_compiler.py
+    ├── agents/          # 8 agent architectures as Flow factories
+    │   └── flows/       # Flow-based agent factories
+    │       ├── _react.py
+    │       ├── _reflexion.py
+    │       ├── _rewoo.py
+    │       ├── _plan_execute.py
+    │       ├── _tot.py
+    │       ├── _lats.py
+    │       ├── _self_discovery.py
+    │       └── _llm_compiler.py
+    ├── flow/            # Flow orchestration
+    │   ├── _scope.py    # Scope, apply_scope()
+    │   ├── _flow.py     # Flow, FlowStep, FlowResult, FlowEvent
+    │   └── _executor.py # execute_flow(), iter_flow()
     ├── tools/           # 25 pre-built tools (11 modules)
     ├── memory/          # Graph-backed memory (GraphStore, views, search)
-    ├── pipeline/        # Sequential phase execution
     ├── knowledge/       # Knowledge registry + loaders
     └── _runner.py       # run_tools() convenience wrapper
 ```
 
 Supporting directories:
 
-- **`examples/`** — 36 examples (01–36): hello world, streaming, tools, agents, middleware, server tools, memory, pipelines, knowledge, fallback chains
-- **`tests/`** — `tests/` (core), `tests/agents/`, `tests/toolkit/`, `tests/graph/`, `tests/memory/`, `tests/pipeline/`, `tests/knowledge/`
+- **`examples/`** — examples (01–36): hello world, streaming, tools, agent flows, middleware, server tools, memory, flows, knowledge, fallback chains
+- **`tests/`** — `tests/` (core), `tests/agents/`, `tests/agents/flows/`, `tests/toolkit/`, `tests/graph/`, `tests/memory/`, `tests/knowledge/`, `tests/flow/`
 - **`research/`** — standalone Markdown reference guides (not part of the package)
 - **`docs/`** — MkDocs site source
 
@@ -236,10 +260,10 @@ Supporting directories:
 | **Retry** | `RetryConfig` with exponential backoff. |
 | **Pricing** | Per-model pricing registry with cost tracking on `Response`. |
 | **Batch** | `BatchRequest` / `BatchResult` for batch API jobs. |
-| **Agents** | 8 architectures with shared base, event streaming, per-phase customization. |
+| **Flows** | Composable Step orchestration — sequential, cyclic, DAG modes with Policy and Trace. |
+| **Agent flows** | 8 architectures as Flow factories with per-phase LLM overrides. |
 | **Graph** | `Graph` facade with `Node[T]`/`Edge`, algorithms (BFS, DFS, PageRank, etc.), persistence. |
 | **Memory** | `GraphStore` with keyword/vector search, temporal/relational/property views, middleware. |
-| **Pipeline** | Sequential phase execution, context accumulation, streaming, resume, failure handling. |
 | **Knowledge** | `KnowledgeRegistry` with category/tag filtering, context building, file loaders. |
 | **Server tools** | `code_execution()`, `web_search()` for provider-hosted capabilities. |
 
@@ -248,6 +272,9 @@ Supporting directories:
 ## Quick Links
 
 - [Getting Started](getting-started.md)
+- [Flow Architecture](flow-architecture.md)
+- [Agents and Capabilities](agents-and-capabilities.md)
+- [Graph Layer](graph.md)
+- [Examples](examples.md)
 - [API Docs](api.md)
 - [UV development guide](uv-guide.md)
-- [Examples](../examples/)
