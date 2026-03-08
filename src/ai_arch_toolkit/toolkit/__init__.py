@@ -50,6 +50,7 @@ from ai_arch_toolkit.toolkit.memory import (
     conversational,
     memory_tools,
 )
+from ai_arch_toolkit.toolkit.moderation import LLMModerator, ModerationMiddleware
 
 __all__ = [
     "BruteForceIndex",
@@ -62,8 +63,10 @@ __all__ = [
     "GraphStore",
     "KnowledgeEntry",
     "KnowledgeRegistry",
+    "LLMModerator",
     "MemoryMiddleware",
     "MemoryPreset",
+    "ModerationMiddleware",
     "Node",
     "PropertyView",
     "RelationalView",
