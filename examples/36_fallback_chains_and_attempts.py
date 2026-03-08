@@ -6,16 +6,16 @@ Demonstrates the full fallback chain and attempt tracking features:
    each with independent provider, retry, middleware, and temperature.
 2. **Attempt tracking** — every LLM call (primary, retry, fallback) is
    recorded on ``Response.attempts`` so you can inspect what happened.
-3. **Agent-level accumulation** — ``AgentResult.all_attempts`` aggregates
-   attempts across all agent steps.
+3. **Flow-level trace** — ``FlowResult.trace`` aggregates cost and timing
+   across all flow steps.
 4. **Custom fallback_on** — control which error types trigger fallback.
 
 Requires: OPENAI_API_KEY (and optionally ANTHROPIC_API_KEY / XAI_API_KEY).
 """
 
-from ai_arch_toolkit import LLM, Attempt
-from ai_arch_toolkit.core import APIError, RetryConfig, ToolGroup
-from ai_arch_toolkit.toolkit.agents import AgentConfig, ReActAgent
+from ai_arch_toolkit import LLM, Attempt, State, ToolGroup
+from ai_arch_toolkit.core import APIError, RetryConfig
+from ai_arch_toolkit.toolkit.agents import react_flow, react_initial_state
 from ai_arch_toolkit.toolkit.tools import datetime_now, math_eval
 
 # =====================================================================
@@ -132,31 +132,29 @@ print(f"\nStream finalized — {len(resp.attempts)} attempt(s):")
 print_attempts(resp.attempts)
 
 # =====================================================================
-# 6. Agent with attempt tracking — all_attempts
+# 6. Flow with attempt tracking — trace
 # =====================================================================
 
 print(f"\n{'=' * 60}")
-print("6. AGENT-LEVEL ATTEMPT TRACKING")
+print("6. FLOW-LEVEL TRACE")
 print("=" * 60)
 
 tools = ToolGroup(datetime_now, math_eval)
 llm = LLM("gpt-4.1-nano", fallback="gpt-4.1-mini")
 
-agent = ReActAgent(
+flow = react_flow(
     llm,
     tools,
-    config=AgentConfig(
-        system="Use tools to answer. Be concise.",
-        max_iterations=5,
-    ),
+    system="Use tools to answer. Be concise.",
+    max_iterations=5,
 )
 
-result = agent.run_sync("What is 42 * 17? Use the calculator tool.")
-print(f"Answer: {result.answer}")
-print(f"Steps: {len(result.steps)}")
+state = State(operational=react_initial_state("What is 42 * 17? Use the calculator tool."))
+result = flow.run_sync(state)
+print(f"Answer: {state['response'].text}")
+print(f"Trace steps: {len(result.trace.steps)}")
 print(f"Total cost: ${result.total_cost:.6f}")
-print(f"\nAll attempts across all steps ({len(result.all_attempts)}):")
-print_attempts(result.all_attempts)
+print(f"Total duration: {result.total_duration:.2f}s")
 
 # =====================================================================
 # 7. Custom fallback_on — control which errors trigger fallback

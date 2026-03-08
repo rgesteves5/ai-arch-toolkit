@@ -1,11 +1,11 @@
-"""13 — Structured Output Agent.
+"""13 — Structured Output with ReAct Flow.
 
-A ReActAgent that uses tools to gather data and returns a typed JSON
-weather report via OutputSchema.
+A react_flow that uses tools to gather data and returns a typed JSON
+weather report via OutputSchema passed as an llm_kwarg.
 """
 
-from ai_arch_toolkit.core import LLM, OutputSchema, ToolGroup
-from ai_arch_toolkit.toolkit.agents import AgentConfig, ReActAgent
+from ai_arch_toolkit import LLM, OutputSchema, State, ToolGroup
+from ai_arch_toolkit.toolkit.agents import react_flow, react_initial_state
 from ai_arch_toolkit.toolkit.tools import geocode, get_weather
 
 # Define the output schema for a weather report
@@ -29,22 +29,22 @@ weather_schema = OutputSchema(
 tools = ToolGroup(get_weather, geocode)
 llm = LLM("gpt-4.1-nano")
 
-agent = ReActAgent(
+flow = react_flow(
     llm,
     tools,
-    config=AgentConfig(
-        system="You are a weather assistant. Use the tools to gather data, then produce a report.",
-        max_iterations=5,
-        output_schema=weather_schema,
-    ),
+    system="You are a weather assistant. Use the tools to gather data, then produce a report.",
+    max_iterations=5,
+    llm_kwargs={"output_schema": weather_schema},
 )
 
-result = agent.run_sync("Give me a weather report for Berlin.")
+state = State(operational=react_initial_state("Give me a weather report for Berlin."))
+result = flow.run_sync(state)
 
-print("Answer:", result.answer)
-if result.parsed:
-    print(f"City: {result.parsed['city']}")
-    print(f"Temp: {result.parsed['temperature_c']}°C")
-    print(f"Summary: {result.parsed['summary']}")
-print(f"Steps: {len(result.steps)}")
+response = state["response"]
+print("Answer:", response.text)
+if response.parsed:
+    print(f"City: {response.parsed['city']}")
+    print(f"Temp: {response.parsed['temperature_c']}°C")
+    print(f"Summary: {response.parsed['summary']}")
+print(f"Steps: {len(result.trace.steps)}")
 print(f"Cost: ${result.total_cost:.4f}")

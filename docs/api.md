@@ -60,20 +60,41 @@ All public types are re-exported from `ai_arch_toolkit` (top-level) or from `ai_
 - **Algorithms** (require `GraphAlgorithms` backend): `bfs`, `dfs`, `shortest_path`, `find_all_paths`, `get_ancestors`, `get_descendants`, `get_subgraph`, `get_ego_graph`, `pagerank`, `centrality`, `connected_components`
 - **Persistence**: `save`, `load`, `to_dict`, `from_dict`, `copy`
 
-### Toolkit — Agents
+### Core — Flow Primitives
 
-| Agent | Architecture |
-|-------|-------------|
-| `ReActAgent` | Thought → Action → Observation loop |
-| `ReflexionAgent` | ReAct + self-critique retry (`ReflexionConfig`) |
-| `ReWOOAgent` | Plan → Execute → Solve (`ReWOOConfig`) |
-| `PlanExecuteAgent` | Plan → per-step ReAct → Solve (`PlanExecuteConfig`) |
-| `ToTAgent` | Tree of Thoughts — DFS/BFS (`ToTConfig`) |
-| `LATSAgent` | MCTS + ReAct rollouts (`LATSConfig`) |
-| `SelfDiscoveryAgent` | Reasoning module selection → Solve (`SelfDiscoveryConfig`) |
-| `LLMCompilerAgent` | DAG plan → parallel execute → join (`LLMCompilerConfig`) |
+| Symbol | Description |
+|--------|-------------|
+| `State`, `StateSnapshot`, `MergeStrategy` | 4-layer mutable state container |
+| `Step`, `StepFn`, `Result` | Named async functions with structured output |
+| `Policy` | Retry, timeout, confidence thresholds, cost limits |
+| `Trace`, `StepTrace`, `PolicyDecision` | Full execution records |
+| `execute_step()` | Single-step execution with policy enforcement |
 
-Common types: `BaseAgent`, `AgentConfig`, `PhaseConfig`, `AgentEvent`, `AgentStep`, `AgentResult`, `StopReason`.
+### Toolkit — Flow Orchestration
+
+| Symbol | Description |
+|--------|-------------|
+| `Flow` | Composes Steps into sequential, cyclic, or DAG execution graphs |
+| `FlowStep` | Wraps a Step with optional `when` conditions and `after` dependencies |
+| `FlowResult` | Total cost, duration, usage, and full Trace |
+| `FlowEvent` | Streaming events (`flow_start`, `step_start`, `step_end`, `flow_end`) |
+| `Scope` | Controls what keys a Step can see (include/exclude/transform/enrich) |
+| `execute_flow()`, `iter_flow()` | Execution and streaming entry points |
+
+### Toolkit — Agent Flows
+
+| Flow Factory | Architecture |
+|-------------|-------------|
+| `react_flow()` | Thought → Action → Observation loop |
+| `reflexion_flow()` | ReAct + self-critique retry |
+| `rewoo_flow()` | Plan → Execute → Solve |
+| `plan_execute_flow()` | Plan → per-step ReAct → Solve |
+| `tot_flow()` | Tree of Thoughts — DFS/BFS |
+| `lats_flow()` | MCTS + ReAct rollouts |
+| `self_discovery_flow()` | Reasoning module selection → Solve |
+| `llm_compiler_flow()` | DAG plan → parallel execute → join |
+
+Each factory has a companion `*_initial_state(task)` helper that creates the initial operational dict for `State(operational=...)`.
 
 ### Toolkit — Memory
 
@@ -89,16 +110,6 @@ Common types: `BaseAgent`, `AgentConfig`, `PhaseConfig`, `AgentEvent`, `AgentSte
 | `MemoryPreset` | Preset configurations |
 | `conversational()`, `cognitive()` | Built-in presets |
 | `memory_tools()` | Generate `@tool` functions for agent use |
-
-### Toolkit — Pipeline
-
-| Symbol | Description |
-|--------|-------------|
-| `Pipeline` | Sequential phase execution: `run()`, `iter()`, `run_from()` |
-| `PipelineContext` | Accumulates artifacts, provenance, metadata |
-| `PhaseResult` | Phase outcome: `ok` / `failed` / `partial` / `skipped` |
-| `PipelineResult` | Aggregate result with token tracking |
-| `run_phase()`, `run_phases()` | Convenience functions |
 
 ### Toolkit — Knowledge
 

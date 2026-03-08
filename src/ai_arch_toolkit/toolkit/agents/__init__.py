@@ -1,46 +1,41 @@
-"""Agents — architecture implementations built on core/ primitives."""
+"""Agents — Flow-based agent architectures built on core/ primitives."""
 
 from __future__ import annotations
 
-from ai_arch_toolkit.toolkit.agents._base import (
-    AgentConfig,
-    AgentEvent,
-    AgentResult,
-    AgentStep,
-    BaseAgent,
-    PhaseConfig,
-    StopReason,
+from ai_arch_toolkit.toolkit.agents.flows import (
+    lats_flow,
+    lats_initial_state,
+    llm_compiler_flow,
+    llm_compiler_initial_state,
+    plan_execute_flow,
+    plan_execute_initial_state,
+    react_flow,
+    react_initial_state,
+    reflexion_flow,
+    reflexion_initial_state,
+    rewoo_flow,
+    rewoo_initial_state,
+    self_discovery_flow,
+    self_discovery_initial_state,
+    tot_flow,
+    tot_initial_state,
 )
-from ai_arch_toolkit.toolkit.agents._lats import LATSAgent, LATSConfig
-from ai_arch_toolkit.toolkit.agents._llm_compiler import LLMCompilerAgent, LLMCompilerConfig
-from ai_arch_toolkit.toolkit.agents._plan_execute import PlanExecuteAgent, PlanExecuteConfig
-from ai_arch_toolkit.toolkit.agents._react import ReActAgent
-from ai_arch_toolkit.toolkit.agents._reflexion import ReflexionAgent, ReflexionConfig
-from ai_arch_toolkit.toolkit.agents._rewoo import ReWOOAgent, ReWOOConfig
-from ai_arch_toolkit.toolkit.agents._self_discovery import SelfDiscoveryAgent, SelfDiscoveryConfig
-from ai_arch_toolkit.toolkit.agents._tot import ToTAgent, ToTConfig
 
 __all__ = [
-    "AgentConfig",
-    "AgentEvent",
-    "AgentResult",
-    "AgentStep",
-    "BaseAgent",
-    "LATSAgent",
-    "LATSConfig",
-    "LLMCompilerAgent",
-    "LLMCompilerConfig",
-    "PhaseConfig",
-    "PlanExecuteAgent",
-    "PlanExecuteConfig",
-    "ReActAgent",
-    "ReWOOAgent",
-    "ReWOOConfig",
-    "ReflexionAgent",
-    "ReflexionConfig",
-    "SelfDiscoveryAgent",
-    "SelfDiscoveryConfig",
-    "StopReason",
-    "ToTAgent",
-    "ToTConfig",
+    "lats_flow",
+    "lats_initial_state",
+    "llm_compiler_flow",
+    "llm_compiler_initial_state",
+    "plan_execute_flow",
+    "plan_execute_initial_state",
+    "react_flow",
+    "react_initial_state",
+    "reflexion_flow",
+    "reflexion_initial_state",
+    "rewoo_flow",
+    "rewoo_initial_state",
+    "self_discovery_flow",
+    "self_discovery_initial_state",
+    "tot_flow",
+    "tot_initial_state",
 ]

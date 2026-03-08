@@ -1,4 +1,4 @@
-"""27 — LLMCompiler Agent.
+"""27 — LLMCompiler Flow.
 
 LLMCompiler plans a DAG of tasks, executes independent tasks in parallel,
 then joins the results. Supports replanning if results are insufficient.
@@ -6,7 +6,8 @@ then joins the results. Supports replanning if results are insufficient.
 Three phases per iteration: Plan DAG → Parallel Execute → Join.
 """
 
-from ai_arch_toolkit import LLM, AgentConfig, LLMCompilerAgent, ToolGroup, tool
+from ai_arch_toolkit import LLM, State, ToolGroup, tool
+from ai_arch_toolkit.toolkit.agents import llm_compiler_flow, llm_compiler_initial_state
 
 llm = LLM("claude-sonnet-4-20250514")
 
@@ -34,17 +35,17 @@ def get_gdp(country: str) -> str:
 
 
 tools = ToolGroup(get_population, get_gdp)
-agent = LLMCompilerAgent(
-    llm,
-    tools,
-    config=AgentConfig(max_iterations=5),
-)
 
-result = agent.run_sync(
-    "Compare France, Germany, and Japan by population and GDP. "
-    "Which country has the highest GDP per capita?"
-)
+flow = llm_compiler_flow(llm, tools, max_replans=2)
 
-print("Answer:", result.answer)
-print(f"Steps: {len(result.steps)}")
-print(f"Stop reason: {result.stop_reason}")
+state = State(
+    operational=llm_compiler_initial_state(
+        "Compare France, Germany, and Japan by population and GDP. "
+        "Which country has the highest GDP per capita?"
+    )
+)
+result = flow.run_sync(state)
+
+print("Answer:", state["response"].text)
+print(f"Steps: {len(result.trace.steps)}")
+print(f"Cost: ${result.total_cost:.4f}")

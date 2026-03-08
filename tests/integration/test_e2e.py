@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from ai_arch_toolkit.core import LLM, RateLimitMiddleware, ToolGroup, tool, tool_result
-from ai_arch_toolkit.toolkit.agents import AgentConfig, ReActAgent
+from ai_arch_toolkit.core import LLM, RateLimitMiddleware, State, ToolGroup, tool, tool_result
+from ai_arch_toolkit.toolkit.agents import react_flow, react_initial_state
 from tests.integration.conftest import skip_no_openai
 
 MODEL = "gpt-4.1-nano"
@@ -81,7 +81,7 @@ async def test_tool_calling_round_trip():
 
 
 # ---------------------------------------------------------------------------
-# Test 3: ReAct agent e2e
+# Test 3: ReAct flow e2e
 # ---------------------------------------------------------------------------
 
 
@@ -101,13 +101,12 @@ def multiply(a: int, b: int) -> str:
 @pytest.mark.integration
 async def test_react_agent_e2e():
     llm = LLM(MODEL)
-    config = AgentConfig(max_iterations=5)
-    agent = ReActAgent(llm=llm, tools=ToolGroup(multiply), config=config)
+    flow = react_flow(llm, ToolGroup(multiply), max_iterations=5)
+    state = State(operational=react_initial_state("What is 7 times 8?"))
 
-    result = await agent.run("What is 7 times 8?")
-    assert "56" in result.answer
-    assert len(result.steps) >= 1
-    assert result.all_attempts
+    result = await flow.run(state)
+    assert "56" in state["response"].text
+    assert result.trace.steps
     await llm.close()
 
 
