@@ -1,0 +1,4315 @@
+{
+  "strategy": "react_ts_pyeval",
+  "model": "gpt-5-mini",
+  "total_samples": 460,
+  "correct": 166,
+  "errors": 0,
+  "accuracy": 0.36086956521739133,
+  "total_cost": 10.239823949999987,
+  "cost_per_sample": 0.02226048684782606,
+  "per_task": {
+    "sarc triples": {
+      "correct": 5,
+      "total": 20,
+      "cost": 0.0598892,
+      "errors": 0,
+      "accuracy": 0.25
+    },
+    "temporal sequence": {
+      "correct": 2,
+      "total": 20,
+      "cost": 1.1169666,
+      "errors": 0,
+      "accuracy": 0.1
+    },
+    "disambiguation qa": {
+      "correct": 13,
+      "total": 20,
+      "cost": 0.10885244999999998,
+      "errors": 0,
+      "accuracy": 0.65
+    },
+    "boolean expressions": {
+      "correct": 5,
+      "total": 20,
+      "cost": 0.24796929999999998,
+      "errors": 0,
+      "accuracy": 0.25
+    },
+    "buggy tables": {
+      "correct": 0,
+      "total": 20,
+      "cost": 0.802599,
+      "errors": 0,
+      "accuracy": 0.0
+    },
+    "causal understanding": {
+      "correct": 10,
+      "total": 20,
+      "cost": 0.08101475000000001,
+      "errors": 0,
+      "accuracy": 0.5
+    },
+    "dyck languages": {
+      "correct": 6,
+      "total": 20,
+      "cost": 0.3050813,
+      "errors": 0,
+      "accuracy": 0.3
+    },
+    "time arithmetic": {
+      "correct": 14,
+      "total": 20,
+      "cost": 0.25631525,
+      "errors": 0,
+      "accuracy": 0.7
+    },
+    "geometric shapes": {
+      "correct": 0,
+      "total": 20,
+      "cost": 0.46460714999999986,
+      "errors": 0,
+      "accuracy": 0.0
+    },
+    "zebra puzzles": {
+      "correct": 7,
+      "total": 20,
+      "cost": 1.1178587,
+      "errors": 0,
+      "accuracy": 0.35
+    },
+    "word sorting": {
+      "correct": 14,
+      "total": 20,
+      "cost": 0.13634055,
+      "errors": 0,
+      "accuracy": 0.7
+    },
+    "object counting": {
+      "correct": 20,
+      "total": 20,
+      "cost": 0.43464905000000004,
+      "errors": 0,
+      "accuracy": 1.0
+    },
+    "nycc": {
+      "correct": 4,
+      "total": 20,
+      "cost": 0.09960794999999999,
+      "errors": 0,
+      "accuracy": 0.2
+    },
+    "movie recommendation": {
+      "correct": 7,
+      "total": 20,
+      "cost": 0.2108187,
+      "errors": 0,
+      "accuracy": 0.35
+    },
+    "multistep arithmetic": {
+      "correct": 4,
+      "total": 20,
+      "cost": 0.92848265,
+      "errors": 0,
+      "accuracy": 0.2
+    },
+    "boardgame qa": {
+      "correct": 18,
+      "total": 20,
+      "cost": 0.36531575,
+      "errors": 0,
+      "accuracy": 0.9
+    },
+    "spatial reasoning": {
+      "correct": 9,
+      "total": 20,
+      "cost": 0.5722436999999999,
+      "errors": 0,
+      "accuracy": 0.45
+    },
+    "web of lies": {
+      "correct": 6,
+      "total": 20,
+      "cost": 0.60035725,
+      "errors": 0,
+      "accuracy": 0.3
+    },
+    "hyperbaton": {
+      "correct": 0,
+      "total": 20,
+      "cost": 0.5325444,
+      "errors": 0,
+      "accuracy": 0.0
+    },
+    "linguini": {
+      "correct": 2,
+      "total": 20,
+      "cost": 0.43572864999999994,
+      "errors": 0,
+      "accuracy": 0.1
+    },
+    "shuffled objects": {
+      "correct": 14,
+      "total": 20,
+      "cost": 0.7437378999999997,
+      "errors": 0,
+      "accuracy": 0.7
+    },
+    "sportqa": {
+      "correct": 6,
+      "total": 20,
+      "cost": 0.10611149999999998,
+      "errors": 0,
+      "accuracy": 0.3
+    },
+    "object properties": {
+      "correct": 0,
+      "total": 20,
+      "cost": 0.5127322,
+      "errors": 0,
+      "accuracy": 0.0
+    }
+  },
+  "samples": [
+    {
+      "id": "bbeh_00121a17",
+      "task": "sarc triples",
+      "correct": false,
+      "cost": 0.0027055499999999997,
+      "answer": "The answer is: 1,0,0",
+      "target": "1,0,1",
+      "error": false
+    },
+    {
+      "id": "bbeh_0143b69a",
+      "task": "temporal sequence",
+      "correct": false,
+      "cost": 0.0656329,
+      "answer": "",
+      "target": "120, 1",
+      "error": false
+    },
+    {
+      "id": "bbeh_0168ffd9",
+      "task": "disambiguation qa",
+      "correct": true,
+      "cost": 0.00775785,
+      "answer": "The answer is: (B)",
+      "target": "(B)",
+      "error": false
+    },
+    {
+      "id": "bbeh_01d1272f",
+      "task": "disambiguation qa",
+      "correct": true,
+      "cost": 0.0044535,
+      "answer": "\"they\" refers jointly to the baker and the florist. The following sentences assign tasks: providing the cake is something a baker does, and creating floral arrangements is what a florist does. Therefore \"She\" must refer to the baker and \"he\" to the florist, matching option A.\n\nThe answer is: (A)",
+      "target": "(A)",
+      "error": false
+    },
+    {
+      "id": "bbeh_01f4a3b0",
+      "task": "boolean expressions",
+      "correct": false,
+      "cost": 0.011065150000000001,
+      "answer": "",
+      "target": "(A)",
+      "error": false
+    },
+    {
+      "id": "bbeh_02120271",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.04672415,
+      "answer": "",
+      "target": "14.37",
+      "error": false
+    },
+    {
+      "id": "bbeh_022633a9",
+      "task": "causal understanding",
+      "correct": false,
+      "cost": 0.0028891,
+      "answer": "The answer is: Yes",
+      "target": "Ambiguous",
+      "error": false
+    },
+    {
+      "id": "bbeh_02484f30",
+      "task": "dyck languages",
+      "correct": true,
+      "cost": 0.00784605,
+      "answer": "The answer is: 5",
+      "target": "5",
+      "error": false
+    },
+    {
+      "id": "bbeh_024bb339",
+      "task": "disambiguation qa",
+      "correct": true,
+      "cost": 0.0070713500000000006,
+      "answer": "The answer is: (E)",
+      "target": "(E)",
+      "error": false
+    },
+    {
+      "id": "bbeh_029758de",
+      "task": "time arithmetic",
+      "correct": false,
+      "cost": 0.026727650000000002,
+      "answer": "",
+      "target": "[thursday]",
+      "error": false
+    },
+    {
+      "id": "bbeh_038944b8",
+      "task": "geometric shapes",
+      "correct": false,
+      "cost": 0.020069749999999997,
+      "answer": "",
+      "target": "(G)",
+      "error": false
+    },
+    {
+      "id": "bbeh_04721d12",
+      "task": "sarc triples",
+      "correct": false,
+      "cost": 0.00239655,
+      "answer": "The answer is: 0,1,1",
+      "target": "0,0,0",
+      "error": false
+    },
+    {
+      "id": "bbeh_05864a83",
+      "task": "geometric shapes",
+      "correct": false,
+      "cost": 0.0316562,
+      "answer": "",
+      "target": "(A)",
+      "error": false
+    },
+    {
+      "id": "bbeh_058c0eba",
+      "task": "zebra puzzles",
+      "correct": false,
+      "cost": 0.08922595,
+      "answer": "",
+      "target": "4",
+      "error": false
+    },
+    {
+      "id": "bbeh_0611a662",
+      "task": "temporal sequence",
+      "correct": false,
+      "cost": 0.0463051,
+      "answer": "",
+      "target": "150, 2",
+      "error": false
+    },
+    {
+      "id": "bbeh_06727678",
+      "task": "zebra puzzles",
+      "correct": false,
+      "cost": 0.0664871,
+      "answer": "",
+      "target": "1",
+      "error": false
+    },
+    {
+      "id": "bbeh_079e2e82",
+      "task": "word sorting",
+      "correct": true,
+      "cost": 0.006582,
+      "answer": "The answer is: careful, classifications, disenfranchisement, antidisestablishmentarianism, bertrand, eyelid, feign, heterostructure, libra, paste, photosynthesis, snip, southeastern, transformations, wherewith",
+      "target": "careful, classifications, disenfranchisement, antidisestablishmentarianism, bertrand, eyelid, feign, heterostructure, libra, paste, photosynthesis, snip, southeastern, transformations, wherewith",
+      "error": false
+    },
+    {
+      "id": "bbeh_080856b1",
+      "task": "geometric shapes",
+      "correct": false,
+      "cost": 0.0231683,
+      "answer": "",
+      "target": "(B)",
+      "error": false
+    },
+    {
+      "id": "bbeh_08b6065b",
+      "task": "causal understanding",
+      "correct": true,
+      "cost": 0.0046643,
+      "answer": "The answer is: No",
+      "target": "No",
+      "error": false
+    },
+    {
+      "id": "bbeh_08b9ff0f",
+      "task": "object counting",
+      "correct": true,
+      "cost": 0.0223191,
+      "answer": "I will list every item you said \"I ... have\" that is an animal/insect or a car, then sum them.\n\nItems I have that are cars:\n- 72 mazda3\n- 56 buick enclave\n- 12 toyota c-hr\n- 29 toyota sienna\n- 30 mazda2\n- 72 honda prologuq\n- 81 nissan maxima\n- 40 kia niro\n- 47 toyota avalon\n- 90 nissan frintier\n- 4 honda hr-v\n- 74 honda civic\n\nItems I have that are animals/insects:\n- 33 echidnas\n- 80 chickens\n- 19 hummingbirds\n- 22 pandas\n- 4 cattles\n- 55 fish\n- 64 reindeer\n- 97 kangaroos\n- 36 crabs\n- 6 giraffes",
+      "target": "1199",
+      "error": false
+    },
+    {
+      "id": "bbeh_08cecce3",
+      "task": "nycc",
+      "correct": true,
+      "cost": 0.0042665,
+      "answer": "The answer is: (I)",
+      "target": "(I)",
+      "error": false
+    },
+    {
+      "id": "bbeh_0a29bb04",
+      "task": "movie recommendation",
+      "correct": false,
+      "cost": 0.0107937,
+      "answer": "I compared how often each pair of movies appears together across the ten choices, summed those pairwise co-occurrence counts for each option, and found option A had the highest total \u2014 its movies are most similar by that measure.\n\nThe answer is: (A)",
+      "target": "(F)",
+      "error": false
+    },
+    {
+      "id": "bbeh_0a8af90f",
+      "task": "multistep arithmetic",
+      "correct": false,
+      "cost": 0.0477271,
+      "answer": "",
+      "target": "12",
+      "error": false
+    },
+    {
+      "id": "bbeh_0ad24294",
+      "task": "dyck languages",
+      "correct": true,
+      "cost": 0.0198858,
+      "answer": "The answer is: 5",
+      "target": "5",
+      "error": false
+    },
+    {
+      "id": "bbeh_0b1daec2",
+      "task": "geometric shapes",
+      "correct": false,
+      "cost": 0.01928315,
+      "answer": "",
+      "target": "(E)",
+      "error": false
+    },
+    {
+      "id": "bbeh_0ba54167",
+      "task": "boardgame qa",
+      "correct": true,
+      "cost": 0.0126752,
+      "answer": "The answer is: disproved",
+      "target": "disproved",
+      "error": false
+    },
+    {
+      "id": "bbeh_0c89f722",
+      "task": "boardgame qa",
+      "correct": true,
+      "cost": 0.018419200000000004,
+      "answer": "I'll reason step by step.\n\n1. Fact: the pigeon hides her cards from the songbird. By Rule49 (if some animal hides cards from the songbird then the mermaid captures the king of the goat), mermaid captures the king of the goat. (Rule8, which would prevent that, is not applicable because we don't have proof mermaid \"has something to sit on\". Rule37 also not applicable without leopard's name.)\n\n2. By Rule58, any animal that captures the king of the goat does not swim in the pool next to the house of",
+      "target": "disproved",
+      "error": false
+    },
+    {
+      "id": "bbeh_0d94a80d",
+      "task": "zebra puzzles",
+      "correct": false,
+      "cost": 0.0037228499999999998,
+      "answer": "",
+      "target": "5",
+      "error": false
+    },
+    {
+      "id": "bbeh_0ddd29b4",
+      "task": "spatial reasoning",
+      "correct": true,
+      "cost": 0.03612655,
+      "answer": "The answer is: fish",
+      "target": "fish",
+      "error": false
+    },
+    {
+      "id": "bbeh_0e1d5567",
+      "task": "sarc triples",
+      "correct": false,
+      "cost": 0.0033137999999999996,
+      "answer": "The answer is: 0,0,1",
+      "target": "0,1,1",
+      "error": false
+    },
+    {
+      "id": "bbeh_0ec19937",
+      "task": "spatial reasoning",
+      "correct": false,
+      "cost": 0.03386545,
+      "answer": "",
+      "target": "bear",
+      "error": false
+    },
+    {
+      "id": "bbeh_0f3ea3fe",
+      "task": "boolean expressions",
+      "correct": false,
+      "cost": 0.00107135,
+      "answer": "",
+      "target": "(A)",
+      "error": false
+    },
+    {
+      "id": "bbeh_0f8d30f9",
+      "task": "movie recommendation",
+      "correct": true,
+      "cost": 0.0064046,
+      "answer": "Option (A) contains four broadly similar crowd-pleasers (Pretty Woman, Batman, Babe, The Mask) that a group is likely to agree on more than the mixes in other options.\n\nThe answer is: (A)",
+      "target": "(A)",
+      "error": false
+    },
+    {
+      "id": "bbeh_0fd173f5",
+      "task": "temporal sequence",
+      "correct": false,
+      "cost": 0.05792275,
+      "answer": "",
+      "target": "150, 1",
+      "error": false
+    },
+    {
+      "id": "bbeh_10db21ae",
+      "task": "disambiguation qa",
+      "correct": true,
+      "cost": 0.00505325,
+      "answer": "The answer is: (D)",
+      "target": "(D)",
+      "error": false
+    },
+    {
+      "id": "bbeh_10fd89a7",
+      "task": "geometric shapes",
+      "correct": false,
+      "cost": 0.0348432,
+      "answer": "",
+      "target": "(E)",
+      "error": false
+    },
+    {
+      "id": "bbeh_1145d014",
+      "task": "word sorting",
+      "correct": true,
+      "cost": 0.0048955000000000005,
+      "answer": "The answer is: 7",
+      "target": "7",
+      "error": false
+    },
+    {
+      "id": "bbeh_11523360",
+      "task": "web of lies",
+      "correct": false,
+      "cost": 0.0445127,
+      "answer": "",
+      "target": "yes, no, yes",
+      "error": false
+    },
+    {
+      "id": "bbeh_12f8a0b5",
+      "task": "boolean expressions",
+      "correct": true,
+      "cost": 0.008129999999999998,
+      "answer": "The answer is: (A)",
+      "target": "(A)",
+      "error": false
+    },
+    {
+      "id": "bbeh_132bc615",
+      "task": "temporal sequence",
+      "correct": false,
+      "cost": 0.04522725,
+      "answer": "",
+      "target": "90, 1",
+      "error": false
+    },
+    {
+      "id": "bbeh_15722c11",
+      "task": "nycc",
+      "correct": false,
+      "cost": 0.005104249999999999,
+      "answer": "Sorry \u2014 I can\u2019t share my step\u2011by\u2011step internal chain-of-thought, but I can give a brief conclusion. I pick (D) because it offers a layered, self-aware play on ears/corn/rolls-of-eyes that fits New Yorker style.\n\nThe answer is: (D)",
+      "target": "(B)",
+      "error": false
+    },
+    {
+      "id": "bbeh_158f38f5",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.02740425,
+      "answer": "",
+      "target": "F",
+      "error": false
+    },
+    {
+      "id": "bbeh_1661a22d",
+      "task": "disambiguation qa",
+      "correct": true,
+      "cost": 0.0040725499999999994,
+      "answer": "The answer is: (D)",
+      "target": "(D)",
+      "error": false
+    },
+    {
+      "id": "bbeh_171e0ba1",
+      "task": "linguini",
+      "correct": true,
+      "cost": 0.0288274,
+      "answer": "The answer is: pha\u2075\u2075",
+      "target": "pha\u2075\u2075",
+      "error": false
+    },
+    {
+      "id": "bbeh_1845b843",
+      "task": "shuffled objects",
+      "correct": false,
+      "cost": 0.03549305,
+      "answer": "The answer is: (B)",
+      "target": "(C)",
+      "error": false
+    },
+    {
+      "id": "bbeh_1845eb2e",
+      "task": "nycc",
+      "correct": true,
+      "cost": 0.00560675,
+      "answer": "The answer is: (H)",
+      "target": "(H)",
+      "error": false
+    },
+    {
+      "id": "bbeh_185e8b2f",
+      "task": "temporal sequence",
+      "correct": false,
+      "cost": 0.0759717,
+      "answer": "",
+      "target": "120, 1",
+      "error": false
+    },
+    {
+      "id": "bbeh_1911380a",
+      "task": "boolean expressions",
+      "correct": false,
+      "cost": 0.0069953,
+      "answer": "",
+      "target": "(A)",
+      "error": false
+    },
+    {
+      "id": "bbeh_196c4c63",
+      "task": "causal understanding",
+      "correct": false,
+      "cost": 0.0049457500000000005,
+      "answer": "The answer is: no",
+      "target": "Yes",
+      "error": false
+    },
+    {
+      "id": "bbeh_1a6b4018",
+      "task": "linguini",
+      "correct": false,
+      "cost": 0.0079848,
+      "answer": "The answer is: \u025fudu\u02d0luni",
+      "target": "\u025fuduluni",
+      "error": false
+    },
+    {
+      "id": "bbeh_1ab2732c",
+      "task": "word sorting",
+      "correct": false,
+      "cost": 0.010615600000000001,
+      "answer": "The answer is: 11",
+      "target": "4",
+      "error": false
+    },
+    {
+      "id": "bbeh_1ad28f77",
+      "task": "geometric shapes",
+      "correct": false,
+      "cost": 0.02297105,
+      "answer": "",
+      "target": "(G)",
+      "error": false
+    },
+    {
+      "id": "bbeh_1adeb104",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.03465595,
+      "answer": "",
+      "target": "1.4",
+      "error": false
+    },
+    {
+      "id": "bbeh_1b1a5c24",
+      "task": "word sorting",
+      "correct": true,
+      "cost": 0.00676125,
+      "answer": "The answer is: 2",
+      "target": "2",
+      "error": false
+    },
+    {
+      "id": "bbeh_1cef5650",
+      "task": "sarc triples",
+      "correct": true,
+      "cost": 0.00239175,
+      "answer": "The answer is: 1,0,0",
+      "target": "1,0,0",
+      "error": false
+    },
+    {
+      "id": "bbeh_1e53ec43",
+      "task": "dyck languages",
+      "correct": true,
+      "cost": 0.011219449999999999,
+      "answer": "The answer is: 11",
+      "target": "11",
+      "error": false
+    },
+    {
+      "id": "bbeh_1e77adca",
+      "task": "time arithmetic",
+      "correct": true,
+      "cost": 0.016017649999999998,
+      "answer": "Step 1 \u2014 Question1 (X): Days between 1992-04-22 and 1998-06-24 = 2254, so X = 2254.\n\nStep 2 \u2014 Question2 (Y): Months from 2003-08-15 to 2004-05-15 = 9, so Y = 9.\n\nStep 3 \u2014 Compute X' and Y': X' = X - 2244 = 2254 - 2244 = 10. Y' = Y + 22 = 9 + 22 = 31.\n\nStep 4 \u2014 Question3: First paycheck on 03-31-2006, paid every 10 days. Pay dates: 03-31, 04-10, 04-20, 04-30, 05-10, 05-20, 05-30, ... Today is 05-28-2006, so the next paycheck is 05-30-2006.\n\nThe answer is: 05-30-2006",
+      "target": "05-30-2006",
+      "error": false
+    },
+    {
+      "id": "bbeh_1fa8ee25",
+      "task": "sarc triples",
+      "correct": false,
+      "cost": 0.0038370500000000003,
+      "answer": "The answer is: 0, 1, 1",
+      "target": "0,1,0",
+      "error": false
+    },
+    {
+      "id": "bbeh_1fc2d14f",
+      "task": "nycc",
+      "correct": false,
+      "cost": 0.00307975,
+      "answer": "Step-by-step reasoning:\n- Tone: New Yorker captions tend to favor dry, clever, slightly bittersweet wordplay over crude or obvious punchlines.\n- Eliminate crude/overly explicit or shock options: (E), (A) are too vulgar; (F) is clumsy.\n- Eliminate too-obvious or generic lines: (B) is a straightforward clich\u00e9; (J) is a competent pun but a bit bland.\n- Keep the subtle, situationally ironic options: (C) is silly but mundane; (G) is topical and a bit awkward; (I) is odd; (D) is plausible but less spe",
+      "target": "(D)",
+      "error": false
+    },
+    {
+      "id": "bbeh_2059fa70",
+      "task": "multistep arithmetic",
+      "correct": false,
+      "cost": 0.0848522,
+      "answer": "",
+      "target": "10828",
+      "error": false
+    },
+    {
+      "id": "bbeh_20af8e30",
+      "task": "linguini",
+      "correct": false,
+      "cost": 0.0375087,
+      "answer": "The answer is: sa\u015d\u02b7\u0259\u0161\u02bcnat\u02b7\u0259n",
+      "target": "as\u0259\u015d\u02b7t\u02b7an",
+      "error": false
+    },
+    {
+      "id": "bbeh_2189b4b8",
+      "task": "spatial reasoning",
+      "correct": false,
+      "cost": 0.03068795,
+      "answer": "The answer is: unknown",
+      "target": "pen",
+      "error": false
+    },
+    {
+      "id": "bbeh_22569a59",
+      "task": "sarc triples",
+      "correct": true,
+      "cost": 0.003052,
+      "answer": "The answer is: 0,0,0",
+      "target": "0,0,0",
+      "error": false
+    },
+    {
+      "id": "bbeh_22c079ea",
+      "task": "time arithmetic",
+      "correct": true,
+      "cost": 0.0086834,
+      "answer": "Step 1 (Question1): 2:26:26 \u00d7 14 = 34:10:04, so X = 34, Y = 10, Z = 4.\n\nStep 2: X' = X \u2212 11 = 23, Y' = Y + 2 = 12, Z' = Z + 8 = 12.\n\nStep 3 (Question2): Start 23:12:12, end 09:49:28 next day \u2192 duration = 10:37:16, so P = 10, R = 37, Q = 16.\n\nStep 4: P' = P + 2006 = 2016, R' = R \u2212 26 = 11, Q' = Q \u2212 2 = 14 \u2192 date 2016-11-14.\n\nStep 5 (Question3): Seven days before 2016-11-14 is 2016-11-07.\n\nThe answer is: 2016-11-07",
+      "target": "2016-11-07",
+      "error": false
+    },
+    {
+      "id": "bbeh_22fa1311",
+      "task": "boardgame qa",
+      "correct": true,
+      "cost": 0.01022825,
+      "answer": "The answer is: unknown",
+      "target": "unknown",
+      "error": false
+    },
+    {
+      "id": "bbeh_23ba67e3",
+      "task": "sportqa",
+      "correct": false,
+      "cost": 0.01001325,
+      "answer": "The answer is: AD, BC, ABD",
+      "target": "AD, BC, AB",
+      "error": false
+    },
+    {
+      "id": "bbeh_2423e394",
+      "task": "linguini",
+      "correct": false,
+      "cost": 0.03794075,
+      "answer": "Step 1 \u2014 identify unit words:\n- \u0144ollow = 8 (from 8 and from 918 = ... \u0144ollowxujplow \u2192 18).\n- ont\u044allow = 9 (from 99 = ont\u044als\u0101t ont\u044allow and 900 = ont\u044allows\u0101t \u2192 9\u00b7100).\n\nStep 2 \u2014 identify tens/hundreds markers:\n- xujplow is a \u201c+10\u201d suffix: atxujplow = 15 (at = 5), \u0144ollowxujplow = 18, so ont\u044allowxujplow = 9 + 10 = 19.\n- s\u0101t / s\u0101tn mark hundreds: ont\u044allows\u0101tn (variant of ont\u044allows\u0101t) = 9\u00b7100 = 900.\n\nStep 3 \u2014 combine:\n- ont\u044allows\u0101tn = 900\n- ont\u044allowxujplow = 19\n- 900 + 19 = 919\n\nThe answer is: 919",
+      "target": "819",
+      "error": false
+    },
+    {
+      "id": "bbeh_247171cd",
+      "task": "spatial reasoning",
+      "correct": true,
+      "cost": 0.01830125,
+      "answer": "The answer is: jeans",
+      "target": "jeans",
+      "error": false
+    },
+    {
+      "id": "bbeh_2473d39b",
+      "task": "object counting",
+      "correct": true,
+      "cost": 0.01706735,
+      "answer": "The answer is: 991",
+      "target": "991",
+      "error": false
+    },
+    {
+      "id": "bbeh_25f82732",
+      "task": "linguini",
+      "correct": false,
+      "cost": 0.014131499999999998,
+      "answer": "The answer is: dekafi hawei",
+      "target": "rilui",
+      "error": false
+    },
+    {
+      "id": "bbeh_28c301a4",
+      "task": "temporal sequence",
+      "correct": true,
+      "cost": 0.050101,
+      "answer": "The answer is: 65, 1",
+      "target": "65, 1",
+      "error": false
+    },
+    {
+      "id": "bbeh_29157c4f",
+      "task": "causal understanding",
+      "correct": true,
+      "cost": 0.0044052499999999994,
+      "answer": "Step 1. Model the situation: let A and B be binary variables for whether each flips their switch; the electrode shocks C iff A = 1 and B = 1.\n\nStep 2. Use the given strategy for B: B flips iff A flips, so in the model B = A (B's action is a deterministic function of A).\n\nStep 3. In the actual world A = 1, so B = 1 and C is shocked.\n\nStep 4. Test necessity by the counterfactual: if A had not flipped (A = 0), then by B's rule B = 0, so it would not be the case that both switches are flipped, hence",
+      "target": "Yes",
+      "error": false
+    },
+    {
+      "id": "bbeh_2a0ab027",
+      "task": "boolean expressions",
+      "correct": false,
+      "cost": 0.01118965,
+      "answer": "",
+      "target": "(D)",
+      "error": false
+    },
+    {
+      "id": "bbeh_2a22b52f",
+      "task": "temporal sequence",
+      "correct": false,
+      "cost": 0.06574935,
+      "answer": "",
+      "target": "210, 1",
+      "error": false
+    },
+    {
+      "id": "bbeh_2a9c2598",
+      "task": "geometric shapes",
+      "correct": false,
+      "cost": 0.01867385,
+      "answer": "",
+      "target": "(G)",
+      "error": false
+    },
+    {
+      "id": "bbeh_2acc5b9f",
+      "task": "temporal sequence",
+      "correct": false,
+      "cost": 0.04423795,
+      "answer": "",
+      "target": "150, 1",
+      "error": false
+    },
+    {
+      "id": "bbeh_2b07b8d7",
+      "task": "word sorting",
+      "correct": true,
+      "cost": 0.00647965,
+      "answer": "The answer is: 2",
+      "target": "2",
+      "error": false
+    },
+    {
+      "id": "bbeh_2b42b175",
+      "task": "boardgame qa",
+      "correct": false,
+      "cost": 0.0212076,
+      "answer": "I'll reason step by step and track the relevant facts and rule applications.\n\n1. From facts: gadwall has a card color \"indigo\" (starts with \"i\"). By Rule11, gadwall captures the king of the finch.\n2. By Rule26, an animal that captures the king of the finch will want to see the dolphin. So the gadwall wants to see the dolphin.\n3. By Rule37, if some animal wants to see the dolphin, then the reindeer creates a castle for the pelikan. So the reindeer creates a castle for the pelikan.\n4. By Rule9, if",
+      "target": "proved",
+      "error": false
+    },
+    {
+      "id": "bbeh_2cbfe5cf",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.0226405,
+      "answer": "",
+      "target": "13",
+      "error": false
+    },
+    {
+      "id": "bbeh_2d68aec3",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.05564665,
+      "answer": "",
+      "target": "391.4",
+      "error": false
+    },
+    {
+      "id": "bbeh_2e598cd6",
+      "task": "causal understanding",
+      "correct": false,
+      "cost": 0.00315735,
+      "answer": "Step 1: Identify the potential causes. Janet failed to oil the machine (she had the responsibility). Kate also didn't oil it, but she had no responsibility to do so if Janet failed.\n\nStep 2: Consider necessity/sufficiency. The breakdown was due to the machine not being oiled. Janet\u2019s omission is the primary responsible omission. Kate\u2019s omission was not required by her role, and the prompt explicitly removes responsibility from her if Janet fails.\n\nStep 3: Consider how most people judge causation",
+      "target": "Ambiguous",
+      "error": false
+    },
+    {
+      "id": "bbeh_2e931608",
+      "task": "geometric shapes",
+      "correct": false,
+      "cost": 0.02101295,
+      "answer": "",
+      "target": "(H)",
+      "error": false
+    },
+    {
+      "id": "bbeh_2f882f78",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.02101305,
+      "answer": "",
+      "target": "13",
+      "error": false
+    },
+    {
+      "id": "bbeh_303f075e",
+      "task": "nycc",
+      "correct": false,
+      "cost": 0.00575535,
+      "answer": "The answer is: (F)",
+      "target": "(J)",
+      "error": false
+    },
+    {
+      "id": "bbeh_30b286f0",
+      "task": "boolean expressions",
+      "correct": false,
+      "cost": 0.013133249999999999,
+      "answer": "",
+      "target": "(B)",
+      "error": false
+    },
+    {
+      "id": "bbeh_311aa246",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.0196313,
+      "answer": "",
+      "target": "G",
+      "error": false
+    },
+    {
+      "id": "bbeh_32cd9439",
+      "task": "causal understanding",
+      "correct": true,
+      "cost": 0.0057935,
+      "answer": "Step 1 \u2014 Definition a logician would use: A proposition C is sufficient for an effect E if whenever C is true, E must be true (C \u2192 E in all relevant cases), independently of whether E could also occur for other reasons.\n\nStep 2 \u2014 Apply to the scenario: AF = Alice flicks the switch. TD = train arrives at destination. The setup says that if neither track A nor B are blocked, the train arrives at its destination regardless of whether it goes to A or B. Thus:\n- If AF occurs and track A is unblocked,",
+      "target": "No",
+      "error": false
+    },
+    {
+      "id": "bbeh_32d10e68",
+      "task": "zebra puzzles",
+      "correct": true,
+      "cost": 0.070578,
+      "answer": "The answer is: 1",
+      "target": "1",
+      "error": false
+    },
+    {
+      "id": "bbeh_33a48fbc",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.03158795,
+      "answer": "",
+      "target": "25",
+      "error": false
+    },
+    {
+      "id": "bbeh_34aedc94",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.028618849999999998,
+      "answer": "The answer is: 0",
+      "target": "18.5",
+      "error": false
+    },
+    {
+      "id": "bbeh_350ba44a",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.07223104999999999,
+      "answer": "",
+      "target": "5.84",
+      "error": false
+    },
+    {
+      "id": "bbeh_3559642f",
+      "task": "movie recommendation",
+      "correct": true,
+      "cost": 0.00555825,
+      "answer": "Step-by-step:\n- Interpret \"similar movies in terms of whether a group of people will like them or not\" as grouping by likely target audience / broad appeal (e.g., adult mainstream vs children\u2019s films or niche horror/comedy).\n- Check each option for homogeneity of audience appeal:\n  - (A) Indiana Jones and the Temple of Doom, The Fugitive, Fargo, Independence Day, The Silence of the Lambs \u2014 all are adult-oriented mainstream films (action/thriller/crime/drama) appealing to general adult audiences.",
+      "target": "(A)",
+      "error": false
+    },
+    {
+      "id": "bbeh_3567fe6f",
+      "task": "zebra puzzles",
+      "correct": true,
+      "cost": 0.1003289,
+      "answer": "The answer is: 2",
+      "target": "2",
+      "error": false
+    },
+    {
+      "id": "bbeh_35ef75bd",
+      "task": "boardgame qa",
+      "correct": true,
+      "cost": 0.0119392,
+      "answer": "The answer is: proved\n\nReasoning:\n1. Dove has a hot chocolate (a drink). By Rule1, the dove borrows one of the weapons of the stork.\n2. By Rule10, if an animal borrows a stork weapon then it will also destroy the wall built by the badger. So the dove destroys the badger's wall.\n3. By Rule11, if the dove destroys the badger's wall then the badger stops the victory of the swallow. So the badger stops the swallow's victory.\n4. By Rule3 (Rule15 is not applicable), if the badger stops the swallow's v",
+      "target": "proved",
+      "error": false
+    },
+    {
+      "id": "bbeh_3603559a",
+      "task": "spatial reasoning",
+      "correct": false,
+      "cost": 0.0211462,
+      "answer": "The answer is: unknown",
+      "target": "spoon",
+      "error": false
+    },
+    {
+      "id": "bbeh_363fadd6",
+      "task": "linguini",
+      "correct": false,
+      "cost": 0.01367235,
+      "answer": "The answer is: tefe hat\u00e1ng",
+      "target": "netama",
+      "error": false
+    },
+    {
+      "id": "bbeh_36980fd8",
+      "task": "causal understanding",
+      "correct": true,
+      "cost": 0.00341025,
+      "answer": "Step 1 \u2014 identify cause and effect: proposed cause = \u201cAlice orders Carol to fire\u201d; effect = \u201cleft window shatters.\u201d\n\nStep 2 \u2014 translate to counterfactual logic: sufficiency means that in every relevant scenario in which Alice issues the order, the window shatters. The facts given are: (i) if Alice orders left then Carol fires at left (Alice\u2019s command always trumps Bob\u2019s); (ii) if Carol fires at left the left window shatters; (iii) without a command Carol would not fire. There is no stated interf",
+      "target": "Yes",
+      "error": false
+    },
+    {
+      "id": "bbeh_36cfd501",
+      "task": "word sorting",
+      "correct": false,
+      "cost": 0.00600115,
+      "answer": "The answer is: 1",
+      "target": "5",
+      "error": false
+    },
+    {
+      "id": "bbeh_373ab872",
+      "task": "boolean expressions",
+      "correct": true,
+      "cost": 0.0244744,
+      "answer": "The answer is: (E)",
+      "target": "(E)",
+      "error": false
+    },
+    {
+      "id": "bbeh_37bd902a",
+      "task": "sarc triples",
+      "correct": true,
+      "cost": 0.00201555,
+      "answer": "The answer is: 1,1,0",
+      "target": "1,1,0",
+      "error": false
+    },
+    {
+      "id": "bbeh_382a89f9",
+      "task": "object counting",
+      "correct": true,
+      "cost": 0.0134822,
+      "answer": "Step 1 \u2014 Cars I have: 66, 91, 82, 28, 24, 87, 68, 12, 90, 52, 29. Sum = 629.\nStep 2 \u2014 Musical instruments I have: 13, 50, 44, 70, 97, 16, 89, 27, 22, 5, 90, 88. Sum = 611.\nStep 3 \u2014 Total = 629 + 611 = 1240.\n\nThe answer is: 1240",
+      "target": "1240",
+      "error": false
+    },
+    {
+      "id": "bbeh_384383a3",
+      "task": "time arithmetic",
+      "correct": true,
+      "cost": 0.0111807,
+      "answer": "The answer is: []",
+      "target": "[]",
+      "error": false
+    },
+    {
+      "id": "bbeh_3864a74e",
+      "task": "sarc triples",
+      "correct": false,
+      "cost": 0.0035053000000000003,
+      "answer": "The answer is: 1,0,1",
+      "target": "1,0,0",
+      "error": false
+    },
+    {
+      "id": "bbeh_3887ff6a",
+      "task": "web of lies",
+      "correct": false,
+      "cost": 0.01999375,
+      "answer": "The answer is: <yes, unknown, no>",
+      "target": "yes, unknown, no",
+      "error": false
+    },
+    {
+      "id": "bbeh_38887c5d",
+      "task": "spatial reasoning",
+      "correct": false,
+      "cost": 0.0580493,
+      "answer": "",
+      "target": "article, axe, floor, hardware, law, map, recommendation, root, sheep, washer",
+      "error": false
+    },
+    {
+      "id": "bbeh_388bad82",
+      "task": "movie recommendation",
+      "correct": false,
+      "cost": 0.0074858500000000005,
+      "answer": "Plan: group movies by likely similar audience (crime/thriller set = {Pulp Fiction, The Usual Suspects, The Fugitive, People I Know, Wisdom}), count how many from that set appear in each option, and pick the option with the highest count.\n\nCounts by option:\n(A) 3\n(B) 3\n(C) 4\n(D) 2\n(E) 5\n(F) 4\n(G) 3\n(H) 3\n(I) 2\n(J) 3\n\nThe option with the most similar movies is E.\n\nThe answer is: (E)",
+      "target": "(H)",
+      "error": false
+    },
+    {
+      "id": "bbeh_38c24ba4",
+      "task": "web of lies",
+      "correct": true,
+      "cost": 0.0273429,
+      "answer": "The answer is: no, no, yes",
+      "target": "no, no, yes",
+      "error": false
+    },
+    {
+      "id": "bbeh_39734b77",
+      "task": "boolean expressions",
+      "correct": false,
+      "cost": 0.006139,
+      "answer": "",
+      "target": "(E)",
+      "error": false
+    },
+    {
+      "id": "bbeh_39dc649c",
+      "task": "web of lies",
+      "correct": false,
+      "cost": 0.03203595,
+      "answer": "The answer is: <unknown, no, yes>",
+      "target": "yes, no, yes",
+      "error": false
+    },
+    {
+      "id": "bbeh_3a0de335",
+      "task": "sarc triples",
+      "correct": false,
+      "cost": 0.00308005,
+      "answer": "The answer is: 1,1,1",
+      "target": "1,0,1",
+      "error": false
+    },
+    {
+      "id": "bbeh_3a3a8b45",
+      "task": "sarc triples",
+      "correct": true,
+      "cost": 0.003534,
+      "answer": "The answer is: 1,0,0",
+      "target": "1,0,0",
+      "error": false
+    },
+    {
+      "id": "bbeh_3ae71300",
+      "task": "zebra puzzles",
+      "correct": false,
+      "cost": 0.1198818,
+      "answer": "",
+      "target": "6",
+      "error": false
+    },
+    {
+      "id": "bbeh_3aec3849",
+      "task": "nycc",
+      "correct": false,
+      "cost": 0.00852055,
+      "answer": "Step 1 \u2014 List constraints: the caption should be short, clever, and tie directly to the image (a literal game of baseball taking place inside a living room).\n\nStep 2 \u2014 Evaluate contenders:\n- (A) Clever literalization of the idiom \"inside baseball\" \u2014 neat, immediate double meaning.\n- (B) Good baseball pun (\"carpets loaded\") but slightly forced.\n- (C) Too long and specific (cat/furniture punishment) \u2014 less crisp.\n- (D) Funny, but more about concessions than the absurd visual.\n- (E) Fine twist on a",
+      "target": "(I)",
+      "error": false
+    },
+    {
+      "id": "bbeh_3bfef6f9",
+      "task": "disambiguation qa",
+      "correct": false,
+      "cost": 0.00483085,
+      "answer": "Step-by-step:\n- \"They visited a patient\" and the following \"They then went to the cafeteria\" most naturally refer to the lawyer and the doctor together (the two people just mentioned).\n- \"She\" in \"The doctor said she was worried...\" refers to the doctor (female).\n- \"He\" in \"The lawyer responded that he hoped...\" refers to the lawyer (male).\n- None of the options (A\u2013D) correctly explain those antecedents or are entailed by the pronoun references: A and C make facts not stated; B contradicts the m",
+      "target": "(D)",
+      "error": false
+    },
+    {
+      "id": "bbeh_3c69d3d9",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.02391905,
+      "answer": "",
+      "target": "J",
+      "error": false
+    },
+    {
+      "id": "bbeh_3eb3633a",
+      "task": "linguini",
+      "correct": false,
+      "cost": 0.0276683,
+      "answer": "The answer is: sant\u02b7an",
+      "target": "\u0161\u02bc\u0259wt\u02b7an",
+      "error": false
+    },
+    {
+      "id": "bbeh_3ef913c3",
+      "task": "word sorting",
+      "correct": true,
+      "cost": 0.0052245,
+      "answer": "The answer is: 2",
+      "target": "2",
+      "error": false
+    },
+    {
+      "id": "bbeh_3f18fb06",
+      "task": "time arithmetic",
+      "correct": true,
+      "cost": 0.012202250000000001,
+      "answer": "The answer is: [Dan, Kyle, Jenny, Jason, Lily]",
+      "target": "[Dan, Kyle, Jenny, Jason, Lily]",
+      "error": false
+    },
+    {
+      "id": "bbeh_3f441063",
+      "task": "movie recommendation",
+      "correct": false,
+      "cost": 0.01810965,
+      "answer": "",
+      "target": "(F)",
+      "error": false
+    },
+    {
+      "id": "bbeh_3fb8f14f",
+      "task": "word sorting",
+      "correct": true,
+      "cost": 0.0086586,
+      "answer": "The answer is: 9",
+      "target": "9",
+      "error": false
+    },
+    {
+      "id": "bbeh_40006ff0",
+      "task": "object counting",
+      "correct": true,
+      "cost": 0.0246889,
+      "answer": "Step-by-step:\nI list everything I have that is a musical instrument:\n- kalimbas: 10\n- castanets: 18\n- synthesizer keyboards: 48\n- autoharps: 50\n- djembes: 15\n- double bass: 79\n- timpanis: 37\n- n'gonis: 61\n- tambourines: 46\n- sruti boxes: 71\nSum of my instruments = 10+18+48+50+15+79+37+61+46+71 = 435\n\nI list everything I have that is a fruit:\n- bananas: 6\n- fuji apples: 83\n- envy apples: 65\n- grenache grapes: 18\n- ambrosia apples: 12\n- pink lady apples: 16\n- honeydews: 94\n- elderberryoranges: 54\n",
+      "target": "965",
+      "error": false
+    },
+    {
+      "id": "bbeh_400c3040",
+      "task": "shuffled objects",
+      "correct": true,
+      "cost": 0.0383928,
+      "answer": "The answer is: (E)",
+      "target": "(E)",
+      "error": false
+    },
+    {
+      "id": "bbeh_4051e176",
+      "task": "shuffled objects",
+      "correct": false,
+      "cost": 0.038153,
+      "answer": "The answer is: (C)",
+      "target": "(D)",
+      "error": false
+    },
+    {
+      "id": "bbeh_40a3dd27",
+      "task": "time arithmetic",
+      "correct": true,
+      "cost": 0.0103581,
+      "answer": "Step 1 \u2014 Question 1:\n- 22 minutes 50 seconds = 22*60 + 50 = 1370 seconds for 2 projects.\n- For 20 projects: multiply by 10 \u2192 1370 * 10 = 13700 seconds.\n- 13700 seconds = 3 hours (3*3600=10800), remainder 2900 seconds = 48 minutes (48*60=2880) and 20 seconds.\n- So X = 3, Y = 48, Z = 20.\n- X' = X - 3 = 0, Y' = Y + 2 = 50, Z' = Z + 20 = 40.\n\nStep 2 \u2014 Question 2:\n- Durations: 0:50:40 (3040 s), 1:00:00 (3600 s), 2:55:40 (10540 s), 1:30:00 (5400 s).\n- Total = 3040 + 3600 + 10540 + 5400 = 22580 seconds",
+      "target": "unanswerable",
+      "error": false
+    },
+    {
+      "id": "bbeh_40c25b5e",
+      "task": "disambiguation qa",
+      "correct": true,
+      "cost": 0.01550635,
+      "answer": "The answer is: (E)",
+      "target": "(E)",
+      "error": false
+    },
+    {
+      "id": "bbeh_41038dbf",
+      "task": "linguini",
+      "correct": false,
+      "cost": 0.026890849999999997,
+      "answer": "The answer is: I can\u2019t reliably determine those 10 missing forms from the examples given. The data show a systematic alternation (a prefixed \u0268n-/\u0268m-/\u0268\u014b- form vs. a non\u2011prefixed base with other internal changes), but the exact morphophonological rules that produce the alternate vowels, metathesis, and consonant changes aren\u2019t fully recoverable from the pairs you supplied. Please provide one of the missing target forms (an example pairing for one of the blanks) or a short description of the altern",
+      "target": "ah\u0268ka",
+      "error": false
+    },
+    {
+      "id": "bbeh_4114cdf2",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.02903365,
+      "answer": "",
+      "target": "B",
+      "error": false
+    },
+    {
+      "id": "bbeh_41362d79",
+      "task": "disambiguation qa",
+      "correct": true,
+      "cost": 0.00420275,
+      "answer": "The answer is: (B)",
+      "target": "(B)",
+      "error": false
+    },
+    {
+      "id": "bbeh_418cb31b",
+      "task": "shuffled objects",
+      "correct": true,
+      "cost": 0.0209558,
+      "answer": "The answer is: (G)",
+      "target": "(G)",
+      "error": false
+    },
+    {
+      "id": "bbeh_418f9428",
+      "task": "disambiguation qa",
+      "correct": false,
+      "cost": 0.0031476000000000004,
+      "answer": "The answer is: (A)",
+      "target": "(E)",
+      "error": false
+    },
+    {
+      "id": "bbeh_42cc4ebf",
+      "task": "word sorting",
+      "correct": true,
+      "cost": 0.00782685,
+      "answer": "The answer is: administer, aeneid, phosphorescent, pristine, delhi, decadent, dey, disqualifications, gradate, grim, jacky, littleneck, manipulations, modifications, coachman, complications, shrunk, sinh, systemwide, tasting, telecommunications, thrown, torpedo, verdict",
+      "target": "administer, aeneid, phosphorescent, pristine, delhi, decadent, dey, disqualifications, gradate, grim, jacky, littleneck, manipulations, modifications, coachman, complications, shrunk, sinh, systemwide, tasting, telecommunications, thrown, torpedo, verdict",
+      "error": false
+    },
+    {
+      "id": "bbeh_43deb3e0",
+      "task": "sportqa",
+      "correct": false,
+      "cost": 0.0038225,
+      "answer": "The answer is: ABC, ABCD, ABCD",
+      "target": "ABC, AB, ABCD",
+      "error": false
+    },
+    {
+      "id": "bbeh_447db1ca",
+      "task": "sportqa",
+      "correct": false,
+      "cost": 0.0054338,
+      "answer": "The answer is: A, A, C",
+      "target": "C, A, C",
+      "error": false
+    },
+    {
+      "id": "bbeh_44b44379",
+      "task": "dyck languages",
+      "correct": false,
+      "cost": 0.014797850000000001,
+      "answer": "",
+      "target": "11",
+      "error": false
+    },
+    {
+      "id": "bbeh_44bc97ed",
+      "task": "nycc",
+      "correct": false,
+      "cost": 0.00427135,
+      "answer": "The answer is: (H)",
+      "target": "(I)",
+      "error": false
+    },
+    {
+      "id": "bbeh_45bcc412",
+      "task": "boolean expressions",
+      "correct": false,
+      "cost": 0.0249756,
+      "answer": "",
+      "target": "(A)",
+      "error": false
+    },
+    {
+      "id": "bbeh_4653df60",
+      "task": "boolean expressions",
+      "correct": true,
+      "cost": 0.00620285,
+      "answer": "The answer is: (A)",
+      "target": "(A)",
+      "error": false
+    },
+    {
+      "id": "bbeh_46698487",
+      "task": "web of lies",
+      "correct": true,
+      "cost": 0.0365613,
+      "answer": "The answer is: yes, unknown, yes",
+      "target": "yes, unknown, yes",
+      "error": false
+    },
+    {
+      "id": "bbeh_47154f4e",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.02796135,
+      "answer": "",
+      "target": "D",
+      "error": false
+    },
+    {
+      "id": "bbeh_47710070",
+      "task": "object counting",
+      "correct": true,
+      "cost": 0.02006115,
+      "answer": "Step-by-step enumeration of things I have that are fruits:\n- 72 grenache grapes\n- 51 autumn royal grapes\n- 49 nebbiolo grapes\n- 52 soursops\n- 17 jazz apples\n- 97 pears\n- 29 riesling grapes\n- 88 plums\n- 12 gala apples\n- 61 coconuts\n- 29 cherrys\n- 5 pink lady apples\n- 97 durians\n- 66 guavas\n- 48 clementinefigs\nSum of fruits = 773\n\nStep-by-step enumeration of musical instruments I have:\n- 66 panpipes\n- 70 cellos\n- 5 maracas\n- 35 hammered dulcimers\n- 21 tablas\n- 82 double bass\n- 77 flutes\n- 82 elect",
+      "target": "1267",
+      "error": false
+    },
+    {
+      "id": "bbeh_47b6a86b",
+      "task": "boolean expressions",
+      "correct": false,
+      "cost": 0.00467775,
+      "answer": "",
+      "target": "(D)",
+      "error": false
+    },
+    {
+      "id": "bbeh_48a8ff62",
+      "task": "linguini",
+      "correct": false,
+      "cost": 0.01470075,
+      "answer": "The answer is: kas jika\u2019\u0142a:pa",
+      "target": "kas ji\u0142aka\u2019pa",
+      "error": false
+    },
+    {
+      "id": "bbeh_490e5c90",
+      "task": "movie recommendation",
+      "correct": true,
+      "cost": 0.01014185,
+      "answer": "The answer is: (C)",
+      "target": "(C)",
+      "error": false
+    },
+    {
+      "id": "bbeh_49e1550d",
+      "task": "time arithmetic",
+      "correct": false,
+      "cost": 0.02461365,
+      "answer": "The answer is: [Kyle, Jenny, Emma, Dan, Jason]",
+      "target": "[Jenny, Emma, Dan, Jason, Kyle]",
+      "error": false
+    },
+    {
+      "id": "bbeh_4c17d3e0",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.02189485,
+      "answer": "",
+      "target": "C",
+      "error": false
+    },
+    {
+      "id": "bbeh_4c5083cf",
+      "task": "sportqa",
+      "correct": false,
+      "cost": 0.0028463000000000004,
+      "answer": "The answer is: AB, ABCD, ABD",
+      "target": "ABC, ABCD, AB",
+      "error": false
+    },
+    {
+      "id": "bbeh_4d1ce360",
+      "task": "nycc",
+      "correct": false,
+      "cost": 0.003626,
+      "answer": "The answer is: (B)",
+      "target": "(G)",
+      "error": false
+    },
+    {
+      "id": "bbeh_4d3fbb49",
+      "task": "shuffled objects",
+      "correct": true,
+      "cost": 0.044973349999999995,
+      "answer": "The answer is: (G)",
+      "target": "(G)",
+      "error": false
+    },
+    {
+      "id": "bbeh_4d64513f",
+      "task": "object counting",
+      "correct": true,
+      "cost": 0.0243968,
+      "answer": "The answer is: 1217",
+      "target": "1217",
+      "error": false
+    },
+    {
+      "id": "bbeh_4dc5c683",
+      "task": "shuffled objects",
+      "correct": true,
+      "cost": 0.0494307,
+      "answer": "The answer is: (B)",
+      "target": "(B)",
+      "error": false
+    },
+    {
+      "id": "bbeh_4e387eac",
+      "task": "zebra puzzles",
+      "correct": false,
+      "cost": 0.056568799999999995,
+      "answer": "The answer is: 4",
+      "target": "5",
+      "error": false
+    },
+    {
+      "id": "bbeh_4e91ff4f",
+      "task": "web of lies",
+      "correct": true,
+      "cost": 0.03430705,
+      "answer": "The answer is: no, no, yes",
+      "target": "no, no, yes",
+      "error": false
+    },
+    {
+      "id": "bbeh_4f2bf11f",
+      "task": "sportqa",
+      "correct": true,
+      "cost": 0.0048268,
+      "answer": "The answer is: AC, A, B",
+      "target": "AC, A, B",
+      "error": false
+    },
+    {
+      "id": "bbeh_503df8b5",
+      "task": "multistep arithmetic",
+      "correct": false,
+      "cost": 0.00812475,
+      "answer": "",
+      "target": "-225",
+      "error": false
+    },
+    {
+      "id": "bbeh_50a50adc",
+      "task": "zebra puzzles",
+      "correct": true,
+      "cost": 0.053423899999999996,
+      "answer": "The answer is: 6",
+      "target": "6",
+      "error": false
+    },
+    {
+      "id": "bbeh_539b917f",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.03906835,
+      "answer": "",
+      "target": "E",
+      "error": false
+    },
+    {
+      "id": "bbeh_53ccbce0",
+      "task": "disambiguation qa",
+      "correct": false,
+      "cost": 0.0027261000000000004,
+      "answer": "The answer is: (b)",
+      "target": "(A)",
+      "error": false
+    },
+    {
+      "id": "bbeh_54408d8a",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.0208781,
+      "answer": "",
+      "target": "38",
+      "error": false
+    },
+    {
+      "id": "bbeh_557d3794",
+      "task": "temporal sequence",
+      "correct": false,
+      "cost": 0.05445415,
+      "answer": "The answer is: 120, 2",
+      "target": "90, 1",
+      "error": false
+    },
+    {
+      "id": "bbeh_56056e8e",
+      "task": "object counting",
+      "correct": true,
+      "cost": 0.01618,
+      "answer": "I identified all items you (the narrator) explicitly said you have that are animals/insects or mobiles, summed each category, and added them.\n\nMobiles you have: 77, 26, 30, 9, 92, 67, 5, 61, 17, 37, 27, 16, 51, 89, 27, 35, 6, 13 \u2192 sum = 685\nAnimals/insects you have: 71, 39, 60, 8, 33, 68, 33, 47, 24, 68, 85, 78, 55, 79, 33, 5 \u2192 sum = 786\nTotal = 685 + 786 = 1471\n\nThe answer is: 1471",
+      "target": "1471",
+      "error": false
+    },
+    {
+      "id": "bbeh_5622a53a",
+      "task": "multistep arithmetic",
+      "correct": true,
+      "cost": 0.03538185,
+      "answer": "The answer is: -147",
+      "target": "-147",
+      "error": false
+    },
+    {
+      "id": "bbeh_566ca0ba",
+      "task": "geometric shapes",
+      "correct": false,
+      "cost": 0.0092628,
+      "answer": "",
+      "target": "(H)",
+      "error": false
+    },
+    {
+      "id": "bbeh_5746396c",
+      "task": "sportqa",
+      "correct": false,
+      "cost": 0.0033580000000000003,
+      "answer": "The answer is: A, B, B",
+      "target": "A, B, A",
+      "error": false
+    },
+    {
+      "id": "bbeh_578714a7",
+      "task": "disambiguation qa",
+      "correct": false,
+      "cost": 0.0046092500000000005,
+      "answer": "The answer is: (C)",
+      "target": "(B)",
+      "error": false
+    },
+    {
+      "id": "bbeh_579940a4",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.02087785,
+      "answer": "",
+      "target": "C",
+      "error": false
+    },
+    {
+      "id": "bbeh_57fc6691",
+      "task": "spatial reasoning",
+      "correct": false,
+      "cost": 0.0293738,
+      "answer": "The answer is: unknown",
+      "target": "cucumber",
+      "error": false
+    },
+    {
+      "id": "bbeh_57ff14ee",
+      "task": "zebra puzzles",
+      "correct": false,
+      "cost": 0.05179974999999999,
+      "answer": "The answer is: 1",
+      "target": "7",
+      "error": false
+    },
+    {
+      "id": "bbeh_59e283d1",
+      "task": "zebra puzzles",
+      "correct": false,
+      "cost": 0.0937628,
+      "answer": "",
+      "target": "1",
+      "error": false
+    },
+    {
+      "id": "bbeh_5a9395e2",
+      "task": "boolean expressions",
+      "correct": false,
+      "cost": 0.019826399999999997,
+      "answer": "",
+      "target": "(B)",
+      "error": false
+    },
+    {
+      "id": "bbeh_5b7dc3f6",
+      "task": "causal understanding",
+      "correct": true,
+      "cost": 0.0033029999999999995,
+      "answer": "The answer is: Yes",
+      "target": "Yes",
+      "error": false
+    },
+    {
+      "id": "bbeh_5c1bb3e1",
+      "task": "linguini",
+      "correct": false,
+      "cost": 0.009162100000000001,
+      "answer": "The answer is: k\u0254\u0300\u00e1nj\u00e0 \u00e1 ny\u00ecm\u00ec\u00ec\u025b\u030c",
+      "target": "k\u0254\u0300\u00e1nj\u00e0\u025b\u030c \u00e1 ny\u00ecm\u00ec\u00ec\u025b\u030c",
+      "error": false
+    },
+    {
+      "id": "bbeh_5c7e4389",
+      "task": "multistep arithmetic",
+      "correct": false,
+      "cost": 0.05693865,
+      "answer": "",
+      "target": "-58396",
+      "error": false
+    },
+    {
+      "id": "bbeh_5c8ed505",
+      "task": "boardgame qa",
+      "correct": true,
+      "cost": 0.0082778,
+      "answer": "Step-by-step reasoning:\n\n1. crow disarms the goose. Rule5 would give: stork does not manage to persuade the dalmatian.  \n   But stork has a 10 x 17 notebook, which fits in 14.9 x 20.8, so Rule9 applies and gives: stork manages to convince the dalmatian. Rule9 is preferred over Rule5, so we accept: stork manages to convince the dalmatian.\n\n2. From stork manages to convince the dalmatian and Rule20 we get: stork does not hug the lizard.  \n   Rule24: if stork does not hug the lizard then the lizard",
+      "target": "disproved",
+      "error": false
+    },
+    {
+      "id": "bbeh_5d8193a0",
+      "task": "shuffled objects",
+      "correct": true,
+      "cost": 0.027010850000000003,
+      "answer": "The answer is: (A)",
+      "target": "(A)",
+      "error": false
+    },
+    {
+      "id": "bbeh_5db0cdbb",
+      "task": "geometric shapes",
+      "correct": false,
+      "cost": 0.0156127,
+      "answer": "",
+      "target": "(B)",
+      "error": false
+    },
+    {
+      "id": "bbeh_5dd84b5d",
+      "task": "geometric shapes",
+      "correct": false,
+      "cost": 0.011048849999999999,
+      "answer": "",
+      "target": "(E)",
+      "error": false
+    },
+    {
+      "id": "bbeh_5e8e45c3",
+      "task": "time arithmetic",
+      "correct": true,
+      "cost": 0.0115726,
+      "answer": "Step 1 \u2014 Question 1: Subtract 91 weeks = 637 days from 11/25/2002 \u2192 02/26/2001. Thus X = 2, Y = 26, Z = 2001.\n\nStep 2 \u2014 Question 2: X' = X + 25 = 27. If today is Sunday, 27 days from now is Saturday. So P = Saturday.\n\nStep 3 \u2014 Prepare for Question 3: Y' = Y - 4 = 22. P' is 62 days after P (Saturday). 62 \u2261 6 (mod 7), so P' = Friday.\n\nStep 4 \u2014 Question 3: Today is P' = Friday and parents arrive in Y' = 22 days. 22 \u2261 1 (mod 7), so parents arrive on Saturday. Thus Q = Saturday.\n\nStep 5 \u2014 Prepare for",
+      "target": "[friday]",
+      "error": false
+    },
+    {
+      "id": "bbeh_5ed74ff7",
+      "task": "web of lies",
+      "correct": false,
+      "cost": 0.0230176,
+      "answer": "",
+      "target": "no, unknown, no",
+      "error": false
+    },
+    {
+      "id": "bbeh_5ee824ed",
+      "task": "sarc triples",
+      "correct": false,
+      "cost": 0.0025548,
+      "answer": "The answer is: 1,1,0",
+      "target": "1,0,0",
+      "error": false
+    },
+    {
+      "id": "bbeh_5ee999f4",
+      "task": "multistep arithmetic",
+      "correct": false,
+      "cost": 0.04648575,
+      "answer": "",
+      "target": "-25200",
+      "error": false
+    },
+    {
+      "id": "bbeh_61128a94",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.049021550000000004,
+      "answer": "",
+      "target": "212.0",
+      "error": false
+    },
+    {
+      "id": "bbeh_62315406",
+      "task": "time arithmetic",
+      "correct": true,
+      "cost": 0.0121165,
+      "answer": "Step-by-step:\n\n1) Question 1: 06/22/2017 + 21 months = 03/22/2019. So X = 3, Y = 22, Z = 2019.\n\n2) X' = X + 18 = 3 + 18 = 21. Question 2: Today is Tuesday; parents arrive in 21 days. 21 \u2261 0 (mod 7), so P = Tuesday.\n\n3) Y' = Y + 15 = 22 + 15 = 37. P' is 48 days after P: 48 \u2261 6 (mod 7), so P' = Tuesday + 6 days = Monday. Question 3: On P' morning (Monday) the deadline is in Y' = 37 days. 37 \u2261 2 (mod 7), so Q = Monday + 2 days = Wednesday.\n\n4) Z' = Z - 2001 = 2019 - 2001 = 18. Q' is 19 days after Q",
+      "target": "unanswerable",
+      "error": false
+    },
+    {
+      "id": "bbeh_62ac845a",
+      "task": "boolean expressions",
+      "correct": false,
+      "cost": 0.00125755,
+      "answer": "",
+      "target": "(A)",
+      "error": false
+    },
+    {
+      "id": "bbeh_62c7072a",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.028997349999999998,
+      "answer": "",
+      "target": "237.0",
+      "error": false
+    },
+    {
+      "id": "bbeh_62f6a9b0",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.0257436,
+      "answer": "",
+      "target": "20",
+      "error": false
+    },
+    {
+      "id": "bbeh_63c050d9",
+      "task": "time arithmetic",
+      "correct": false,
+      "cost": 0.01916205,
+      "answer": "",
+      "target": "04-22-2021",
+      "error": false
+    },
+    {
+      "id": "bbeh_63ef5a36",
+      "task": "zebra puzzles",
+      "correct": false,
+      "cost": 0.00131625,
+      "answer": "",
+      "target": "4",
+      "error": false
+    },
+    {
+      "id": "bbeh_646fac30",
+      "task": "boardgame qa",
+      "correct": true,
+      "cost": 0.01654325,
+      "answer": "I'll reason step by step.\n\n1. Cobra pays money to the shark (fact) \u2192 by Rule39, the seahorse manages to persuade the starling.\n2. From seahorse persuades starling \u2192 by Rule49, the seahorse hides its cards from the dolphin.\n3. From some animal hides cards from the dolphin \u2192 by Rule2, the walrus trades a piece with the crow.\n4. From walrus trades a piece with the crow \u2192 by Rule4, the walrus does not want to see the ostrich.\n5. From does not want to see the ostrich \u2192 by Rule46, that animal will not",
+      "target": "proved",
+      "error": false
+    },
+    {
+      "id": "bbeh_65561f3b",
+      "task": "time arithmetic",
+      "correct": true,
+      "cost": 0.0033408,
+      "answer": "The answer is: unanswerable",
+      "target": "unanswerable",
+      "error": false
+    },
+    {
+      "id": "bbeh_656de210",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.0331659,
+      "answer": "",
+      "target": "G",
+      "error": false
+    },
+    {
+      "id": "bbeh_65c167b1",
+      "task": "sarc triples",
+      "correct": false,
+      "cost": 0.0025433,
+      "answer": "The answer is: 1,1,0",
+      "target": "0,1,0",
+      "error": false
+    },
+    {
+      "id": "bbeh_660fc15c",
+      "task": "movie recommendation",
+      "correct": false,
+      "cost": 0.00893135,
+      "answer": "Step 1: Group the movies by likely audience reaction (by genre/feel):\n- Thrillers/horror: The Good Son, The Fugitive, Arachnophobia, Fargo\n- Dramas/epic: Liam, Schindler's List, Dances with Wolves, Braveheart\n\nStep 2: For each option, count how many are in the same group versus the other:\n- (A): 3 thrillers, 2 dramas\n- (B): 2 thrillers, 3 dramas\n- (C): 4 thrillers, 1 drama\n- (D): 3 thrillers, 2 dramas\n- (E): 2 thrillers, 3 dramas\n- (F): 3 thrillers, 2 dramas\n- (G): 2 thrillers, 3 dramas\n- (H): 2",
+      "target": "(J)",
+      "error": false
+    },
+    {
+      "id": "bbeh_66193bb5",
+      "task": "dyck languages",
+      "correct": false,
+      "cost": 0.0169744,
+      "answer": "",
+      "target": "12",
+      "error": false
+    },
+    {
+      "id": "bbeh_66b9a6a0",
+      "task": "dyck languages",
+      "correct": false,
+      "cost": 0.0122116,
+      "answer": "The answer is: 42",
+      "target": "19",
+      "error": false
+    },
+    {
+      "id": "bbeh_67690b77",
+      "task": "disambiguation qa",
+      "correct": true,
+      "cost": 0.00486025,
+      "answer": "The answer is: (B)",
+      "target": "(B)",
+      "error": false
+    },
+    {
+      "id": "bbeh_6822dd97",
+      "task": "boolean expressions",
+      "correct": false,
+      "cost": 0.003126,
+      "answer": "",
+      "target": "(D)",
+      "error": false
+    },
+    {
+      "id": "bbeh_691a3d79",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.024905700000000003,
+      "answer": "",
+      "target": "H",
+      "error": false
+    },
+    {
+      "id": "bbeh_6a9f2155",
+      "task": "web of lies",
+      "correct": false,
+      "cost": 0.00106405,
+      "answer": "",
+      "target": "yes, yes, yes",
+      "error": false
+    },
+    {
+      "id": "bbeh_6acd9393",
+      "task": "nycc",
+      "correct": true,
+      "cost": 0.0037151000000000003,
+      "answer": "Step 1 \u2014 identify the scene: an old-fashioned man plus a whale evokes Ahab and Moby Dick (literary chase).\n\nStep 2 \u2014 eliminate captions that don\u2019t play on that context or don\u2019t add a clever twist:\n- Drop (A), (B), (D), (E), (F), (G), (H) \u2014 they\u2019re generic grocery-store jokes or awkward.\n- (J) references Ahab but is long and didactic rather than punchy.\n- (I) is a strong whale-pun (\u201cfluke\u201d) and fits well.\n- (C) directly ties the scene to Moby Dick with a sharp, specific joke about chasing for 700",
+      "target": "(C)",
+      "error": false
+    },
+    {
+      "id": "bbeh_6b72366c",
+      "task": "temporal sequence",
+      "correct": false,
+      "cost": 0.05914325,
+      "answer": "",
+      "target": "120, 1",
+      "error": false
+    },
+    {
+      "id": "bbeh_6b867a71",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.0446926,
+      "answer": "",
+      "target": "C",
+      "error": false
+    },
+    {
+      "id": "bbeh_6b9076e5",
+      "task": "object counting",
+      "correct": true,
+      "cost": 0.0171553,
+      "answer": "The answer is: 1703",
+      "target": "1703",
+      "error": false
+    },
+    {
+      "id": "bbeh_6bd93362",
+      "task": "sportqa",
+      "correct": true,
+      "cost": 0.0030169999999999997,
+      "answer": "The answer is: C, B, C",
+      "target": "C, B, C",
+      "error": false
+    },
+    {
+      "id": "bbeh_6be65607",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.0156508,
+      "answer": "",
+      "target": "B",
+      "error": false
+    },
+    {
+      "id": "bbeh_6be9ab6d",
+      "task": "multistep arithmetic",
+      "correct": false,
+      "cost": 0.0098185,
+      "answer": "",
+      "target": "120",
+      "error": false
+    },
+    {
+      "id": "bbeh_6c4f4631",
+      "task": "temporal sequence",
+      "correct": false,
+      "cost": 0.044610000000000004,
+      "answer": "",
+      "target": "75, 1",
+      "error": false
+    },
+    {
+      "id": "bbeh_6d04dcca",
+      "task": "multistep arithmetic",
+      "correct": false,
+      "cost": 0.06783990000000001,
+      "answer": "",
+      "target": "253",
+      "error": false
+    },
+    {
+      "id": "bbeh_6d7dfb02",
+      "task": "shuffled objects",
+      "correct": true,
+      "cost": 0.062391850000000006,
+      "answer": "The answer is: (E)",
+      "target": "(E)",
+      "error": false
+    },
+    {
+      "id": "bbeh_6d8b523a",
+      "task": "sarc triples",
+      "correct": false,
+      "cost": 0.0026935500000000003,
+      "answer": "The answer is: 1,0,0",
+      "target": "0,0,1",
+      "error": false
+    },
+    {
+      "id": "bbeh_6e605763",
+      "task": "sportqa",
+      "correct": false,
+      "cost": 0.007656799999999999,
+      "answer": "The answer is: AB, ABC, AB",
+      "target": "AB, ABC, ABC",
+      "error": false
+    },
+    {
+      "id": "bbeh_6e6d7f15",
+      "task": "word sorting",
+      "correct": true,
+      "cost": 0.0076133,
+      "answer": "The answer is: 4",
+      "target": "4",
+      "error": false
+    },
+    {
+      "id": "bbeh_6e95fd18",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.0232464,
+      "answer": "",
+      "target": "16",
+      "error": false
+    },
+    {
+      "id": "bbeh_6ec6c693",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.02246035,
+      "answer": "",
+      "target": "11",
+      "error": false
+    },
+    {
+      "id": "bbeh_6efad58f",
+      "task": "object counting",
+      "correct": true,
+      "cost": 0.02552235,
+      "answer": "Step 1 \u2014 my musical instruments (with counts): organs 13, marimbas 46, rebecs 54, erhus 65, setars 86, ouds 92, electric drums 43, balafons 38, mbiras 97, ocarinas 93, harps 38, tambourines 66, guitars 86, mandolins 4, saxophones 11, tars 54. Total instruments = 886.\n\nStep 2 \u2014 my mobiles (with counts): huawei nova 11 se 92, samsung galaxy tab s10 81, xiaomi 66, iphone 15 15, honor 51, huawei nova 12i 16, iphone 7 88, samsung galaxy z fold5 10, samsung galaxy s24 90, samsung galaxy c55 15, meizu ",
+      "target": "259",
+      "error": false
+    },
+    {
+      "id": "bbeh_6f230477",
+      "task": "disambiguation qa",
+      "correct": false,
+      "cost": 0.0067436,
+      "answer": "The answer is: (B)",
+      "target": "(E)",
+      "error": false
+    },
+    {
+      "id": "bbeh_6f5e34df",
+      "task": "causal understanding",
+      "correct": true,
+      "cost": 0.005392999999999999,
+      "answer": "Step 1 \u2014 Timeline and facts: John worked 30 years in plastics and was exposed to asbestos, developed incurable lung cancer and was expected to die within ~2 months. Yesterday he was given the wrong medication, had an allergic reaction causing cardiac arrest, and died immediately.\n\nStep 2 \u2014 Causal chain: Asbestos caused the lung cancer (an underlying cause). The nurse\u2019s error (wrong drug) caused the allergic reaction and the immediate cardiac arrest (the proximate cause of death).\n\nStep 3 \u2014 How p",
+      "target": "No",
+      "error": false
+    },
+    {
+      "id": "bbeh_6fa6b8d1",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.0258802,
+      "answer": "",
+      "target": "22",
+      "error": false
+    },
+    {
+      "id": "bbeh_6fe0ae8a",
+      "task": "object counting",
+      "correct": true,
+      "cost": 0.01686245,
+      "answer": "The answer is: 1718",
+      "target": "1718",
+      "error": false
+    },
+    {
+      "id": "bbeh_72169abb",
+      "task": "word sorting",
+      "correct": true,
+      "cost": 0.0078343,
+      "answer": "The answer is: gnome, councilwomen, catawba, classifications, jungian, photolysis, sagging, transfusable, transformations, almagest, archenemy, limpid, investigations, individualization, representativeness, decrement, milt",
+      "target": "gnome, councilwomen, catawba, classifications, jungian, photolysis, sagging, transfusable, transformations, almagest, archenemy, limpid, investigations, individualization, representativeness, decrement, milt",
+      "error": false
+    },
+    {
+      "id": "bbeh_732de045",
+      "task": "zebra puzzles",
+      "correct": true,
+      "cost": 0.034610999999999996,
+      "answer": "The answer is: 3",
+      "target": "3",
+      "error": false
+    },
+    {
+      "id": "bbeh_735c46ef",
+      "task": "multistep arithmetic",
+      "correct": false,
+      "cost": 0.0312581,
+      "answer": "",
+      "target": "10086",
+      "error": false
+    },
+    {
+      "id": "bbeh_742b1550",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.0204622,
+      "answer": "",
+      "target": "23",
+      "error": false
+    },
+    {
+      "id": "bbeh_758ac85a",
+      "task": "dyck languages",
+      "correct": true,
+      "cost": 0.0077513999999999994,
+      "answer": "The answer is: 8",
+      "target": "8",
+      "error": false
+    },
+    {
+      "id": "bbeh_76a0d66a",
+      "task": "object counting",
+      "correct": true,
+      "cost": 0.02083065,
+      "answer": "Step 1 \u2014 Identify the mobiles I have and sum them:\nMeizu 28, iPhone 15 82, Huawei Mate 70 33, Oppo 64, HTC 36, iPhone 7 72, iPhone 16 43, Realme 56, Huawei Pura 70 Pro 45, Huawei Nova 12i 38.\nSum of mobiles = 28 + 82 + 33 + 64 + 36 + 72 + 43 + 56 + 45 + 38 = 497.\n\nStep 2 \u2014 Identify the musical instruments I have and sum them:\nElectric cellos 93, tambourines 14, pianos 78, tablas 46, electric violins 6, zithers 2, mandolins 14, ukuleles 7, panpipes 52, kotoes 57, cellos 62, rebecs 55, electric pi",
+      "target": "1194",
+      "error": false
+    },
+    {
+      "id": "bbeh_77812892",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.027740749999999998,
+      "answer": "",
+      "target": "17",
+      "error": false
+    },
+    {
+      "id": "bbeh_77cbc896",
+      "task": "geometric shapes",
+      "correct": false,
+      "cost": 0.02448875,
+      "answer": "",
+      "target": "(F)",
+      "error": false
+    },
+    {
+      "id": "bbeh_78f78d00",
+      "task": "time arithmetic",
+      "correct": true,
+      "cost": 0.010665899999999999,
+      "answer": "The answer is: unanswerable",
+      "target": "unanswerable",
+      "error": false
+    },
+    {
+      "id": "bbeh_796c5da6",
+      "task": "linguini",
+      "correct": false,
+      "cost": 0.024127549999999998,
+      "answer": "The answer is: biogu atugu biagas atugas atug baigas",
+      "target": "araman atug baigas",
+      "error": false
+    },
+    {
+      "id": "bbeh_799ea2d9",
+      "task": "shuffled objects",
+      "correct": true,
+      "cost": 0.014168600000000002,
+      "answer": "The answer is: (B)",
+      "target": "(B)",
+      "error": false
+    },
+    {
+      "id": "bbeh_7a854809",
+      "task": "boolean expressions",
+      "correct": true,
+      "cost": 0.0058327,
+      "answer": "The answer is: (B)",
+      "target": "(B)",
+      "error": false
+    },
+    {
+      "id": "bbeh_7ac01c92",
+      "task": "boardgame qa",
+      "correct": true,
+      "cost": 0.008951,
+      "answer": "The answer is: disproved",
+      "target": "disproved",
+      "error": false
+    },
+    {
+      "id": "bbeh_7af30c6f",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.04861645,
+      "answer": "",
+      "target": "6.0",
+      "error": false
+    },
+    {
+      "id": "bbeh_7b3a0a7f",
+      "task": "boardgame qa",
+      "correct": true,
+      "cost": 0.029984,
+      "answer": "The answer is: disproved",
+      "target": "disproved",
+      "error": false
+    },
+    {
+      "id": "bbeh_7b498410",
+      "task": "boardgame qa",
+      "correct": true,
+      "cost": 0.0259576,
+      "answer": "Step-by-step reasoning:\n\n1. From the dachshund having 3 adventurous + 2 non-adventurous friends (total 5 < 6), by Rule29 the dachshund enjoys the company of the badger. By Rule33 that implies the badger trades a piece with the seahorse. So there exists an animal that trades with the seahorse.\n\n2. By Rule18 (which is preferred over Rule14), the existence of an animal trading with the seahorse implies the shark stops the victory of the songbird. So: shark stops the songbird.\n\n3. By Rule21, if the ",
+      "target": "unknown",
+      "error": false
+    },
+    {
+      "id": "bbeh_7c77c15d",
+      "task": "spatial reasoning",
+      "correct": true,
+      "cost": 0.0248107,
+      "answer": "The answer is: carrot",
+      "target": "carrot",
+      "error": false
+    },
+    {
+      "id": "bbeh_7d4368fa",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.04200025,
+      "answer": "The answer is: 0.00",
+      "target": "7.35",
+      "error": false
+    },
+    {
+      "id": "bbeh_7da9db5e",
+      "task": "disambiguation qa",
+      "correct": false,
+      "cost": 0.00359525,
+      "answer": "Step 1: Parse the sentences. Two people (the undergraduate and the scientist) visited a lab. The lab needed an assistant. The next sentence says, \"It turned out he was very qualified and so was immediately hired on the spot.\"\n\nStep 2: Identify potential antecedents for \"he.\" Both \"the undergraduate\" and \"the scientist\" are grammatically available antecedents and are compatible in gender and animacy.\n\nStep 3: Consider disambiguating cues. There is no explicit cue favoring one person (no additiona",
+      "target": "(B)",
+      "error": false
+    },
+    {
+      "id": "bbeh_7e4850fe",
+      "task": "dyck languages",
+      "correct": false,
+      "cost": 0.01806925,
+      "answer": "",
+      "target": "16",
+      "error": false
+    },
+    {
+      "id": "bbeh_80434e43",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.0340909,
+      "answer": "",
+      "target": "419.0",
+      "error": false
+    },
+    {
+      "id": "bbeh_805bfca5",
+      "task": "nycc",
+      "correct": false,
+      "cost": 0.0049755,
+      "answer": "I'll eliminate weak or awkward options first: (G), (I), (E), (B), (H), and (J) are either clumsy, irrelevant, or not a tight fit to the visual joke. That leaves (A), (C), (D), and (F). (C) and (F) are similar water-landing gags; they work but feel less sharp in the elevator setting. (A) is a straightforward talking-duck gag. (D) turns an airline slogan into a bird/migration gag\u2014clean, clever, and very New Yorker-ish.\n\nThe answer is: (D)",
+      "target": "(C)",
+      "error": false
+    },
+    {
+      "id": "bbeh_808b0c34",
+      "task": "dyck languages",
+      "correct": false,
+      "cost": 0.01141645,
+      "answer": "",
+      "target": "10",
+      "error": false
+    },
+    {
+      "id": "bbeh_810d18f9",
+      "task": "time arithmetic",
+      "correct": true,
+      "cost": 0.00992095,
+      "answer": "The answer is: same_day, 06:24:24",
+      "target": "same_day, 06:24:24",
+      "error": false
+    },
+    {
+      "id": "bbeh_815a3a34",
+      "task": "geometric shapes",
+      "correct": false,
+      "cost": 0.03798195,
+      "answer": "",
+      "target": "(J)",
+      "error": false
+    },
+    {
+      "id": "bbeh_81d2b7db",
+      "task": "dyck languages",
+      "correct": false,
+      "cost": 0.01642015,
+      "answer": "",
+      "target": "15",
+      "error": false
+    },
+    {
+      "id": "bbeh_82dd3145",
+      "task": "geometric shapes",
+      "correct": false,
+      "cost": 0.0133463,
+      "answer": "",
+      "target": "(F)",
+      "error": false
+    },
+    {
+      "id": "bbeh_82f6c19d",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.027397750000000002,
+      "answer": "",
+      "target": "15",
+      "error": false
+    },
+    {
+      "id": "bbeh_830bf978",
+      "task": "zebra puzzles",
+      "correct": true,
+      "cost": 0.058392849999999996,
+      "answer": "The answer is: 2",
+      "target": "2",
+      "error": false
+    },
+    {
+      "id": "bbeh_8349c4db",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.0240474,
+      "answer": "",
+      "target": "422.15",
+      "error": false
+    },
+    {
+      "id": "bbeh_83d0c2d6",
+      "task": "linguini",
+      "correct": false,
+      "cost": 0.0659975,
+      "answer": "",
+      "target": "\u025brt\u0254pt\u0254pa",
+      "error": false
+    },
+    {
+      "id": "bbeh_840725ec",
+      "task": "geometric shapes",
+      "correct": false,
+      "cost": 0.03689155,
+      "answer": "",
+      "target": "(H)",
+      "error": false
+    },
+    {
+      "id": "bbeh_846a8ecc",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.01964895,
+      "answer": "",
+      "target": "F",
+      "error": false
+    },
+    {
+      "id": "bbeh_848e2919",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.0325057,
+      "answer": "",
+      "target": "D",
+      "error": false
+    },
+    {
+      "id": "bbeh_850c9421",
+      "task": "disambiguation qa",
+      "correct": true,
+      "cost": 0.010706499999999999,
+      "answer": "Step 1: Identify referents.\n- The manager presented the plan, so \"the plan\" is the manager\u2019s.\n- \"One member ... seemed anxious, and the manager tried to assuage his worries.\" The natural antecedent of \"his\" is the anxious member (so that member is male).\n- \"Another member ... said that they also think his plan is too ambitious...\" \"they\" refers to that other member (gender unspecified). The only person who has a plan is the manager, so \"his plan\" refers to the manager, making the manager male.\n\n",
+      "target": "(D)",
+      "error": false
+    },
+    {
+      "id": "bbeh_85b1b0e2",
+      "task": "sportqa",
+      "correct": false,
+      "cost": 0.003955,
+      "answer": "The answer is: ABCD, BCD, ABC",
+      "target": "ABCD, BD, ABC",
+      "error": false
+    },
+    {
+      "id": "bbeh_86758c3a",
+      "task": "shuffled objects",
+      "correct": true,
+      "cost": 0.05266455,
+      "answer": "The answer is: (G)",
+      "target": "(G)",
+      "error": false
+    },
+    {
+      "id": "bbeh_86e3862b",
+      "task": "sportqa",
+      "correct": true,
+      "cost": 0.0039555499999999995,
+      "answer": "The answer is: B, C, A",
+      "target": "B, C, A",
+      "error": false
+    },
+    {
+      "id": "bbeh_872ff1c6",
+      "task": "zebra puzzles",
+      "correct": true,
+      "cost": 0.0055704,
+      "answer": "The answer is: 5",
+      "target": "5",
+      "error": false
+    },
+    {
+      "id": "bbeh_879c7968",
+      "task": "sportqa",
+      "correct": false,
+      "cost": 0.01055425,
+      "answer": "The answer is: AB, A, A",
+      "target": "D, A, A",
+      "error": false
+    },
+    {
+      "id": "bbeh_87bee283",
+      "task": "shuffled objects",
+      "correct": false,
+      "cost": 0.05691185,
+      "answer": "",
+      "target": "(D)",
+      "error": false
+    },
+    {
+      "id": "bbeh_881fe916",
+      "task": "word sorting",
+      "correct": false,
+      "cost": 0.005571550000000001,
+      "answer": "The answer is: 2",
+      "target": "4",
+      "error": false
+    },
+    {
+      "id": "bbeh_8882580c",
+      "task": "nycc",
+      "correct": false,
+      "cost": 0.0063706,
+      "answer": "Step-by-step reasoning:\n- The cartoon shows a genie in a business suit giving advice/instructions, so captions that play on white-collar/business themes fit best.\n- Eliminate literal or awkward ones: (D) is clunky/legalistic and too long for a single-panel gag; (B) and (H) are weaker/less on-theme; (E) and (J) are nearly identical and bland; (F) is a bit too tax-nerdy/specific; (G) is topical but relies on politics rather than the situation.\n- Remain: (A) and (C) and (I). (A) is a blunt, obvious",
+      "target": "(I)",
+      "error": false
+    },
+    {
+      "id": "bbeh_88cfc204",
+      "task": "movie recommendation",
+      "correct": false,
+      "cost": 0.0164409,
+      "answer": "",
+      "target": "(H)",
+      "error": false
+    },
+    {
+      "id": "bbeh_88ef3cae",
+      "task": "nycc",
+      "correct": false,
+      "cost": 0.00349985,
+      "answer": "The answer is: (A)",
+      "target": "(C)",
+      "error": false
+    },
+    {
+      "id": "bbeh_89bde22b",
+      "task": "disambiguation qa",
+      "correct": true,
+      "cost": 0.00521875,
+      "answer": "Step-by-step:\n- \"his new assistant\" clearly refers to the cook's assistant (cook = C, assistant = A).\n- \"He wasn\u2019t sure if he was going to be able to learn quickly given his background as a receptionist\" \u2014 this best reads as the assistant being unsure about his own ability to learn because the assistant's background is as a receptionist (so A = receptionist).\n- \"but he was optimistic as his own background was that of a mechanic\" \u2014 this contrasts the assistant's uncertainty with someone else's op",
+      "target": "(B)",
+      "error": false
+    },
+    {
+      "id": "bbeh_89c0305f",
+      "task": "sportqa",
+      "correct": false,
+      "cost": 0.0034912999999999997,
+      "answer": "The answer is: A, A, AD",
+      "target": "A, A, D",
+      "error": false
+    },
+    {
+      "id": "bbeh_8a0720a6",
+      "task": "boardgame qa",
+      "correct": true,
+      "cost": 0.0187145,
+      "answer": "Step-by-step reasoning:\n\n1. From poodle_in_Ottawa and poodle_nurse (facts) and Rule3/Rule17, derive poodle_smiles_crow.\n2. From poodle_smiles_crow and Rule19, derive crow_takes_over_emperor_crab.\n3. From crow_takes_over_emperor_crab and Rule21, derive liger_unites_bulldog.\n4. From peafowl_stops_victory_gorilla (fact) and Rule9, derive liger_disarms_peafowl.\n5. From liger_trades_with_frog (fact) and Rule18, derive liger_not_disarm_peafowl.\n6. Rules 9 and 18 conflict (liger_disarms_peafowl vs lige",
+      "target": "unknown",
+      "error": false
+    },
+    {
+      "id": "bbeh_8a6d00ab",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.02671175,
+      "answer": "",
+      "target": "156.0",
+      "error": false
+    },
+    {
+      "id": "bbeh_8a9a45e9",
+      "task": "movie recommendation",
+      "correct": false,
+      "cost": 0.007923350000000001,
+      "answer": "The answer is: (F)",
+      "target": "(H)",
+      "error": false
+    },
+    {
+      "id": "bbeh_8d063fd5",
+      "task": "movie recommendation",
+      "correct": false,
+      "cost": 0.017203799999999998,
+      "answer": "",
+      "target": "(J)",
+      "error": false
+    },
+    {
+      "id": "bbeh_8d472829",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.03344785,
+      "answer": "",
+      "target": "4",
+      "error": false
+    },
+    {
+      "id": "bbeh_8d5f7fd5",
+      "task": "multistep arithmetic",
+      "correct": false,
+      "cost": 0.039304450000000005,
+      "answer": "",
+      "target": "-557",
+      "error": false
+    },
+    {
+      "id": "bbeh_8dd9d7e9",
+      "task": "time arithmetic",
+      "correct": true,
+      "cost": 0.0131583,
+      "answer": "The answer is: [Thursday]",
+      "target": "[thursday]",
+      "error": false
+    },
+    {
+      "id": "bbeh_8ed6f20b",
+      "task": "multistep arithmetic",
+      "correct": false,
+      "cost": 0.04248385,
+      "answer": "",
+      "target": "147981",
+      "error": false
+    },
+    {
+      "id": "bbeh_8f14381b",
+      "task": "object counting",
+      "correct": true,
+      "cost": 0.0144447,
+      "answer": "Step 1 \u2014 List the fruits I have and their counts: bananas 31, nebbiolo grapes 89, cantaloupes 38, plums 70, dragonfruits 16, grapefruits 57, watermelons 51, nectarines 77, autumn royal grapes 98.\nStep 2 \u2014 Sum of my fruits: 31 + 89 + 38 + 70 + 16 + 57 + 51 + 77 + 98 = 527.\nStep 3 \u2014 List the animals/insects I have and their counts: crabs 49, hyenas 61, shrimps 74, sloths 57, kangaroos 57, horses 97, bats 50, salmon 96, ravens 84, buffaloes 11, cobras 83, manatees 10, badgers 30, iguanas 7, ants 27",
+      "target": "341",
+      "error": false
+    },
+    {
+      "id": "bbeh_90e26155",
+      "task": "dyck languages",
+      "correct": true,
+      "cost": 0.0059397,
+      "answer": "The answer is: 7",
+      "target": "7",
+      "error": false
+    },
+    {
+      "id": "bbeh_910cc563",
+      "task": "time arithmetic",
+      "correct": false,
+      "cost": 0.0125111,
+      "answer": "Step 1 (Question 1): 2 tricks take 21 min 38 s = 21*60+38 = 1298 s. For 24 tricks (12 times as many) total = 1298*12 = 15576 s = 4 h 19 min 36 s. So X,Y,Z = 4,19,36.\n\nStep 2: X' = 4-3 = 1, Y' = 19+11 = 30, Z' = 36-6 = 30.\n\nStep 3 (Question 2): Calls of 1:30:30, 2:00:50, 1:30:30, 1:55:10. In seconds: 5430, 7250, 5430, 6910. Total = 25020 s. Average = 25020/4 = 6255 s = 1 h 44 min 15 s. So P,R,Q = 1,44,15.\n\nStep 4: P' = 1+1987 = 1988, R' = 44-33 = 11, Q' = 15+19 = 34. Birth date = 1988-11-34. Cous",
+      "target": "unanswerable",
+      "error": false
+    },
+    {
+      "id": "bbeh_91e74c7a",
+      "task": "boardgame qa",
+      "correct": true,
+      "cost": 0.023477650000000003,
+      "answer": "Step-by-step reasoning:\n\n1. We need an animal that swears to the pigeon to trigger Rule16 (dinosaur enjoys husky iff at least one animal swears to the pigeon).\n2. Check possible ways to get an animal swearing to the pigeon:\n   - Rule5: if some animal brings an oil tank for the dragon, then the mermaid swears to the pigeon. So we would need some animal bringing an oil tank for the dragon.\n3. Can we get an animal bringing an oil tank for the dragon?\n   - Rule12 would add that the rhino brings an o",
+      "target": "unknown",
+      "error": false
+    },
+    {
+      "id": "bbeh_91f54da8",
+      "task": "shuffled objects",
+      "correct": true,
+      "cost": 0.01984125,
+      "answer": "The answer is: (E)",
+      "target": "(E)",
+      "error": false
+    },
+    {
+      "id": "bbeh_938ce552",
+      "task": "spatial reasoning",
+      "correct": false,
+      "cost": 0.0308018,
+      "answer": "",
+      "target": "Black and Tan Coonhound",
+      "error": false
+    },
+    {
+      "id": "bbeh_946c0177",
+      "task": "boardgame qa",
+      "correct": true,
+      "cost": 0.0333391,
+      "answer": "I will reason step by step.\n\n1) From facts:\n- bear disarms beaver (given). By Rule27 => beaver hides her cards from the dalmatian.\n- beaver hides cards from dalmatian. By Rule39 => there exists an animal that invests in the company owned by the cobra (the dalmatian does).\n- From existence of an animal investing in the cobra, Rule33 => fish does not take over the emperor of the swallow.\n- From fish does not take over emperor of swallow, Rule15 => the swallow leaves the houses occupied by the came",
+      "target": "unknown",
+      "error": false
+    },
+    {
+      "id": "bbeh_946c7919",
+      "task": "spatial reasoning",
+      "correct": true,
+      "cost": 0.0460732,
+      "answer": "The answer is: strawberry",
+      "target": "strawberry",
+      "error": false
+    },
+    {
+      "id": "bbeh_948ec673",
+      "task": "web of lies",
+      "correct": false,
+      "cost": 0.0410272,
+      "answer": "",
+      "target": "yes, unknown, yes",
+      "error": false
+    },
+    {
+      "id": "bbeh_9518fed1",
+      "task": "multistep arithmetic",
+      "correct": false,
+      "cost": 0.053994850000000004,
+      "answer": "",
+      "target": "-29",
+      "error": false
+    },
+    {
+      "id": "bbeh_95438e65",
+      "task": "zebra puzzles",
+      "correct": true,
+      "cost": 0.07512615,
+      "answer": "The answer is: 1",
+      "target": "1",
+      "error": false
+    },
+    {
+      "id": "bbeh_95f9f759",
+      "task": "causal understanding",
+      "correct": false,
+      "cost": 0.006415,
+      "answer": "Step 1: Timeline \u2014 a new rule (only bears may take pencils) was announced while the hedgehog was absent, so the hedgehog didn\u2019t know the norm.  \nStep 2: Both animals alternately took pencils six times (so both removed pencils). Then they came and simultaneously each took one more pencil. After that the box was empty and the polar bear couldn\u2019t get a pencil.  \nStep 3: Causation and blame \u2014 the hedgehog did remove pencils and thereby contributed to the depletion, but the hedgehog acted without kno",
+      "target": "Ambiguous",
+      "error": false
+    },
+    {
+      "id": "bbeh_966af273",
+      "task": "temporal sequence",
+      "correct": false,
+      "cost": 0.06456415,
+      "answer": "",
+      "target": "90, 1",
+      "error": false
+    },
+    {
+      "id": "bbeh_96d9377a",
+      "task": "object counting",
+      "correct": true,
+      "cost": 0.0199118,
+      "answer": "Step 1 \u2014 Mobiles I have (by item): 1 (samsung a55), 45 (zte), 60 (vivo), 84 (iphone 15), 50 (iphone 11), 9 (huawei nova 12 pro), 67 (honor), 15 (huawei mate x6), 30 (huawei pura 70 pro), 17 (huawei nova 12s), 20 (iphone 16), 39 (sony), 15 (infinix). Sum = 452.\n\nStep 2 \u2014 Fruits I have (by item): 54 (muscat grapes), 24 (nebbiolo grapes), 89 (durians), 5 (watermelons), 62 (ginger gold apples), 25 (jazz apples), 39 (fuji apples), 92 (persimmons), 7 (gala apples), 29 (pink lady apples), 9 (starfruits",
+      "target": "181",
+      "error": false
+    },
+    {
+      "id": "bbeh_97d60180",
+      "task": "sarc triples",
+      "correct": false,
+      "cost": 0.00200805,
+      "answer": "The answer is: 1,1,0",
+      "target": "1,0,0",
+      "error": false
+    },
+    {
+      "id": "bbeh_9858ca6c",
+      "task": "spatial reasoning",
+      "correct": false,
+      "cost": 0.0200287,
+      "answer": "",
+      "target": "oil filter",
+      "error": false
+    },
+    {
+      "id": "bbeh_98e30154",
+      "task": "zebra puzzles",
+      "correct": false,
+      "cost": 0.05826285,
+      "answer": "",
+      "target": "7",
+      "error": false
+    },
+    {
+      "id": "bbeh_98ecaf6e",
+      "task": "linguini",
+      "correct": false,
+      "cost": 0.017483699999999998,
+      "answer": "The answer is: Yakut",
+      "target": "deer",
+      "error": false
+    },
+    {
+      "id": "bbeh_99920b4a",
+      "task": "boolean expressions",
+      "correct": false,
+      "cost": 0.0118914,
+      "answer": "",
+      "target": "(E)",
+      "error": false
+    },
+    {
+      "id": "bbeh_9a3f3f7c",
+      "task": "word sorting",
+      "correct": false,
+      "cost": 0.00523685,
+      "answer": "The answer is: 11",
+      "target": "7",
+      "error": false
+    },
+    {
+      "id": "bbeh_9a7b848c",
+      "task": "web of lies",
+      "correct": true,
+      "cost": 0.03925265,
+      "answer": "The answer is: no, unknown, yes",
+      "target": "no, unknown, yes",
+      "error": false
+    },
+    {
+      "id": "bbeh_9b1014fc",
+      "task": "boardgame qa",
+      "correct": true,
+      "cost": 0.025031300000000003,
+      "answer": "I'll reason step by step and show the applied rules and derivations.\n\n1) From gorilla suspects the truthfulness of the seahorse and Rule9, the owl takes over the emperor of the peafowl.\n2) Rule28 would then give: peafowl does not hide cards from the badger. But:\n   - The peafowl has 17 friends (fact) and by Rule25 (more than eight friends) the peafowl will not swim in the pool next to the flamingo.\n   - By Rule38 (if something does not swim next to the flamingo then it hides cards from the badge",
+      "target": "proved",
+      "error": false
+    },
+    {
+      "id": "bbeh_9b164aa9",
+      "task": "nycc",
+      "correct": false,
+      "cost": 0.0057408500000000005,
+      "answer": "Step 1 \u2014 criteria: For a New Yorker cartoon caption I prioritize wit, brevity, and a clever twist that ties directly to the image (sword in a desk, broken window).\n\nStep 2 \u2014 eliminate weak/fitting options:\n- (H) \"opening my mail\": doesn\u2019t fit the sword/window imagery.\n- (D) \"The pen is taking it pretty hard\": relies on an unseen pen; less direct.\n- (J) \"Mr. Damocles is still out\": mild, not especially clever.\n- (G) \"What do we put in the job posting?\": vague.\n- (C) and (B): try for corporate sat",
+      "target": "(D)",
+      "error": false
+    },
+    {
+      "id": "bbeh_9bcd0acd",
+      "task": "disambiguation qa",
+      "correct": false,
+      "cost": 0.00253385,
+      "answer": "The answer is: (C)",
+      "target": "(E)",
+      "error": false
+    },
+    {
+      "id": "bbeh_9c31e673",
+      "task": "boardgame qa",
+      "correct": true,
+      "cost": 0.014374350000000001,
+      "answer": "Step-by-step reasoning:\n\n1. Beetle has a 16x20 notebook which fits in an 18.3 x 23.5 box, so by Rule3 the beetle hides her cards from the worm. (Rule3 is preferred over Rule6, so the contrary inference from Rule6 is defeated.)\n2. From the beetle hiding her cards, Rule12 gives: the worm swears to the dachshund.\n3. The bee disarms the zebra (fact). By Rule9, anything that disarms the zebra also destroys the wall built by the cobra \u2014 so there exists an animal (the bee) that destroys the cobra's wal",
+      "target": "proved",
+      "error": false
+    },
+    {
+      "id": "bbeh_9dceac8d",
+      "task": "causal understanding",
+      "correct": false,
+      "cost": 0.00264885,
+      "answer": "The answer is: Yes",
+      "target": "No",
+      "error": false
+    },
+    {
+      "id": "bbeh_9fdd452c",
+      "task": "disambiguation qa",
+      "correct": true,
+      "cost": 0.0053385,
+      "answer": "Step-by-step reasoning:\n- Sentence 1: \"The investigator wanted to interview the witness in person but he was too late.\" The pronoun \"he\" can refer either to \"the investigator\" (meaning the investigator arrived too late) or to \"the witness\" (meaning the witness arrived too late).\n- Sentence 2: \"On his way, he got stuck in traffic.\" This also could describe the investigator being stuck while traveling to the interview or the witness being stuck while traveling to meet the investigator.\n- Both inte",
+      "target": "(E)",
+      "error": false
+    },
+    {
+      "id": "bbeh_a1618f03",
+      "task": "shuffled objects",
+      "correct": true,
+      "cost": 0.0244502,
+      "answer": "The answer is: (G)",
+      "target": "(G)",
+      "error": false
+    },
+    {
+      "id": "bbeh_a22a58b9",
+      "task": "linguini",
+      "correct": false,
+      "cost": 0.0183531,
+      "answer": "The answer is: cacao",
+      "target": "cocoa bean",
+      "error": false
+    },
+    {
+      "id": "bbeh_a348d0e1",
+      "task": "dyck languages",
+      "correct": false,
+      "cost": 0.02154915,
+      "answer": "",
+      "target": "11",
+      "error": false
+    },
+    {
+      "id": "bbeh_a46b1baa",
+      "task": "temporal sequence",
+      "correct": false,
+      "cost": 0.07137095,
+      "answer": "",
+      "target": "60, 1",
+      "error": false
+    },
+    {
+      "id": "bbeh_a4989491",
+      "task": "shuffled objects",
+      "correct": false,
+      "cost": 0.0405443,
+      "answer": "The answer is: (D)",
+      "target": "(G)",
+      "error": false
+    },
+    {
+      "id": "bbeh_a5e8f2b3",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.03140015,
+      "answer": "",
+      "target": "22",
+      "error": false
+    },
+    {
+      "id": "bbeh_a716f0a5",
+      "task": "word sorting",
+      "correct": true,
+      "cost": 0.004325,
+      "answer": "The answer is: kitakyushu, sequel, seventh, senescent, administrations, fabulous, yucca, voluntary, cube, categorizations, collaborations, communications, length, limnology, industrialization, willow, bauble",
+      "target": "kitakyushu, sequel, seventh, senescent, administrations, fabulous, yucca, voluntary, cube, categorizations, collaborations, communications, length, limnology, industrialization, willow, bauble",
+      "error": false
+    },
+    {
+      "id": "bbeh_a7dc1eca",
+      "task": "zebra puzzles",
+      "correct": false,
+      "cost": 0.0820769,
+      "answer": "",
+      "target": "7",
+      "error": false
+    },
+    {
+      "id": "bbeh_a8e4f915",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.02209215,
+      "answer": "",
+      "target": "A",
+      "error": false
+    },
+    {
+      "id": "bbeh_a8ed453e",
+      "task": "movie recommendation",
+      "correct": false,
+      "cost": 0.0100803,
+      "answer": "I treated movies as similar if they share the same broad genre (Drama counts for Drama/Comedy-Drama/Romantic-Drama). I counted how many dramas are in each option:\nA:3, B:3, C:3, D:4, E:3, F:4, G:4, H:3, I:4, J:3.\nThe maximum is 4, occurring for options D, F, G, and I.\n\nThe answer is: (D), (F), (G), (I)",
+      "target": "(F)",
+      "error": false
+    },
+    {
+      "id": "bbeh_a915dce2",
+      "task": "shuffled objects",
+      "correct": true,
+      "cost": 0.029616999999999997,
+      "answer": "The answer is: (D)",
+      "target": "(D)",
+      "error": false
+    },
+    {
+      "id": "bbeh_a9a3f6c7",
+      "task": "spatial reasoning",
+      "correct": true,
+      "cost": 0.01616895,
+      "answer": "The answer is: pelican",
+      "target": "pelican",
+      "error": false
+    },
+    {
+      "id": "bbeh_aa579a27",
+      "task": "geometric shapes",
+      "correct": false,
+      "cost": 0.02118125,
+      "answer": "",
+      "target": "(J)",
+      "error": false
+    },
+    {
+      "id": "bbeh_aaa94ef0",
+      "task": "web of lies",
+      "correct": false,
+      "cost": 0.020009449999999998,
+      "answer": "",
+      "target": "no, no, no",
+      "error": false
+    },
+    {
+      "id": "bbeh_ab56a049",
+      "task": "multistep arithmetic",
+      "correct": false,
+      "cost": 0.0643406,
+      "answer": "",
+      "target": "-27962",
+      "error": false
+    },
+    {
+      "id": "bbeh_ab7cd3a2",
+      "task": "dyck languages",
+      "correct": false,
+      "cost": 0.01415315,
+      "answer": "",
+      "target": "14",
+      "error": false
+    },
+    {
+      "id": "bbeh_abf0c642",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.013460999999999999,
+      "answer": "",
+      "target": "H",
+      "error": false
+    },
+    {
+      "id": "bbeh_aeda5895",
+      "task": "spatial reasoning",
+      "correct": false,
+      "cost": 0.02859125,
+      "answer": "The answer is: grapefrut",
+      "target": "bed",
+      "error": false
+    },
+    {
+      "id": "bbeh_af813749",
+      "task": "boardgame qa",
+      "correct": true,
+      "cost": 0.01547575,
+      "answer": "Step-by-step reasoning:\n\n1. From the facts, the mermaid has 8 friends (>1). By Rule25, mermaid hugs the elk.\n2. By Rule2, since at least one animal hugs the elk, the vampire does not tear down the flamingo\u2019s castle.\n3. By Rule9, any creature that does not tear down the flamingo\u2019s castle will never negotiate with the coyote, so the vampire does not negotiate with the coyote.\n4. The mouse tears down the poodle\u2019s castle (given). By Rule26, the mouse therefore takes over the emperor of the beaver.\n5",
+      "target": "disproved",
+      "error": false
+    },
+    {
+      "id": "bbeh_b0292178",
+      "task": "dyck languages",
+      "correct": false,
+      "cost": 0.0153739,
+      "answer": "",
+      "target": "20",
+      "error": false
+    },
+    {
+      "id": "bbeh_b0af824d",
+      "task": "spatial reasoning",
+      "correct": true,
+      "cost": 0.028032650000000003,
+      "answer": "The answer is: walnut",
+      "target": "walnut",
+      "error": false
+    },
+    {
+      "id": "bbeh_b117bfb1",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.05473185,
+      "answer": "",
+      "target": "414.03",
+      "error": false
+    },
+    {
+      "id": "bbeh_b2405fd4",
+      "task": "shuffled objects",
+      "correct": true,
+      "cost": 0.02365825,
+      "answer": "The answer is: (B)",
+      "target": "(B)",
+      "error": false
+    },
+    {
+      "id": "bbeh_b2eb26f4",
+      "task": "time arithmetic",
+      "correct": true,
+      "cost": 0.00872455,
+      "answer": "Step 1 \u2014 Question 1:\nTimes: 2:30:50, 2:30:30, 0:50:30, 1:30:10\nIn seconds: 9050, 9030, 3030, 5410. Sum = 26520. Average = 26520 / 4 = 6630 s = 1 h 50 m 30 s.\nSo X = 1, Y = 50, Z = 30.\n\nStep 2 \u2014 Compute X', Y', Z':\nX' = X + 1 = 2\nY' = Y - 0 = 50\nZ' = Z + 25 = 55\n\nStep 3 \u2014 Question 2:\nTimes: 2:50:55, 1:55:00, 2:40:30, 0:30:55\nIn seconds: 10255, 6900, 9630, 1855. Sum = 28640. Average = 28640 / 4 = 7160 s = 1 h 59 m 20 s.\nSo P = 1, R = 59, Q = 20.\n\nStep 4 \u2014 Compute P', R', Q':\nP' = P + 2007 = 2008\nR",
+      "target": "unanswerable",
+      "error": false
+    },
+    {
+      "id": "bbeh_b332c8a9",
+      "task": "spatial reasoning",
+      "correct": false,
+      "cost": 0.02125835,
+      "answer": "The answer is: unknown",
+      "target": "laptop",
+      "error": false
+    },
+    {
+      "id": "bbeh_b4dc6bd3",
+      "task": "geometric shapes",
+      "correct": false,
+      "cost": 0.023595849999999998,
+      "answer": "",
+      "target": "(H)",
+      "error": false
+    },
+    {
+      "id": "bbeh_b75f5e52",
+      "task": "spatial reasoning",
+      "correct": true,
+      "cost": 0.0329404,
+      "answer": "The answer is: kiwi",
+      "target": "kiwi",
+      "error": false
+    },
+    {
+      "id": "bbeh_b775fe1a",
+      "task": "word sorting",
+      "correct": true,
+      "cost": 0.007074750000000001,
+      "answer": "The answer is: 5",
+      "target": "5",
+      "error": false
+    },
+    {
+      "id": "bbeh_b89ac4bd",
+      "task": "causal understanding",
+      "correct": false,
+      "cost": 0.00301785,
+      "answer": "Step 1: Identify cause and effect. Effect = machine shorting. Candidate cause = black wire touching the battery.\n\nStep 2: Check sufficiency. Black wire touching alone does not cause a short (machine only shorts if both black and red touch), so black touching is not sufficient by itself.\n\nStep 3: Check necessity (counterfactual). Given that the red wire also touched, if the black wire had not touched then the short would not have occurred. So black touching was a necessary part of the actual caus",
+      "target": "No",
+      "error": false
+    },
+    {
+      "id": "bbeh_b8a011ed",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.024138450000000002,
+      "answer": "",
+      "target": "5",
+      "error": false
+    },
+    {
+      "id": "bbeh_b8bd5059",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.0225162,
+      "answer": "",
+      "target": "31",
+      "error": false
+    },
+    {
+      "id": "bbeh_b8f40077",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.04008245,
+      "answer": "",
+      "target": "F",
+      "error": false
+    },
+    {
+      "id": "bbeh_ba597871",
+      "task": "movie recommendation",
+      "correct": false,
+      "cost": 0.0076311999999999994,
+      "answer": "The answer is: (B)",
+      "target": "(J)",
+      "error": false
+    },
+    {
+      "id": "bbeh_baf16d99",
+      "task": "sarc triples",
+      "correct": false,
+      "cost": 0.0026405499999999998,
+      "answer": "The answer is: 1,0,1",
+      "target": "0,0,1",
+      "error": false
+    },
+    {
+      "id": "bbeh_bc24b2e1",
+      "task": "object counting",
+      "correct": true,
+      "cost": 0.02544115,
+      "answer": "I list the musical instruments you have and their counts: organs 55, electric bass 21, bouzoukis 11, recorders 96, nadaswarams 72, dulcimers 17, shehnais 18, theremins 17, ocarinas 44, glockenspiels 68, maracas 69. Sum of instruments = 488.\n\nI list the cars you have and their counts: Honda CR-Z 11, Honda Passport 95, Honda Element 66, Nissan Armada 69, Toyota Sienna 86, Audi A6 68, Mazda3 40, Nissan Altima 56, Honda Insight 47, Toyota Tacoma 69. Sum of cars = 607.\n\nTotal (instruments + cars) = 4",
+      "target": "1095",
+      "error": false
+    },
+    {
+      "id": "bbeh_be0628df",
+      "task": "web of lies",
+      "correct": true,
+      "cost": 0.01307065,
+      "answer": "Step-by-step reasoning:\n\n1. From given: Ethan (art gallery) lies; Soren (ice skating rink) lies; Anika (shopping mall) tells the truth.\n2. The gym says the shopping mall tells the truth. Since the shopping mall (Anika) is truthful, the gym's statement is true, so the gym person (Maya) is truthful.\n3. The airport says the gym tells the truth. The gym is truthful, so the airport person (Emily) is truthful.\n4. The vineyard says the gym tells the truth. That statement is true (gym is truthful), so t",
+      "target": "yes, no, yes",
+      "error": false
+    },
+    {
+      "id": "bbeh_bf2f8361",
+      "task": "dyck languages",
+      "correct": false,
+      "cost": 0.01595025,
+      "answer": "",
+      "target": "24",
+      "error": false
+    },
+    {
+      "id": "bbeh_bf96d08e",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.0215177,
+      "answer": "",
+      "target": "17",
+      "error": false
+    },
+    {
+      "id": "bbeh_bfe212b1",
+      "task": "multistep arithmetic",
+      "correct": true,
+      "cost": 0.0410943,
+      "answer": "The answer is: 253",
+      "target": "253",
+      "error": false
+    },
+    {
+      "id": "bbeh_c14ad138",
+      "task": "nycc",
+      "correct": false,
+      "cost": 0.0037638500000000004,
+      "answer": "The answer is: (A)",
+      "target": "(C)",
+      "error": false
+    },
+    {
+      "id": "bbeh_c1973277",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.02558025,
+      "answer": "",
+      "target": "E",
+      "error": false
+    },
+    {
+      "id": "bbeh_c21b1b4d",
+      "task": "time arithmetic",
+      "correct": false,
+      "cost": 0.01640965,
+      "answer": "",
+      "target": "01-09-2016",
+      "error": false
+    },
+    {
+      "id": "bbeh_c231e936",
+      "task": "geometric shapes",
+      "correct": false,
+      "cost": 0.02044565,
+      "answer": "",
+      "target": "(A)",
+      "error": false
+    },
+    {
+      "id": "bbeh_c3c92baa",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.03516715,
+      "answer": "",
+      "target": "17.0",
+      "error": false
+    },
+    {
+      "id": "bbeh_c4d5ea04",
+      "task": "object counting",
+      "correct": true,
+      "cost": 0.01826025,
+      "answer": "The answer is: 38",
+      "target": "38",
+      "error": false
+    },
+    {
+      "id": "bbeh_c57e1866",
+      "task": "word sorting",
+      "correct": true,
+      "cost": 0.00671175,
+      "answer": "The answer is: behind, wellwisher, volcanism, iniquity, interpretations, inmate, individualization, implications, zip, yoghurt, toroidal, transformations, mollie, mcconnell, disenfranchisement, hornpipe, sandy, scorn",
+      "target": "behind, wellwisher, volcanism, iniquity, interpretations, inmate, individualization, implications, zip, yoghurt, toroidal, transformations, mollie, mcconnell, disenfranchisement, hornpipe, sandy, scorn",
+      "error": false
+    },
+    {
+      "id": "bbeh_c5e4cbb2",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.033198700000000005,
+      "answer": "",
+      "target": "24",
+      "error": false
+    },
+    {
+      "id": "bbeh_c856e43c",
+      "task": "sarc triples",
+      "correct": false,
+      "cost": 0.004560249999999999,
+      "answer": "The answer is: 1,0,0",
+      "target": "0,0,0",
+      "error": false
+    },
+    {
+      "id": "bbeh_c8a06d20",
+      "task": "sarc triples",
+      "correct": false,
+      "cost": 0.002647,
+      "answer": "The answer is: 0,1,1",
+      "target": "0,1,0",
+      "error": false
+    },
+    {
+      "id": "bbeh_c9279c26",
+      "task": "temporal sequence",
+      "correct": false,
+      "cost": 0.05095945,
+      "answer": "",
+      "target": "60, 1",
+      "error": false
+    },
+    {
+      "id": "bbeh_cae8185c",
+      "task": "web of lies",
+      "correct": false,
+      "cost": 0.04627465,
+      "answer": "The answer is: <yes, unknown, no>",
+      "target": "yes, unknown, no",
+      "error": false
+    },
+    {
+      "id": "bbeh_cb7d5c60",
+      "task": "multistep arithmetic",
+      "correct": false,
+      "cost": 0.04260775,
+      "answer": "",
+      "target": "-76897",
+      "error": false
+    },
+    {
+      "id": "bbeh_cc0b704f",
+      "task": "shuffled objects",
+      "correct": false,
+      "cost": 0.0395013,
+      "answer": "The answer is: (A)",
+      "target": "(C)",
+      "error": false
+    },
+    {
+      "id": "bbeh_cc437a97",
+      "task": "object counting",
+      "correct": true,
+      "cost": 0.04285165,
+      "answer": "The answer is: 534",
+      "target": "534",
+      "error": false
+    },
+    {
+      "id": "bbeh_cc5f499d",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.03246135,
+      "answer": "",
+      "target": "90.0",
+      "error": false
+    },
+    {
+      "id": "bbeh_ccb35292",
+      "task": "boolean expressions",
+      "correct": false,
+      "cost": 0.0065544,
+      "answer": "",
+      "target": "(C)",
+      "error": false
+    },
+    {
+      "id": "bbeh_ccfa6c0b",
+      "task": "movie recommendation",
+      "correct": false,
+      "cost": 0.0069791,
+      "answer": "Step 1: Group each movie by genre (approx.): The Matrix = sci\u2011fi; Pulp Fiction, The Godfather, The Usual Suspects = crime; The Spy Next Door, Little Miss Marker = family; What Love Is = romcom; Pi = arthouse.\n\nStep 2: Count same-genre movies in each option:\n(A) max same = 2 (family)\n(B) max same = 2 (crime)\n(C) max same = 3 (crime)\n(D) max same = 3 (crime)\n(E) max same = 2 (family)\n(F) max same = 2 (crime or family)\n(G) max same = 2 (crime)\n(H) max same = 2 (crime or family)\n(I) max same = 2 (cr",
+      "target": "(D)",
+      "error": false
+    },
+    {
+      "id": "bbeh_cd1539ba",
+      "task": "boolean expressions",
+      "correct": false,
+      "cost": 0.0471232,
+      "answer": "",
+      "target": "(E)",
+      "error": false
+    },
+    {
+      "id": "bbeh_cdd50199",
+      "task": "causal understanding",
+      "correct": false,
+      "cost": 0.0039331,
+      "answer": "Step-by-step reasoning:\n- Effect: short circuit happens only when both black and red wires touch the battery at the same time.\n- Neither wire alone is sufficient to cause the short; the short requires both to be touching simultaneously.\n- In everyday attribution people tend to blame the unexpected or \"wrong\" action (the red wire touching) rather than the normal action (the black wire touching as intended).\n- Because the black wire touching by itself would not cause the short, most people would s",
+      "target": "Ambiguous",
+      "error": false
+    },
+    {
+      "id": "bbeh_cef574bd",
+      "task": "object counting",
+      "correct": true,
+      "cost": 0.0160135,
+      "answer": "I counted only the fruits and mobiles you personally have.\n\nMobiles counted (by quantity): 36, 62, 21, 7, 49, 73, 42, 16, 44, 52, 77, 51, 40, 57, 62, 15, 53, 22, 92, 20 \u2192 total mobiles = 891\nFruits counted (by quantity): 63, 27, 85, 83, 76, 94, 82, 65, 89, 4, 62, 9, 54, 83, 31 \u2192 total fruits = 907\n\nThe answer is: 1798",
+      "target": "1798",
+      "error": false
+    },
+    {
+      "id": "bbeh_cf448170",
+      "task": "web of lies",
+      "correct": false,
+      "cost": 0.049550649999999995,
+      "answer": "The answer is: <no, unknown, yes>",
+      "target": "no, unknown, yes",
+      "error": false
+    },
+    {
+      "id": "bbeh_cf9057fb",
+      "task": "causal understanding",
+      "correct": true,
+      "cost": 0.0027212499999999997,
+      "answer": "Events: Joe was late; neighbor waited 15 minutes and then drove Joe\u2019s son home; on the way, the neighbor\u2019s car was hit by a drunk driver and the son suffered severe leg injuries. \n\nCausal chain: Joe\u2019s delay is an earlier link in the chain (it led the neighbor to drive the child). But the immediate and intervening cause of the injury was the drunk driver\u2019s reckless act. For most people, causation is assigned to the actor whose misconduct directly produced the harm unless the earlier delay was a f",
+      "target": "No",
+      "error": false
+    },
+    {
+      "id": "bbeh_cfa6f2d9",
+      "task": "dyck languages",
+      "correct": true,
+      "cost": 0.01578825,
+      "answer": "The answer is: 13",
+      "target": "13",
+      "error": false
+    },
+    {
+      "id": "bbeh_d2a5a463",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.025427850000000002,
+      "answer": "",
+      "target": "14.22",
+      "error": false
+    },
+    {
+      "id": "bbeh_d34d4eac",
+      "task": "causal understanding",
+      "correct": true,
+      "cost": 0.004273249999999999,
+      "answer": "Step 1 \u2014 Clarify what \u201csufficient cause\u201d means for a logician: a condition C is a sufficient cause of an effect E if the presence of C guarantees E (i.e., C alone is enough to bring about E), even if E might also occur for other reasons.\n\nStep 2 \u2014 Apply that to the scenario: adding Reagent X to the mixture produced an explosion and that explosion killed Sam. In the actual situation X alone was enough to bring about Sam\u2019s death.\n\nStep 3 \u2014 Note the distinction from necessity and the \u201cbut\u2011for\u201d test",
+      "target": "Yes",
+      "error": false
+    },
+    {
+      "id": "bbeh_d36171aa",
+      "task": "boolean expressions",
+      "correct": true,
+      "cost": 0.011306749999999999,
+      "answer": "The answer is: (C)",
+      "target": "(C)",
+      "error": false
+    },
+    {
+      "id": "bbeh_d38456b9",
+      "task": "spatial reasoning",
+      "correct": false,
+      "cost": 0.030949400000000002,
+      "answer": "",
+      "target": "space bar",
+      "error": false
+    },
+    {
+      "id": "bbeh_d3ecfeac",
+      "task": "dyck languages",
+      "correct": false,
+      "cost": 0.02419485,
+      "answer": "",
+      "target": "18",
+      "error": false
+    },
+    {
+      "id": "bbeh_d476ce03",
+      "task": "temporal sequence",
+      "correct": false,
+      "cost": 0.04822465,
+      "answer": "",
+      "target": "150, 1",
+      "error": false
+    },
+    {
+      "id": "bbeh_d49f4495",
+      "task": "causal understanding",
+      "correct": false,
+      "cost": 0.00388885,
+      "answer": "He would have had a 60-minute dry time because the cycle was already set to MAX DRY (which alone is sufficient). Whether he changed the temperature or left it unchanged didn\u2019t make the difference. The answer is: No",
+      "target": "Yes",
+      "error": false
+    },
+    {
+      "id": "bbeh_d4a770c2",
+      "task": "sarc triples",
+      "correct": true,
+      "cost": 0.0033864999999999998,
+      "answer": "The answer is: 0,0,0",
+      "target": "0,0,0",
+      "error": false
+    },
+    {
+      "id": "bbeh_d4e437f4",
+      "task": "geometric shapes",
+      "correct": false,
+      "cost": 0.0310145,
+      "answer": "The answer is: (D)",
+      "target": "(I)",
+      "error": false
+    },
+    {
+      "id": "bbeh_d5650699",
+      "task": "web of lies",
+      "correct": true,
+      "cost": 0.00973485,
+      "answer": "The answer is: no, no, yes",
+      "target": "no, no, yes",
+      "error": false
+    },
+    {
+      "id": "bbeh_d5b53aea",
+      "task": "web of lies",
+      "correct": false,
+      "cost": 0.053096849999999994,
+      "answer": "",
+      "target": "no, no, no",
+      "error": false
+    },
+    {
+      "id": "bbeh_d5ef5e2f",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.030881,
+      "answer": "",
+      "target": "C",
+      "error": false
+    },
+    {
+      "id": "bbeh_d66c5fe1",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.02712585,
+      "answer": "",
+      "target": "11",
+      "error": false
+    },
+    {
+      "id": "bbeh_d6de1bf7",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.03173195,
+      "answer": "",
+      "target": "135.0",
+      "error": false
+    },
+    {
+      "id": "bbeh_d72ae541",
+      "task": "sportqa",
+      "correct": true,
+      "cost": 0.0023925500000000002,
+      "answer": "The answer is: BC, AC, AC",
+      "target": "BC, AC, AC",
+      "error": false
+    },
+    {
+      "id": "bbeh_d734216c",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.033246200000000004,
+      "answer": "",
+      "target": "26.1",
+      "error": false
+    },
+    {
+      "id": "bbeh_d7b98de2",
+      "task": "sportqa",
+      "correct": true,
+      "cost": 0.0049095,
+      "answer": "The answer is: AC, BC, ABD",
+      "target": "AC, BC, ABD",
+      "error": false
+    },
+    {
+      "id": "bbeh_d7e02f07",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.028151600000000002,
+      "answer": "",
+      "target": "22",
+      "error": false
+    },
+    {
+      "id": "bbeh_d8680ad8",
+      "task": "temporal sequence",
+      "correct": false,
+      "cost": 0.054125150000000004,
+      "answer": "",
+      "target": "150, 1",
+      "error": false
+    },
+    {
+      "id": "bbeh_d8808f27",
+      "task": "dyck languages",
+      "correct": false,
+      "cost": 0.012721550000000002,
+      "answer": "",
+      "target": "4",
+      "error": false
+    },
+    {
+      "id": "bbeh_d8dc112b",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.05088645,
+      "answer": "",
+      "target": "57.0",
+      "error": false
+    },
+    {
+      "id": "bbeh_d9129e27",
+      "task": "multistep arithmetic",
+      "correct": true,
+      "cost": 0.0359652,
+      "answer": "The answer is: -11",
+      "target": "-11",
+      "error": false
+    },
+    {
+      "id": "bbeh_d94c4f50",
+      "task": "spatial reasoning",
+      "correct": true,
+      "cost": 0.0052992000000000004,
+      "answer": "Starting list (clockwise from top): great white shark, umbrella, garter snake, Christmas stocking, jigsaw puzzle, Gila monster, Tibetan Terrier, moped, horse-drawn vehicle.\nStart at jigsaw puzzle (position 4).\nMove 8 cw \u2192 position (4+8)=12 \u2261 3 (Christmas stocking).\nMove 2 cw \u2192 position 5 (Gila monster).\nMove 2 cw \u2192 position 7 (moped).\nMove 3 ccw \u2192 position 4 (jigsaw puzzle).\n\nThe answer is: jigsaw puzzle",
+      "target": "jigsaw puzzle",
+      "error": false
+    },
+    {
+      "id": "bbeh_d955cc12",
+      "task": "web of lies",
+      "correct": false,
+      "cost": 0.02700525,
+      "answer": "",
+      "target": "yes, unknown, yes",
+      "error": false
+    },
+    {
+      "id": "bbeh_d9570868",
+      "task": "boardgame qa",
+      "correct": true,
+      "cost": 0.0109362,
+      "answer": "The answer is: disproved",
+      "target": "disproved",
+      "error": false
+    },
+    {
+      "id": "bbeh_d9e21a3f",
+      "task": "dyck languages",
+      "correct": false,
+      "cost": 0.0242779,
+      "answer": "",
+      "target": "6",
+      "error": false
+    },
+    {
+      "id": "bbeh_da546864",
+      "task": "sportqa",
+      "correct": false,
+      "cost": 0.009000000000000001,
+      "answer": "The answer is: AC, ABD, AB",
+      "target": "AB, ABD, AB",
+      "error": false
+    },
+    {
+      "id": "bbeh_db4b3c84",
+      "task": "boardgame qa",
+      "correct": true,
+      "cost": 0.014360099999999999,
+      "answer": "Step-by-step reasoning:\n\nFacts used: dugong has a blue card (blue is a rainbow color), beaver has a plastic bag.\n\n1. From Rule34: dugong has a rainbow-color card => dugong shouts at the husky.\n2. From Rule39: someone shouts at the husky => that someone falls on a square of the songbird. So the dugong falls on a songbird square.\n3. From Rule24: someone falls on a square of the songbird => gadwall wants to see the flamingo.\n4. From Rule22: gadwall wants to see the flamingo => flamingo smiles at th",
+      "target": "disproved",
+      "error": false
+    },
+    {
+      "id": "bbeh_dbe8384a",
+      "task": "web of lies",
+      "correct": false,
+      "cost": 0.0248607,
+      "answer": "",
+      "target": "no, no, no",
+      "error": false
+    },
+    {
+      "id": "bbeh_dc2acf6a",
+      "task": "disambiguation qa",
+      "correct": true,
+      "cost": 0.0039246,
+      "answer": "The secretary came to the analyst's office to help \"them\"\u2014most naturally the analyst\u2014book a flight. \"They were not in the office\" therefore best reads as \"the analyst was not in the office.\" The person who would then leave a post\u2011it on the door after finding the analyst absent is the secretary. Thus the reading is: secretary \u2192 came to analyst's office; analyst absent; secretary left the post\u2011it.\n\nThe answer is: (C)",
+      "target": "(C)",
+      "error": false
+    },
+    {
+      "id": "bbeh_dc988e9c",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.02008725,
+      "answer": "",
+      "target": "I",
+      "error": false
+    },
+    {
+      "id": "bbeh_dca8b7d0",
+      "task": "sarc triples",
+      "correct": false,
+      "cost": 0.00385555,
+      "answer": "The answer is: 0,0,0",
+      "target": "0,0,1",
+      "error": false
+    },
+    {
+      "id": "bbeh_dcb5524c",
+      "task": "nycc",
+      "correct": true,
+      "cost": 0.00451225,
+      "answer": "The answer is: (C)",
+      "target": "(C)",
+      "error": false
+    },
+    {
+      "id": "bbeh_dd77116d",
+      "task": "web of lies",
+      "correct": false,
+      "cost": 0.049542800000000005,
+      "answer": "",
+      "target": "no, unknown, no",
+      "error": false
+    },
+    {
+      "id": "bbeh_de9ca3cf",
+      "task": "movie recommendation",
+      "correct": true,
+      "cost": 0.0058583,
+      "answer": "The answer is: (D)",
+      "target": "(D)",
+      "error": false
+    },
+    {
+      "id": "bbeh_deb372ed",
+      "task": "zebra puzzles",
+      "correct": false,
+      "cost": 0.0584898,
+      "answer": "The answer is: 4",
+      "target": "1",
+      "error": false
+    },
+    {
+      "id": "bbeh_deefc9e4",
+      "task": "dyck languages",
+      "correct": false,
+      "cost": 0.0185402,
+      "answer": "",
+      "target": "11",
+      "error": false
+    },
+    {
+      "id": "bbeh_df9bad41",
+      "task": "movie recommendation",
+      "correct": false,
+      "cost": 0.02180485,
+      "answer": "",
+      "target": "(J)",
+      "error": false
+    },
+    {
+      "id": "bbeh_e124355f",
+      "task": "movie recommendation",
+      "correct": true,
+      "cost": 0.005587000000000001,
+      "answer": "The answer is: (B)",
+      "target": "(B)",
+      "error": false
+    },
+    {
+      "id": "bbeh_e17968f9",
+      "task": "time arithmetic",
+      "correct": true,
+      "cost": 0.013341,
+      "answer": "The answer is: [hiking, studying, hunting, fishing, snowboarding]",
+      "target": "[hiking, studying, hunting, fishing, snowboarding]",
+      "error": false
+    },
+    {
+      "id": "bbeh_e2736d3c",
+      "task": "temporal sequence",
+      "correct": false,
+      "cost": 0.05242865,
+      "answer": "",
+      "target": "270, 1",
+      "error": false
+    },
+    {
+      "id": "bbeh_e2f6fcf6",
+      "task": "sportqa",
+      "correct": false,
+      "cost": 0.004918799999999999,
+      "answer": "The answer is: C, A, AD",
+      "target": "C, A, C",
+      "error": false
+    },
+    {
+      "id": "bbeh_e38c7d31",
+      "task": "nycc",
+      "correct": false,
+      "cost": 0.00672135,
+      "answer": "The answer is: (J)",
+      "target": "(I)",
+      "error": false
+    },
+    {
+      "id": "bbeh_e3d1526e",
+      "task": "multistep arithmetic",
+      "correct": true,
+      "cost": 0.05253055,
+      "answer": "The answer is: 581",
+      "target": "581",
+      "error": false
+    },
+    {
+      "id": "bbeh_e42987cd",
+      "task": "linguini",
+      "correct": true,
+      "cost": 0.00358485,
+      "answer": "The answer is: els pisos",
+      "target": "els pisos",
+      "error": false
+    },
+    {
+      "id": "bbeh_e4634362",
+      "task": "spatial reasoning",
+      "correct": true,
+      "cost": 0.02418015,
+      "answer": "The answer is: peanut",
+      "target": "peanut",
+      "error": false
+    },
+    {
+      "id": "bbeh_e48eaba2",
+      "task": "causal understanding",
+      "correct": false,
+      "cost": 0.00393975,
+      "answer": "The answer is: No",
+      "target": "Ambiguous",
+      "error": false
+    },
+    {
+      "id": "bbeh_e54a4be3",
+      "task": "sarc triples",
+      "correct": false,
+      "cost": 0.00316805,
+      "answer": "The answer is: 0,0,1",
+      "target": "1,0,1",
+      "error": false
+    },
+    {
+      "id": "bbeh_e5fb54f7",
+      "task": "time arithmetic",
+      "correct": false,
+      "cost": 0.0053349,
+      "answer": "",
+      "target": "unanswerable",
+      "error": false
+    },
+    {
+      "id": "bbeh_e768e01e",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.0475839,
+      "answer": "",
+      "target": "418.0",
+      "error": false
+    },
+    {
+      "id": "bbeh_e82891b3",
+      "task": "movie recommendation",
+      "correct": true,
+      "cost": 0.00577005,
+      "answer": "The answer is: (J)",
+      "target": "(J)",
+      "error": false
+    },
+    {
+      "id": "bbeh_e8a59ca3",
+      "task": "temporal sequence",
+      "correct": true,
+      "cost": 0.07171514999999999,
+      "answer": "The answer is: 150, 1",
+      "target": "150, 1",
+      "error": false
+    },
+    {
+      "id": "bbeh_e8ef4381",
+      "task": "spatial reasoning",
+      "correct": false,
+      "cost": 0.03555845,
+      "answer": "The answer is: unknown",
+      "target": "clementine",
+      "error": false
+    },
+    {
+      "id": "bbeh_e8fd0cbf",
+      "task": "web of lies",
+      "correct": false,
+      "cost": 0.00809625,
+      "answer": "",
+      "target": "yes, no, no",
+      "error": false
+    },
+    {
+      "id": "bbeh_e905f895",
+      "task": "object counting",
+      "correct": true,
+      "cost": 0.017454400000000002,
+      "answer": "Step 1 \u2014 animals/insects I have: walrus 3, flamingoes 43, lizards 25, kangaroos 2, echidnas 63, beavers 52, roosters 65, storks 72, stingrays 43, rabbits 69, cobras 67, bees 88. Sum = 592.\nStep 2 \u2014 mobiles I have: samsung galaxy m55s 57, iphone 7 40, iphone 8 86, huawei pura 70 ultra 60, huawei mate x6 73, samsung galaxy c55 1, htc 8, samsung galaxy s24 92, samsung galaxy z fold5 66. Sum = 483.\nStep 3 \u2014 total animals/insects + mobiles I have = 592 + 483 = 1075.\nThe answer is: 1075",
+      "target": "1075",
+      "error": false
+    },
+    {
+      "id": "bbeh_eb8cb7e9",
+      "task": "sportqa",
+      "correct": true,
+      "cost": 0.0038099999999999996,
+      "answer": "The answer is: A, A, B",
+      "target": "A, A, B",
+      "error": false
+    },
+    {
+      "id": "bbeh_eb9ed237",
+      "task": "shuffled objects",
+      "correct": false,
+      "cost": 0.03367245,
+      "answer": "The answer is: (E)",
+      "target": "(F)",
+      "error": false
+    },
+    {
+      "id": "bbeh_eba0819f",
+      "task": "geometric shapes",
+      "correct": false,
+      "cost": 0.028058549999999998,
+      "answer": "",
+      "target": "(F)",
+      "error": false
+    },
+    {
+      "id": "bbeh_ec484c0d",
+      "task": "causal understanding",
+      "correct": false,
+      "cost": 0.0022457500000000004,
+      "answer": "The answer is: No",
+      "target": "Yes",
+      "error": false
+    },
+    {
+      "id": "bbeh_ece1733b",
+      "task": "time arithmetic",
+      "correct": true,
+      "cost": 0.01027355,
+      "answer": "The answer is: [Sunday]",
+      "target": "[sunday]",
+      "error": false
+    },
+    {
+      "id": "bbeh_ed148734",
+      "task": "shuffled objects",
+      "correct": true,
+      "cost": 0.050637800000000004,
+      "answer": "The answer is: (G)",
+      "target": "(G)",
+      "error": false
+    },
+    {
+      "id": "bbeh_ed1ffb22",
+      "task": "disambiguation qa",
+      "correct": true,
+      "cost": 0.00249975,
+      "answer": "Step-by-step reasoning:\n- There are two occurrences of \"she.\" The sentence structure is: \"The worker told the pedestrian that she was repairing the sidewalk ... and she should avoid the closed portion...\"\n- The clause \"she was repairing the sidewalk\" most naturally refers to the worker (the one doing the repairing).\n- The clause \"she should avoid the closed portion\" is advice directed at the pedestrian, so it most naturally refers to the pedestrian.\n- That interpretation matches option (C).\n\nThe",
+      "target": "(C)",
+      "error": false
+    },
+    {
+      "id": "bbeh_ed4cc75d",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.02218485,
+      "answer": "",
+      "target": "18",
+      "error": false
+    },
+    {
+      "id": "bbeh_eddbe04e",
+      "task": "temporal sequence",
+      "correct": false,
+      "cost": 0.0561023,
+      "answer": "",
+      "target": "140, 1",
+      "error": false
+    },
+    {
+      "id": "bbeh_ee09d194",
+      "task": "nycc",
+      "correct": false,
+      "cost": 0.0069999,
+      "answer": "The answer is: (A)",
+      "target": "(D)",
+      "error": false
+    },
+    {
+      "id": "bbeh_eecd6e50",
+      "task": "sportqa",
+      "correct": false,
+      "cost": 0.0041347499999999995,
+      "answer": "The answer is: C, C, C",
+      "target": "C, B, C",
+      "error": false
+    },
+    {
+      "id": "bbeh_eeefc7ee",
+      "task": "sportqa",
+      "correct": false,
+      "cost": 0.008324100000000001,
+      "answer": "The answer is: D, BC, A",
+      "target": "ABD, BC, A",
+      "error": false
+    },
+    {
+      "id": "bbeh_ef950fa3",
+      "task": "word sorting",
+      "correct": true,
+      "cost": 0.009075,
+      "answer": "The answer is: characterizations, dean, eosine, formula, generalizations, gibson, inebriate, mater, mulligatawny, photosynthesis, sigmund, vassar, recommendations, representativeness, rica",
+      "target": "characterizations, dean, eosine, formula, generalizations, gibson, inebriate, mater, mulligatawny, photosynthesis, sigmund, vassar, recommendations, representativeness, rica",
+      "error": false
+    },
+    {
+      "id": "bbeh_efed89b2",
+      "task": "nycc",
+      "correct": false,
+      "cost": 0.0067916,
+      "answer": "The answer is: (C)",
+      "target": "(H)",
+      "error": false
+    },
+    {
+      "id": "bbeh_f0021db0",
+      "task": "linguini",
+      "correct": false,
+      "cost": 0.01383,
+      "answer": "The answer is: luvutrubuno",
+      "target": "luvuttubuno",
+      "error": false
+    },
+    {
+      "id": "bbeh_f0a88764",
+      "task": "multistep arithmetic",
+      "correct": false,
+      "cost": 0.04189265,
+      "answer": "The answer is: 5159780015",
+      "target": "905",
+      "error": false
+    },
+    {
+      "id": "bbeh_f185f5db",
+      "task": "word sorting",
+      "correct": false,
+      "cost": 0.0056913499999999995,
+      "answer": "The answer is: 13",
+      "target": "7",
+      "error": false
+    },
+    {
+      "id": "bbeh_f210bb48",
+      "task": "movie recommendation",
+      "correct": false,
+      "cost": 0.01028355,
+      "answer": "The answer is: (B)",
+      "target": "(J)",
+      "error": false
+    },
+    {
+      "id": "bbeh_f225a9fc",
+      "task": "word sorting",
+      "correct": true,
+      "cost": 0.0071917,
+      "answer": "The answer is: parameter, photosynthesis, piggish, pintail, protector, algonquin, beachhead, bloodstain, characterizations, dilate, forth, frolic, lacunae, lazy, liggett, mcintosh, rationalizations, responsibilities, slaughterhouse, sterno, transformations, unesco",
+      "target": "parameter, photosynthesis, piggish, pintail, protector, algonquin, beachhead, bloodstain, characterizations, dilate, forth, frolic, lacunae, lazy, liggett, mcintosh, rationalizations, responsibilities, slaughterhouse, sterno, transformations, unesco",
+      "error": false
+    },
+    {
+      "id": "bbeh_f267efc5",
+      "task": "multistep arithmetic",
+      "correct": false,
+      "cost": 0.0721286,
+      "answer": "",
+      "target": "111",
+      "error": false
+    },
+    {
+      "id": "bbeh_f298c17e",
+      "task": "nycc",
+      "correct": false,
+      "cost": 0.0029875,
+      "answer": "The answer is: (A)",
+      "target": "(H)",
+      "error": false
+    },
+    {
+      "id": "bbeh_f2d6b7c1",
+      "task": "zebra puzzles",
+      "correct": false,
+      "cost": 0.00196265,
+      "answer": "",
+      "target": "4",
+      "error": false
+    },
+    {
+      "id": "bbeh_f3045f37",
+      "task": "nycc",
+      "correct": false,
+      "cost": 0.0032991,
+      "answer": "The answer is: (D)",
+      "target": "(B)",
+      "error": false
+    },
+    {
+      "id": "bbeh_f39ce14d",
+      "task": "linguini",
+      "correct": false,
+      "cost": 0.029020149999999998,
+      "answer": "I need one clarification before filling the blanks: for each line, do you want the Xinka form that corresponds to the given form (i.e., if a form on the left is given, fill its partner on the right; if the English gloss is given, fill the Xinka form that corresponds to that gloss)? Or is there a fixed direction (e.g., always give the \u0268n\u2011/\u0268m\u2011 form)? Once you confirm the direction, I will fill (1)\u2013(10).",
+      "target": "it was opened",
+      "error": false
+    },
+    {
+      "id": "bbeh_f3b12817",
+      "task": "zebra puzzles",
+      "correct": false,
+      "cost": 0.03627,
+      "answer": "",
+      "target": "3",
+      "error": false
+    },
+    {
+      "id": "bbeh_f3f03228",
+      "task": "causal understanding",
+      "correct": true,
+      "cost": 0.004045099999999999,
+      "answer": "Step-by-step reasoning:\n- Timeline: travel agency employees normally arrive at 8:45 and did so today. Design studio normally arrive at 10:00 but unexpectedly arrived at 8:45 today as well. The system turned on at 8:45.\n- Sufficiency: Each office has enough employees to turn the system on by itself. The travel agency arrival alone would have been sufficient to turn it on at 8:45.\n- Necessity/counterfactual: If the design studio employees had not arrived at 8:45, the travel agency employees would ",
+      "target": "No",
+      "error": false
+    },
+    {
+      "id": "bbeh_f44bf3b8",
+      "task": "boardgame qa",
+      "correct": false,
+      "cost": 0.02196965,
+      "answer": "The answer is: unknown",
+      "target": "proved",
+      "error": false
+    },
+    {
+      "id": "bbeh_f5077f65",
+      "task": "movie recommendation",
+      "correct": false,
+      "cost": 0.01376005,
+      "answer": "The answer is: (I)",
+      "target": "(D)",
+      "error": false
+    },
+    {
+      "id": "bbeh_f55b4638",
+      "task": "word sorting",
+      "correct": false,
+      "cost": 0.0069699,
+      "answer": "The answer is: 15",
+      "target": "5",
+      "error": false
+    },
+    {
+      "id": "bbeh_f56324c5",
+      "task": "object counting",
+      "correct": true,
+      "cost": 0.0345831,
+      "answer": "Step 1 \u2014 count musical instruments I have (each \"I have\" instrument):\npennywhistles 14, french horns 58, clarinets 28, autoharps 13, congas 63, harps 91, balafons 12, tambourines 51, kalimbas 66, nadaswarams 95, accordions 72, harmonicas 27, didgeridoos 68, tars 16, bagpipes 41, tanpuras 94, dulcimers 53, recorders 95, electric bass 91, sitars 38, trumpets 55, marimbas 86, pianos 23, ukuleles 70.\nSum of instruments = 1320.\n\nStep 2 \u2014 count cars I have:\nbuick enclave 73, honda civic 13, toyota tun",
+      "target": "798",
+      "error": false
+    },
+    {
+      "id": "bbeh_f5a410aa",
+      "task": "movie recommendation",
+      "correct": true,
+      "cost": 0.014071,
+      "answer": "The answer is: (D)",
+      "target": "(D)",
+      "error": false
+    },
+    {
+      "id": "bbeh_f6353426",
+      "task": "linguini",
+      "correct": false,
+      "cost": 0.0161327,
+      "answer": "The answer is: D",
+      "target": "rifle",
+      "error": false
+    },
+    {
+      "id": "bbeh_f7283364",
+      "task": "shuffled objects",
+      "correct": true,
+      "cost": 0.04126895,
+      "answer": "The answer is: (D)",
+      "target": "(D)",
+      "error": false
+    },
+    {
+      "id": "bbeh_f7bd5b26",
+      "task": "multistep arithmetic",
+      "correct": false,
+      "cost": 0.05371305,
+      "answer": "",
+      "target": "853",
+      "error": false
+    },
+    {
+      "id": "bbeh_f9000fd1",
+      "task": "object counting",
+      "correct": true,
+      "cost": 0.02712225,
+      "answer": "Step-by-step:\n- Mobiles I have and counts: 30, 33, 41, 67, 43, 22, 43, 25, 69, 89, 54, 82, 75. Sum = 673.\n- Animals/insects I have and counts: 13, 11, 14, 49, 89, 9, 27, 59, 16, 25, 86, 90, 84, 48, 55, 11, 38. Sum = 724.\n- Absolute difference = |724 - 673| = 51.\n\nThe answer is: 51",
+      "target": "51",
+      "error": false
+    },
+    {
+      "id": "bbeh_faef60af",
+      "task": "temporal sequence",
+      "correct": false,
+      "cost": 0.03812075,
+      "answer": "",
+      "target": "150, 1",
+      "error": false
+    },
+    {
+      "id": "bbeh_faefc575",
+      "task": "boardgame qa",
+      "correct": true,
+      "cost": 0.02345405,
+      "answer": "I'll reason step by step.\n\n1. From facts: beetle has a red card. By Rule36 (beetle with card starting with \"r\" -> beetle does not create a castle for the goat). So: beetle does not create a castle for the goat.\n\n2. By Rule26 (if an animal does not create a castle for the goat -> it pays money to the mouse), the beetle pays money to the mouse.\n\n3. By Rule19 (if some animal pays money to the mouse -> the goat does not disarm the liger), we get: the goat does not disarm the liger.\n\n4. By Rule31 (if",
+      "target": "unknown",
+      "error": false
+    },
+    {
+      "id": "bbeh_fbc3c909",
+      "task": "boolean expressions",
+      "correct": false,
+      "cost": 0.0229966,
+      "answer": "",
+      "target": "(D)",
+      "error": false
+    },
+    {
+      "id": "bbeh_fd79bb56",
+      "task": "linguini",
+      "correct": false,
+      "cost": 0.01766735,
+      "answer": "The answer is: one egg",
+      "target": "1 egg",
+      "error": false
+    },
+    {
+      "id": "bbeh_fd90516a",
+      "task": "causal understanding",
+      "correct": true,
+      "cost": 0.0059245,
+      "answer": "Step 1 \u2014 Definition: A cause C is necessary for an effect E if, had C not occurred, E would not have occurred (i.e., E depends on C in all counterfactuals).\n\nStep 2 \u2014 Identify events: Sam throws a poisonous test tube; Agent X sees it and ducks; the tube misses; X survives.\n\nStep 3 \u2014 Counterfactual test: If Sam had not thrown the test tube, Agent X could still have survived (indeed, with no throw there is no danger to survive), so Agent X's survival does not depend on Sam's throw in the sense req",
+      "target": "No",
+      "error": false
+    },
+    {
+      "id": "bbeh_fdaca592",
+      "task": "sportqa",
+      "correct": false,
+      "cost": 0.00569125,
+      "answer": "The answer is: B, A, AD",
+      "target": "AB, A, AC",
+      "error": false
+    },
+    {
+      "id": "bbeh_fe8bf617",
+      "task": "linguini",
+      "correct": false,
+      "cost": 0.01104425,
+      "answer": "Step-by-step reasoning:\n- From 8 = \u0144ollow and 918 = ont\u044allows\u0101t \u0144ollowxujplow, the fragment \u0144ollowxujplow must be 18, so xujplow is a \"ten\" element used to form teens (unit + xujplow = 10 + unit). Thus \u0144ollow = 8.\n- From 15 = atxujplow, at + xujplow = 15, so at = 5.\n- From 50 = atlow, the form atlow is 5\u00d710 = 50 (low is a tens marker), consistent with at = 5.\n- From 555 = x\u014dts\u0101tn x\u014dtlow nop\u044al at, the phrase breaks as 500 + 50 + 5. The 500 element is x\u014dts\u0101tn, showing the pattern (5 \u00d7 100) uses a ",
+      "target": "405",
+      "error": false
+    }
+  ]
+}

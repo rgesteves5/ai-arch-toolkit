@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from ai_arch_toolkit.toolkit.agents.flows import (
+    generate_review_flow,
+    generate_review_initial_state,
     lats_flow,
     lats_initial_state,
     llm_compiler_flow,
@@ -22,6 +24,8 @@ from ai_arch_toolkit.toolkit.agents.flows import (
 )
 
 __all__ = [
+    "generate_review_flow",
+    "generate_review_initial_state",
     "lats_flow",
     "lats_initial_state",
     "llm_compiler_flow",

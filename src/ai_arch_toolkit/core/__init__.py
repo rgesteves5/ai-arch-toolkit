@@ -22,6 +22,7 @@ from ai_arch_toolkit.core._content import (
 from ai_arch_toolkit.core._exceptions import APIError, RateLimitError
 from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._middleware import Middleware, Request
+from ai_arch_toolkit.core._moderation import ModerationError, ModerationResult, Moderator
 from ai_arch_toolkit.core._policy import OnExhausted, OnLowConfidence, OnTimeout, Policy
 from ai_arch_toolkit.core._pricing import pricing
 from ai_arch_toolkit.core._rate_limit import RateLimitMiddleware
@@ -102,6 +103,9 @@ __all__ = [
     "MergeConflictError",
     "MergeStrategy",
     "Middleware",
+    "ModerationError",
+    "ModerationResult",
+    "Moderator",
     "NodeID",
     "NodeType",
     "OnExhausted",

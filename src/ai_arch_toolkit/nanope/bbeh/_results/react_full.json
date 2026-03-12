@@ -1,0 +1,4315 @@
+{
+  "strategy": "react_full",
+  "model": "gpt-5-nano",
+  "total_samples": 460,
+  "correct": 119,
+  "errors": 0,
+  "accuracy": 0.25869565217391305,
+  "total_cost": 2.13560947,
+  "cost_per_sample": 0.004642629282608696,
+  "per_task": {
+    "sarc triples": {
+      "correct": 3,
+      "total": 20,
+      "cost": 0.009879450000000001,
+      "errors": 0,
+      "accuracy": 0.15
+    },
+    "temporal sequence": {
+      "correct": 2,
+      "total": 20,
+      "cost": 0.30346976999999997,
+      "errors": 0,
+      "accuracy": 0.1
+    },
+    "disambiguation qa": {
+      "correct": 7,
+      "total": 20,
+      "cost": 0.029847899999999997,
+      "errors": 0,
+      "accuracy": 0.35
+    },
+    "boolean expressions": {
+      "correct": 8,
+      "total": 20,
+      "cost": 0.12615784000000002,
+      "errors": 0,
+      "accuracy": 0.4
+    },
+    "buggy tables": {
+      "correct": 0,
+      "total": 20,
+      "cost": 0.16241947000000004,
+      "errors": 0,
+      "accuracy": 0.0
+    },
+    "causal understanding": {
+      "correct": 10,
+      "total": 20,
+      "cost": 0.012426349999999997,
+      "errors": 0,
+      "accuracy": 0.5
+    },
+    "dyck languages": {
+      "correct": 9,
+      "total": 20,
+      "cost": 0.049628700000000005,
+      "errors": 0,
+      "accuracy": 0.45
+    },
+    "time arithmetic": {
+      "correct": 18,
+      "total": 20,
+      "cost": 0.08702994,
+      "errors": 0,
+      "accuracy": 0.9
+    },
+    "geometric shapes": {
+      "correct": 1,
+      "total": 20,
+      "cost": 0.1023546,
+      "errors": 0,
+      "accuracy": 0.05
+    },
+    "zebra puzzles": {
+      "correct": 6,
+      "total": 20,
+      "cost": 0.10512760000000002,
+      "errors": 0,
+      "accuracy": 0.3
+    },
+    "word sorting": {
+      "correct": 13,
+      "total": 20,
+      "cost": 0.05129547,
+      "errors": 0,
+      "accuracy": 0.65
+    },
+    "object counting": {
+      "correct": 3,
+      "total": 20,
+      "cost": 0.21928556000000002,
+      "errors": 0,
+      "accuracy": 0.15
+    },
+    "nycc": {
+      "correct": 2,
+      "total": 20,
+      "cost": 0.012415100000000002,
+      "errors": 0,
+      "accuracy": 0.1
+    },
+    "movie recommendation": {
+      "correct": 16,
+      "total": 20,
+      "cost": 0.020641100000000003,
+      "errors": 0,
+      "accuracy": 0.8
+    },
+    "multistep arithmetic": {
+      "correct": 0,
+      "total": 20,
+      "cost": 0.060687460000000006,
+      "errors": 0,
+      "accuracy": 0.0
+    },
+    "boardgame qa": {
+      "correct": 8,
+      "total": 20,
+      "cost": 0.07175326000000001,
+      "errors": 0,
+      "accuracy": 0.4
+    },
+    "spatial reasoning": {
+      "correct": 1,
+      "total": 20,
+      "cost": 0.04898105,
+      "errors": 0,
+      "accuracy": 0.05
+    },
+    "web of lies": {
+      "correct": 3,
+      "total": 20,
+      "cost": 0.21078929000000002,
+      "errors": 0,
+      "accuracy": 0.15
+    },
+    "hyperbaton": {
+      "correct": 0,
+      "total": 20,
+      "cost": 0.07084684,
+      "errors": 0,
+      "accuracy": 0.0
+    },
+    "linguini": {
+      "correct": 2,
+      "total": 20,
+      "cost": 0.055540620000000006,
+      "errors": 0,
+      "accuracy": 0.1
+    },
+    "shuffled objects": {
+      "correct": 2,
+      "total": 20,
+      "cost": 0.18203140000000007,
+      "errors": 0,
+      "accuracy": 0.1
+    },
+    "sportqa": {
+      "correct": 5,
+      "total": 20,
+      "cost": 0.024034300000000005,
+      "errors": 0,
+      "accuracy": 0.25
+    },
+    "object properties": {
+      "correct": 0,
+      "total": 20,
+      "cost": 0.1189664,
+      "errors": 0,
+      "accuracy": 0.0
+    }
+  },
+  "samples": [
+    {
+      "id": "bbeh_00121a17",
+      "task": "sarc triples",
+      "correct": true,
+      "cost": 0.0004995500000000001,
+      "answer": "The answer is: 1,0,1",
+      "target": "1,0,1",
+      "error": false
+    },
+    {
+      "id": "bbeh_0143b69a",
+      "task": "temporal sequence",
+      "correct": false,
+      "cost": 0.01237765,
+      "answer": "The answer is: 30, 1",
+      "target": "120, 1",
+      "error": false
+    },
+    {
+      "id": "bbeh_0168ffd9",
+      "task": "disambiguation qa",
+      "correct": false,
+      "cost": 0.0030276,
+      "answer": "The answer is: (A)",
+      "target": "(B)",
+      "error": false
+    },
+    {
+      "id": "bbeh_01d1272f",
+      "task": "disambiguation qa",
+      "correct": true,
+      "cost": 0.0009227500000000001,
+      "answer": "The answer is: A",
+      "target": "(A)",
+      "error": false
+    },
+    {
+      "id": "bbeh_01f4a3b0",
+      "task": "boolean expressions",
+      "correct": true,
+      "cost": 0.00867735,
+      "answer": "The answer is: (A)",
+      "target": "(A)",
+      "error": false
+    },
+    {
+      "id": "bbeh_02120271",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.01104898,
+      "answer": "The answer is: 0",
+      "target": "14.37",
+      "error": false
+    },
+    {
+      "id": "bbeh_022633a9",
+      "task": "causal understanding",
+      "correct": false,
+      "cost": 0.0010298500000000001,
+      "answer": "The answer is: No",
+      "target": "Ambiguous",
+      "error": false
+    },
+    {
+      "id": "bbeh_02484f30",
+      "task": "dyck languages",
+      "correct": false,
+      "cost": 0.00103735,
+      "answer": "The answer is: 45",
+      "target": "5",
+      "error": false
+    },
+    {
+      "id": "bbeh_024bb339",
+      "task": "disambiguation qa",
+      "correct": true,
+      "cost": 0.0008985000000000001,
+      "answer": "The answer is: E",
+      "target": "(E)",
+      "error": false
+    },
+    {
+      "id": "bbeh_029758de",
+      "task": "time arithmetic",
+      "correct": true,
+      "cost": 0.005772950000000001,
+      "answer": "The answer is: [Thursday]",
+      "target": "[thursday]",
+      "error": false
+    },
+    {
+      "id": "bbeh_038944b8",
+      "task": "geometric shapes",
+      "correct": false,
+      "cost": 0.010403270000000001,
+      "answer": "The answer is: (D)",
+      "target": "(G)",
+      "error": false
+    },
+    {
+      "id": "bbeh_04721d12",
+      "task": "sarc triples",
+      "correct": false,
+      "cost": 0.0007799,
+      "answer": "The answer is: 0,1,0",
+      "target": "0,0,0",
+      "error": false
+    },
+    {
+      "id": "bbeh_05864a83",
+      "task": "geometric shapes",
+      "correct": false,
+      "cost": 0.01105258,
+      "answer": "The answer is: G",
+      "target": "(A)",
+      "error": false
+    },
+    {
+      "id": "bbeh_058c0eba",
+      "task": "zebra puzzles",
+      "correct": true,
+      "cost": 0.0024855000000000003,
+      "answer": "The answer is: 4",
+      "target": "4",
+      "error": false
+    },
+    {
+      "id": "bbeh_0611a662",
+      "task": "temporal sequence",
+      "correct": false,
+      "cost": 0.0,
+      "answer": "",
+      "target": "150, 2",
+      "error": false
+    },
+    {
+      "id": "bbeh_06727678",
+      "task": "zebra puzzles",
+      "correct": false,
+      "cost": 0.0019251500000000003,
+      "answer": "The answer is: 3",
+      "target": "1",
+      "error": false
+    },
+    {
+      "id": "bbeh_079e2e82",
+      "task": "word sorting",
+      "correct": true,
+      "cost": 0.00277763,
+      "answer": "The answer is: careful, classifications, disenfranchisement, antidisestablishmentarianism, bertrand, eyelid, feign, heterostructure, libra, paste, photosynthesis, snip, southeastern, transformations, wherewith",
+      "target": "careful, classifications, disenfranchisement, antidisestablishmentarianism, bertrand, eyelid, feign, heterostructure, libra, paste, photosynthesis, snip, southeastern, transformations, wherewith",
+      "error": false
+    },
+    {
+      "id": "bbeh_080856b1",
+      "task": "geometric shapes",
+      "correct": false,
+      "cost": 0.00340923,
+      "answer": "The answer is: F",
+      "target": "(B)",
+      "error": false
+    },
+    {
+      "id": "bbeh_08b6065b",
+      "task": "causal understanding",
+      "correct": true,
+      "cost": 0.00032025,
+      "answer": "The answer is: No",
+      "target": "No",
+      "error": false
+    },
+    {
+      "id": "bbeh_08b9ff0f",
+      "task": "object counting",
+      "correct": false,
+      "cost": 0.0058248,
+      "answer": "The answer is: 1690",
+      "target": "1199",
+      "error": false
+    },
+    {
+      "id": "bbeh_08cecce3",
+      "task": "nycc",
+      "correct": true,
+      "cost": 0.0006446000000000001,
+      "answer": "The answer is: (I)",
+      "target": "(I)",
+      "error": false
+    },
+    {
+      "id": "bbeh_0a29bb04",
+      "task": "movie recommendation",
+      "correct": true,
+      "cost": 0.00115915,
+      "answer": "The answer is: F",
+      "target": "(F)",
+      "error": false
+    },
+    {
+      "id": "bbeh_0a8af90f",
+      "task": "multistep arithmetic",
+      "correct": false,
+      "cost": 0.0038352,
+      "answer": "The answer is: 0",
+      "target": "12",
+      "error": false
+    },
+    {
+      "id": "bbeh_0ad24294",
+      "task": "dyck languages",
+      "correct": true,
+      "cost": 0.0004468,
+      "answer": "The answer is: 5",
+      "target": "5",
+      "error": false
+    },
+    {
+      "id": "bbeh_0b1daec2",
+      "task": "geometric shapes",
+      "correct": false,
+      "cost": 0.002955,
+      "answer": "The answer is: D",
+      "target": "(E)",
+      "error": false
+    },
+    {
+      "id": "bbeh_0ba54167",
+      "task": "boardgame qa",
+      "correct": false,
+      "cost": 0.0033556000000000002,
+      "answer": "The answer is: unknown",
+      "target": "disproved",
+      "error": false
+    },
+    {
+      "id": "bbeh_0c89f722",
+      "task": "boardgame qa",
+      "correct": false,
+      "cost": 0.00115655,
+      "answer": "The answer is: unknown",
+      "target": "disproved",
+      "error": false
+    },
+    {
+      "id": "bbeh_0d94a80d",
+      "task": "zebra puzzles",
+      "correct": true,
+      "cost": 0.01378095,
+      "answer": "The answer is: 5",
+      "target": "5",
+      "error": false
+    },
+    {
+      "id": "bbeh_0ddd29b4",
+      "task": "spatial reasoning",
+      "correct": false,
+      "cost": 0.0013460999999999998,
+      "answer": "The answer is: unknown",
+      "target": "fish",
+      "error": false
+    },
+    {
+      "id": "bbeh_0e1d5567",
+      "task": "sarc triples",
+      "correct": false,
+      "cost": 0.0005239000000000001,
+      "answer": "The answer is: 1,1,1",
+      "target": "0,1,1",
+      "error": false
+    },
+    {
+      "id": "bbeh_0ec19937",
+      "task": "spatial reasoning",
+      "correct": false,
+      "cost": 0.0017743,
+      "answer": "The answer is: unknown",
+      "target": "bear",
+      "error": false
+    },
+    {
+      "id": "bbeh_0f3ea3fe",
+      "task": "boolean expressions",
+      "correct": true,
+      "cost": 0.0083265,
+      "answer": "The answer is: (A)",
+      "target": "(A)",
+      "error": false
+    },
+    {
+      "id": "bbeh_0f8d30f9",
+      "task": "movie recommendation",
+      "correct": false,
+      "cost": 0.0015160500000000001,
+      "answer": "The answer is: (G)",
+      "target": "(A)",
+      "error": false
+    },
+    {
+      "id": "bbeh_0fd173f5",
+      "task": "temporal sequence",
+      "correct": true,
+      "cost": 0.02614072,
+      "answer": "The answer is: 150, 1",
+      "target": "150, 1",
+      "error": false
+    },
+    {
+      "id": "bbeh_10db21ae",
+      "task": "disambiguation qa",
+      "correct": false,
+      "cost": 0.00133515,
+      "answer": "The answer is: (E)",
+      "target": "(D)",
+      "error": false
+    },
+    {
+      "id": "bbeh_10fd89a7",
+      "task": "geometric shapes",
+      "correct": false,
+      "cost": 0.0029098,
+      "answer": "The answer is: (O)",
+      "target": "(E)",
+      "error": false
+    },
+    {
+      "id": "bbeh_1145d014",
+      "task": "word sorting",
+      "correct": true,
+      "cost": 0.00237925,
+      "answer": "The answer is: 7",
+      "target": "7",
+      "error": false
+    },
+    {
+      "id": "bbeh_11523360",
+      "task": "web of lies",
+      "correct": false,
+      "cost": 0.00416095,
+      "answer": "The answer is: <unknown, unknown, unknown>",
+      "target": "yes, no, yes",
+      "error": false
+    },
+    {
+      "id": "bbeh_12f8a0b5",
+      "task": "boolean expressions",
+      "correct": false,
+      "cost": 0.01165379,
+      "answer": "The answer is: (C)",
+      "target": "(A)",
+      "error": false
+    },
+    {
+      "id": "bbeh_132bc615",
+      "task": "temporal sequence",
+      "correct": false,
+      "cost": 0.011175800000000001,
+      "answer": "",
+      "target": "90, 1",
+      "error": false
+    },
+    {
+      "id": "bbeh_15722c11",
+      "task": "nycc",
+      "correct": false,
+      "cost": 0.0006972500000000001,
+      "answer": "The answer is: (F)",
+      "target": "(B)",
+      "error": false
+    },
+    {
+      "id": "bbeh_158f38f5",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.0017334,
+      "answer": "The answer is: K",
+      "target": "F",
+      "error": false
+    },
+    {
+      "id": "bbeh_1661a22d",
+      "task": "disambiguation qa",
+      "correct": false,
+      "cost": 0.0007558500000000001,
+      "answer": "The answer is: (C)",
+      "target": "(D)",
+      "error": false
+    },
+    {
+      "id": "bbeh_171e0ba1",
+      "task": "linguini",
+      "correct": false,
+      "cost": 0.0014151500000000002,
+      "answer": "The answer is: pap\u00e0h",
+      "target": "pha\u2075\u2075",
+      "error": false
+    },
+    {
+      "id": "bbeh_1845b843",
+      "task": "shuffled objects",
+      "correct": false,
+      "cost": 0.0179212,
+      "answer": "The answer is: D",
+      "target": "(C)",
+      "error": false
+    },
+    {
+      "id": "bbeh_1845eb2e",
+      "task": "nycc",
+      "correct": false,
+      "cost": 0.0007481,
+      "answer": "The answer is: (J)",
+      "target": "(H)",
+      "error": false
+    },
+    {
+      "id": "bbeh_185e8b2f",
+      "task": "temporal sequence",
+      "correct": false,
+      "cost": 0.015531050000000001,
+      "answer": "",
+      "target": "120, 1",
+      "error": false
+    },
+    {
+      "id": "bbeh_1911380a",
+      "task": "boolean expressions",
+      "correct": false,
+      "cost": 0.0018751,
+      "answer": "The answer is: (C)",
+      "target": "(A)",
+      "error": false
+    },
+    {
+      "id": "bbeh_196c4c63",
+      "task": "causal understanding",
+      "correct": true,
+      "cost": 0.0006908,
+      "answer": "The answer is: yes",
+      "target": "Yes",
+      "error": false
+    },
+    {
+      "id": "bbeh_1a6b4018",
+      "task": "linguini",
+      "correct": false,
+      "cost": 0.00244595,
+      "answer": "The answer is: \u025fudu\u02d0lumu\u025fani",
+      "target": "\u025fuduluni",
+      "error": false
+    },
+    {
+      "id": "bbeh_1ab2732c",
+      "task": "word sorting",
+      "correct": false,
+      "cost": 0.0022284,
+      "answer": "The answer is: 11",
+      "target": "4",
+      "error": false
+    },
+    {
+      "id": "bbeh_1ad28f77",
+      "task": "geometric shapes",
+      "correct": false,
+      "cost": 0.0021068000000000003,
+      "answer": "The answer is: E",
+      "target": "(G)",
+      "error": false
+    },
+    {
+      "id": "bbeh_1adeb104",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.01301554,
+      "answer": "The answer is: 0",
+      "target": "1.4",
+      "error": false
+    },
+    {
+      "id": "bbeh_1b1a5c24",
+      "task": "word sorting",
+      "correct": true,
+      "cost": 0.0016990500000000001,
+      "answer": "The answer is: 2",
+      "target": "2",
+      "error": false
+    },
+    {
+      "id": "bbeh_1cef5650",
+      "task": "sarc triples",
+      "correct": true,
+      "cost": 0.0003207,
+      "answer": "The answer is: 1,0,0",
+      "target": "1,0,0",
+      "error": false
+    },
+    {
+      "id": "bbeh_1e53ec43",
+      "task": "dyck languages",
+      "correct": false,
+      "cost": 0.00128435,
+      "answer": "The answer is: 9",
+      "target": "11",
+      "error": false
+    },
+    {
+      "id": "bbeh_1e77adca",
+      "task": "time arithmetic",
+      "correct": true,
+      "cost": 0.008465160000000001,
+      "answer": "The answer is: 05-30-2006",
+      "target": "05-30-2006",
+      "error": false
+    },
+    {
+      "id": "bbeh_1fa8ee25",
+      "task": "sarc triples",
+      "correct": false,
+      "cost": 0.0007547500000000001,
+      "answer": "The answer is: 0,1,1",
+      "target": "0,1,0",
+      "error": false
+    },
+    {
+      "id": "bbeh_1fc2d14f",
+      "task": "nycc",
+      "correct": false,
+      "cost": 0.00082395,
+      "answer": "The answer is: (B)",
+      "target": "(D)",
+      "error": false
+    },
+    {
+      "id": "bbeh_2059fa70",
+      "task": "multistep arithmetic",
+      "correct": false,
+      "cost": 0.0036830000000000005,
+      "answer": "The answer is: 0",
+      "target": "10828",
+      "error": false
+    },
+    {
+      "id": "bbeh_20af8e30",
+      "task": "linguini",
+      "correct": false,
+      "cost": 0.00328675,
+      "answer": "The answer is: a\u015d\u02b7\u0259st\u02b7an",
+      "target": "as\u0259\u015d\u02b7t\u02b7an",
+      "error": false
+    },
+    {
+      "id": "bbeh_2189b4b8",
+      "task": "spatial reasoning",
+      "correct": false,
+      "cost": 0.00040744999999999996,
+      "answer": "The answer is: unknown",
+      "target": "pen",
+      "error": false
+    },
+    {
+      "id": "bbeh_22569a59",
+      "task": "sarc triples",
+      "correct": false,
+      "cost": 0.0007828500000000001,
+      "answer": "The answer is: 0,0,1",
+      "target": "0,0,0",
+      "error": false
+    },
+    {
+      "id": "bbeh_22c079ea",
+      "task": "time arithmetic",
+      "correct": true,
+      "cost": 0.0022273,
+      "answer": "The answer is: 2016-11-07",
+      "target": "2016-11-07",
+      "error": false
+    },
+    {
+      "id": "bbeh_22fa1311",
+      "task": "boardgame qa",
+      "correct": true,
+      "cost": 0.00315955,
+      "answer": "The answer is: unknown",
+      "target": "unknown",
+      "error": false
+    },
+    {
+      "id": "bbeh_23ba67e3",
+      "task": "sportqa",
+      "correct": false,
+      "cost": 0.0020631,
+      "answer": "The answer is: ACD, AB, AD",
+      "target": "AD, BC, AB",
+      "error": false
+    },
+    {
+      "id": "bbeh_2423e394",
+      "task": "linguini",
+      "correct": false,
+      "cost": 0.00284515,
+      "answer": "The answer is: 9000 19",
+      "target": "819",
+      "error": false
+    },
+    {
+      "id": "bbeh_247171cd",
+      "task": "spatial reasoning",
+      "correct": false,
+      "cost": 0.00227345,
+      "answer": "The answer is: unknown",
+      "target": "jeans",
+      "error": false
+    },
+    {
+      "id": "bbeh_2473d39b",
+      "task": "object counting",
+      "correct": true,
+      "cost": 0.01261603,
+      "answer": "The answer is: 991",
+      "target": "991",
+      "error": false
+    },
+    {
+      "id": "bbeh_25f82732",
+      "task": "linguini",
+      "correct": false,
+      "cost": 0.0039295,
+      "answer": "The answer is: riya dekafi",
+      "target": "rilui",
+      "error": false
+    },
+    {
+      "id": "bbeh_28c301a4",
+      "task": "temporal sequence",
+      "correct": false,
+      "cost": 0.0,
+      "answer": "",
+      "target": "65, 1",
+      "error": false
+    },
+    {
+      "id": "bbeh_29157c4f",
+      "task": "causal understanding",
+      "correct": true,
+      "cost": 0.0005897000000000001,
+      "answer": "The answer is: yes",
+      "target": "Yes",
+      "error": false
+    },
+    {
+      "id": "bbeh_2a0ab027",
+      "task": "boolean expressions",
+      "correct": false,
+      "cost": 0.0035157000000000005,
+      "answer": "The answer is: (C)",
+      "target": "(D)",
+      "error": false
+    },
+    {
+      "id": "bbeh_2a22b52f",
+      "task": "temporal sequence",
+      "correct": false,
+      "cost": 0.033181,
+      "answer": "",
+      "target": "210, 1",
+      "error": false
+    },
+    {
+      "id": "bbeh_2a9c2598",
+      "task": "geometric shapes",
+      "correct": false,
+      "cost": 0.0036785500000000005,
+      "answer": "The answer is: H",
+      "target": "(G)",
+      "error": false
+    },
+    {
+      "id": "bbeh_2acc5b9f",
+      "task": "temporal sequence",
+      "correct": false,
+      "cost": 0.014809480000000002,
+      "answer": "",
+      "target": "150, 1",
+      "error": false
+    },
+    {
+      "id": "bbeh_2b07b8d7",
+      "task": "word sorting",
+      "correct": false,
+      "cost": 0.00119015,
+      "answer": "The answer is: 13",
+      "target": "2",
+      "error": false
+    },
+    {
+      "id": "bbeh_2b42b175",
+      "task": "boardgame qa",
+      "correct": false,
+      "cost": 0.0018610000000000002,
+      "answer": "The answer is: unknown",
+      "target": "proved",
+      "error": false
+    },
+    {
+      "id": "bbeh_2cbfe5cf",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.00287915,
+      "answer": "The answer is: unknown",
+      "target": "13",
+      "error": false
+    },
+    {
+      "id": "bbeh_2d68aec3",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.006718900000000001,
+      "answer": "",
+      "target": "391.4",
+      "error": false
+    },
+    {
+      "id": "bbeh_2e598cd6",
+      "task": "causal understanding",
+      "correct": false,
+      "cost": 0.0006706,
+      "answer": "The answer is: No",
+      "target": "Ambiguous",
+      "error": false
+    },
+    {
+      "id": "bbeh_2e931608",
+      "task": "geometric shapes",
+      "correct": false,
+      "cost": 0.005513850000000001,
+      "answer": "The answer is: E",
+      "target": "(H)",
+      "error": false
+    },
+    {
+      "id": "bbeh_2f882f78",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.0035972000000000005,
+      "answer": "The answer is: unknown",
+      "target": "13",
+      "error": false
+    },
+    {
+      "id": "bbeh_303f075e",
+      "task": "nycc",
+      "correct": false,
+      "cost": 0.00041675,
+      "answer": "The answer is: (F)",
+      "target": "(J)",
+      "error": false
+    },
+    {
+      "id": "bbeh_30b286f0",
+      "task": "boolean expressions",
+      "correct": false,
+      "cost": 0.0092748,
+      "answer": "The answer is: (E)",
+      "target": "(B)",
+      "error": false
+    },
+    {
+      "id": "bbeh_311aa246",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.004457050000000001,
+      "answer": "The answer is: BCFGJ",
+      "target": "G",
+      "error": false
+    },
+    {
+      "id": "bbeh_32cd9439",
+      "task": "causal understanding",
+      "correct": false,
+      "cost": 0.00102365,
+      "answer": "The answer is: yes",
+      "target": "No",
+      "error": false
+    },
+    {
+      "id": "bbeh_32d10e68",
+      "task": "zebra puzzles",
+      "correct": false,
+      "cost": 0.01034254,
+      "answer": "",
+      "target": "1",
+      "error": false
+    },
+    {
+      "id": "bbeh_33a48fbc",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.0020605,
+      "answer": "The answer is: unknown",
+      "target": "25",
+      "error": false
+    },
+    {
+      "id": "bbeh_34aedc94",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.0024185000000000005,
+      "answer": "The answer is: 0",
+      "target": "18.5",
+      "error": false
+    },
+    {
+      "id": "bbeh_350ba44a",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.00360865,
+      "answer": "The answer is: 12.50",
+      "target": "5.84",
+      "error": false
+    },
+    {
+      "id": "bbeh_3559642f",
+      "task": "movie recommendation",
+      "correct": true,
+      "cost": 0.000804,
+      "answer": "The answer is: (A)",
+      "target": "(A)",
+      "error": false
+    },
+    {
+      "id": "bbeh_3567fe6f",
+      "task": "zebra puzzles",
+      "correct": false,
+      "cost": 0.00113675,
+      "answer": "The answer is: 4",
+      "target": "2",
+      "error": false
+    },
+    {
+      "id": "bbeh_35ef75bd",
+      "task": "boardgame qa",
+      "correct": false,
+      "cost": 0.0063752,
+      "answer": "The answer is: unknown",
+      "target": "proved",
+      "error": false
+    },
+    {
+      "id": "bbeh_3603559a",
+      "task": "spatial reasoning",
+      "correct": false,
+      "cost": 0.0017977,
+      "answer": "The answer is: unknown",
+      "target": "spoon",
+      "error": false
+    },
+    {
+      "id": "bbeh_363fadd6",
+      "task": "linguini",
+      "correct": false,
+      "cost": 0.004955600000000001,
+      "answer": "The answer is: abang hat\u00e1ng",
+      "target": "netama",
+      "error": false
+    },
+    {
+      "id": "bbeh_36980fd8",
+      "task": "causal understanding",
+      "correct": true,
+      "cost": 0.0008965,
+      "answer": "The answer is: yes",
+      "target": "Yes",
+      "error": false
+    },
+    {
+      "id": "bbeh_36cfd501",
+      "task": "word sorting",
+      "correct": true,
+      "cost": 0.0019156000000000004,
+      "answer": "The answer is: 5",
+      "target": "5",
+      "error": false
+    },
+    {
+      "id": "bbeh_373ab872",
+      "task": "boolean expressions",
+      "correct": false,
+      "cost": 0.00906641,
+      "answer": "The answer is: (D)",
+      "target": "(E)",
+      "error": false
+    },
+    {
+      "id": "bbeh_37bd902a",
+      "task": "sarc triples",
+      "correct": false,
+      "cost": 0.00044730000000000003,
+      "answer": "The answer is: 1,0,1",
+      "target": "1,1,0",
+      "error": false
+    },
+    {
+      "id": "bbeh_382a89f9",
+      "task": "object counting",
+      "correct": false,
+      "cost": 0.008295029999999998,
+      "answer": "The answer is: 3019",
+      "target": "1240",
+      "error": false
+    },
+    {
+      "id": "bbeh_384383a3",
+      "task": "time arithmetic",
+      "correct": true,
+      "cost": 0.00591225,
+      "answer": "The answer is: []",
+      "target": "[]",
+      "error": false
+    },
+    {
+      "id": "bbeh_3864a74e",
+      "task": "sarc triples",
+      "correct": false,
+      "cost": 0.0004242,
+      "answer": "The answer is: 0,0,1",
+      "target": "1,0,0",
+      "error": false
+    },
+    {
+      "id": "bbeh_3887ff6a",
+      "task": "web of lies",
+      "correct": false,
+      "cost": 0.008483000000000001,
+      "answer": "",
+      "target": "yes, unknown, no",
+      "error": false
+    },
+    {
+      "id": "bbeh_38887c5d",
+      "task": "spatial reasoning",
+      "correct": false,
+      "cost": 0.0033888000000000004,
+      "answer": "The answer is: unknown",
+      "target": "article, axe, floor, hardware, law, map, recommendation, root, sheep, washer",
+      "error": false
+    },
+    {
+      "id": "bbeh_388bad82",
+      "task": "movie recommendation",
+      "correct": true,
+      "cost": 0.0005962000000000001,
+      "answer": "The answer is: H",
+      "target": "(H)",
+      "error": false
+    },
+    {
+      "id": "bbeh_38c24ba4",
+      "task": "web of lies",
+      "correct": false,
+      "cost": 0.0019128,
+      "answer": "The answer is: unknown, unknown, unknown",
+      "target": "no, no, yes",
+      "error": false
+    },
+    {
+      "id": "bbeh_39734b77",
+      "task": "boolean expressions",
+      "correct": true,
+      "cost": 0.0023386500000000003,
+      "answer": "The answer is: (E)",
+      "target": "(E)",
+      "error": false
+    },
+    {
+      "id": "bbeh_39dc649c",
+      "task": "web of lies",
+      "correct": false,
+      "cost": 0.01385507,
+      "answer": "The answer is: <unknown, unknown, unknown>",
+      "target": "yes, no, yes",
+      "error": false
+    },
+    {
+      "id": "bbeh_3a0de335",
+      "task": "sarc triples",
+      "correct": false,
+      "cost": 0.00042325,
+      "answer": "The answer is: 1,1,1",
+      "target": "1,0,1",
+      "error": false
+    },
+    {
+      "id": "bbeh_3a3a8b45",
+      "task": "sarc triples",
+      "correct": false,
+      "cost": 0.0005248500000000001,
+      "answer": "The answer is: 1,1,0",
+      "target": "1,0,0",
+      "error": false
+    },
+    {
+      "id": "bbeh_3ae71300",
+      "task": "zebra puzzles",
+      "correct": false,
+      "cost": 0.006765,
+      "answer": "",
+      "target": "6",
+      "error": false
+    },
+    {
+      "id": "bbeh_3aec3849",
+      "task": "nycc",
+      "correct": false,
+      "cost": 0.00059565,
+      "answer": "The answer is: (B)",
+      "target": "(I)",
+      "error": false
+    },
+    {
+      "id": "bbeh_3bfef6f9",
+      "task": "disambiguation qa",
+      "correct": false,
+      "cost": 0.00110435,
+      "answer": "The answer is: (E)",
+      "target": "(D)",
+      "error": false
+    },
+    {
+      "id": "bbeh_3c69d3d9",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.0013275000000000001,
+      "answer": "The answer is: K",
+      "target": "J",
+      "error": false
+    },
+    {
+      "id": "bbeh_3eb3633a",
+      "task": "linguini",
+      "correct": false,
+      "cost": 0.0023879500000000002,
+      "answer": "The answer is: sawt\u02b7\u0259n",
+      "target": "\u0161\u02bc\u0259wt\u02b7an",
+      "error": false
+    },
+    {
+      "id": "bbeh_3ef913c3",
+      "task": "word sorting",
+      "correct": true,
+      "cost": 0.0013192500000000001,
+      "answer": "The answer is: 2",
+      "target": "2",
+      "error": false
+    },
+    {
+      "id": "bbeh_3f18fb06",
+      "task": "time arithmetic",
+      "correct": true,
+      "cost": 0.0043744000000000005,
+      "answer": "The answer is: [Dan, Kyle, Jenny, Jason, Lily]",
+      "target": "[Dan, Kyle, Jenny, Jason, Lily]",
+      "error": false
+    },
+    {
+      "id": "bbeh_3f441063",
+      "task": "movie recommendation",
+      "correct": true,
+      "cost": 0.0010132,
+      "answer": "The answer is: (F)",
+      "target": "(F)",
+      "error": false
+    },
+    {
+      "id": "bbeh_3fb8f14f",
+      "task": "word sorting",
+      "correct": true,
+      "cost": 0.0018467300000000002,
+      "answer": "The answer is: 9",
+      "target": "9",
+      "error": false
+    },
+    {
+      "id": "bbeh_40006ff0",
+      "task": "object counting",
+      "correct": false,
+      "cost": 0.004539950000000001,
+      "answer": "The answer is: 888",
+      "target": "965",
+      "error": false
+    },
+    {
+      "id": "bbeh_400c3040",
+      "task": "shuffled objects",
+      "correct": false,
+      "cost": 0.012724460000000002,
+      "answer": "The answer is: (F)",
+      "target": "(E)",
+      "error": false
+    },
+    {
+      "id": "bbeh_4051e176",
+      "task": "shuffled objects",
+      "correct": true,
+      "cost": 0.00924051,
+      "answer": "The answer is: (D)",
+      "target": "(D)",
+      "error": false
+    },
+    {
+      "id": "bbeh_40a3dd27",
+      "task": "time arithmetic",
+      "correct": true,
+      "cost": 0.00269272,
+      "answer": "The answer is: unanswerable",
+      "target": "unanswerable",
+      "error": false
+    },
+    {
+      "id": "bbeh_40c25b5e",
+      "task": "disambiguation qa",
+      "correct": true,
+      "cost": 0.0025932000000000004,
+      "answer": "The answer is: (E)",
+      "target": "(E)",
+      "error": false
+    },
+    {
+      "id": "bbeh_41038dbf",
+      "task": "linguini",
+      "correct": false,
+      "cost": 0.0031347700000000003,
+      "answer": "The answer is: see; say, tell; open (it); it chose (it); I saw (it); I plant (it); it was trapped; I leap; it is being sewn, woven; I was bathed",
+      "target": "ah\u0268ka",
+      "error": false
+    },
+    {
+      "id": "bbeh_4114cdf2",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.00732899,
+      "answer": "The answer is: K",
+      "target": "B",
+      "error": false
+    },
+    {
+      "id": "bbeh_41362d79",
+      "task": "disambiguation qa",
+      "correct": true,
+      "cost": 0.0008719,
+      "answer": "The answer is: (B)",
+      "target": "(B)",
+      "error": false
+    },
+    {
+      "id": "bbeh_418cb31b",
+      "task": "shuffled objects",
+      "correct": false,
+      "cost": 0.009718420000000002,
+      "answer": "The answer is: (f)",
+      "target": "(G)",
+      "error": false
+    },
+    {
+      "id": "bbeh_418f9428",
+      "task": "disambiguation qa",
+      "correct": false,
+      "cost": 0.0006176,
+      "answer": "The answer is: (a)",
+      "target": "(E)",
+      "error": false
+    },
+    {
+      "id": "bbeh_42cc4ebf",
+      "task": "word sorting",
+      "correct": true,
+      "cost": 0.00335583,
+      "answer": "The answer is: administer,aeneid,phosphorescent,pristine,delhi,decadent,dey,disqualifications,gradate,grim,jacky,littleneck,manipulations,modifications,coachman,complications,shrunk,sinh,systemwide,tasting,telecommunications,thrown,torpedo,verdict",
+      "target": "administer, aeneid, phosphorescent, pristine, delhi, decadent, dey, disqualifications, gradate, grim, jacky, littleneck, manipulations, modifications, coachman, complications, shrunk, sinh, systemwide, tasting, telecommunications, thrown, torpedo, verdict",
+      "error": false
+    },
+    {
+      "id": "bbeh_43deb3e0",
+      "task": "sportqa",
+      "correct": false,
+      "cost": 0.0005297500000000001,
+      "answer": "The answer is: ABC, ABCD, ABCD",
+      "target": "ABC, AB, ABCD",
+      "error": false
+    },
+    {
+      "id": "bbeh_447db1ca",
+      "task": "sportqa",
+      "correct": false,
+      "cost": 0.0008336500000000001,
+      "answer": "The answer is: A, A, C",
+      "target": "C, A, C",
+      "error": false
+    },
+    {
+      "id": "bbeh_44b44379",
+      "task": "dyck languages",
+      "correct": true,
+      "cost": 0.00060505,
+      "answer": "The answer is: 11",
+      "target": "11",
+      "error": false
+    },
+    {
+      "id": "bbeh_44bc97ed",
+      "task": "nycc",
+      "correct": false,
+      "cost": 0.0005173500000000001,
+      "answer": "The answer is: (b)",
+      "target": "(I)",
+      "error": false
+    },
+    {
+      "id": "bbeh_45bcc412",
+      "task": "boolean expressions",
+      "correct": true,
+      "cost": 0.005507799999999999,
+      "answer": "The answer is: A",
+      "target": "(A)",
+      "error": false
+    },
+    {
+      "id": "bbeh_4653df60",
+      "task": "boolean expressions",
+      "correct": true,
+      "cost": 0.0038391500000000004,
+      "answer": "The answer is: (A)",
+      "target": "(A)",
+      "error": false
+    },
+    {
+      "id": "bbeh_46698487",
+      "task": "web of lies",
+      "correct": false,
+      "cost": 0.0112756,
+      "answer": "The answer is: <unknown, unknown, unknown>",
+      "target": "yes, unknown, yes",
+      "error": false
+    },
+    {
+      "id": "bbeh_47154f4e",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.0032642,
+      "answer": "The answer is: K",
+      "target": "D",
+      "error": false
+    },
+    {
+      "id": "bbeh_47710070",
+      "task": "object counting",
+      "correct": true,
+      "cost": 0.01026969,
+      "answer": "The answer is: 1267",
+      "target": "1267",
+      "error": false
+    },
+    {
+      "id": "bbeh_47b6a86b",
+      "task": "boolean expressions",
+      "correct": false,
+      "cost": 0.00663585,
+      "answer": "",
+      "target": "(D)",
+      "error": false
+    },
+    {
+      "id": "bbeh_48a8ff62",
+      "task": "linguini",
+      "correct": true,
+      "cost": 0.0039440000000000005,
+      "answer": "The answer is: kas ji\u0142aka\u2019pa",
+      "target": "kas ji\u0142aka\u2019pa",
+      "error": false
+    },
+    {
+      "id": "bbeh_490e5c90",
+      "task": "movie recommendation",
+      "correct": true,
+      "cost": 0.0008040500000000001,
+      "answer": "The answer is: (c)",
+      "target": "(C)",
+      "error": false
+    },
+    {
+      "id": "bbeh_49e1550d",
+      "task": "time arithmetic",
+      "correct": false,
+      "cost": 0.00661487,
+      "answer": "The answer is: [\"Jenny\", \"Emma\", \"Dan\", \"Jason\", \"Kyle\"]",
+      "target": "[Jenny, Emma, Dan, Jason, Kyle]",
+      "error": false
+    },
+    {
+      "id": "bbeh_4c17d3e0",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.0041411500000000006,
+      "answer": "The answer is: K",
+      "target": "C",
+      "error": false
+    },
+    {
+      "id": "bbeh_4c5083cf",
+      "task": "sportqa",
+      "correct": false,
+      "cost": 0.0009115500000000001,
+      "answer": "The answer is: AB, ABCD, AB",
+      "target": "ABC, ABCD, AB",
+      "error": false
+    },
+    {
+      "id": "bbeh_4d1ce360",
+      "task": "nycc",
+      "correct": false,
+      "cost": 0.0005177000000000001,
+      "answer": "The answer is: (B)",
+      "target": "(G)",
+      "error": false
+    },
+    {
+      "id": "bbeh_4d3fbb49",
+      "task": "shuffled objects",
+      "correct": false,
+      "cost": 0.0041010000000000005,
+      "answer": "The answer is: (C)",
+      "target": "(G)",
+      "error": false
+    },
+    {
+      "id": "bbeh_4d64513f",
+      "task": "object counting",
+      "correct": false,
+      "cost": 0.00919648,
+      "answer": "The answer is: 1220",
+      "target": "1217",
+      "error": false
+    },
+    {
+      "id": "bbeh_4dc5c683",
+      "task": "shuffled objects",
+      "correct": false,
+      "cost": 0.012167440000000002,
+      "answer": "The answer is: (D)",
+      "target": "(B)",
+      "error": false
+    },
+    {
+      "id": "bbeh_4e387eac",
+      "task": "zebra puzzles",
+      "correct": false,
+      "cost": 0.0022623,
+      "answer": "The answer is: 3",
+      "target": "5",
+      "error": false
+    },
+    {
+      "id": "bbeh_4e91ff4f",
+      "task": "web of lies",
+      "correct": false,
+      "cost": 0.00337005,
+      "answer": "The answer is: <unknown, unknown, unknown>",
+      "target": "no, no, yes",
+      "error": false
+    },
+    {
+      "id": "bbeh_4f2bf11f",
+      "task": "sportqa",
+      "correct": false,
+      "cost": 0.0010892000000000002,
+      "answer": "The answer is: A, A, B",
+      "target": "AC, A, B",
+      "error": false
+    },
+    {
+      "id": "bbeh_503df8b5",
+      "task": "multistep arithmetic",
+      "correct": false,
+      "cost": 0.0015827,
+      "answer": "The answer is: 0",
+      "target": "-225",
+      "error": false
+    },
+    {
+      "id": "bbeh_50a50adc",
+      "task": "zebra puzzles",
+      "correct": false,
+      "cost": 0.01642671,
+      "answer": "",
+      "target": "6",
+      "error": false
+    },
+    {
+      "id": "bbeh_539b917f",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.005731400000000001,
+      "answer": "The answer is: BJ",
+      "target": "E",
+      "error": false
+    },
+    {
+      "id": "bbeh_53ccbce0",
+      "task": "disambiguation qa",
+      "correct": false,
+      "cost": 0.00102775,
+      "answer": "The answer is: (B)",
+      "target": "(A)",
+      "error": false
+    },
+    {
+      "id": "bbeh_54408d8a",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.006234580000000001,
+      "answer": "The answer is: unknown",
+      "target": "38",
+      "error": false
+    },
+    {
+      "id": "bbeh_557d3794",
+      "task": "temporal sequence",
+      "correct": false,
+      "cost": 0.017958000000000002,
+      "answer": "The answer is: 0, 0",
+      "target": "90, 1",
+      "error": false
+    },
+    {
+      "id": "bbeh_56056e8e",
+      "task": "object counting",
+      "correct": false,
+      "cost": 0.02098509,
+      "answer": "",
+      "target": "1471",
+      "error": false
+    },
+    {
+      "id": "bbeh_5622a53a",
+      "task": "multistep arithmetic",
+      "correct": false,
+      "cost": 0.00188965,
+      "answer": "The answer is: 0",
+      "target": "-147",
+      "error": false
+    },
+    {
+      "id": "bbeh_566ca0ba",
+      "task": "geometric shapes",
+      "correct": false,
+      "cost": 0.00422815,
+      "answer": "The answer is: B",
+      "target": "(H)",
+      "error": false
+    },
+    {
+      "id": "bbeh_5746396c",
+      "task": "sportqa",
+      "correct": false,
+      "cost": 0.00044995,
+      "answer": "The answer is: A, B, C",
+      "target": "A, B, A",
+      "error": false
+    },
+    {
+      "id": "bbeh_578714a7",
+      "task": "disambiguation qa",
+      "correct": true,
+      "cost": 0.0010526,
+      "answer": "The answer is: (B)",
+      "target": "(B)",
+      "error": false
+    },
+    {
+      "id": "bbeh_579940a4",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.0016905000000000002,
+      "answer": "The answer is: K",
+      "target": "C",
+      "error": false
+    },
+    {
+      "id": "bbeh_57fc6691",
+      "task": "spatial reasoning",
+      "correct": false,
+      "cost": 0.0006256,
+      "answer": "The answer is: unknown",
+      "target": "cucumber",
+      "error": false
+    },
+    {
+      "id": "bbeh_57ff14ee",
+      "task": "zebra puzzles",
+      "correct": true,
+      "cost": 0.004704250000000001,
+      "answer": "The answer is: 7",
+      "target": "7",
+      "error": false
+    },
+    {
+      "id": "bbeh_59e283d1",
+      "task": "zebra puzzles",
+      "correct": true,
+      "cost": 0.00221912,
+      "answer": "The answer is: 1",
+      "target": "1",
+      "error": false
+    },
+    {
+      "id": "bbeh_5a9395e2",
+      "task": "boolean expressions",
+      "correct": true,
+      "cost": 0.008855779999999999,
+      "answer": "The answer is: B",
+      "target": "(B)",
+      "error": false
+    },
+    {
+      "id": "bbeh_5b7dc3f6",
+      "task": "causal understanding",
+      "correct": false,
+      "cost": 0.0006727,
+      "answer": "The answer is: No",
+      "target": "Yes",
+      "error": false
+    },
+    {
+      "id": "bbeh_5c1bb3e1",
+      "task": "linguini",
+      "correct": false,
+      "cost": 0.0016502,
+      "answer": "The answer is: k\u0254\u0300\u00e1nj\u00e0-l\u00e8\u014b\u025b\u030c \u00e1 ny\u00ecm\u00ec\u00ec\u025b\u030c",
+      "target": "k\u0254\u0300\u00e1nj\u00e0\u025b\u030c \u00e1 ny\u00ecm\u00ec\u00ec\u025b\u030c",
+      "error": false
+    },
+    {
+      "id": "bbeh_5c7e4389",
+      "task": "multistep arithmetic",
+      "correct": false,
+      "cost": 0.0020902,
+      "answer": "The answer is: 0",
+      "target": "-58396",
+      "error": false
+    },
+    {
+      "id": "bbeh_5c8ed505",
+      "task": "boardgame qa",
+      "correct": true,
+      "cost": 0.00521056,
+      "answer": "The answer is: disproved",
+      "target": "disproved",
+      "error": false
+    },
+    {
+      "id": "bbeh_5d8193a0",
+      "task": "shuffled objects",
+      "correct": false,
+      "cost": 0.005553300000000001,
+      "answer": "The answer is: (C)",
+      "target": "(A)",
+      "error": false
+    },
+    {
+      "id": "bbeh_5db0cdbb",
+      "task": "geometric shapes",
+      "correct": false,
+      "cost": 0.0034007000000000004,
+      "answer": "The answer is: A",
+      "target": "(B)",
+      "error": false
+    },
+    {
+      "id": "bbeh_5dd84b5d",
+      "task": "geometric shapes",
+      "correct": true,
+      "cost": 0.00340545,
+      "answer": "The answer is: E",
+      "target": "(E)",
+      "error": false
+    },
+    {
+      "id": "bbeh_5e8e45c3",
+      "task": "time arithmetic",
+      "correct": false,
+      "cost": 0.0050871,
+      "answer": "The answer is: [Saturday]",
+      "target": "[friday]",
+      "error": false
+    },
+    {
+      "id": "bbeh_5ed74ff7",
+      "task": "web of lies",
+      "correct": false,
+      "cost": 0.00979271,
+      "answer": "The answer is: unknown, unknown, yes",
+      "target": "no, unknown, no",
+      "error": false
+    },
+    {
+      "id": "bbeh_5ee824ed",
+      "task": "sarc triples",
+      "correct": false,
+      "cost": 0.000319,
+      "answer": "The answer is: 1,1,0",
+      "target": "1,0,0",
+      "error": false
+    },
+    {
+      "id": "bbeh_5ee999f4",
+      "task": "multistep arithmetic",
+      "correct": false,
+      "cost": 0.0020672,
+      "answer": "The answer is: 0",
+      "target": "-25200",
+      "error": false
+    },
+    {
+      "id": "bbeh_61128a94",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.014845549999999999,
+      "answer": "The answer is: 182.00",
+      "target": "212.0",
+      "error": false
+    },
+    {
+      "id": "bbeh_62315406",
+      "task": "time arithmetic",
+      "correct": true,
+      "cost": 0.0033110000000000006,
+      "answer": "The answer is: unanswerable",
+      "target": "unanswerable",
+      "error": false
+    },
+    {
+      "id": "bbeh_62ac845a",
+      "task": "boolean expressions",
+      "correct": false,
+      "cost": 0.0025419,
+      "answer": "The answer is: (c)",
+      "target": "(A)",
+      "error": false
+    },
+    {
+      "id": "bbeh_62c7072a",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.01018185,
+      "answer": "The answer is: 173.00",
+      "target": "237.0",
+      "error": false
+    },
+    {
+      "id": "bbeh_62f6a9b0",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.0016703500000000001,
+      "answer": "The answer is: unknown",
+      "target": "20",
+      "error": false
+    },
+    {
+      "id": "bbeh_63c050d9",
+      "task": "time arithmetic",
+      "correct": true,
+      "cost": 0.0043016,
+      "answer": "The answer is: 04-22-2021",
+      "target": "04-22-2021",
+      "error": false
+    },
+    {
+      "id": "bbeh_63ef5a36",
+      "task": "zebra puzzles",
+      "correct": false,
+      "cost": 0.006667650000000001,
+      "answer": "",
+      "target": "4",
+      "error": false
+    },
+    {
+      "id": "bbeh_646fac30",
+      "task": "boardgame qa",
+      "correct": false,
+      "cost": 0.0011352500000000002,
+      "answer": "The answer is: unknown",
+      "target": "proved",
+      "error": false
+    },
+    {
+      "id": "bbeh_65561f3b",
+      "task": "time arithmetic",
+      "correct": true,
+      "cost": 0.0014943,
+      "answer": "The answer is: unanswerable",
+      "target": "unanswerable",
+      "error": false
+    },
+    {
+      "id": "bbeh_656de210",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.0028066500000000004,
+      "answer": "The answer is: K",
+      "target": "G",
+      "error": false
+    },
+    {
+      "id": "bbeh_65c167b1",
+      "task": "sarc triples",
+      "correct": false,
+      "cost": 0.00039645,
+      "answer": "The answer is: 1,1,0",
+      "target": "0,1,0",
+      "error": false
+    },
+    {
+      "id": "bbeh_660fc15c",
+      "task": "movie recommendation",
+      "correct": true,
+      "cost": 0.0012868,
+      "answer": "The answer is: J",
+      "target": "(J)",
+      "error": false
+    },
+    {
+      "id": "bbeh_66193bb5",
+      "task": "dyck languages",
+      "correct": true,
+      "cost": 0.0015464500000000002,
+      "answer": "The answer is: 12",
+      "target": "12",
+      "error": false
+    },
+    {
+      "id": "bbeh_66b9a6a0",
+      "task": "dyck languages",
+      "correct": true,
+      "cost": 0.0021209500000000004,
+      "answer": "The answer is: 19",
+      "target": "19",
+      "error": false
+    },
+    {
+      "id": "bbeh_67690b77",
+      "task": "disambiguation qa",
+      "correct": false,
+      "cost": 0.0026224,
+      "answer": "The answer is: (A)",
+      "target": "(B)",
+      "error": false
+    },
+    {
+      "id": "bbeh_6822dd97",
+      "task": "boolean expressions",
+      "correct": false,
+      "cost": 0.004204,
+      "answer": "The answer is: (C)",
+      "target": "(D)",
+      "error": false
+    },
+    {
+      "id": "bbeh_691a3d79",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.0036649,
+      "answer": "The answer is: K",
+      "target": "H",
+      "error": false
+    },
+    {
+      "id": "bbeh_6a9f2155",
+      "task": "web of lies",
+      "correct": false,
+      "cost": 0.0075172,
+      "answer": "The answer is: <unknown, unknown, unknown>",
+      "target": "yes, yes, yes",
+      "error": false
+    },
+    {
+      "id": "bbeh_6acd9393",
+      "task": "nycc",
+      "correct": false,
+      "cost": 0.000467,
+      "answer": "The answer is: (B)",
+      "target": "(C)",
+      "error": false
+    },
+    {
+      "id": "bbeh_6b72366c",
+      "task": "temporal sequence",
+      "correct": false,
+      "cost": 0.0130937,
+      "answer": "The answer is: 20, 1",
+      "target": "120, 1",
+      "error": false
+    },
+    {
+      "id": "bbeh_6b867a71",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.001693,
+      "answer": "The answer is: K",
+      "target": "C",
+      "error": false
+    },
+    {
+      "id": "bbeh_6b9076e5",
+      "task": "object counting",
+      "correct": true,
+      "cost": 0.0046429,
+      "answer": "The answer is: 1703",
+      "target": "1703",
+      "error": false
+    },
+    {
+      "id": "bbeh_6bd93362",
+      "task": "sportqa",
+      "correct": true,
+      "cost": 0.00050325,
+      "answer": "The answer is: C, B, C",
+      "target": "C, B, C",
+      "error": false
+    },
+    {
+      "id": "bbeh_6be65607",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.0035898,
+      "answer": "The answer is: K",
+      "target": "B",
+      "error": false
+    },
+    {
+      "id": "bbeh_6be9ab6d",
+      "task": "multistep arithmetic",
+      "correct": false,
+      "cost": 0.00224655,
+      "answer": "The answer is: 0",
+      "target": "120",
+      "error": false
+    },
+    {
+      "id": "bbeh_6c4f4631",
+      "task": "temporal sequence",
+      "correct": false,
+      "cost": 0.01525419,
+      "answer": "The answer is: 75, 2",
+      "target": "75, 1",
+      "error": false
+    },
+    {
+      "id": "bbeh_6d04dcca",
+      "task": "multistep arithmetic",
+      "correct": false,
+      "cost": 0.0018907000000000001,
+      "answer": "The answer is: 0",
+      "target": "253",
+      "error": false
+    },
+    {
+      "id": "bbeh_6d7dfb02",
+      "task": "shuffled objects",
+      "correct": false,
+      "cost": 0.0034932,
+      "answer": "The answer is: (B)",
+      "target": "(E)",
+      "error": false
+    },
+    {
+      "id": "bbeh_6d8b523a",
+      "task": "sarc triples",
+      "correct": false,
+      "cost": 0.0006529500000000001,
+      "answer": "The answer is: 1,0,1",
+      "target": "0,0,1",
+      "error": false
+    },
+    {
+      "id": "bbeh_6e605763",
+      "task": "sportqa",
+      "correct": false,
+      "cost": 0.00093565,
+      "answer": "The answer is: ABC, ABC, AC",
+      "target": "AB, ABC, ABC",
+      "error": false
+    },
+    {
+      "id": "bbeh_6e6d7f15",
+      "task": "word sorting",
+      "correct": true,
+      "cost": 0.0030681000000000003,
+      "answer": "The answer is: 4",
+      "target": "4",
+      "error": false
+    },
+    {
+      "id": "bbeh_6e95fd18",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.00275785,
+      "answer": "The answer is: unknown",
+      "target": "16",
+      "error": false
+    },
+    {
+      "id": "bbeh_6ec6c693",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.0059258,
+      "answer": "The answer is: unknown",
+      "target": "11",
+      "error": false
+    },
+    {
+      "id": "bbeh_6efad58f",
+      "task": "object counting",
+      "correct": false,
+      "cost": 0.01614393,
+      "answer": "The answer is: 881",
+      "target": "259",
+      "error": false
+    },
+    {
+      "id": "bbeh_6f230477",
+      "task": "disambiguation qa",
+      "correct": false,
+      "cost": 0.0016936000000000002,
+      "answer": "The answer is: (D)",
+      "target": "(E)",
+      "error": false
+    },
+    {
+      "id": "bbeh_6f5e34df",
+      "task": "causal understanding",
+      "correct": true,
+      "cost": 0.00042515,
+      "answer": "The answer is: No",
+      "target": "No",
+      "error": false
+    },
+    {
+      "id": "bbeh_6fa6b8d1",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.01776051,
+      "answer": "",
+      "target": "22",
+      "error": false
+    },
+    {
+      "id": "bbeh_6fe0ae8a",
+      "task": "object counting",
+      "correct": false,
+      "cost": 0.00732554,
+      "answer": "The answer is: 1137",
+      "target": "1718",
+      "error": false
+    },
+    {
+      "id": "bbeh_72169abb",
+      "task": "word sorting",
+      "correct": true,
+      "cost": 0.0021025,
+      "answer": "The answer is: gnome,councilwomen,catawba,classifications,jungian,photolysis,sagging,transfusable,transformations,almagest,archenemy,limpid,investigations,individualization,representativeness,decrement,milt",
+      "target": "gnome, councilwomen, catawba, classifications, jungian, photolysis, sagging, transfusable, transformations, almagest, archenemy, limpid, investigations, individualization, representativeness, decrement, milt",
+      "error": false
+    },
+    {
+      "id": "bbeh_732de045",
+      "task": "zebra puzzles",
+      "correct": false,
+      "cost": 0.0013606,
+      "answer": "The answer is: 4",
+      "target": "3",
+      "error": false
+    },
+    {
+      "id": "bbeh_735c46ef",
+      "task": "multistep arithmetic",
+      "correct": false,
+      "cost": 0.0068659,
+      "answer": "The answer is: 0",
+      "target": "10086",
+      "error": false
+    },
+    {
+      "id": "bbeh_742b1550",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.0111594,
+      "answer": "The answer is: unknown",
+      "target": "23",
+      "error": false
+    },
+    {
+      "id": "bbeh_758ac85a",
+      "task": "dyck languages",
+      "correct": true,
+      "cost": 0.00063555,
+      "answer": "The answer is: 8",
+      "target": "8",
+      "error": false
+    },
+    {
+      "id": "bbeh_76a0d66a",
+      "task": "object counting",
+      "correct": false,
+      "cost": 0.006847530000000001,
+      "answer": "The answer is: 2312",
+      "target": "1194",
+      "error": false
+    },
+    {
+      "id": "bbeh_77812892",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.00665865,
+      "answer": "",
+      "target": "17",
+      "error": false
+    },
+    {
+      "id": "bbeh_77cbc896",
+      "task": "geometric shapes",
+      "correct": false,
+      "cost": 0.00535135,
+      "answer": "The answer is: (B)",
+      "target": "(F)",
+      "error": false
+    },
+    {
+      "id": "bbeh_78f78d00",
+      "task": "time arithmetic",
+      "correct": true,
+      "cost": 0.0030691000000000004,
+      "answer": "The answer is: unanswerable",
+      "target": "unanswerable",
+      "error": false
+    },
+    {
+      "id": "bbeh_796c5da6",
+      "task": "linguini",
+      "correct": false,
+      "cost": 0.0029053000000000004,
+      "answer": "The answer is: anowip wiwis atug baigas",
+      "target": "araman atug baigas",
+      "error": false
+    },
+    {
+      "id": "bbeh_799ea2d9",
+      "task": "shuffled objects",
+      "correct": false,
+      "cost": 0.01310354,
+      "answer": "The answer is: A",
+      "target": "(B)",
+      "error": false
+    },
+    {
+      "id": "bbeh_7a854809",
+      "task": "boolean expressions",
+      "correct": false,
+      "cost": 0.0023412000000000003,
+      "answer": "The answer is: (D)",
+      "target": "(B)",
+      "error": false
+    },
+    {
+      "id": "bbeh_7ac01c92",
+      "task": "boardgame qa",
+      "correct": false,
+      "cost": 0.0025038000000000005,
+      "answer": "The answer is: unknown",
+      "target": "disproved",
+      "error": false
+    },
+    {
+      "id": "bbeh_7af30c6f",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.0067384,
+      "answer": "",
+      "target": "6.0",
+      "error": false
+    },
+    {
+      "id": "bbeh_7b3a0a7f",
+      "task": "boardgame qa",
+      "correct": false,
+      "cost": 0.0026501500000000004,
+      "answer": "The answer is: unknown",
+      "target": "disproved",
+      "error": false
+    },
+    {
+      "id": "bbeh_7b498410",
+      "task": "boardgame qa",
+      "correct": true,
+      "cost": 0.00291555,
+      "answer": "The answer is: unknown",
+      "target": "unknown",
+      "error": false
+    },
+    {
+      "id": "bbeh_7c77c15d",
+      "task": "spatial reasoning",
+      "correct": false,
+      "cost": 0.0009578500000000001,
+      "answer": "The answer is: unknown",
+      "target": "carrot",
+      "error": false
+    },
+    {
+      "id": "bbeh_7d4368fa",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.0114552,
+      "answer": "The answer is: 0.00",
+      "target": "7.35",
+      "error": false
+    },
+    {
+      "id": "bbeh_7da9db5e",
+      "task": "disambiguation qa",
+      "correct": false,
+      "cost": 0.0013854000000000002,
+      "answer": "The answer is: (e)",
+      "target": "(B)",
+      "error": false
+    },
+    {
+      "id": "bbeh_7e4850fe",
+      "task": "dyck languages",
+      "correct": false,
+      "cost": 0.007193550000000001,
+      "answer": "The answer is: 47",
+      "target": "16",
+      "error": false
+    },
+    {
+      "id": "bbeh_80434e43",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.006715700000000001,
+      "answer": "",
+      "target": "419.0",
+      "error": false
+    },
+    {
+      "id": "bbeh_805bfca5",
+      "task": "nycc",
+      "correct": false,
+      "cost": 0.0009272000000000001,
+      "answer": "The answer is: B",
+      "target": "(C)",
+      "error": false
+    },
+    {
+      "id": "bbeh_808b0c34",
+      "task": "dyck languages",
+      "correct": false,
+      "cost": 0.006645210000000001,
+      "answer": "The answer is: 15",
+      "target": "10",
+      "error": false
+    },
+    {
+      "id": "bbeh_810d18f9",
+      "task": "time arithmetic",
+      "correct": true,
+      "cost": 0.0042383,
+      "answer": "The answer is: same_day, 06:24:24",
+      "target": "same_day, 06:24:24",
+      "error": false
+    },
+    {
+      "id": "bbeh_815a3a34",
+      "task": "geometric shapes",
+      "correct": false,
+      "cost": 0.0051084799999999994,
+      "answer": "The answer is: (A)",
+      "target": "(J)",
+      "error": false
+    },
+    {
+      "id": "bbeh_81d2b7db",
+      "task": "dyck languages",
+      "correct": false,
+      "cost": 0.001368,
+      "answer": "The answer is: 21",
+      "target": "15",
+      "error": false
+    },
+    {
+      "id": "bbeh_82dd3145",
+      "task": "geometric shapes",
+      "correct": false,
+      "cost": 0.004111480000000001,
+      "answer": "The answer is: (G)",
+      "target": "(F)",
+      "error": false
+    },
+    {
+      "id": "bbeh_82f6c19d",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.0025778000000000003,
+      "answer": "The answer is: unknown",
+      "target": "15",
+      "error": false
+    },
+    {
+      "id": "bbeh_830bf978",
+      "task": "zebra puzzles",
+      "correct": true,
+      "cost": 0.008928430000000001,
+      "answer": "The answer is: 2",
+      "target": "2",
+      "error": false
+    },
+    {
+      "id": "bbeh_8349c4db",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.00857805,
+      "answer": "The answer is: 430.31",
+      "target": "422.15",
+      "error": false
+    },
+    {
+      "id": "bbeh_83d0c2d6",
+      "task": "linguini",
+      "correct": false,
+      "cost": 0.00314955,
+      "answer": "The answer is: \u025brt\u0254t\u0254pa \u025brt\u0254pat\u0254pa",
+      "target": "\u025brt\u0254pt\u0254pa",
+      "error": false
+    },
+    {
+      "id": "bbeh_840725ec",
+      "task": "geometric shapes",
+      "correct": false,
+      "cost": 0.005428710000000001,
+      "answer": "The answer is: M",
+      "target": "(H)",
+      "error": false
+    },
+    {
+      "id": "bbeh_846a8ecc",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.006631850000000001,
+      "answer": "",
+      "target": "F",
+      "error": false
+    },
+    {
+      "id": "bbeh_848e2919",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.0016300000000000002,
+      "answer": "The answer is: K",
+      "target": "D",
+      "error": false
+    },
+    {
+      "id": "bbeh_850c9421",
+      "task": "disambiguation qa",
+      "correct": true,
+      "cost": 0.00133715,
+      "answer": "The answer is: (D)",
+      "target": "(D)",
+      "error": false
+    },
+    {
+      "id": "bbeh_85b1b0e2",
+      "task": "sportqa",
+      "correct": false,
+      "cost": 0.0010160500000000001,
+      "answer": "The answer is: ABC, BD, ABC",
+      "target": "ABCD, BD, ABC",
+      "error": false
+    },
+    {
+      "id": "bbeh_86758c3a",
+      "task": "shuffled objects",
+      "correct": false,
+      "cost": 0.00125675,
+      "answer": "The answer is: (A)",
+      "target": "(G)",
+      "error": false
+    },
+    {
+      "id": "bbeh_86e3862b",
+      "task": "sportqa",
+      "correct": true,
+      "cost": 0.0016536500000000002,
+      "answer": "The answer is: B, C, A",
+      "target": "B, C, A",
+      "error": false
+    },
+    {
+      "id": "bbeh_872ff1c6",
+      "task": "zebra puzzles",
+      "correct": true,
+      "cost": 0.0004762000000000001,
+      "answer": "The answer is: 5",
+      "target": "5",
+      "error": false
+    },
+    {
+      "id": "bbeh_879c7968",
+      "task": "sportqa",
+      "correct": false,
+      "cost": 0.0036292500000000005,
+      "answer": "The answer is: D, B, A",
+      "target": "D, A, A",
+      "error": false
+    },
+    {
+      "id": "bbeh_87bee283",
+      "task": "shuffled objects",
+      "correct": false,
+      "cost": 0.01299929,
+      "answer": "The answer is: (G)",
+      "target": "(D)",
+      "error": false
+    },
+    {
+      "id": "bbeh_881fe916",
+      "task": "word sorting",
+      "correct": false,
+      "cost": 0.00425087,
+      "answer": "The answer is: 6",
+      "target": "4",
+      "error": false
+    },
+    {
+      "id": "bbeh_8882580c",
+      "task": "nycc",
+      "correct": false,
+      "cost": 0.00059575,
+      "answer": "The answer is: (E)",
+      "target": "(I)",
+      "error": false
+    },
+    {
+      "id": "bbeh_88cfc204",
+      "task": "movie recommendation",
+      "correct": true,
+      "cost": 0.0009545,
+      "answer": "The answer is: H",
+      "target": "(H)",
+      "error": false
+    },
+    {
+      "id": "bbeh_88ef3cae",
+      "task": "nycc",
+      "correct": false,
+      "cost": 0.00077525,
+      "answer": "The answer is: (E)",
+      "target": "(C)",
+      "error": false
+    },
+    {
+      "id": "bbeh_89bde22b",
+      "task": "disambiguation qa",
+      "correct": false,
+      "cost": 0.0019759,
+      "answer": "The answer is: (C)",
+      "target": "(B)",
+      "error": false
+    },
+    {
+      "id": "bbeh_89c0305f",
+      "task": "sportqa",
+      "correct": false,
+      "cost": 0.0016005500000000003,
+      "answer": "The answer is: BD, A, AD",
+      "target": "A, A, D",
+      "error": false
+    },
+    {
+      "id": "bbeh_8a0720a6",
+      "task": "boardgame qa",
+      "correct": true,
+      "cost": 0.005760250000000001,
+      "answer": "The answer is: unknown",
+      "target": "unknown",
+      "error": false
+    },
+    {
+      "id": "bbeh_8a6d00ab",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.00645215,
+      "answer": "The answer is: 0",
+      "target": "156.0",
+      "error": false
+    },
+    {
+      "id": "bbeh_8a9a45e9",
+      "task": "movie recommendation",
+      "correct": true,
+      "cost": 0.0008816,
+      "answer": "The answer is: H",
+      "target": "(H)",
+      "error": false
+    },
+    {
+      "id": "bbeh_8d063fd5",
+      "task": "movie recommendation",
+      "correct": true,
+      "cost": 0.0010109,
+      "answer": "The answer is: (J)",
+      "target": "(J)",
+      "error": false
+    },
+    {
+      "id": "bbeh_8d472829",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.0030225,
+      "answer": "The answer is: unknown",
+      "target": "4",
+      "error": false
+    },
+    {
+      "id": "bbeh_8d5f7fd5",
+      "task": "multistep arithmetic",
+      "correct": false,
+      "cost": 0.002836,
+      "answer": "The answer is: 0",
+      "target": "-557",
+      "error": false
+    },
+    {
+      "id": "bbeh_8dd9d7e9",
+      "task": "time arithmetic",
+      "correct": true,
+      "cost": 0.0042171,
+      "answer": "The answer is: [Thursday]",
+      "target": "[thursday]",
+      "error": false
+    },
+    {
+      "id": "bbeh_8ed6f20b",
+      "task": "multistep arithmetic",
+      "correct": false,
+      "cost": 0.00490945,
+      "answer": "The answer is: 5",
+      "target": "147981",
+      "error": false
+    },
+    {
+      "id": "bbeh_8f14381b",
+      "task": "object counting",
+      "correct": false,
+      "cost": 0.00825795,
+      "answer": "The answer is: 249",
+      "target": "341",
+      "error": false
+    },
+    {
+      "id": "bbeh_90e26155",
+      "task": "dyck languages",
+      "correct": true,
+      "cost": 0.0014935,
+      "answer": "The answer is: 7",
+      "target": "7",
+      "error": false
+    },
+    {
+      "id": "bbeh_910cc563",
+      "task": "time arithmetic",
+      "correct": true,
+      "cost": 0.0025898,
+      "answer": "The answer is: unanswerable",
+      "target": "unanswerable",
+      "error": false
+    },
+    {
+      "id": "bbeh_91e74c7a",
+      "task": "boardgame qa",
+      "correct": true,
+      "cost": 0.00855005,
+      "answer": "The answer is: unknown",
+      "target": "unknown",
+      "error": false
+    },
+    {
+      "id": "bbeh_91f54da8",
+      "task": "shuffled objects",
+      "correct": false,
+      "cost": 0.00945171,
+      "answer": "",
+      "target": "(E)",
+      "error": false
+    },
+    {
+      "id": "bbeh_938ce552",
+      "task": "spatial reasoning",
+      "correct": false,
+      "cost": 0.003948800000000001,
+      "answer": "The answer is: unknown",
+      "target": "Black and Tan Coonhound",
+      "error": false
+    },
+    {
+      "id": "bbeh_946c0177",
+      "task": "boardgame qa",
+      "correct": true,
+      "cost": 0.0028572500000000004,
+      "answer": "The answer is: unknown",
+      "target": "unknown",
+      "error": false
+    },
+    {
+      "id": "bbeh_946c7919",
+      "task": "spatial reasoning",
+      "correct": false,
+      "cost": 0.0014475,
+      "answer": "The answer is: unknown",
+      "target": "strawberry",
+      "error": false
+    },
+    {
+      "id": "bbeh_948ec673",
+      "task": "web of lies",
+      "correct": false,
+      "cost": 0.00622725,
+      "answer": "The answer is: unknown, unknown, unknown",
+      "target": "yes, unknown, yes",
+      "error": false
+    },
+    {
+      "id": "bbeh_9518fed1",
+      "task": "multistep arithmetic",
+      "correct": false,
+      "cost": 0.0019911,
+      "answer": "The answer is: 0",
+      "target": "-29",
+      "error": false
+    },
+    {
+      "id": "bbeh_95438e65",
+      "task": "zebra puzzles",
+      "correct": false,
+      "cost": 0.00271705,
+      "answer": "The answer is: 3",
+      "target": "1",
+      "error": false
+    },
+    {
+      "id": "bbeh_95f9f759",
+      "task": "causal understanding",
+      "correct": false,
+      "cost": 0.00097735,
+      "answer": "The answer is: No",
+      "target": "Ambiguous",
+      "error": false
+    },
+    {
+      "id": "bbeh_966af273",
+      "task": "temporal sequence",
+      "correct": false,
+      "cost": 0.0,
+      "answer": "",
+      "target": "90, 1",
+      "error": false
+    },
+    {
+      "id": "bbeh_96d9377a",
+      "task": "object counting",
+      "correct": false,
+      "cost": 0.02145044,
+      "answer": "",
+      "target": "181",
+      "error": false
+    },
+    {
+      "id": "bbeh_97d60180",
+      "task": "sarc triples",
+      "correct": false,
+      "cost": 0.00037,
+      "answer": "The answer is: 1,1,0",
+      "target": "1,0,0",
+      "error": false
+    },
+    {
+      "id": "bbeh_9858ca6c",
+      "task": "spatial reasoning",
+      "correct": false,
+      "cost": 0.0010561,
+      "answer": "The answer is: unknown",
+      "target": "oil filter",
+      "error": false
+    },
+    {
+      "id": "bbeh_98e30154",
+      "task": "zebra puzzles",
+      "correct": false,
+      "cost": 0.0066674,
+      "answer": "",
+      "target": "7",
+      "error": false
+    },
+    {
+      "id": "bbeh_98ecaf6e",
+      "task": "linguini",
+      "correct": false,
+      "cost": 0.0016998500000000001,
+      "answer": "The answer is: (c)",
+      "target": "deer",
+      "error": false
+    },
+    {
+      "id": "bbeh_99920b4a",
+      "task": "boolean expressions",
+      "correct": false,
+      "cost": 0.0065331,
+      "answer": "The answer is: (D)",
+      "target": "(E)",
+      "error": false
+    },
+    {
+      "id": "bbeh_9a3f3f7c",
+      "task": "word sorting",
+      "correct": false,
+      "cost": 0.00127789,
+      "answer": "The answer is: 11",
+      "target": "7",
+      "error": false
+    },
+    {
+      "id": "bbeh_9a7b848c",
+      "task": "web of lies",
+      "correct": false,
+      "cost": 0.013712760000000001,
+      "answer": "The answer is: <unknown, unknown, unknown>",
+      "target": "no, unknown, yes",
+      "error": false
+    },
+    {
+      "id": "bbeh_9b1014fc",
+      "task": "boardgame qa",
+      "correct": false,
+      "cost": 0.006488270000000001,
+      "answer": "The answer is: unknown",
+      "target": "proved",
+      "error": false
+    },
+    {
+      "id": "bbeh_9b164aa9",
+      "task": "nycc",
+      "correct": false,
+      "cost": 0.00064545,
+      "answer": "The answer is: I",
+      "target": "(D)",
+      "error": false
+    },
+    {
+      "id": "bbeh_9bcd0acd",
+      "task": "disambiguation qa",
+      "correct": false,
+      "cost": 0.0013128,
+      "answer": "The answer is: C",
+      "target": "(E)",
+      "error": false
+    },
+    {
+      "id": "bbeh_9c31e673",
+      "task": "boardgame qa",
+      "correct": true,
+      "cost": 0.00407188,
+      "answer": "The answer is: proved",
+      "target": "proved",
+      "error": false
+    },
+    {
+      "id": "bbeh_9dceac8d",
+      "task": "causal understanding",
+      "correct": false,
+      "cost": 0.0008261000000000001,
+      "answer": "The answer is: Yes",
+      "target": "No",
+      "error": false
+    },
+    {
+      "id": "bbeh_9fdd452c",
+      "task": "disambiguation qa",
+      "correct": false,
+      "cost": 0.0008215000000000001,
+      "answer": "The answer is: (B)",
+      "target": "(E)",
+      "error": false
+    },
+    {
+      "id": "bbeh_a1618f03",
+      "task": "shuffled objects",
+      "correct": false,
+      "cost": 0.01964873,
+      "answer": "The answer is: (E)",
+      "target": "(G)",
+      "error": false
+    },
+    {
+      "id": "bbeh_a22a58b9",
+      "task": "linguini",
+      "correct": false,
+      "cost": 0.0022335000000000002,
+      "answer": "The answer is: N",
+      "target": "cocoa bean",
+      "error": false
+    },
+    {
+      "id": "bbeh_a348d0e1",
+      "task": "dyck languages",
+      "correct": false,
+      "cost": 0.00818539,
+      "answer": "The answer is: 13",
+      "target": "11",
+      "error": false
+    },
+    {
+      "id": "bbeh_a46b1baa",
+      "task": "temporal sequence",
+      "correct": false,
+      "cost": 0.01082866,
+      "answer": "The answer is: 35, 1",
+      "target": "60, 1",
+      "error": false
+    },
+    {
+      "id": "bbeh_a4989491",
+      "task": "shuffled objects",
+      "correct": true,
+      "cost": 0.0024373,
+      "answer": "The answer is: G",
+      "target": "(G)",
+      "error": false
+    },
+    {
+      "id": "bbeh_a5e8f2b3",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.0117899,
+      "answer": "The answer is: 21",
+      "target": "22",
+      "error": false
+    },
+    {
+      "id": "bbeh_a716f0a5",
+      "task": "word sorting",
+      "correct": true,
+      "cost": 0.0019127500000000002,
+      "answer": "The answer is: kitakyushu, sequel, seventh, senescent, administrations, fabulous, yucca, voluntary, cube, categorizations, collaborations, communications, length, limnology, industrialization, willow, bauble",
+      "target": "kitakyushu, sequel, seventh, senescent, administrations, fabulous, yucca, voluntary, cube, categorizations, collaborations, communications, length, limnology, industrialization, willow, bauble",
+      "error": false
+    },
+    {
+      "id": "bbeh_a7dc1eca",
+      "task": "zebra puzzles",
+      "correct": false,
+      "cost": 0.0015750000000000002,
+      "answer": "The answer is: 4",
+      "target": "7",
+      "error": false
+    },
+    {
+      "id": "bbeh_a8e4f915",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.00405795,
+      "answer": "The answer is: K",
+      "target": "A",
+      "error": false
+    },
+    {
+      "id": "bbeh_a8ed453e",
+      "task": "movie recommendation",
+      "correct": false,
+      "cost": 0.0009837000000000001,
+      "answer": "The answer is: I",
+      "target": "(F)",
+      "error": false
+    },
+    {
+      "id": "bbeh_a915dce2",
+      "task": "shuffled objects",
+      "correct": false,
+      "cost": 0.010697950000000001,
+      "answer": "The answer is: A",
+      "target": "(D)",
+      "error": false
+    },
+    {
+      "id": "bbeh_a9a3f6c7",
+      "task": "spatial reasoning",
+      "correct": false,
+      "cost": 0.0037183000000000003,
+      "answer": "The answer is: unknown",
+      "target": "pelican",
+      "error": false
+    },
+    {
+      "id": "bbeh_aa579a27",
+      "task": "geometric shapes",
+      "correct": false,
+      "cost": 0.006643850000000001,
+      "answer": "",
+      "target": "(J)",
+      "error": false
+    },
+    {
+      "id": "bbeh_aaa94ef0",
+      "task": "web of lies",
+      "correct": true,
+      "cost": 0.00916576,
+      "answer": "The answer is: no, no, no",
+      "target": "no, no, no",
+      "error": false
+    },
+    {
+      "id": "bbeh_ab56a049",
+      "task": "multistep arithmetic",
+      "correct": false,
+      "cost": 0.0025034000000000002,
+      "answer": "The answer is: 0",
+      "target": "-27962",
+      "error": false
+    },
+    {
+      "id": "bbeh_ab7cd3a2",
+      "task": "dyck languages",
+      "correct": true,
+      "cost": 0.0016580500000000003,
+      "answer": "The answer is: 14",
+      "target": "14",
+      "error": false
+    },
+    {
+      "id": "bbeh_abf0c642",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.00125155,
+      "answer": "The answer is: K",
+      "target": "H",
+      "error": false
+    },
+    {
+      "id": "bbeh_aeda5895",
+      "task": "spatial reasoning",
+      "correct": false,
+      "cost": 0.0010431,
+      "answer": "The answer is: unknown",
+      "target": "bed",
+      "error": false
+    },
+    {
+      "id": "bbeh_af813749",
+      "task": "boardgame qa",
+      "correct": false,
+      "cost": 0.0042784500000000005,
+      "answer": "The answer is: unknown",
+      "target": "disproved",
+      "error": false
+    },
+    {
+      "id": "bbeh_b0292178",
+      "task": "dyck languages",
+      "correct": false,
+      "cost": 0.006191820000000001,
+      "answer": "The answer is: 31",
+      "target": "20",
+      "error": false
+    },
+    {
+      "id": "bbeh_b0af824d",
+      "task": "spatial reasoning",
+      "correct": false,
+      "cost": 0.01041999,
+      "answer": "The answer is: watermelon",
+      "target": "walnut",
+      "error": false
+    },
+    {
+      "id": "bbeh_b117bfb1",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.00877542,
+      "answer": "The answer is: 389.00",
+      "target": "414.03",
+      "error": false
+    },
+    {
+      "id": "bbeh_b2405fd4",
+      "task": "shuffled objects",
+      "correct": false,
+      "cost": 0.009593800000000001,
+      "answer": "",
+      "target": "(B)",
+      "error": false
+    },
+    {
+      "id": "bbeh_b2eb26f4",
+      "task": "time arithmetic",
+      "correct": true,
+      "cost": 0.0027403,
+      "answer": "The answer is: unanswerable",
+      "target": "unanswerable",
+      "error": false
+    },
+    {
+      "id": "bbeh_b332c8a9",
+      "task": "spatial reasoning",
+      "correct": false,
+      "cost": 0.0,
+      "answer": "",
+      "target": "laptop",
+      "error": false
+    },
+    {
+      "id": "bbeh_b4dc6bd3",
+      "task": "geometric shapes",
+      "correct": false,
+      "cost": 0.0028142500000000003,
+      "answer": "The answer is: D",
+      "target": "(H)",
+      "error": false
+    },
+    {
+      "id": "bbeh_b75f5e52",
+      "task": "spatial reasoning",
+      "correct": false,
+      "cost": 0.0015261500000000002,
+      "answer": "The answer is: unknown",
+      "target": "kiwi",
+      "error": false
+    },
+    {
+      "id": "bbeh_b775fe1a",
+      "task": "word sorting",
+      "correct": true,
+      "cost": 0.0016596700000000002,
+      "answer": "The answer is: 5",
+      "target": "5",
+      "error": false
+    },
+    {
+      "id": "bbeh_b89ac4bd",
+      "task": "causal understanding",
+      "correct": true,
+      "cost": 0.0003105,
+      "answer": "The answer is: No",
+      "target": "No",
+      "error": false
+    },
+    {
+      "id": "bbeh_b8a011ed",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.0066445,
+      "answer": "",
+      "target": "5",
+      "error": false
+    },
+    {
+      "id": "bbeh_b8bd5059",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.0026434,
+      "answer": "The answer is: unknown",
+      "target": "31",
+      "error": false
+    },
+    {
+      "id": "bbeh_b8f40077",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.00703518,
+      "answer": "The answer is: H",
+      "target": "F",
+      "error": false
+    },
+    {
+      "id": "bbeh_ba597871",
+      "task": "movie recommendation",
+      "correct": true,
+      "cost": 0.00100655,
+      "answer": "The answer is: (J)",
+      "target": "(J)",
+      "error": false
+    },
+    {
+      "id": "bbeh_baf16d99",
+      "task": "sarc triples",
+      "correct": false,
+      "cost": 0.00036950000000000004,
+      "answer": "The answer is: 1,0,1",
+      "target": "0,0,1",
+      "error": false
+    },
+    {
+      "id": "bbeh_bc24b2e1",
+      "task": "object counting",
+      "correct": false,
+      "cost": 0.01751348,
+      "answer": "The answer is: 4075",
+      "target": "1095",
+      "error": false
+    },
+    {
+      "id": "bbeh_be0628df",
+      "task": "web of lies",
+      "correct": true,
+      "cost": 0.0074785500000000005,
+      "answer": "The answer is: yes, no, yes",
+      "target": "yes, no, yes",
+      "error": false
+    },
+    {
+      "id": "bbeh_bf2f8361",
+      "task": "dyck languages",
+      "correct": true,
+      "cost": 0.0009813,
+      "answer": "The answer is: 24",
+      "target": "24",
+      "error": false
+    },
+    {
+      "id": "bbeh_bf96d08e",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.006649700000000001,
+      "answer": "",
+      "target": "17",
+      "error": false
+    },
+    {
+      "id": "bbeh_bfe212b1",
+      "task": "multistep arithmetic",
+      "correct": false,
+      "cost": 0.0042727500000000005,
+      "answer": "The answer is: 0",
+      "target": "253",
+      "error": false
+    },
+    {
+      "id": "bbeh_c14ad138",
+      "task": "nycc",
+      "correct": false,
+      "cost": 0.00059405,
+      "answer": "The answer is: (a)",
+      "target": "(C)",
+      "error": false
+    },
+    {
+      "id": "bbeh_c1973277",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.0022753499999999998,
+      "answer": "The answer is: K",
+      "target": "E",
+      "error": false
+    },
+    {
+      "id": "bbeh_c21b1b4d",
+      "task": "time arithmetic",
+      "correct": true,
+      "cost": 0.0038100499999999997,
+      "answer": "The answer is: 01-09-2016",
+      "target": "01-09-2016",
+      "error": false
+    },
+    {
+      "id": "bbeh_c231e936",
+      "task": "geometric shapes",
+      "correct": false,
+      "cost": 0.00438864,
+      "answer": "The answer is: M",
+      "target": "(A)",
+      "error": false
+    },
+    {
+      "id": "bbeh_c3c92baa",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.00719695,
+      "answer": "The answer is: 0",
+      "target": "17.0",
+      "error": false
+    },
+    {
+      "id": "bbeh_c4d5ea04",
+      "task": "object counting",
+      "correct": false,
+      "cost": 0.0067111,
+      "answer": "",
+      "target": "38",
+      "error": false
+    },
+    {
+      "id": "bbeh_c57e1866",
+      "task": "word sorting",
+      "correct": true,
+      "cost": 0.0054357500000000005,
+      "answer": "The answer is: behind, wellwisher, volcanism, iniquity, interpretations, inmate, individualization, implications, zip, yoghurt, toroidal, transformations, mollie, mcconnell, disenfranchisement, hornpipe, sandy, scorn",
+      "target": "behind, wellwisher, volcanism, iniquity, interpretations, inmate, individualization, implications, zip, yoghurt, toroidal, transformations, mollie, mcconnell, disenfranchisement, hornpipe, sandy, scorn",
+      "error": false
+    },
+    {
+      "id": "bbeh_c5e4cbb2",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.00272585,
+      "answer": "The answer is: unknown",
+      "target": "24",
+      "error": false
+    },
+    {
+      "id": "bbeh_c856e43c",
+      "task": "sarc triples",
+      "correct": false,
+      "cost": 0.00044820000000000005,
+      "answer": "The answer is: 1,1,0",
+      "target": "0,0,0",
+      "error": false
+    },
+    {
+      "id": "bbeh_c8a06d20",
+      "task": "sarc triples",
+      "correct": false,
+      "cost": 0.00042345,
+      "answer": "The answer is: 0,1,1",
+      "target": "0,1,0",
+      "error": false
+    },
+    {
+      "id": "bbeh_c9279c26",
+      "task": "temporal sequence",
+      "correct": false,
+      "cost": 0.0,
+      "answer": "",
+      "target": "60, 1",
+      "error": false
+    },
+    {
+      "id": "bbeh_cae8185c",
+      "task": "web of lies",
+      "correct": false,
+      "cost": 0.00976285,
+      "answer": "The answer is: unknown, unknown, unknown",
+      "target": "yes, unknown, no",
+      "error": false
+    },
+    {
+      "id": "bbeh_cb7d5c60",
+      "task": "multistep arithmetic",
+      "correct": false,
+      "cost": 0.00550931,
+      "answer": "The answer is: 0",
+      "target": "-76897",
+      "error": false
+    },
+    {
+      "id": "bbeh_cc0b704f",
+      "task": "shuffled objects",
+      "correct": false,
+      "cost": 0.01045501,
+      "answer": "The answer is: (A)",
+      "target": "(C)",
+      "error": false
+    },
+    {
+      "id": "bbeh_cc437a97",
+      "task": "object counting",
+      "correct": false,
+      "cost": 0.01084467,
+      "answer": "The answer is: 704",
+      "target": "534",
+      "error": false
+    },
+    {
+      "id": "bbeh_cc5f499d",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.009285400000000001,
+      "answer": "The answer is: 0",
+      "target": "90.0",
+      "error": false
+    },
+    {
+      "id": "bbeh_ccb35292",
+      "task": "boolean expressions",
+      "correct": true,
+      "cost": 0.0059952899999999995,
+      "answer": "The answer is: (C)",
+      "target": "(C)",
+      "error": false
+    },
+    {
+      "id": "bbeh_ccfa6c0b",
+      "task": "movie recommendation",
+      "correct": true,
+      "cost": 0.0014666500000000001,
+      "answer": "The answer is: D",
+      "target": "(D)",
+      "error": false
+    },
+    {
+      "id": "bbeh_cd1539ba",
+      "task": "boolean expressions",
+      "correct": false,
+      "cost": 0.006645700000000001,
+      "answer": "",
+      "target": "(E)",
+      "error": false
+    },
+    {
+      "id": "bbeh_cdd50199",
+      "task": "causal understanding",
+      "correct": false,
+      "cost": 0.0005153,
+      "answer": "The answer is: No",
+      "target": "Ambiguous",
+      "error": false
+    },
+    {
+      "id": "bbeh_cef574bd",
+      "task": "object counting",
+      "correct": false,
+      "cost": 0.011287720000000001,
+      "answer": "The answer is: 1773",
+      "target": "1798",
+      "error": false
+    },
+    {
+      "id": "bbeh_cf448170",
+      "task": "web of lies",
+      "correct": false,
+      "cost": 0.02965898,
+      "answer": "",
+      "target": "no, unknown, yes",
+      "error": false
+    },
+    {
+      "id": "bbeh_cf9057fb",
+      "task": "causal understanding",
+      "correct": true,
+      "cost": 0.0004893,
+      "answer": "The answer is: No",
+      "target": "No",
+      "error": false
+    },
+    {
+      "id": "bbeh_cfa6f2d9",
+      "task": "dyck languages",
+      "correct": true,
+      "cost": 0.00157715,
+      "answer": "The answer is: 13",
+      "target": "13",
+      "error": false
+    },
+    {
+      "id": "bbeh_d2a5a463",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.0067280000000000005,
+      "answer": "",
+      "target": "14.22",
+      "error": false
+    },
+    {
+      "id": "bbeh_d34d4eac",
+      "task": "causal understanding",
+      "correct": true,
+      "cost": 0.0005617,
+      "answer": "The answer is: yes",
+      "target": "Yes",
+      "error": false
+    },
+    {
+      "id": "bbeh_d36171aa",
+      "task": "boolean expressions",
+      "correct": false,
+      "cost": 0.0038593500000000005,
+      "answer": "The answer is: (d)",
+      "target": "(C)",
+      "error": false
+    },
+    {
+      "id": "bbeh_d38456b9",
+      "task": "spatial reasoning",
+      "correct": false,
+      "cost": 0.0007748000000000001,
+      "answer": "The answer is: unknown",
+      "target": "space bar",
+      "error": false
+    },
+    {
+      "id": "bbeh_d3ecfeac",
+      "task": "dyck languages",
+      "correct": false,
+      "cost": 0.0024744000000000003,
+      "answer": "The answer is: 19",
+      "target": "18",
+      "error": false
+    },
+    {
+      "id": "bbeh_d476ce03",
+      "task": "temporal sequence",
+      "correct": false,
+      "cost": 0.02069879,
+      "answer": "",
+      "target": "150, 1",
+      "error": false
+    },
+    {
+      "id": "bbeh_d49f4495",
+      "task": "causal understanding",
+      "correct": false,
+      "cost": 0.00051685,
+      "answer": "The answer is: No",
+      "target": "Yes",
+      "error": false
+    },
+    {
+      "id": "bbeh_d4a770c2",
+      "task": "sarc triples",
+      "correct": true,
+      "cost": 0.00065155,
+      "answer": "The answer is: 0,0,0",
+      "target": "0,0,0",
+      "error": false
+    },
+    {
+      "id": "bbeh_d4e437f4",
+      "task": "geometric shapes",
+      "correct": false,
+      "cost": 0.0032405,
+      "answer": "The answer is: E",
+      "target": "(I)",
+      "error": false
+    },
+    {
+      "id": "bbeh_d5650699",
+      "task": "web of lies",
+      "correct": false,
+      "cost": 0.006609650000000001,
+      "answer": "",
+      "target": "no, no, yes",
+      "error": false
+    },
+    {
+      "id": "bbeh_d5b53aea",
+      "task": "web of lies",
+      "correct": false,
+      "cost": 0.01577205,
+      "answer": "The answer is: unknown, unknown, unknown",
+      "target": "no, no, no",
+      "error": false
+    },
+    {
+      "id": "bbeh_d5ef5e2f",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.00290045,
+      "answer": "The answer is: K",
+      "target": "C",
+      "error": false
+    },
+    {
+      "id": "bbeh_d66c5fe1",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.00526145,
+      "answer": "The answer is: unknown",
+      "target": "11",
+      "error": false
+    },
+    {
+      "id": "bbeh_d6de1bf7",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.006723150000000001,
+      "answer": "",
+      "target": "135.0",
+      "error": false
+    },
+    {
+      "id": "bbeh_d72ae541",
+      "task": "sportqa",
+      "correct": false,
+      "cost": 0.0007333000000000001,
+      "answer": "The answer is: C, AC, AC",
+      "target": "BC, AC, AC",
+      "error": false
+    },
+    {
+      "id": "bbeh_d734216c",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.01283922,
+      "answer": "The answer is: 0",
+      "target": "26.1",
+      "error": false
+    },
+    {
+      "id": "bbeh_d7b98de2",
+      "task": "sportqa",
+      "correct": true,
+      "cost": 0.00194195,
+      "answer": "The answer is: AC, BC, ABD",
+      "target": "AC, BC, ABD",
+      "error": false
+    },
+    {
+      "id": "bbeh_d7e02f07",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.00967341,
+      "answer": "The answer is: unknown",
+      "target": "22",
+      "error": false
+    },
+    {
+      "id": "bbeh_d8680ad8",
+      "task": "temporal sequence",
+      "correct": false,
+      "cost": 0.025842140000000003,
+      "answer": "",
+      "target": "150, 1",
+      "error": false
+    },
+    {
+      "id": "bbeh_d8808f27",
+      "task": "dyck languages",
+      "correct": false,
+      "cost": 0.00139465,
+      "answer": "The answer is: 12",
+      "target": "4",
+      "error": false
+    },
+    {
+      "id": "bbeh_d8dc112b",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.00521075,
+      "answer": "",
+      "target": "57.0",
+      "error": false
+    },
+    {
+      "id": "bbeh_d9129e27",
+      "task": "multistep arithmetic",
+      "correct": false,
+      "cost": 0.0021942,
+      "answer": "The answer is: 0",
+      "target": "-11",
+      "error": false
+    },
+    {
+      "id": "bbeh_d94c4f50",
+      "task": "spatial reasoning",
+      "correct": true,
+      "cost": 0.0010583500000000002,
+      "answer": "The answer is: jigsaw puzzle",
+      "target": "jigsaw puzzle",
+      "error": false
+    },
+    {
+      "id": "bbeh_d955cc12",
+      "task": "web of lies",
+      "correct": false,
+      "cost": 0.010909350000000002,
+      "answer": "",
+      "target": "yes, unknown, yes",
+      "error": false
+    },
+    {
+      "id": "bbeh_d9570868",
+      "task": "boardgame qa",
+      "correct": true,
+      "cost": 0.00510365,
+      "answer": "The answer is: disproved",
+      "target": "disproved",
+      "error": false
+    },
+    {
+      "id": "bbeh_d9e21a3f",
+      "task": "dyck languages",
+      "correct": false,
+      "cost": 0.0022114300000000003,
+      "answer": "The answer is: 5",
+      "target": "6",
+      "error": false
+    },
+    {
+      "id": "bbeh_da546864",
+      "task": "sportqa",
+      "correct": false,
+      "cost": 0.00111665,
+      "answer": "The answer is: AC, ACD, AB",
+      "target": "AB, ABD, AB",
+      "error": false
+    },
+    {
+      "id": "bbeh_db4b3c84",
+      "task": "boardgame qa",
+      "correct": false,
+      "cost": 0.0026038500000000004,
+      "answer": "The answer is: unknown",
+      "target": "disproved",
+      "error": false
+    },
+    {
+      "id": "bbeh_dbe8384a",
+      "task": "web of lies",
+      "correct": false,
+      "cost": 0.013452790000000001,
+      "answer": "The answer is: yes, yes, yes",
+      "target": "no, no, no",
+      "error": false
+    },
+    {
+      "id": "bbeh_dc2acf6a",
+      "task": "disambiguation qa",
+      "correct": true,
+      "cost": 0.0024666,
+      "answer": "The answer is: (C)",
+      "target": "(C)",
+      "error": false
+    },
+    {
+      "id": "bbeh_dc988e9c",
+      "task": "hyperbaton",
+      "correct": false,
+      "cost": 0.0036359700000000005,
+      "answer": "The answer is: K",
+      "target": "I",
+      "error": false
+    },
+    {
+      "id": "bbeh_dca8b7d0",
+      "task": "sarc triples",
+      "correct": false,
+      "cost": 0.00042205,
+      "answer": "The answer is: 0,0,0",
+      "target": "0,0,1",
+      "error": false
+    },
+    {
+      "id": "bbeh_dcb5524c",
+      "task": "nycc",
+      "correct": true,
+      "cost": 0.00041710000000000006,
+      "answer": "The answer is: (C)",
+      "target": "(C)",
+      "error": false
+    },
+    {
+      "id": "bbeh_dd77116d",
+      "task": "web of lies",
+      "correct": false,
+      "cost": 0.01410512,
+      "answer": "The answer is: unknown, unknown, unknown",
+      "target": "no, unknown, no",
+      "error": false
+    },
+    {
+      "id": "bbeh_de9ca3cf",
+      "task": "movie recommendation",
+      "correct": true,
+      "cost": 0.0012146000000000001,
+      "answer": "The answer is: D",
+      "target": "(D)",
+      "error": false
+    },
+    {
+      "id": "bbeh_deb372ed",
+      "task": "zebra puzzles",
+      "correct": false,
+      "cost": 0.00380335,
+      "answer": "The answer is: 4",
+      "target": "1",
+      "error": false
+    },
+    {
+      "id": "bbeh_deefc9e4",
+      "task": "dyck languages",
+      "correct": false,
+      "cost": 0.00057775,
+      "answer": "The answer is: 13",
+      "target": "11",
+      "error": false
+    },
+    {
+      "id": "bbeh_df9bad41",
+      "task": "movie recommendation",
+      "correct": true,
+      "cost": 0.0010329000000000002,
+      "answer": "The answer is: J",
+      "target": "(J)",
+      "error": false
+    },
+    {
+      "id": "bbeh_e124355f",
+      "task": "movie recommendation",
+      "correct": true,
+      "cost": 0.00041645000000000007,
+      "answer": "The answer is: (B)",
+      "target": "(B)",
+      "error": false
+    },
+    {
+      "id": "bbeh_e17968f9",
+      "task": "time arithmetic",
+      "correct": true,
+      "cost": 0.00437106,
+      "answer": "The answer is: [hiking, studying, hunting, fishing, snowboarding]",
+      "target": "[hiking, studying, hunting, fishing, snowboarding]",
+      "error": false
+    },
+    {
+      "id": "bbeh_e2736d3c",
+      "task": "temporal sequence",
+      "correct": false,
+      "cost": 0.02768584,
+      "answer": "",
+      "target": "270, 1",
+      "error": false
+    },
+    {
+      "id": "bbeh_e2f6fcf6",
+      "task": "sportqa",
+      "correct": false,
+      "cost": 0.00114065,
+      "answer": "The answer is: C, A, B",
+      "target": "C, A, C",
+      "error": false
+    },
+    {
+      "id": "bbeh_e38c7d31",
+      "task": "nycc",
+      "correct": false,
+      "cost": 0.0005705,
+      "answer": "The answer is: (c)",
+      "target": "(I)",
+      "error": false
+    },
+    {
+      "id": "bbeh_e3d1526e",
+      "task": "multistep arithmetic",
+      "correct": false,
+      "cost": 0.00398835,
+      "answer": "The answer is: 10",
+      "target": "581",
+      "error": false
+    },
+    {
+      "id": "bbeh_e42987cd",
+      "task": "linguini",
+      "correct": true,
+      "cost": 0.00098975,
+      "answer": "The answer is: els pisos",
+      "target": "els pisos",
+      "error": false
+    },
+    {
+      "id": "bbeh_e4634362",
+      "task": "spatial reasoning",
+      "correct": false,
+      "cost": 0.00961181,
+      "answer": "The answer is: unknown",
+      "target": "peanut",
+      "error": false
+    },
+    {
+      "id": "bbeh_e48eaba2",
+      "task": "causal understanding",
+      "correct": false,
+      "cost": 0.0005173500000000001,
+      "answer": "The answer is: No",
+      "target": "Ambiguous",
+      "error": false
+    },
+    {
+      "id": "bbeh_e54a4be3",
+      "task": "sarc triples",
+      "correct": false,
+      "cost": 0.00034504999999999996,
+      "answer": "The answer is: 0,0,1",
+      "target": "1,0,1",
+      "error": false
+    },
+    {
+      "id": "bbeh_e5fb54f7",
+      "task": "time arithmetic",
+      "correct": true,
+      "cost": 0.0032788,
+      "answer": "The answer is: unanswerable",
+      "target": "unanswerable",
+      "error": false
+    },
+    {
+      "id": "bbeh_e768e01e",
+      "task": "buggy tables",
+      "correct": false,
+      "cost": 0.0038831100000000004,
+      "answer": "The answer is: 0",
+      "target": "418.0",
+      "error": false
+    },
+    {
+      "id": "bbeh_e82891b3",
+      "task": "movie recommendation",
+      "correct": true,
+      "cost": 0.0008810000000000001,
+      "answer": "The answer is: J",
+      "target": "(J)",
+      "error": false
+    },
+    {
+      "id": "bbeh_e8a59ca3",
+      "task": "temporal sequence",
+      "correct": true,
+      "cost": 0.022730300000000002,
+      "answer": "The answer is: 150, 1",
+      "target": "150, 1",
+      "error": false
+    },
+    {
+      "id": "bbeh_e8ef4381",
+      "task": "spatial reasoning",
+      "correct": false,
+      "cost": 0.0018049000000000001,
+      "answer": "The answer is: unknown",
+      "target": "clementine",
+      "error": false
+    },
+    {
+      "id": "bbeh_e8fd0cbf",
+      "task": "web of lies",
+      "correct": true,
+      "cost": 0.0135668,
+      "answer": "The answer is: yes, no, no",
+      "target": "yes, no, no",
+      "error": false
+    },
+    {
+      "id": "bbeh_e905f895",
+      "task": "object counting",
+      "correct": false,
+      "cost": 0.00633591,
+      "answer": "The answer is: 1190",
+      "target": "1075",
+      "error": false
+    },
+    {
+      "id": "bbeh_eb8cb7e9",
+      "task": "sportqa",
+      "correct": true,
+      "cost": 0.00101555,
+      "answer": "The answer is: A, A, B",
+      "target": "A, A, B",
+      "error": false
+    },
+    {
+      "id": "bbeh_eb9ed237",
+      "task": "shuffled objects",
+      "correct": false,
+      "cost": 0.005602500000000001,
+      "answer": "The answer is: (E)",
+      "target": "(F)",
+      "error": false
+    },
+    {
+      "id": "bbeh_eba0819f",
+      "task": "geometric shapes",
+      "correct": false,
+      "cost": 0.01220396,
+      "answer": "The answer is: D",
+      "target": "(F)",
+      "error": false
+    },
+    {
+      "id": "bbeh_ec484c0d",
+      "task": "causal understanding",
+      "correct": false,
+      "cost": 0.00038920000000000003,
+      "answer": "The answer is: No",
+      "target": "Yes",
+      "error": false
+    },
+    {
+      "id": "bbeh_ece1733b",
+      "task": "time arithmetic",
+      "correct": true,
+      "cost": 0.00846178,
+      "answer": "The answer is: [Sunday]",
+      "target": "[sunday]",
+      "error": false
+    },
+    {
+      "id": "bbeh_ed148734",
+      "task": "shuffled objects",
+      "correct": false,
+      "cost": 0.006738490000000001,
+      "answer": "The answer is: (F)",
+      "target": "(G)",
+      "error": false
+    },
+    {
+      "id": "bbeh_ed1ffb22",
+      "task": "disambiguation qa",
+      "correct": false,
+      "cost": 0.0020253,
+      "answer": "The answer is: (a)",
+      "target": "(C)",
+      "error": false
+    },
+    {
+      "id": "bbeh_ed4cc75d",
+      "task": "object properties",
+      "correct": false,
+      "cost": 0.007273900000000001,
+      "answer": "The answer is: unknown",
+      "target": "18",
+      "error": false
+    },
+    {
+      "id": "bbeh_eddbe04e",
+      "task": "temporal sequence",
+      "correct": false,
+      "cost": 0.01877516,
+      "answer": "The answer is: 75, 1",
+      "target": "140, 1",
+      "error": false
+    },
+    {
+      "id": "bbeh_ee09d194",
+      "task": "nycc",
+      "correct": false,
+      "cost": 0.0006226000000000001,
+      "answer": "The answer is: (a)",
+      "target": "(D)",
+      "error": false
+    },
+    {
+      "id": "bbeh_eecd6e50",
+      "task": "sportqa",
+      "correct": true,
+      "cost": 0.0008599,
+      "answer": "The answer is: C, B, C",
+      "target": "C, B, C",
+      "error": false
+    },
+    {
+      "id": "bbeh_eeefc7ee",
+      "task": "sportqa",
+      "correct": false,
+      "cost": 0.00099215,
+      "answer": "The answer is: AB, C, A",
+      "target": "ABD, BC, A",
+      "error": false
+    },
+    {
+      "id": "bbeh_ef950fa3",
+      "task": "word sorting",
+      "correct": true,
+      "cost": 0.00460705,
+      "answer": "The answer is: characterizations, dean, eosine, formula, generalizations, gibson, inebriate, mater, mulligatawny, photosynthesis, sigmund, vassar, recommendations, representativeness, rica",
+      "target": "characterizations, dean, eosine, formula, generalizations, gibson, inebriate, mater, mulligatawny, photosynthesis, sigmund, vassar, recommendations, representativeness, rica",
+      "error": false
+    },
+    {
+      "id": "bbeh_efed89b2",
+      "task": "nycc",
+      "correct": false,
+      "cost": 0.00051845,
+      "answer": "The answer is: (F)",
+      "target": "(H)",
+      "error": false
+    },
+    {
+      "id": "bbeh_f0021db0",
+      "task": "linguini",
+      "correct": false,
+      "cost": 0.00115875,
+      "answer": "The answer is: lurubunon",
+      "target": "luvuttubuno",
+      "error": false
+    },
+    {
+      "id": "bbeh_f0a88764",
+      "task": "multistep arithmetic",
+      "correct": false,
+      "cost": 0.0020182000000000004,
+      "answer": "The answer is: 0",
+      "target": "905",
+      "error": false
+    },
+    {
+      "id": "bbeh_f185f5db",
+      "task": "word sorting",
+      "correct": false,
+      "cost": 0.00219745,
+      "answer": "The answer is: 13",
+      "target": "7",
+      "error": false
+    },
+    {
+      "id": "bbeh_f210bb48",
+      "task": "movie recommendation",
+      "correct": true,
+      "cost": 0.00113405,
+      "answer": "The answer is: J",
+      "target": "(J)",
+      "error": false
+    },
+    {
+      "id": "bbeh_f225a9fc",
+      "task": "word sorting",
+      "correct": false,
+      "cost": 0.003953900000000001,
+      "answer": "The answer is: parameter,photosynthesis,piggish,pintail,protector,algonquin,beachhead,bloodstain,characterizations,dilate,forth,frolic,lacunae,liggett,mcintosh,rationalizations,responsibilities,slaughterhouse,sterno,transformations,unesco",
+      "target": "parameter, photosynthesis, piggish, pintail, protector, algonquin, beachhead, bloodstain, characterizations, dilate, forth, frolic, lacunae, lazy, liggett, mcintosh, rationalizations, responsibilities, slaughterhouse, sterno, transformations, unesco",
+      "error": false
+    },
+    {
+      "id": "bbeh_f267efc5",
+      "task": "multistep arithmetic",
+      "correct": false,
+      "cost": 0.00309345,
+      "answer": "The answer is: 0",
+      "target": "111",
+      "error": false
+    },
+    {
+      "id": "bbeh_f298c17e",
+      "task": "nycc",
+      "correct": false,
+      "cost": 0.0007744000000000001,
+      "answer": "The answer is: (j)",
+      "target": "(H)",
+      "error": false
+    },
+    {
+      "id": "bbeh_f2d6b7c1",
+      "task": "zebra puzzles",
+      "correct": false,
+      "cost": 0.00413185,
+      "answer": "The answer is: 3",
+      "target": "4",
+      "error": false
+    },
+    {
+      "id": "bbeh_f3045f37",
+      "task": "nycc",
+      "correct": false,
+      "cost": 0.000546,
+      "answer": "The answer is: (a)",
+      "target": "(B)",
+      "error": false
+    },
+    {
+      "id": "bbeh_f39ce14d",
+      "task": "linguini",
+      "correct": false,
+      "cost": 0.00512005,
+      "answer": "The answer is: \u0268nder\u02bco, \u0268n\u0282aka\u02a6\u02bca, \u0268napal\u02bca, \u0268\u014bk\u02bcan\u02bci, \u0268mbir\u02bci, \u0268mp\u02bcahan\u02bci, \u0268\u014bk\u02bcan\u02bci, \u0268ndunat\u02bci, \u0268nh\u0268k\u02bca, \u0268nipal\u02bca",
+      "target": "it was opened",
+      "error": false
+    },
+    {
+      "id": "bbeh_f3b12817",
+      "task": "zebra puzzles",
+      "correct": false,
+      "cost": 0.0067518000000000005,
+      "answer": "",
+      "target": "3",
+      "error": false
+    },
+    {
+      "id": "bbeh_f3f03228",
+      "task": "causal understanding",
+      "correct": true,
+      "cost": 0.00041665,
+      "answer": "The answer is: No",
+      "target": "No",
+      "error": false
+    },
+    {
+      "id": "bbeh_f44bf3b8",
+      "task": "boardgame qa",
+      "correct": false,
+      "cost": 0.001018,
+      "answer": "The answer is: unknown",
+      "target": "proved",
+      "error": false
+    },
+    {
+      "id": "bbeh_f5077f65",
+      "task": "movie recommendation",
+      "correct": false,
+      "cost": 0.00106045,
+      "answer": "The answer is: (C)",
+      "target": "(D)",
+      "error": false
+    },
+    {
+      "id": "bbeh_f55b4638",
+      "task": "word sorting",
+      "correct": false,
+      "cost": 0.00211765,
+      "answer": "The answer is: 14",
+      "target": "5",
+      "error": false
+    },
+    {
+      "id": "bbeh_f56324c5",
+      "task": "object counting",
+      "correct": false,
+      "cost": 0.02116497,
+      "answer": "The answer is: 84",
+      "target": "798",
+      "error": false
+    },
+    {
+      "id": "bbeh_f5a410aa",
+      "task": "movie recommendation",
+      "correct": false,
+      "cost": 0.0014183,
+      "answer": "The answer is: (C)",
+      "target": "(D)",
+      "error": false
+    },
+    {
+      "id": "bbeh_f6353426",
+      "task": "linguini",
+      "correct": false,
+      "cost": 0.0014935,
+      "answer": "The answer is: (c)",
+      "target": "rifle",
+      "error": false
+    },
+    {
+      "id": "bbeh_f7283364",
+      "task": "shuffled objects",
+      "correct": false,
+      "cost": 0.005126800000000001,
+      "answer": "The answer is: (C)",
+      "target": "(D)",
+      "error": false
+    },
+    {
+      "id": "bbeh_f7bd5b26",
+      "task": "multistep arithmetic",
+      "correct": false,
+      "cost": 0.00122015,
+      "answer": "The answer is: 0",
+      "target": "853",
+      "error": false
+    },
+    {
+      "id": "bbeh_f9000fd1",
+      "task": "object counting",
+      "correct": false,
+      "cost": 0.009032350000000001,
+      "answer": "",
+      "target": "51",
+      "error": false
+    },
+    {
+      "id": "bbeh_faef60af",
+      "task": "temporal sequence",
+      "correct": false,
+      "cost": 0.01738729,
+      "answer": "",
+      "target": "150, 1",
+      "error": false
+    },
+    {
+      "id": "bbeh_faefc575",
+      "task": "boardgame qa",
+      "correct": false,
+      "cost": 0.0006984000000000001,
+      "answer": "The answer is: proved",
+      "target": "unknown",
+      "error": false
+    },
+    {
+      "id": "bbeh_fbc3c909",
+      "task": "boolean expressions",
+      "correct": true,
+      "cost": 0.014470420000000001,
+      "answer": "The answer is: (D)",
+      "target": "(D)",
+      "error": false
+    },
+    {
+      "id": "bbeh_fd79bb56",
+      "task": "linguini",
+      "correct": false,
+      "cost": 0.0017755,
+      "answer": "The answer is: an egg",
+      "target": "1 egg",
+      "error": false
+    },
+    {
+      "id": "bbeh_fd90516a",
+      "task": "causal understanding",
+      "correct": true,
+      "cost": 0.0005868500000000001,
+      "answer": "The answer is: no",
+      "target": "No",
+      "error": false
+    },
+    {
+      "id": "bbeh_fdaca592",
+      "task": "sportqa",
+      "correct": false,
+      "cost": 0.00101855,
+      "answer": "The answer is: BC, AC, ACD",
+      "target": "AB, A, AC",
+      "error": false
+    },
+    {
+      "id": "bbeh_fe8bf617",
+      "task": "linguini",
+      "correct": false,
+      "cost": 0.005019850000000001,
+      "answer": "The answer is: 15",
+      "target": "405",
+      "error": false
+    }
+  ]
+}

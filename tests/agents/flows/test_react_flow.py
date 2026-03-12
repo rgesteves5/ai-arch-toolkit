@@ -98,6 +98,157 @@ class TestReactFlow:
         assert state["response"].text == "sync answer"
 
 
+class TestReactFinalAnswer:
+    """Tests for last-chance final answer behaviour."""
+
+    async def test_final_answer_hint_produces_text(self) -> None:
+        """Model always returns tool calls — hint on last turn should still be sent."""
+        tc = ToolCall(id="tc1", name="search", input={"q": "x"})
+
+        llm = AsyncMock()
+        # All calls return tool calls (simulates Gemini/Haiku behaviour)
+        llm.complete = AsyncMock(return_value=_make_response(tool_calls=(tc,)))
+
+        tools = AsyncMock(spec=ToolGroup)
+        tools.async_execute = AsyncMock(return_value="result")
+        tools.schemas = lambda: {}
+
+        flow = react_flow(llm, tools, max_iterations=3, final_answer_hint=True)
+        state = State(operational=react_initial_state("test"))
+        await flow.run(state)
+
+        # On the last (3rd) llm_call, the hint message should be appended
+        last_call_messages = llm.complete.call_args_list[-1][0][0]
+        hint_messages = [
+            m
+            for m in last_call_messages
+            if isinstance(m, dict) and "last turn" in str(m.get("content", "")).lower()
+        ]
+        assert len(hint_messages) == 1
+
+    async def test_final_answer_hint_not_on_early_turns(self) -> None:
+        """Hint message should NOT appear on non-final turns."""
+        tc = ToolCall(id="tc1", name="search", input={"q": "x"})
+
+        llm = AsyncMock()
+        llm.complete = AsyncMock(
+            side_effect=[
+                _make_response(tool_calls=(tc,)),
+                _make_response(text="done"),
+            ]
+        )
+
+        tools = AsyncMock(spec=ToolGroup)
+        tools.async_execute = AsyncMock(return_value="result")
+        tools.schemas = lambda: {}
+
+        flow = react_flow(llm, tools, max_iterations=5, final_answer_hint=True)
+        state = State(operational=react_initial_state("test"))
+        await flow.run(state)
+
+        # First call should NOT have the hint
+        first_call_messages = llm.complete.call_args_list[0][0][0]
+        hint_messages = [
+            m
+            for m in first_call_messages
+            if isinstance(m, dict) and "last turn" in str(m.get("content", "")).lower()
+        ]
+        assert len(hint_messages) == 0
+
+    async def test_strip_tools_on_final(self) -> None:
+        """When strip_tools_on_final=True, last call gets empty ToolGroup."""
+        tc = ToolCall(id="tc1", name="search", input={"q": "x"})
+
+        llm = AsyncMock()
+        llm.complete = AsyncMock(return_value=_make_response(tool_calls=(tc,)))
+
+        tools = AsyncMock(spec=ToolGroup)
+        tools.async_execute = AsyncMock(return_value="result")
+        tools.schemas = lambda: {}
+
+        flow = react_flow(llm, tools, max_iterations=2, strip_tools_on_final=True)
+        state = State(operational=react_initial_state("test"))
+        await flow.run(state)
+
+        # Last call should receive an empty ToolGroup (not the original tools)
+        last_call = llm.complete.call_args_list[-1]
+        call_tools = last_call[1]["tools"]
+        assert isinstance(call_tools, ToolGroup)
+        assert call_tools is not tools  # Should be a fresh empty ToolGroup
+
+    async def test_show_turn_counter(self) -> None:
+        """Turn counter messages appear when show_turn_counter=True."""
+        tc = ToolCall(id="tc1", name="search", input={"q": "x"})
+
+        llm = AsyncMock()
+        llm.complete = AsyncMock(
+            side_effect=[
+                _make_response(tool_calls=(tc,)),
+                _make_response(text="done"),
+            ]
+        )
+
+        tools = AsyncMock(spec=ToolGroup)
+        tools.async_execute = AsyncMock(return_value="result")
+        tools.schemas = lambda: {}
+
+        flow = react_flow(
+            llm,
+            tools,
+            max_iterations=5,
+            show_turn_counter=True,
+            final_answer_hint=False,
+        )
+        state = State(operational=react_initial_state("test"))
+        await flow.run(state)
+
+        # First call should have [Turn 1/5]
+        first_messages = llm.complete.call_args_list[0][0][0]
+        turn_msgs = [
+            m
+            for m in first_messages
+            if isinstance(m, dict) and "[Turn 1/5]" in str(m.get("content", ""))
+        ]
+        assert len(turn_msgs) == 1
+
+    async def test_hint_disabled(self) -> None:
+        """When final_answer_hint=False, no hint is injected."""
+        tc = ToolCall(id="tc1", name="search", input={"q": "x"})
+
+        llm = AsyncMock()
+        llm.complete = AsyncMock(return_value=_make_response(tool_calls=(tc,)))
+
+        tools = AsyncMock(spec=ToolGroup)
+        tools.async_execute = AsyncMock(return_value="result")
+        tools.schemas = lambda: {}
+
+        flow = react_flow(llm, tools, max_iterations=2, final_answer_hint=False)
+        state = State(operational=react_initial_state("test"))
+        await flow.run(state)
+
+        # No hint on any call
+        for call in llm.complete.call_args_list:
+            messages = call[0][0]
+            hint_msgs = [
+                m
+                for m in messages
+                if isinstance(m, dict) and "last turn" in str(m.get("content", "")).lower()
+            ]
+            assert len(hint_msgs) == 0
+
+    async def test_turn_tracked_in_state(self) -> None:
+        """Turn counter is stored in state after execution."""
+        llm = AsyncMock()
+        llm.complete = AsyncMock(return_value=_make_response(text="done"))
+        tools = ToolGroup()
+
+        flow = react_flow(llm, tools, max_iterations=5)
+        state = State(operational=react_initial_state("test"))
+        await flow.run(state)
+
+        assert state.get("turn") == 1
+
+
 class TestReactInitialState:
     def test_creates_messages(self) -> None:
         init = react_initial_state("Hello")

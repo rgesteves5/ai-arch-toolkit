@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import uuid
 import warnings
 from collections.abc import AsyncIterator
 from typing import Any
@@ -134,7 +135,10 @@ def _messages_to_sdk(
                     json.loads(raw_content) if isinstance(raw_content, str) else raw_content
                 )
             except (json.JSONDecodeError, TypeError):
-                response_data = {"result": raw_content}
+                response_data = raw_content
+            # Gemini FunctionResponse.response must be a dict
+            if not isinstance(response_data, dict):
+                response_data = {"result": response_data}
             fn_name = msg.get("name", "")
             if not fn_name:
                 warnings.warn(
@@ -157,20 +161,30 @@ def _messages_to_sdk(
         # Assistant with tool_calls → model Content with FunctionCall parts
         if role == "assistant" and msg.get("tool_calls"):
             _flush_fn_responses()
-            parts: list[types.Part] = []
-            text = msg.get("content", "")
-            if text:
-                parts.append(types.Part(text=text))
-            for tc in msg["tool_calls"]:
-                parts.append(
-                    types.Part(
-                        function_call=types.FunctionCall(
-                            name=tc.get("name", ""),
-                            args=tc.get("input", {}),
+            # Prefer raw Gemini response parts (preserves thought_signature)
+            raw = msg.get("_raw")
+            raw_content = None
+            if raw is not None:
+                candidates = getattr(raw, "candidates", None)
+                if candidates:
+                    raw_content = getattr(candidates[0], "content", None)
+            if raw_content is not None:
+                contents.append(raw_content)
+            else:
+                parts: list[types.Part] = []
+                text = msg.get("content", "")
+                if text:
+                    parts.append(types.Part(text=text))
+                for tc in msg["tool_calls"]:
+                    parts.append(
+                        types.Part(
+                            function_call=types.FunctionCall(
+                                name=tc.get("name", ""),
+                                args=tc.get("input", {}),
+                            )
                         )
                     )
-                )
-            contents.append(types.Content(role="model", parts=parts))
+                contents.append(types.Content(role="model", parts=parts))
             continue
 
         # Regular message
@@ -257,7 +271,7 @@ def _parse_sdk_response(
             fc = part.function_call
             tool_calls.append(
                 ToolCall(
-                    id=getattr(fc, "id", "") or "",
+                    id=getattr(fc, "id", "") or uuid.uuid4().hex[:24],
                     name=fc.name,
                     input=dict(fc.args) if fc.args else {},
                 )
@@ -544,7 +558,7 @@ class GeminiProvider(BaseProvider):
                             fc = part.function_call
                             state.tool_calls.append(
                                 ToolCall(
-                                    id=getattr(fc, "id", "") or "",
+                                    id=getattr(fc, "id", "") or uuid.uuid4().hex[:24],
                                     name=fc.name,
                                     input=dict(fc.args) if fc.args else {},
                                 )

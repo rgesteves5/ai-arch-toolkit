@@ -1,13 +1,13 @@
-"""Tests for toolkit/tools/_knowledge.py."""
+"""Tests for toolkit/tools/_wikipedia.py."""
 
 from __future__ import annotations
 
 import json
 from unittest.mock import MagicMock, patch
 
-from ai_arch_toolkit.toolkit.tools._knowledge import (
-    define_word,
+from ai_arch_toolkit.toolkit.tools._wikipedia import (
     wikipedia_article,
+    wikipedia_related,
     wikipedia_search,
 )
 
@@ -21,7 +21,7 @@ def _mock_urlopen(data):
 
 
 class TestWikipediaSearch:
-    @patch("ai_arch_toolkit.toolkit.tools._knowledge.urllib.request.urlopen")
+    @patch("ai_arch_toolkit.toolkit.tools._wikipedia.urllib.request.urlopen")
     def test_returns_results(self, mock_urlopen):
         mock_urlopen.return_value = _mock_urlopen(
             {
@@ -36,15 +36,15 @@ class TestWikipediaSearch:
         result = wikipedia_search("Python")
         assert "Python" in result
         assert "programming" in result
-        assert "<b>" not in result  # HTML stripped
+        assert "<b>" not in result
 
-    @patch("ai_arch_toolkit.toolkit.tools._knowledge.urllib.request.urlopen")
+    @patch("ai_arch_toolkit.toolkit.tools._wikipedia.urllib.request.urlopen")
     def test_no_results(self, mock_urlopen):
         mock_urlopen.return_value = _mock_urlopen({"query": {"search": []}})
         result = wikipedia_search("xyznonexistent")
         assert "No Wikipedia results" in result
 
-    @patch("ai_arch_toolkit.toolkit.tools._knowledge.urllib.request.urlopen")
+    @patch("ai_arch_toolkit.toolkit.tools._wikipedia.urllib.request.urlopen")
     def test_api_failure(self, mock_urlopen):
         mock_urlopen.side_effect = TimeoutError()
         result = wikipedia_search("test")
@@ -52,7 +52,7 @@ class TestWikipediaSearch:
 
 
 class TestWikipediaArticle:
-    @patch("ai_arch_toolkit.toolkit.tools._knowledge.urllib.request.urlopen")
+    @patch("ai_arch_toolkit.toolkit.tools._wikipedia.urllib.request.urlopen")
     def test_returns_extract(self, mock_urlopen):
         mock_urlopen.return_value = _mock_urlopen(
             {"query": {"pages": {"123": {"title": "Python", "extract": "Python is a language."}}}}
@@ -61,7 +61,7 @@ class TestWikipediaArticle:
         assert "Python" in result
         assert "language" in result
 
-    @patch("ai_arch_toolkit.toolkit.tools._knowledge.urllib.request.urlopen")
+    @patch("ai_arch_toolkit.toolkit.tools._wikipedia.urllib.request.urlopen")
     def test_missing_article(self, mock_urlopen):
         mock_urlopen.return_value = _mock_urlopen(
             {"query": {"pages": {"-1": {"title": "Xyz", "missing": ""}}}}
@@ -69,7 +69,7 @@ class TestWikipediaArticle:
         result = wikipedia_article("Xyz")
         assert "not found" in result.lower()
 
-    @patch("ai_arch_toolkit.toolkit.tools._knowledge.urllib.request.urlopen")
+    @patch("ai_arch_toolkit.toolkit.tools._wikipedia.urllib.request.urlopen")
     def test_truncation(self, mock_urlopen):
         mock_urlopen.return_value = _mock_urlopen(
             {"query": {"pages": {"1": {"title": "Big", "extract": "x" * 10000}}}}
@@ -78,33 +78,33 @@ class TestWikipediaArticle:
         assert "Truncated" in result
 
 
-class TestDefineWord:
-    @patch("ai_arch_toolkit.toolkit.tools._knowledge.urllib.request.urlopen")
-    def test_returns_definition(self, mock_urlopen):
+class TestWikipediaRelated:
+    @patch("ai_arch_toolkit.toolkit.tools._wikipedia.urllib.request.urlopen")
+    def test_returns_links(self, mock_urlopen):
         mock_urlopen.return_value = _mock_urlopen(
-            [
-                {
-                    "word": "test",
-                    "phonetic": "/tɛst/",
-                    "meanings": [
-                        {
-                            "partOfSpeech": "noun",
-                            "definitions": [{"definition": "A procedure for evaluation."}],
+            {
+                "query": {
+                    "pages": {
+                        "1": {
+                            "title": "Python",
+                            "links": [
+                                {"title": "Guido van Rossum"},
+                                {"title": "Programming language"},
+                            ],
                         }
-                    ],
+                    }
                 }
-            ]
+            }
         )
-        result = define_word("test")
-        assert "test" in result
-        assert "noun" in result
-        assert "procedure" in result
+        result = wikipedia_related("Python")
+        assert "Related Wikipedia pages" in result
+        assert "Guido van Rossum" in result
 
-    @patch("ai_arch_toolkit.toolkit.tools._knowledge.urllib.request.urlopen")
-    def test_word_not_found(self, mock_urlopen):
-        import urllib.error
-        from io import BytesIO
-
-        mock_urlopen.side_effect = urllib.error.HTTPError("url", 404, "Not Found", {}, BytesIO())
-        result = define_word("xyzzzz")
-        assert "not found" in result.lower()
+    @patch("ai_arch_toolkit.toolkit.tools._wikipedia.urllib.request.urlopen")
+    def test_falls_back_to_search_when_missing(self, mock_urlopen):
+        mock_urlopen.side_effect = [
+            _mock_urlopen({"query": {"pages": {"-1": {"title": "Missing", "missing": ""}}}}),
+            _mock_urlopen({"query": {"search": [{"title": "Python", "snippet": "A language."}]}}),
+        ]
+        result = wikipedia_related("Missing")
+        assert "Wikipedia results" in result

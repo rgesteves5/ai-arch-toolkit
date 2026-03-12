@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import re
 
-from ai_arch_toolkit.toolkit.tools._datetime import datetime_now, timezone_convert
+from ai_arch_toolkit.toolkit.tools._datetime import (
+    date_add,
+    date_diff,
+    date_format,
+    datetime_now,
+    timezone_convert,
+)
 
 
 class TestDatetimeNow:
@@ -53,3 +59,41 @@ class TestTimezoneConvert:
     def test_invalid_time_format(self):
         result = timezone_convert("not-a-time", "UTC", "UTC")
         assert "Invalid time format" in result
+
+
+class TestDateAdd:
+    def test_add_days_to_date(self):
+        result = date_add("2026-01-15", days=2)
+        assert result == "2026-01-17"
+
+    def test_add_time_to_date_forces_datetime_output(self):
+        result = date_add("2026-01-15", hours=2, minutes=30)
+        assert result == "2026-01-15 02:30"
+
+    def test_invalid_input(self):
+        result = date_add("15/01/2026", days=1)
+        assert "Invalid date/time format" in result
+
+
+class TestDateDiff:
+    def test_diff_in_days(self):
+        result = date_diff("2026-01-15", "2026-01-17", unit="days")
+        assert result.endswith("= 2 days")
+
+    def test_diff_in_hours(self):
+        result = date_diff("2026-01-15 09:00", "2026-01-15 12:30", unit="hours")
+        assert result.endswith("= 3.5 hours")
+
+    def test_invalid_unit(self):
+        result = date_diff("2026-01-15", "2026-01-17", unit="weeks")
+        assert "Invalid unit" in result
+
+
+class TestDateFormat:
+    def test_reformats_date(self):
+        result = date_format("2026-01-15", "%d/%m/%Y")
+        assert result == "15/01/2026"
+
+    def test_reformats_datetime(self):
+        result = date_format("2026-01-15 09:30", "%H:%M on %A")
+        assert result.startswith("09:30 on ")

@@ -1,4 +1,4 @@
-"""Knowledge tools — Wikipedia and dictionary lookups (free, no API key)."""
+"""Wikipedia tools — article search, summaries, and related pages."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import urllib.request
 from ai_arch_toolkit.core import tool
 
 _TIMEOUT = 10
+_USER_AGENT = "ai-arch-toolkit/1.0"
 
 
 @tool
@@ -26,7 +27,7 @@ def wikipedia_search(query: str, results: int = 3) -> str:
         f"&srlimit={results}&format=json&utf8=1"
     )
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "ai-arch-toolkit/1.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
         with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
             data = json.loads(resp.read())
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
@@ -39,9 +40,7 @@ def wikipedia_search(query: str, results: int = 3) -> str:
     lines: list[str] = []
     for item in items:
         title = item.get("title", "")
-        # Strip HTML tags from snippet
-        snippet = item.get("snippet", "")
-        snippet = _strip_html(snippet)
+        snippet = _strip_html(item.get("snippet", ""))
         lines.append(f"  - {title}: {snippet}")
 
     return f"Wikipedia results for {query!r}:\n" + "\n".join(lines)
@@ -61,7 +60,7 @@ def wikipedia_article(title: str, max_chars: int = 4000) -> str:
         f"&prop=extracts&exintro=1&explaintext=1&format=json&utf8=1"
     )
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "ai-arch-toolkit/1.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
         with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
             data = json.loads(resp.read())
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
@@ -82,43 +81,47 @@ def wikipedia_article(title: str, max_chars: int = 4000) -> str:
 
 
 @tool
-def define_word(word: str) -> str:
-    """Look up a word definition using the Free Dictionary API.
+def wikipedia_related(title: str, limit: int = 5) -> str:
+    """Get related Wikipedia article titles from a page's outgoing links.
+
+    Falls back to a regular Wikipedia search if the page is missing.
 
     Args:
-        word: The word to define.
+        title: Exact article title, e.g. "Python (programming language)".
+        limit: Number of related pages to return (1-20). Defaults to 5.
     """
-    url = f"https://api.dictionaryapi.dev/api/v2/entries/en/{urllib.request.quote(word)}"
+    limit = max(1, min(limit, 20))
+    url = (
+        f"https://en.wikipedia.org/w/api.php"
+        f"?action=query&titles={urllib.request.quote(title)}"
+        f"&prop=links&plnamespace=0&pllimit={limit}&redirects=1&format=json&utf8=1"
+    )
     try:
-        req = urllib.request.Request(url)
+        req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
         with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
             data = json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            return f"Word not found: {word!r}"
-        return f"Dictionary API error: {e.code}"
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
-        return f"Dictionary API failed: {e}"
+        return f"Wikipedia related lookup failed: {e}"
 
-    if not isinstance(data, list) or not data:
-        return f"No definitions found for: {word!r}"
+    pages = data.get("query", {}).get("pages", {})
+    for page in pages.values():
+        if "missing" in page:
+            return wikipedia_search(title, results=limit)
 
-    entry = data[0]
-    phonetic = entry.get("phonetic", "")
-    lines: list[str] = []
-    lines.append(f"{word}" + (f"  {phonetic}" if phonetic else ""))
+        links = page.get("links", [])
+        if not links:
+            return wikipedia_search(title, results=limit)
 
-    for meaning in entry.get("meanings", []):
-        pos = meaning.get("partOfSpeech", "")
-        lines.append(f"\n  {pos}:")
-        for defn in meaning.get("definitions", [])[:3]:
-            d = defn.get("definition", "")
-            lines.append(f"    - {d}")
-            example = defn.get("example")
-            if example:
-                lines.append(f"      Example: {example!r}")
+        lines = [f"Related Wikipedia pages for {page.get('title', title)!r}:"]
+        for item in links[:limit]:
+            link_title = item.get("title", "")
+            if link_title:
+                lines.append(f"  - {link_title}")
+        if len(lines) == 1:
+            return wikipedia_search(title, results=limit)
+        return "\n".join(lines)
 
-    return "\n".join(lines)
+    return wikipedia_search(title, results=limit)
 
 
 def _strip_html(text: str) -> str:
