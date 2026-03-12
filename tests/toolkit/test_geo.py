@@ -6,7 +6,14 @@ import json
 from io import BytesIO
 from unittest.mock import MagicMock, patch
 
-from ai_arch_toolkit.toolkit.tools._geo import country_info, geocode, ip_lookup
+from ai_arch_toolkit.toolkit.tools._geo import (
+    country_info,
+    distance_between,
+    geocode,
+    ip_lookup,
+    reverse_geocode,
+    timezone_lookup,
+)
 
 
 def _mock_urlopen(data):
@@ -112,6 +119,65 @@ class TestIpLookup:
         mock_urlopen.side_effect = TimeoutError()
         result = ip_lookup("8.8.8.8")
         assert "failed" in result.lower()
+
+
+class TestReverseGeocode:
+    @patch("ai_arch_toolkit.toolkit.tools._geo.urllib.request.urlopen")
+    def test_returns_location(self, mock_urlopen):
+        mock_urlopen.return_value = _mock_urlopen(
+            {
+                "display_name": "Tokyo, Japan",
+                "address": {
+                    "city": "Tokyo",
+                    "state": "Tokyo",
+                    "country": "Japan",
+                },
+            }
+        )
+        result = reverse_geocode(35.6762, 139.6503)
+        assert "Tokyo, Japan" in result
+        assert "City: Tokyo" in result
+        assert "Country: Japan" in result
+
+    def test_invalid_coordinates(self):
+        result = reverse_geocode(100.0, 10.0)
+        assert "out of range" in result.lower()
+
+
+class TestTimezoneLookup:
+    @patch("ai_arch_toolkit.toolkit.tools._geo.urllib.request.urlopen")
+    def test_returns_timezone(self, mock_urlopen):
+        mock_urlopen.return_value = _mock_urlopen(
+            {
+                "timezone": "Asia/Tokyo",
+                "utc_offset_seconds": 32400,
+            }
+        )
+        result = timezone_lookup(35.6762, 139.6503)
+        assert "Asia/Tokyo" in result
+        assert "UTC+09:00" in result
+
+    @patch("ai_arch_toolkit.toolkit.tools._geo.urllib.request.urlopen")
+    def test_api_error(self, mock_urlopen):
+        mock_urlopen.side_effect = TimeoutError()
+        result = timezone_lookup(35.6762, 139.6503)
+        assert "failed" in result.lower()
+
+
+class TestDistanceBetween:
+    def test_distance_in_km(self):
+        result = distance_between(0.0, 0.0, 0.0, 1.0)
+        assert "111." in result
+        assert result.endswith(" km")
+
+    def test_distance_in_miles(self):
+        result = distance_between(0.0, 0.0, 0.0, 1.0, unit="mi")
+        assert "69." in result
+        assert result.endswith(" mi")
+
+    def test_invalid_unit(self):
+        result = distance_between(0.0, 0.0, 0.0, 1.0, unit="meters")
+        assert "Invalid unit" in result
 
 
 class TestCountryInfo:

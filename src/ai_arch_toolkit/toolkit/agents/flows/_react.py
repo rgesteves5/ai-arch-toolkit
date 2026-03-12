@@ -25,6 +25,9 @@ def react_flow(
     timeout: float | None = None,
     policy: Policy | None = None,
     llm_kwargs: dict[str, Any] | None = None,
+    final_answer_hint: bool = True,
+    strip_tools_on_final: bool = False,
+    show_turn_counter: bool = False,
 ) -> Flow:
     """Create a ReAct Flow — cyclic LLM reasoning + tool execution.
 
@@ -37,6 +40,13 @@ def react_flow(
         timeout: Overall timeout in seconds.
         policy: Optional execution policy for the flow.
         llm_kwargs: Additional kwargs passed to llm.complete().
+        final_answer_hint: On the last turn, inject a message asking the model
+            to provide a final text answer without calling tools. Fixes models
+            that always emit tool calls and never produce a text response.
+        strip_tools_on_final: On the last turn, pass an empty ToolGroup so the
+            model physically cannot call tools. More aggressive than hint alone.
+        show_turn_counter: Inject a ``[Turn N/M]`` user message each turn for
+            debugging and transparency.
     """
     extra_kwargs = llm_kwargs or {}
 
@@ -44,12 +54,30 @@ def react_flow(
         """Call LLM with current messages and tools."""
         messages: list[dict[str, Any]] = snap.require("messages")
         total_usage: Usage = snap.get("total_usage", Usage())
+        turn: int = snap.get("turn", 0) + 1
+        is_final = turn >= max_iterations
+
+        call_messages = list(messages)
+
+        if show_turn_counter and not is_final:
+            call_messages.append(user(f"[Turn {turn}/{max_iterations}]"))
+
+        if is_final and final_answer_hint:
+            label = f"[Turn {turn}/{max_iterations} — FINAL] " if show_turn_counter else ""
+            call_messages.append(
+                user(
+                    f"{label}This is your last turn. Provide your final answer "
+                    "as text. Do not call any tools."
+                )
+            )
+
+        call_tools = ToolGroup() if (is_final and strip_tools_on_final) else tools
 
         try:
             response = await llm.complete(
-                messages,
+                call_messages,
                 system=system or None,
-                tools=tools,
+                tools=call_tools,
                 **extra_kwargs,
             )
         except Exception as exc:
@@ -71,6 +99,7 @@ def react_flow(
                 "has_tool_calls": response.has_tool_calls,
                 "needs_llm_call": False,
                 "total_usage": new_usage,
+                "turn": turn,
             },
             usage=response.usage,
             cost=response.cost or 0.0,

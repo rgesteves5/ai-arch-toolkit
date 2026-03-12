@@ -1,0 +1,521 @@
+{
+  "baseline": {
+    "strategy": "baseline",
+    "model": "gpt-5-nano",
+    "total_samples": 460,
+    "correct": 62,
+    "errors": 0,
+    "accuracy": 0.13478260869565217,
+    "total_cost": 0.6566297000000001,
+    "cost_per_sample": 0.0014274558695652176,
+    "per_task": {
+      "sarc triples": {
+        "correct": 2,
+        "total": 20,
+        "cost": 0.008944450000000001,
+        "errors": 0,
+        "accuracy": 0.1
+      },
+      "temporal sequence": {
+        "correct": 0,
+        "total": 20,
+        "cost": 0.034103100000000004,
+        "errors": 0,
+        "accuracy": 0.0
+      },
+      "disambiguation qa": {
+        "correct": 3,
+        "total": 20,
+        "cost": 0.0280097,
+        "errors": 0,
+        "accuracy": 0.15
+      },
+      "boolean expressions": {
+        "correct": 0,
+        "total": 20,
+        "cost": 0.033781700000000005,
+        "errors": 0,
+        "accuracy": 0.0
+      },
+      "buggy tables": {
+        "correct": 0,
+        "total": 20,
+        "cost": 0.03470650000000001,
+        "errors": 0,
+        "accuracy": 0.0
+      },
+      "causal understanding": {
+        "correct": 7,
+        "total": 20,
+        "cost": 0.017373350000000003,
+        "errors": 0,
+        "accuracy": 0.35
+      },
+      "dyck languages": {
+        "correct": 4,
+        "total": 20,
+        "cost": 0.02958855000000001,
+        "errors": 0,
+        "accuracy": 0.2
+      },
+      "time arithmetic": {
+        "correct": 10,
+        "total": 20,
+        "cost": 0.02636265,
+        "errors": 0,
+        "accuracy": 0.5
+      },
+      "geometric shapes": {
+        "correct": 0,
+        "total": 20,
+        "cost": 0.03373165,
+        "errors": 0,
+        "accuracy": 0.0
+      },
+      "zebra puzzles": {
+        "correct": 1,
+        "total": 20,
+        "cost": 0.033506500000000015,
+        "errors": 0,
+        "accuracy": 0.05
+      },
+      "word sorting": {
+        "correct": 6,
+        "total": 20,
+        "cost": 0.028213700000000005,
+        "errors": 0,
+        "accuracy": 0.3
+      },
+      "object counting": {
+        "correct": 0,
+        "total": 20,
+        "cost": 0.03539355,
+        "errors": 0,
+        "accuracy": 0.0
+      },
+      "nycc": {
+        "correct": 1,
+        "total": 20,
+        "cost": 0.0157037,
+        "errors": 0,
+        "accuracy": 0.05
+      },
+      "movie recommendation": {
+        "correct": 17,
+        "total": 20,
+        "cost": 0.019914900000000003,
+        "errors": 0,
+        "accuracy": 0.85
+      },
+      "multistep arithmetic": {
+        "correct": 0,
+        "total": 20,
+        "cost": 0.03196575000000001,
+        "errors": 0,
+        "accuracy": 0.0
+      },
+      "boardgame qa": {
+        "correct": 1,
+        "total": 20,
+        "cost": 0.0332428,
+        "errors": 0,
+        "accuracy": 0.05
+      },
+      "spatial reasoning": {
+        "correct": 2,
+        "total": 20,
+        "cost": 0.025807850000000004,
+        "errors": 0,
+        "accuracy": 0.1
+      },
+      "web of lies": {
+        "correct": 0,
+        "total": 20,
+        "cost": 0.0329201,
+        "errors": 0,
+        "accuracy": 0.0
+      },
+      "hyperbaton": {
+        "correct": 0,
+        "total": 20,
+        "cost": 0.03405130000000001,
+        "errors": 0,
+        "accuracy": 0.0
+      },
+      "linguini": {
+        "correct": 2,
+        "total": 20,
+        "cost": 0.031223850000000004,
+        "errors": 0,
+        "accuracy": 0.1
+      },
+      "shuffled objects": {
+        "correct": 1,
+        "total": 20,
+        "cost": 0.03476055000000001,
+        "errors": 0,
+        "accuracy": 0.05
+      },
+      "sportqa": {
+        "correct": 5,
+        "total": 20,
+        "cost": 0.021612499999999996,
+        "errors": 0,
+        "accuracy": 0.25
+      },
+      "object properties": {
+        "correct": 0,
+        "total": 20,
+        "cost": 0.031711,
+        "errors": 0,
+        "accuracy": 0.0
+      }
+    }
+  },
+  "react_tools": {
+    "strategy": "react_tools",
+    "model": "gpt-5-nano",
+    "total_samples": 460,
+    "correct": 66,
+    "errors": 0,
+    "accuracy": 0.14347826086956522,
+    "total_cost": 0.6667523200000004,
+    "cost_per_sample": 0.0014494615652173922,
+    "per_task": {
+      "sarc triples": {
+        "correct": 2,
+        "total": 20,
+        "cost": 0.012106899999999999,
+        "errors": 0,
+        "accuracy": 0.1
+      },
+      "temporal sequence": {
+        "correct": 0,
+        "total": 20,
+        "cost": 0.0359125,
+        "errors": 0,
+        "accuracy": 0.0
+      },
+      "disambiguation qa": {
+        "correct": 2,
+        "total": 20,
+        "cost": 0.0275859,
+        "errors": 0,
+        "accuracy": 0.1
+      },
+      "boolean expressions": {
+        "correct": 1,
+        "total": 20,
+        "cost": 0.0349075,
+        "errors": 0,
+        "accuracy": 0.05
+      },
+      "buggy tables": {
+        "correct": 0,
+        "total": 20,
+        "cost": 0.0358595,
+        "errors": 0,
+        "accuracy": 0.0
+      },
+      "causal understanding": {
+        "correct": 10,
+        "total": 20,
+        "cost": 0.016890100000000005,
+        "errors": 0,
+        "accuracy": 0.5
+      },
+      "dyck languages": {
+        "correct": 4,
+        "total": 20,
+        "cost": 0.027096540000000002,
+        "errors": 0,
+        "accuracy": 0.2
+      },
+      "time arithmetic": {
+        "correct": 11,
+        "total": 20,
+        "cost": 0.027966450000000004,
+        "errors": 0,
+        "accuracy": 0.55
+      },
+      "geometric shapes": {
+        "correct": 0,
+        "total": 20,
+        "cost": 0.03294465,
+        "errors": 0,
+        "accuracy": 0.0
+      },
+      "zebra puzzles": {
+        "correct": 2,
+        "total": 20,
+        "cost": 0.033499900000000006,
+        "errors": 0,
+        "accuracy": 0.1
+      },
+      "word sorting": {
+        "correct": 8,
+        "total": 20,
+        "cost": 0.0304839,
+        "errors": 0,
+        "accuracy": 0.4
+      },
+      "object counting": {
+        "correct": 0,
+        "total": 20,
+        "cost": 0.035784550000000005,
+        "errors": 0,
+        "accuracy": 0.0
+      },
+      "nycc": {
+        "correct": 3,
+        "total": 20,
+        "cost": 0.01578585,
+        "errors": 0,
+        "accuracy": 0.15
+      },
+      "movie recommendation": {
+        "correct": 15,
+        "total": 20,
+        "cost": 0.021562900000000006,
+        "errors": 0,
+        "accuracy": 0.75
+      },
+      "multistep arithmetic": {
+        "correct": 0,
+        "total": 20,
+        "cost": 0.03192015,
+        "errors": 0,
+        "accuracy": 0.0
+      },
+      "boardgame qa": {
+        "correct": 0,
+        "total": 20,
+        "cost": 0.034177400000000004,
+        "errors": 0,
+        "accuracy": 0.0
+      },
+      "spatial reasoning": {
+        "correct": 2,
+        "total": 20,
+        "cost": 0.026187650000000007,
+        "errors": 0,
+        "accuracy": 0.1
+      },
+      "web of lies": {
+        "correct": 0,
+        "total": 20,
+        "cost": 0.0322331,
+        "errors": 0,
+        "accuracy": 0.0
+      },
+      "hyperbaton": {
+        "correct": 0,
+        "total": 20,
+        "cost": 0.0344423,
+        "errors": 0,
+        "accuracy": 0.0
+      },
+      "linguini": {
+        "correct": 1,
+        "total": 20,
+        "cost": 0.031411249999999995,
+        "errors": 0,
+        "accuracy": 0.05
+      },
+      "shuffled objects": {
+        "correct": 0,
+        "total": 20,
+        "cost": 0.035753150000000004,
+        "errors": 0,
+        "accuracy": 0.0
+      },
+      "sportqa": {
+        "correct": 5,
+        "total": 20,
+        "cost": 0.022178150000000004,
+        "errors": 0,
+        "accuracy": 0.25
+      },
+      "object properties": {
+        "correct": 0,
+        "total": 20,
+        "cost": 0.030062030000000003,
+        "errors": 0,
+        "accuracy": 0.0
+      }
+    }
+  },
+  "self_discovery": {
+    "strategy": "self_discovery",
+    "model": "gpt-5-nano",
+    "total_samples": 460,
+    "correct": 75,
+    "errors": 0,
+    "accuracy": 0.16304347826086957,
+    "total_cost": 2.184894950000002,
+    "cost_per_sample": 0.0047497716304347876,
+    "per_task": {
+      "sarc triples": {
+        "correct": 4,
+        "total": 20,
+        "cost": 0.04130005,
+        "errors": 0,
+        "accuracy": 0.2
+      },
+      "temporal sequence": {
+        "correct": 0,
+        "total": 20,
+        "cost": 0.11662040000000001,
+        "errors": 0,
+        "accuracy": 0.0
+      },
+      "disambiguation qa": {
+        "correct": 5,
+        "total": 20,
+        "cost": 0.0932719,
+        "errors": 0,
+        "accuracy": 0.25
+      },
+      "boolean expressions": {
+        "correct": 2,
+        "total": 20,
+        "cost": 0.11019360000000002,
+        "errors": 0,
+        "accuracy": 0.1
+      },
+      "buggy tables": {
+        "correct": 0,
+        "total": 20,
+        "cost": 0.1252784,
+        "errors": 0,
+        "accuracy": 0.0
+      },
+      "causal understanding": {
+        "correct": 11,
+        "total": 20,
+        "cost": 0.05238350000000001,
+        "errors": 0,
+        "accuracy": 0.55
+      },
+      "dyck languages": {
+        "correct": 5,
+        "total": 20,
+        "cost": 0.09553315000000001,
+        "errors": 0,
+        "accuracy": 0.25
+      },
+      "time arithmetic": {
+        "correct": 14,
+        "total": 20,
+        "cost": 0.08432529999999999,
+        "errors": 0,
+        "accuracy": 0.7
+      },
+      "geometric shapes": {
+        "correct": 0,
+        "total": 20,
+        "cost": 0.10481515,
+        "errors": 0,
+        "accuracy": 0.0
+      },
+      "zebra puzzles": {
+        "correct": 0,
+        "total": 20,
+        "cost": 0.10260100000000001,
+        "errors": 0,
+        "accuracy": 0.0
+      },
+      "word sorting": {
+        "correct": 7,
+        "total": 20,
+        "cost": 0.10538075000000001,
+        "errors": 0,
+        "accuracy": 0.35
+      },
+      "object counting": {
+        "correct": 0,
+        "total": 20,
+        "cost": 0.1265755,
+        "errors": 0,
+        "accuracy": 0.0
+      },
+      "nycc": {
+        "correct": 3,
+        "total": 20,
+        "cost": 0.046439499999999995,
+        "errors": 0,
+        "accuracy": 0.15
+      },
+      "movie recommendation": {
+        "correct": 15,
+        "total": 20,
+        "cost": 0.06611035,
+        "errors": 0,
+        "accuracy": 0.75
+      },
+      "multistep arithmetic": {
+        "correct": 0,
+        "total": 20,
+        "cost": 0.10828350000000002,
+        "errors": 0,
+        "accuracy": 0.0
+      },
+      "boardgame qa": {
+        "correct": 1,
+        "total": 20,
+        "cost": 0.10832465000000002,
+        "errors": 0,
+        "accuracy": 0.05
+      },
+      "spatial reasoning": {
+        "correct": 1,
+        "total": 20,
+        "cost": 0.06139150000000001,
+        "errors": 0,
+        "accuracy": 0.05
+      },
+      "web of lies": {
+        "correct": 0,
+        "total": 20,
+        "cost": 0.10851275,
+        "errors": 0,
+        "accuracy": 0.0
+      },
+      "hyperbaton": {
+        "correct": 0,
+        "total": 20,
+        "cost": 0.11801220000000001,
+        "errors": 0,
+        "accuracy": 0.0
+      },
+      "linguini": {
+        "correct": 1,
+        "total": 20,
+        "cost": 0.11014620000000003,
+        "errors": 0,
+        "accuracy": 0.05
+      },
+      "shuffled objects": {
+        "correct": 1,
+        "total": 20,
+        "cost": 0.12093785,
+        "errors": 0,
+        "accuracy": 0.05
+      },
+      "sportqa": {
+        "correct": 5,
+        "total": 20,
+        "cost": 0.0812457,
+        "errors": 0,
+        "accuracy": 0.25
+      },
+      "object properties": {
+        "correct": 0,
+        "total": 20,
+        "cost": 0.09721205000000002,
+        "errors": 0,
+        "accuracy": 0.0
+      }
+    }
+  }
+}

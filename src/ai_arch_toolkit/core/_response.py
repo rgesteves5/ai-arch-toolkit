@@ -135,6 +135,10 @@ class Response:
 
         Returns a dict suitable for appending to a conversation history and
         passing back to ``LLM.complete()`` or provider ``complete()``.
+
+        If ``raw`` contains a provider SDK response with additional metadata
+        (e.g. Gemini thought signatures), it is preserved under ``_raw`` so
+        provider-specific message formatters can use the original parts.
         """
         msg: dict[str, Any] = {"role": "assistant", "content": self.text}
         if self.tool_calls:
@@ -143,6 +147,8 @@ class Response:
             ]
         if self.parsed is not None:
             msg["parsed"] = self.parsed
+        if self.raw is not None:
+            msg["_raw"] = self.raw
         return msg
 
     # --- string-like behaviour ---
