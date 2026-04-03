@@ -60,6 +60,7 @@ class OutputSchema:
     name: str
     schema: dict[str, Any]
     strict: bool = True
+    model_class: type | None = None
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -76,7 +77,11 @@ def _resolve_output_schema(schema: OutputSchema | type) -> OutputSchema:
         from pydantic import BaseModel
 
         if isinstance(schema, type) and issubclass(schema, BaseModel):
-            return OutputSchema(name=schema.__name__, schema=schema.model_json_schema())
+            return OutputSchema(
+                name=schema.__name__,
+                schema=schema.model_json_schema(),
+                model_class=schema,
+            )
     except ImportError:
         pass
     raise TypeError(f"Expected OutputSchema or Pydantic model, got {type(schema)}")

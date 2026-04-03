@@ -281,9 +281,16 @@ def _parse_sdk_response(
     parsed: Any = None
     if output_schema and text:
         try:
-            parsed = json.loads(text)
+            data = json.loads(text)
+            if output_schema.model_class is not None:
+                parsed = output_schema.model_class.model_validate(data)
+            else:
+                parsed = data
         except (json.JSONDecodeError, TypeError):
             logger.warning("Failed to parse structured output as JSON")
+        except Exception:
+            logger.warning("Failed to validate structured output against schema")
+            parsed = json.loads(text)  # fallback to raw dict
 
     usage = _extract_usage(response.usage_metadata) if response.usage_metadata else Usage()
     cost = _estimate_response_cost(model, usage)
