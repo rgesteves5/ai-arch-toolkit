@@ -16,6 +16,7 @@ from ai_arch_toolkit.core._providers._xai import (
     _build_response_format,
     _extract_usage,
     _grpc_code_to_http,
+    _is_multi_agent_model,
     _messages_to_sdk,
     _parse_sdk_response,
     _tool_to_sdk,
@@ -262,6 +263,12 @@ class TestGrpcCodeToHttp:
         assert _grpc_code_to_http(grpc.StatusCode.FAILED_PRECONDITION) == 412
 
 
+class TestModelHelpers:
+    def test_is_multi_agent_model(self):
+        assert _is_multi_agent_model("grok-4.20-multi-agent")
+        assert not _is_multi_agent_model("grok-4.20-reasoning")
+
+
 # ---------------------------------------------------------------------------
 # Provider integration tests (mocked SDK client)
 # ---------------------------------------------------------------------------
@@ -317,34 +324,72 @@ class TestXAIProviderComplete:
         assert "tools" in call_kwargs
         assert len(call_kwargs["tools"]) == 1
 
-    async def test_reasoning_effort_forwarded(self):
+    async def test_reasoning_effort_ignored(self):
         mock_chat = _make_mock_chat()
         mock_client = MagicMock()
         mock_client.chat.create.return_value = mock_chat
 
-        provider = XAIProvider("grok-3", "test-key")
+        provider = XAIProvider("grok-4.20-reasoning", "test-key")
         provider._client = mock_client
-        await provider.complete(
-            [{"role": "user", "content": "Hi"}],
-            thinking=True,
-            thinking_effort="high",
-        )
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            await provider.complete(
+                [{"role": "user", "content": "Hi"}],
+                thinking=True,
+                thinking_effort="high",
+            )
         call_kwargs = mock_client.chat.create.call_args[1]
-        assert call_kwargs["reasoning_effort"] == "high"
+        assert "reasoning_effort" not in call_kwargs
+        assert any("reason automatically" in str(warning.message) for warning in w)
 
-    async def test_thinking_true_defaults_to_high(self):
+    async def test_thinking_true_is_ignored(self):
         mock_chat = _make_mock_chat()
         mock_client = MagicMock()
         mock_client.chat.create.return_value = mock_chat
 
-        provider = XAIProvider("grok-3", "test-key")
+        provider = XAIProvider("grok-4.20-reasoning", "test-key")
+        provider._client = mock_client
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            await provider.complete(
+                [{"role": "user", "content": "Hi"}],
+                thinking=True,
+            )
+        call_kwargs = mock_client.chat.create.call_args[1]
+        assert "reasoning_effort" not in call_kwargs
+        assert any("reason automatically" in str(warning.message) for warning in w)
+
+    async def test_multi_agent_agent_count_forwarded_and_max_tokens_dropped(self):
+        mock_chat = _make_mock_chat()
+        mock_client = MagicMock()
+        mock_client.chat.create.return_value = mock_chat
+
+        provider = XAIProvider("grok-4.20-multi-agent", "test-key")
+        provider._client = mock_client
+        await provider.complete(
+            [{"role": "user", "content": "Hi"}],
+            agent_count=4,
+            max_tokens=64,
+        )
+        call_kwargs = mock_client.chat.create.call_args[1]
+        assert call_kwargs["agent_count"] == 4
+        assert "max_tokens" not in call_kwargs
+
+    async def test_multi_agent_thinking_effort_maps_to_agent_count(self):
+        mock_chat = _make_mock_chat()
+        mock_client = MagicMock()
+        mock_client.chat.create.return_value = mock_chat
+
+        provider = XAIProvider("grok-4.20-multi-agent", "test-key")
         provider._client = mock_client
         await provider.complete(
             [{"role": "user", "content": "Hi"}],
             thinking=True,
+            thinking_effort="medium",
         )
         call_kwargs = mock_client.chat.create.call_args[1]
-        assert call_kwargs["reasoning_effort"] == "high"
+        assert call_kwargs["agent_count"] == 4
+        assert "reasoning_effort" not in call_kwargs
 
     async def test_output_schema_forwarded(self):
         mock_chat = _make_mock_chat(response=_sdk_response(content='{"name": "Alice"}'))

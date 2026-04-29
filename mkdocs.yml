@@ -6,5 +6,6 @@ theme:
 nav:
   - Home: index.md
   - Getting Started: getting-started.md
+  - Model Compatibility: model-compatibility.md
   - UV Guide: uv-guide.md
   - API Docs: api.md

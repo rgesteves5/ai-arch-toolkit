@@ -32,6 +32,15 @@ _SDK_PARAMS = {
     "frequency_penalty",
     "presence_penalty",
     "seed",
+    "agent_count",
+}
+
+_MULTI_AGENT_MODELS = ("grok-4.20-multi-agent",)
+_MULTI_AGENT_EFFORT_COUNTS = {
+    "low": 4,
+    "medium": 4,
+    "high": 16,
+    "xhigh": 16,
 }
 
 
@@ -109,6 +118,11 @@ def _messages_to_sdk(
 
     system_text = "\n\n".join(system_parts) if system_parts else None
     return sdk_msgs, system_text
+
+
+def _is_multi_agent_model(model: str) -> bool:
+    """Return True for xAI multi-agent models."""
+    return model.startswith(_MULTI_AGENT_MODELS)
 
 
 def _tool_to_sdk(tool: dict[str, Any]) -> Any:
@@ -270,9 +284,25 @@ class XAIProvider(BaseProvider):
         thinking = kwargs.pop("thinking", False)
         thinking_effort = kwargs.pop("thinking_effort", None)
         thinking_budget = kwargs.pop("thinking_budget", None)
-        if thinking_budget:
+        multi_agent = _is_multi_agent_model(self._model)
+        if multi_agent:
+            kwargs.pop("max_tokens", None)
+            if "agent_count" not in kwargs:
+                if thinking_effort:
+                    kwargs["agent_count"] = _MULTI_AGENT_EFFORT_COUNTS.get(
+                        thinking_effort.lower(), 4
+                    )
+                elif thinking:
+                    kwargs["agent_count"] = 4
+            if thinking_budget:
+                warnings.warn(
+                    "thinking_budget is not supported by xAI multi-agent models, ignoring",
+                    stacklevel=4,
+                )
+        elif thinking or thinking_effort or thinking_budget:
             warnings.warn(
-                "thinking_budget is not supported by xAI (only reasoning_effort string), ignoring",
+                "xAI Grok reasoning models reason automatically; "
+                "thinking, thinking_effort, and thinking_budget are ignored",
                 stacklevel=4,
             )
         output_schema: OutputSchema | None = kwargs.pop("output_schema", None)
@@ -302,16 +332,12 @@ class XAIProvider(BaseProvider):
             **filtered,
         }
 
-        # Reasoning — default to "high" when thinking=True but no effort specified
-        if thinking:
-            create_kwargs["reasoning_effort"] = thinking_effort or "high"
-            incompatible = {"stop", "frequency_penalty", "presence_penalty"} & set(filtered)
-            if incompatible:
-                warnings.warn(
-                    f"Parameters {sorted(incompatible)} are incompatible with "
-                    f"xAI reasoning models",
-                    stacklevel=4,
-                )
+        incompatible = {"stop", "frequency_penalty", "presence_penalty"} & set(filtered)
+        if incompatible and "reasoning" in self._model:
+            warnings.warn(
+                f"Parameters {sorted(incompatible)} are incompatible with xAI reasoning models",
+                stacklevel=4,
+            )
 
         # Tools
         if tools:

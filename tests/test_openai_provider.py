@@ -385,6 +385,54 @@ class TestOpenAIProviderComplete:
         call_kwargs = mock_client.chat.completions.create.call_args[1]
         assert call_kwargs["reasoning_effort"] == "high"
 
+    async def test_gpt5_reasoning_drops_non_default_temperature(self):
+        mock_client = AsyncMock()
+        mock_client.chat.completions.create.return_value = _sdk_completion()
+
+        provider = OpenAIProvider("gpt-5.4-mini", "test-key")
+        provider._client = mock_client
+        await provider.complete(
+            [{"role": "user", "content": "Hi"}],
+            thinking=True,
+            thinking_effort="medium",
+            temperature=0.0,
+        )
+        call_kwargs = mock_client.chat.completions.create.call_args[1]
+        assert call_kwargs["reasoning_effort"] == "medium"
+        assert "temperature" not in call_kwargs
+
+    async def test_gpt5_reasoning_keeps_temperature_one(self):
+        mock_client = AsyncMock()
+        mock_client.chat.completions.create.return_value = _sdk_completion()
+
+        provider = OpenAIProvider("gpt-5.4-mini", "test-key")
+        provider._client = mock_client
+        await provider.complete(
+            [{"role": "user", "content": "Hi"}],
+            thinking=True,
+            thinking_effort="medium",
+            temperature=1.0,
+        )
+        call_kwargs = mock_client.chat.completions.create.call_args[1]
+        assert call_kwargs["reasoning_effort"] == "medium"
+        assert call_kwargs["temperature"] == 1.0
+
+    async def test_gpt5_reasoning_none_keeps_temperature(self):
+        mock_client = AsyncMock()
+        mock_client.chat.completions.create.return_value = _sdk_completion()
+
+        provider = OpenAIProvider("gpt-5.4-mini", "test-key")
+        provider._client = mock_client
+        await provider.complete(
+            [{"role": "user", "content": "Hi"}],
+            thinking=True,
+            thinking_effort="none",
+            temperature=0.0,
+        )
+        call_kwargs = mock_client.chat.completions.create.call_args[1]
+        assert call_kwargs["reasoning_effort"] == "none"
+        assert call_kwargs["temperature"] == 0.0
+
     async def test_thinking_budget_warns(self):
         mock_client = AsyncMock()
         mock_client.chat.completions.create.return_value = _sdk_completion()
@@ -481,6 +529,49 @@ class TestOpenAIProviderComplete:
         )
         call_kwargs = mock_client.chat.completions.create.call_args[1]
         assert call_kwargs["max_completion_tokens"] == 8192
+
+    async def test_gpt5_translates_max_tokens_to_max_completion_tokens(self):
+        mock_client = AsyncMock()
+        mock_client.chat.completions.create.return_value = _sdk_completion()
+
+        provider = OpenAIProvider("gpt-5.4-mini", "test-key")
+        provider._client = mock_client
+        await provider.complete(
+            [{"role": "user", "content": "Hi"}],
+            max_tokens=64,
+        )
+        call_kwargs = mock_client.chat.completions.create.call_args[1]
+        assert call_kwargs["max_completion_tokens"] == 64
+        assert "max_tokens" not in call_kwargs
+
+    async def test_exact_o3_translates_max_tokens_to_max_completion_tokens(self):
+        mock_client = AsyncMock()
+        mock_client.chat.completions.create.return_value = _sdk_completion()
+
+        provider = OpenAIProvider("o3", "test-key")
+        provider._client = mock_client
+        await provider.complete(
+            [{"role": "user", "content": "Hi"}],
+            max_tokens=64,
+        )
+        call_kwargs = mock_client.chat.completions.create.call_args[1]
+        assert call_kwargs["max_completion_tokens"] == 64
+        assert "max_tokens" not in call_kwargs
+
+    async def test_gpt5_prefers_explicit_max_completion_tokens(self):
+        mock_client = AsyncMock()
+        mock_client.chat.completions.create.return_value = _sdk_completion()
+
+        provider = OpenAIProvider("gpt-5.4-mini", "test-key")
+        provider._client = mock_client
+        await provider.complete(
+            [{"role": "user", "content": "Hi"}],
+            max_tokens=64,
+            max_completion_tokens=128,
+        )
+        call_kwargs = mock_client.chat.completions.create.call_args[1]
+        assert call_kwargs["max_completion_tokens"] == 128
+        assert "max_tokens" not in call_kwargs
 
 
 class TestOpenAIProviderErrors:

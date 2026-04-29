@@ -1,0 +1,206 @@
+# Manual live model probe inventory.
+#
+# Run with:
+#   set -a; source .env; set +a
+#   uv run python scripts/probe_models.py --suite smoke
+#
+# Scenarios:
+#   plain, tools_loop, structured, json_mode, stream, thinking
+
+# ---------------------------------------------------------------------------
+# OpenAI
+# ---------------------------------------------------------------------------
+
+[[models]]
+id = "gpt-5.5"
+provider = "openai"
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
+kwargs = { temperature = 1.0, max_tokens = 64, thinking_effort = "low" }
+
+[[models]]
+id = "gpt-5.4"
+provider = "openai"
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
+kwargs = { temperature = 1.0, max_tokens = 64, thinking_effort = "low" }
+
+[[models]]
+id = "gpt-5.4-mini"
+provider = "openai"
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
+kwargs = { temperature = 1.0, max_tokens = 64, thinking_effort = "low" }
+
+[[models]]
+id = "gpt-5.4-nano"
+provider = "openai"
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
+kwargs = { temperature = 1.0, max_tokens = 64, thinking_effort = "low" }
+
+[[models]]
+id = "gpt-4.1"
+provider = "openai"
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream"]
+kwargs = { temperature = 0.0, max_tokens = 64 }
+
+[[models]]
+id = "gpt-5-mini"
+provider = "openai"
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
+kwargs = { temperature = 1.0, max_tokens = 1024, thinking_effort = "low" }
+
+[[models]]
+id = "gpt-5-nano"
+provider = "openai"
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
+kwargs = { temperature = 1.0, max_tokens = 1024, thinking_effort = "low" }
+
+[[models]]
+id = "gpt-5"
+provider = "openai"
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
+kwargs = { temperature = 1.0, max_tokens = 1024, thinking_effort = "low" }
+
+[[models]]
+id = "o3"
+provider = "openai"
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
+kwargs = { temperature = 1.0, max_tokens = 1024, thinking_effort = "low" }
+
+# ---------------------------------------------------------------------------
+# xAI
+# ---------------------------------------------------------------------------
+
+[[models]]
+id = "grok-4.20-reasoning"
+provider = "xai"
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream"]
+kwargs = { temperature = 0.0, max_tokens = 64 }
+
+[[models]]
+id = "grok-4.20-non-reasoning"
+provider = "xai"
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream"]
+kwargs = { temperature = 0.0, max_tokens = 64 }
+
+[[models]]
+id = "grok-4.20-multi-agent"
+provider = "xai"
+scenarios = ["plain", "stream"]
+kwargs = { temperature = 0.0, agent_count = 4 }
+
+[[models]]
+id = "grok-4-1-fast-reasoning"
+provider = "xai"
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream"]
+kwargs = { temperature = 0.0, max_tokens = 64 }
+
+[[models]]
+id = "grok-4-1-fast-non-reasoning"
+provider = "xai"
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream"]
+kwargs = { temperature = 0.0, max_tokens = 64 }
+
+# ---------------------------------------------------------------------------
+# Gemini
+# ---------------------------------------------------------------------------
+
+[[models]]
+id = "gemini-3.1-pro-preview"
+provider = "gemini"
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
+allow_transient = true
+kwargs = { temperature = 0.0, max_tokens = 512, thinking_effort = "medium" }
+
+[[models]]
+id = "gemini-3.1-flash-lite-preview"
+provider = "gemini"
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
+allow_transient = true
+kwargs = { temperature = 0.0, max_tokens = 64, thinking_effort = "medium" }
+
+[[models]]
+id = "gemini-3.1-flash-live-preview"
+provider = "gemini"
+scenarios = ["plain", "stream"]
+allow_transient = true
+kwargs = { temperature = 0.0, max_tokens = 64 }
+
+[[models]]
+id = "gemini-3-flash-preview"
+provider = "gemini"
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
+allow_transient = true
+kwargs = { temperature = 0.0, max_tokens = 512, thinking_effort = "medium" }
+
+[[models]]
+id = "gemini-2.5-pro"
+provider = "gemini"
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
+allow_transient = true
+kwargs = { temperature = 0.0, max_tokens = 1024, thinking_budget = 256 }
+
+[[models]]
+id = "gemini-2.5-flash"
+provider = "gemini"
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
+allow_transient = true
+kwargs = { temperature = 0.0, max_tokens = 1024, thinking_budget = 256 }
+
+[[models]]
+id = "gemini-2.5-flash-lite"
+provider = "gemini"
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
+allow_transient = true
+kwargs = { temperature = 0.0, max_tokens = 1024, thinking_budget = 512 }
+
+# ---------------------------------------------------------------------------
+# Anthropic
+# ---------------------------------------------------------------------------
+
+[[models]]
+id = "claude-opus-4-7"
+provider = "anthropic"
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream"]
+allow_transient = true
+kwargs = { temperature = 0.0, max_tokens = 64 }
+
+[[models]]
+id = "claude-sonnet-4-6"
+provider = "anthropic"
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream"]
+allow_transient = true
+kwargs = { temperature = 0.0, max_tokens = 64 }
+
+[[models]]
+id = "claude-haiku-4-5"
+provider = "anthropic"
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream"]
+allow_transient = true
+kwargs = { temperature = 0.0, max_tokens = 64 }
+
+[[models]]
+id = "claude-opus-4-6"
+provider = "anthropic"
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream"]
+allow_transient = true
+kwargs = { temperature = 0.0, max_tokens = 64 }
+
+[[models]]
+id = "claude-sonnet-4-5"
+provider = "anthropic"
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream"]
+allow_transient = true
+kwargs = { temperature = 0.0, max_tokens = 64 }
+
+[[models]]
+id = "claude-opus-4-5"
+provider = "anthropic"
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream"]
+allow_transient = true
+kwargs = { temperature = 0.0, max_tokens = 64 }
+
+[[models]]
+id = "claude-sonnet-4-0"
+provider = "anthropic"
+scenarios = ["plain", "tools_loop", "json_mode", "stream"]
+allow_transient = true
+kwargs = { temperature = 0.0, max_tokens = 64 }

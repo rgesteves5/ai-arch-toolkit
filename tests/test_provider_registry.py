@@ -21,6 +21,9 @@ class TestDetectProvider:
     def test_o3(self):
         assert _detect_provider("o3-mini") == "openai"
 
+    def test_exact_o3(self):
+        assert _detect_provider("o3") == "openai"
+
     def test_o4(self):
         assert _detect_provider("o4-mini") == "openai"
 

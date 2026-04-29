@@ -44,6 +44,8 @@ _SERVER_TOOL_TYPES: dict[str, str] = {
     "code_execution": "code_execution_20250522",
 }
 
+_TEMPERATURE_DEPRECATED_MODELS = {"claude-opus-4-7"}
+
 
 # ---------------------------------------------------------------------------
 # Adapter helpers — pure functions for message/tool/response conversion
@@ -194,6 +196,11 @@ def _build_output_config(output_schema: OutputSchema) -> dict[str, Any]:
             "schema": output_schema.schema,
         }
     }
+
+
+def _uses_deprecated_temperature(model: str) -> bool:
+    """Return True for Anthropic models that reject ``temperature``."""
+    return model in _TEMPERATURE_DEPRECATED_MODELS
 
 
 def _extract_usage(sdk_usage: Any) -> Usage:
@@ -352,6 +359,8 @@ class AnthropicProvider(BaseProvider):
             "messages": wire_messages,
             **filtered,
         }
+        if _uses_deprecated_temperature(self._model):
+            sdk_kwargs.pop("temperature", None)
 
         if system:
             sdk_kwargs["system"] = system

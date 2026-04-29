@@ -53,6 +53,11 @@ class ToolGroup:
         self._definitions[name] = tool_def
 
     @property
+    def tools(self) -> list[Callable[..., Any]]:
+        """Return the registered tool functions."""
+        return list(self._fns.values())
+
+    @property
     def definitions(self) -> list[dict[str, Any]]:
         """Return tool definitions suitable for passing to LLM APIs."""
         return list(self._definitions.values())

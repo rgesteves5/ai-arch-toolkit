@@ -347,7 +347,8 @@ class GeminiProvider(BaseProvider):
         self._model = model
         client_kwargs: dict[str, Any] = {"api_key": api_key}
         if timeout is not None:
-            client_kwargs["http_options"] = {"timeout": timeout}
+            # google-genai expects HttpOptions.timeout in milliseconds.
+            client_kwargs["http_options"] = {"timeout": int(timeout * 1000)}
         self._client = genai.Client(**client_kwargs)
 
     async def close(self) -> None:
