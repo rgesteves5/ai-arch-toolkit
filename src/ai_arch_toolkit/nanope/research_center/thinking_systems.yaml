@@ -1,0 +1,368 @@
+topic_decomposition:
+  summary: Break a broad topic into researachable subtopics
+  strategy: |
+    1. State the broad topic in one sentence.
+    2. Ask: what are the major dimensions? (history, key people, mechanisms, impact, current state)
+    3. For each dimension, list 2-3 specific subtopics that can be searched individually.
+    4. Order subtopics by dependency — foundational concepts first, details later.
+    5. For each subtopic, formulate a concrete search query.
+    6. After researching, check which subtopics feed into others and note connections.
+  example: |
+    Topic: "Machine Learning"
+    Dimensions: foundations, techniques, applications, history, ethics
+    Subtopics:
+      Foundations: "what is supervised learning", "neural network basics"
+      Techniques: "decision trees", "deep learning architectures"
+      Applications: "ML in healthcare", "natural language processing"
+      History: "history of artificial intelligence", "perceptron invention"
+      Ethics: "AI bias", "explainability"
+    Order: foundations → history → techniques → applications → ethics
+    Queries: "supervised learning", "neural network", "deep learning", ...
+
+gap_analysis:
+  summary: Identify what is missing in current knowledge about a topic
+  strategy: |
+    1. Define the topic scope — what should a complete understanding cover?
+    2. List the expected subtopics or dimensions (who, what, when, where, why, how).
+    3. Review what is currently known (in memory or provided context).
+    4. For each expected subtopic, mark: covered, partially covered, or missing.
+    5. Prioritize gaps by importance to the research goal.
+    6. Formulate specific queries to fill the highest-priority gaps.
+  example: |
+    Topic: "History of the Internet"
+    Expected: origins, key milestones, key people, technical evolution, social impact, governance
+    Known: ARPANET (1969), Tim Berners-Lee (WWW), TCP/IP
+    Gaps: governance (ICANN, IETF), social impact, post-2000 evolution
+    Priority: governance (high — foundational), social impact (medium)
+    Queries: "internet governance ICANN history", "social impact of internet 2000s"
+
+synthesis:
+  summary: Combine multiple findings into a coherent narrative
+  strategy: |
+    1. Gather all findings on the topic from memory/context.
+    2. Group findings by subtopic or theme.
+    3. Within each group, order chronologically or by importance.
+    4. Identify connections between groups (causes, consequences, parallels).
+    5. Write a structured summary: introduction, body (by theme), conclusion.
+    6. Ensure every claim traces back to a specific finding.
+    7. Flag any remaining uncertainties or contradictions.
+  example: |
+    Topic: "Causes of the French Revolution"
+    Group 1 (Economic): national debt, bread prices, tax inequality
+    Group 2 (Social): estate system, bourgeoisie frustration, Enlightenment ideas
+    Group 3 (Political): weak monarchy, Estates-General crisis
+    Connections: Economic stress + social inequality → political crisis
+    Synthesis: "The French Revolution arose from converging economic collapse,
+    rigid social hierarchy, and Enlightenment-inspired demands for reform..."
+
+compare_contrast:
+  summary: Systematically compare two or more concepts
+  strategy: |
+    1. List the items to compare.
+    2. Define comparison dimensions (features, properties, metrics).
+    3. For each dimension, extract the value for each item.
+    4. Build a comparison table.
+    5. Identify similarities and differences.
+    6. Draw conclusions about relative strengths, applicability, or fit.
+  example: |
+    Compare: Python vs Rust
+    Dimensions: speed, safety, learning curve, ecosystem, use cases
+    | Dimension | Python | Rust |
+    | Speed | Slow (interpreted) | Fast (compiled) |
+    | Safety | Runtime errors | Compile-time safety |
+    | Learning | Easy | Steep |
+    | Ecosystem | Huge (PyPI) | Growing (crates.io) |
+    Conclusion: Python for prototyping/data; Rust for performance-critical systems.
+
+boolean_logic:
+  summary: Evaluate boolean/logical expressions systematically
+  strategy: |
+    Convert English to formal logic. Map True/False to values.
+    Evaluate innermost parentheses first, working outward.
+    For compound statements, resolve each clause independently then combine.
+  example: |
+    Q: "not ( True ) and ( True or False ) is"
+    Step 1: Inner parens first: not(True) = False
+    Step 2: Inner parens: (True or False) = True
+    Step 3: Combine: False and True = False
+    The answer is: False
+
+enumeration:
+  summary: List items explicitly, then count or filter
+  strategy: |
+    List every item mentioned. Number them sequentially.
+    Track additions and removals as separate operations.
+    Count the final list. Never estimate — always enumerate completely.
+  example: |
+    Q: "I have a dog, two cats, and three fish. I give away one cat. How many animals?"
+    Step 1: List: 1.dog, 2.cat, 3.cat, 4.fish, 5.fish, 6.fish
+    Step 2: Remove one cat: 1.dog, 2.cat, 3.fish, 4.fish, 5.fish
+    Step 3: Count: 5
+    The answer is: 5
+
+stepwise_arithmetic:
+  summary: Break multi-step math into single operations
+  strategy: |
+    Identify each arithmetic operation in the problem.
+    Solve one operation at a time, left to right or innermost first.
+    Use math_eval for EVERY calculation — never do mental math.
+    Write each intermediate result explicitly before the next step.
+  example: |
+    Q: "What is (15 * 3) + (42 / 6) - 8?"
+    Step 1: math_eval("15 * 3") → 45
+    Step 2: math_eval("42 / 6") → 7
+    Step 3: math_eval("45 + 7 - 8") → 44
+    The answer is: 44
+
+sorting:
+  summary: Order items by explicit pairwise comparison
+  strategy: |
+    Extract all items to sort. Write them in a list.
+    For alphabetical: compare first letters, then second, etc.
+    For numerical: compare values directly.
+    Build the sorted list one position at a time.
+  example: |
+    Q: "Sort these words alphabetically: cherry, apple, banana, date"
+    Items: cherry, apple, banana, date
+    Compare first letters: a < b < c < d
+    apple (a) → position 1
+    banana (b) → position 2
+    cherry (c) → position 3
+    date (d) → position 4
+    The answer is: apple, banana, cherry, date
+
+constraint_satisfaction:
+  summary: Track constraints, eliminate impossible states
+  strategy: |
+    List all entities and all constraints.
+    Create a table of possibilities for each entity.
+    Apply each constraint to eliminate impossible assignments.
+    When only one possibility remains, that's the answer.
+    If stuck, try assuming a value and check for contradictions.
+  example: |
+    Q: "Alice, Bob, Carol sit in seats 1-3. Alice is not in seat 1. Bob is left of Carol."
+    Possibilities: A={1,2,3}, B={1,2,3}, C={1,2,3}
+    Constraint "A not in 1": A={2,3}
+    Constraint "B left of C": B<C, so B={1,2}, C={2,3}
+    If B=1: C={2,3}, A={2,3}. If C=2: A=3. If C=3: A=2. Both work.
+    If B=2: C=3, A must be 2 or 3, but B=2, C=3, so A=2? No, B=2 already. A=3? C=3 already. Dead end.
+    So B=1. Two solutions: (A=3,B=1,C=2) or (A=2,B=1,C=3).
+
+temporal_reasoning:
+  summary: Build a timeline, track event ordering
+  strategy: |
+    Extract all events and their time references.
+    Build a timeline placing each event at its time.
+    For relative times ("2 hours after"), calculate from the anchor event.
+    For ordering questions, read the timeline in sequence.
+  example: |
+    Q: "Alice arrived at 3pm. Bob arrived 2 hours before Alice. Carol arrived between them. Who arrived second?"
+    Timeline: Bob=1pm, Carol=between 1pm-3pm, Alice=3pm
+    Order: Bob (1st), Carol (2nd), Alice (3rd)
+    The answer is: Carol
+
+spatial_reasoning:
+  summary: Map positions and shapes to coordinates or relative positions
+  strategy: |
+    Assign a coordinate system (grid, compass, or relative positions).
+    Place each object at its position.
+    For movement, update coordinates step by step.
+    For shapes, trace vertices in order.
+    Draw a simple mental map with labeled positions.
+  example: |
+    Q: "A is north of B. C is east of B. D is south of C. What direction is D from A?"
+    Grid: B=(0,0), A=(0,1) [north], C=(1,0) [east], D=(1,-1) [south of C]
+    A=(0,1) to D=(1,-1): east and south → southeast
+    The answer is: southeast
+
+causal_chain:
+  summary: Trace cause-effect chains, identify ambiguity
+  strategy: |
+    Identify the proposed cause and effect.
+    Check if the cause is sufficient (always leads to effect).
+    Check if the cause is necessary (effect can't happen without it).
+    Look for alternative explanations or confounding factors.
+    If multiple interpretations exist, the answer may be "ambiguous."
+  example: |
+    Q: "It rained, and the ground is wet. Did the rain cause the wet ground?"
+    Cause: rain. Effect: wet ground.
+    Is rain sufficient? Usually yes, rain wets ground.
+    Is rain necessary? No — sprinklers, spills could also cause wet ground.
+    But rain is the most likely explanation given the information.
+    The answer is: Yes
+
+pattern_matching:
+  summary: Find repeating structure, apply rules consistently
+  strategy: |
+    Look at the examples or structure for a pattern.
+    State the pattern as a rule.
+    Apply the rule to the new case.
+    Verify by checking against all given examples.
+    For bracket/parenthesis matching, use a stack approach.
+  example: |
+    Q: "Complete the Dyck sequence: ( ( ) → ?"
+    Rule: Every open bracket needs a matching close bracket.
+    Stack: ( → push, ( → push, ) → pop. Stack has one ( remaining.
+    Need one ) to close.
+    The answer is: )
+
+process_of_elimination:
+  summary: Rule out wrong answers using evidence
+  strategy: |
+    List all candidate answers.
+    For each piece of evidence, check which candidates it eliminates.
+    Cross out eliminated candidates.
+    The last remaining candidate is the answer.
+    If multiple remain, look for additional distinguishing evidence.
+  example: |
+    Q: "Which movie would someone who likes sci-fi and dislikes romance pick? (a) Titanic (b) Alien (c) The Notebook (d) Blade Runner"
+    Titanic → romance, eliminate
+    The Notebook → romance, eliminate
+    Alien → sci-fi, keep
+    Blade Runner → sci-fi, keep
+    Both (b) and (d) fit. Need more info, but both are valid sci-fi.
+    The answer is: (b)
+
+table_analysis:
+  summary: Read tables row-by-row, verify each cell
+  strategy: |
+    Read the table headers to understand columns.
+    Go row by row. For each row, verify each cell value.
+    Check for inconsistencies: wrong sums, mismatched data, typos.
+    Mark any cell that doesn't match the expected pattern.
+    Summarize all errors found.
+  example: |
+    Q: "Find the error: Name|Age|City — Alice|25|NYC — Bob|thirty|LA"
+    Row 1: Alice, 25, NYC — all valid
+    Row 2: Bob, "thirty" (string, not number), LA — age format error
+    The answer is: Bob's age should be a number
+
+knowledge_recall:
+  summary: Retrieve factual knowledge, cross-check details
+  strategy: |
+    Identify what domain the question is about.
+    Recall relevant facts from that domain.
+    Cross-check: does the answer make sense given other known facts?
+    If unsure between options, eliminate clearly wrong ones first.
+    For sports/trivia, focus on the most well-known facts.
+  example: |
+    Q: "Which team won the 2020 NBA Finals?"
+    Domain: NBA basketball
+    2020 NBA Finals: Lakers vs Heat
+    Lakers won 4-2
+    The answer is: Los Angeles Lakers
+
+adjective_ordering:
+  summary: Determine correct adjective order using category rules
+  strategy: |
+    English adjective order follows a fixed sequence of categories:
+    1. Determiner (the, a, my)
+    2. Opinion/quality (lovely, ugly, nice, obnoxious)
+    3. Size (big, small, midsize, enormous)
+    4. Age/condition (old, new, ancient)
+    5. Shape (round, rectangular, circular)
+    6. Color (red, blue, green, magenta, teal, crimson)
+    7. Origin/nationality (American, Japanese, French)
+    8. Material (wood, steel, plastic, fiberglass)
+    9. Purpose/qualifier (hiking, smoking, whittling, cooking)
+    10. Noun
+
+    For variant English: study the given examples to learn which categories
+    the variant uses and what order it puts them in. Build a mapping of
+    each adjective to its category using the examples. Then apply the
+    learned order to the test case.
+
+    Use python_repl to sort adjectives by their category index.
+  example: |
+    Q: "Given examples, which is correct: 'lovely big red wooden chair' or 'red big lovely wooden chair'?"
+    Categories: lovely=opinion(2), big=size(3), red=color(6), wooden=material(8)
+    Correct order by index: lovely(2), big(3), red(6), wooden(8) → "lovely big red wooden chair"
+    The answer is: lovely big red wooden chair
+
+state_tracking:
+  summary: Track assignments and swaps step by step using a dictionary
+  strategy: |
+    1. Create a dictionary mapping each entity to its current value/position.
+    2. Process each operation (swap, move, reassign) one at a time.
+    3. For swaps: simultaneously update both entries (use tuple unpacking).
+    4. After all operations, read the final state from the dictionary.
+    5. IMPORTANT: Use python_repl to track state — never do swaps mentally.
+
+    python_repl code pattern:
+    ```
+    state = {"Alice": "striker", "Bob": "goalkeeper", ...}
+    state["Alice"], state["Bob"] = state["Bob"], state["Alice"]
+    # ... more swaps ...
+    state["Alice"]  # final answer
+    ```
+  example: |
+    Q: "Alice=striker, Bob=goalie. Alice and Bob swap. Then Bob and Claire swap (Claire=winger). What is Alice's position?"
+    state = {"Alice": "striker", "Bob": "goalie", "Claire": "winger"}
+    Swap 1: Alice↔Bob → {"Alice": "goalie", "Bob": "striker", "Claire": "winger"}
+    Swap 2: Bob↔Claire → {"Alice": "goalie", "Bob": "winger", "Claire": "striker"}
+    The answer is: goalie
+
+pattern_decoding:
+  summary: Decode a symbolic system from examples, predict new values
+  strategy: |
+    1. List all given example pairs (symbol → value).
+    2. Look for base values: find the simplest symbols and their values
+       (e.g., single-digit numbers, single words).
+    3. Identify operations: how do compound symbols combine base values?
+       Common patterns: addition, multiplication, concatenation, base-N systems.
+    4. Build a mapping table of every known symbol → value.
+    5. For compound expressions, decompose into known parts and apply
+       the operations you identified.
+    6. Verify your rule against ALL given examples before answering.
+    7. Use python_repl to compute the final value.
+
+    Common patterns in numeral systems:
+    - Additive: "fifteen" = "ten" + "five"
+    - Multiplicative: "sixty" = "six" × "ten"
+    - Mixed: "twenty-three" = "twenty" + "three"
+    - Base systems: value depends on position
+  example: |
+    Q: "Given: aba=6, ba=3, a=1, b=2, aba+ba=?"
+    Base values: a=1, b=2
+    Pattern: ba=3 → b+a=2+1=3 (additive, left to right)
+    Verify: aba=6 → a+b+a=1+2+1=4? No. Try: a×b×a=1×2×1=2? No.
+    Try: aba = a×(b+a) = 1×(2+1) = 3? No. aba=6 = (a+b)×a? No.
+    Try: positional base-3: aba = 1×9 + 2×3 + 1 = 16? No.
+    Back to basics: a=1, b=2, ba=3=b+a, aba=6=a+b+a? No, that's 4.
+    aba=6 = a×b×a ×3? Try: aba = concat(a,b,a) in base 10 = 121? No.
+    Key: focus on what operation makes aba=6 given a=1, b=2.
+    The answer is: 9
+
+grid_navigation:
+  summary: Track position on a grid or graph through movement steps
+  strategy: |
+    1. Set up a coordinate system. For square grids: (row, col) or (x, y).
+       For triangular grids: use axial coordinates or track position as an index.
+    2. Place the starting position and record what's there.
+    3. For each movement step:
+       a. Determine the direction vector (up=(0,1), down-left=(-1,-1), etc.)
+       b. Update position: new_pos = old_pos + direction
+       c. Record what object is at the new position
+    4. After all movements, answer the question about the final state.
+    5. Use python_repl to track coordinates and objects.
+
+    Direction mappings (common):
+    - Square grid: up=(0,-1), down=(0,1), left=(-1,0), right=(1,0)
+    - Triangular grid: down-left, down-right, right, left, up-left, up-right
+    - For triangular: assign consistent coordinate offsets to each direction
+
+    python_repl pattern:
+    ```
+    pos = (0, 0)
+    objects = {(0,0): "television"}
+    directions = {"down-left": (-1, 1), "right": (1, 0), ...}
+    pos = (pos[0] + directions["down-left"][0], pos[1] + directions["down-left"][1])
+    objects[pos] = "knife"
+    # ... continue for each step
+    ```
+  example: |
+    Q: "Start at (0,0) with a TV. Go right to (1,0) with a lamp. Go down to (1,1) with a book. What's at your position?"
+    pos=(0,0) objects={(0,0):"TV"}
+    Move right: pos=(1,0) objects={(1,0):"lamp"}
+    Move down: pos=(1,1) objects={(1,1):"book"}
+    The answer is: book
