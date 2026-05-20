@@ -47,4 +47,3 @@ Assistant: **42 × 17 = 714**
 
 === OUTPUT VALIDATION ===
 PASS
-

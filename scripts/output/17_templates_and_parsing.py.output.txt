@@ -37,4 +37,3 @@ From ChatTemplate: Book(title='The Hound of the Baskervilles', author='Arthur Co
 
 === OUTPUT VALIDATION ===
 PASS
-

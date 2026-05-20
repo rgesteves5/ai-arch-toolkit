@@ -84,7 +84,7 @@ Começar pelo core e ir expandindo. Não reescrever tudo de uma vez.
 
 ```
 Fase 1: Core — LLM (calls), Response, content constructors
-Fase 2: Tools — @tool decorator, Tools.from_* sources  
+Fase 2: Tools — @tool decorator, Tools.from_* sources
 Fase 3: Memory + Prompt
 Fase 4: Agent — o loop (run, stream, start/Session, Step)
 Fase 5: Guardians, orchestration, cycles (futuro)

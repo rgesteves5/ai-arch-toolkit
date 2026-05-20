@@ -109,10 +109,7 @@ def date_diff(start: str, end: str, unit: str = "seconds") -> str:
         return f"Invalid unit: {unit!r}. Use 'seconds', 'minutes', 'hours', or 'days'."
 
     value = seconds / scales[unit]
-    if value == int(value):
-        value_str = str(int(value))
-    else:
-        value_str = f"{value:.4f}".rstrip("0").rstrip(".")
+    value_str = str(int(value)) if value == int(value) else f"{value:.4f}".rstrip("0").rstrip(".")
     return f"{start} → {end} = {value_str} {unit}"
 
 
@@ -138,10 +135,7 @@ def _parse_datetime(value: str) -> tuple[datetime, str] | str:
             return datetime.strptime(value, fmt), fmt
         except ValueError:
             continue
-    return (
-        f"Invalid date/time format: {value!r}. "
-        "Use 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM'."
-    )
+    return f"Invalid date/time format: {value!r}. Use 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM'."
 
 
 def _format_datetime(dt: datetime, input_format: str, force_datetime: bool = False) -> str:

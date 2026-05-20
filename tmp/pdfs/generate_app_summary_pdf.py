@@ -25,9 +25,7 @@ class Layout:
     def _line(self, text: str, *, x: int, font: str, size: int, leading: int) -> None:
         if self.y < BOTTOM_Y:
             raise RuntimeError("Content overflowed past one page")
-        self.ops.append(
-            f"BT /{font} {size} Tf 1 0 0 1 {x} {self.y:.2f} Tm ({esc(text)}) Tj ET"
-        )
+        self.ops.append(f"BT /{font} {size} Tf 1 0 0 1 {x} {self.y:.2f} Tm ({esc(text)}) Tj ET")
         self.y -= leading
 
     def heading(self, text: str) -> None:
@@ -62,7 +60,6 @@ class Layout:
 
     def spacer(self, points: int = 6) -> None:
         self.y -= points
-
 
 
 def build_pdf(content_stream: bytes) -> bytes:
@@ -105,7 +102,6 @@ def build_pdf(content_stream: bytes) -> bytes:
     return bytes(pdf)
 
 
-
 def main() -> None:
     out_path = Path("output/pdf/ai-arch-toolkit-summary.pdf")
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -132,11 +128,17 @@ def main() -> None:
     l.spacer()
 
     l.heading("What it does")
-    l.bullet("Uses one Client/AsyncClient API across OpenAI, Anthropic, Gemini, xAI, Mistral, and Groq.")
-    l.bullet("Supports chat, text streaming, and typed stream events (text, tool_call, thinking, usage, done).")
+    l.bullet(
+        "Uses one Client/AsyncClient API across OpenAI, Anthropic, Gemini, xAI, Mistral, and Groq."
+    )
+    l.bullet(
+        "Supports chat, text streaming, and typed stream events (text, tool_call, thinking, usage, done)."
+    )
     l.bullet("Enables structured output with JSON schemas and multimodal content parts.")
     l.bullet("Provides middleware hooks for caching, cost tracking, guardrails, and tracing.")
-    l.bullet("Generates tool schemas with @tool and executes validated calls through ToolRegistry.")
+    l.bullet(
+        "Generates tool schemas with @tool and executes validated calls through ToolRegistry."
+    )
     l.bullet("Includes eight agent implementations with shared config/result/event interfaces.")
     l.bullet("Supports sync and async batch APIs for job submit, status, and result retrieval.")
     l.spacer()
@@ -146,8 +148,12 @@ def main() -> None:
     l.bullet("Client normalizes messages and runs middleware before hooks on a Request envelope.")
     l.bullet("create_provider() selects a provider adapter and routes to external LLM APIs.")
     l.bullet("Provider responses pass through middleware after hooks back to caller.")
-    l.bullet("For tool use: model receives ToolRegistry definitions, emits ToolCall, registry validates/executes, and ToolResult is fed back into the loop.")
-    l.bullet("Checkpoint persistence and runtime resume APIs exist as stubs: Not implemented in repo.")
+    l.bullet(
+        "For tool use: model receives ToolRegistry definitions, emits ToolCall, registry validates/executes, and ToolResult is fed back into the loop."
+    )
+    l.bullet(
+        "Checkpoint persistence and runtime resume APIs exist as stubs: Not implemented in repo."
+    )
     l.spacer()
 
     l.heading("How to run (minimal)")

@@ -62,4 +62,3 @@ The sky appears blue due to a phenomenon called Rayleigh scattering.  Sunlight, 
 
 === OUTPUT VALIDATION ===
 PASS
-

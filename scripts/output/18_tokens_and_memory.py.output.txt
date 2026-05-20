@@ -28,4 +28,3 @@ SlidingWindowMemory items after trim: 1
 
 === OUTPUT VALIDATION ===
 PASS
-

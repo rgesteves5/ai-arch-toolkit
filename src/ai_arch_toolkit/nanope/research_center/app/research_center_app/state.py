@@ -7,7 +7,7 @@ import json
 import sqlite3
 import uuid
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import reflex as rx
@@ -59,7 +59,7 @@ def _migrate_from_json(conn: sqlite3.Connection) -> None:
                     meta.get("max_cycles", "3"),
                     meta.get("grok_model", "grok-4-1-fast-reasoning"),
                     meta.get("gemini_model", "gemini-3-flash"),
-                    meta.get("created_at", datetime.now(timezone.utc).isoformat()),
+                    meta.get("created_at", datetime.now(UTC).isoformat()),
                     meta.get("status", "new"),
                     meta.get("wiki_node_count", "0"),
                 ),
@@ -172,15 +172,13 @@ class ProjectState(rx.State):
     def load_projects(self) -> None:
         """Load projects from SQLite."""
         conn = _get_conn()
-        rows = conn.execute(
-            "SELECT * FROM projects ORDER BY created_at DESC"
-        ).fetchall()
+        rows = conn.execute("SELECT * FROM projects ORDER BY created_at DESC").fetchall()
         self.projects = [dict(row) for row in rows]
 
     def create_project(self, form_data: dict) -> rx.event.EventSpec:
         """Insert a new project into the database."""
         project_id = uuid.uuid4().hex[:12]
-        created_at = datetime.now(timezone.utc).isoformat()
+        created_at = datetime.now(UTC).isoformat()
 
         meta = {
             "id": project_id,
@@ -282,9 +280,7 @@ class PipelineState(rx.State):
         conn = _get_conn()
 
         # Load project config
-        row = conn.execute(
-            "SELECT * FROM projects WHERE id = ?", (project_id,)
-        ).fetchone()
+        row = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
         if row:
             self.topic = row["topic"]
             self.owner_brief = row["brief"]
@@ -327,9 +323,7 @@ class PipelineState(rx.State):
             self.events = [json.loads(r["event_json"]) for r in event_rows]
             # Reconstruct directives_by_cycle from manager_decision events
             self.directives_by_cycle = [
-                ev["directives"]
-                for ev in self.events
-                if ev.get("type") == "manager_decision"
+                ev["directives"] for ev in self.events if ev.get("type") == "manager_decision"
             ]
 
     def stop_pipeline(self) -> None:
@@ -355,18 +349,10 @@ class PipelineState(rx.State):
         # Clear persisted pipeline data (keep wiki)
         if self.project_id:
             conn = _get_conn()
-            conn.execute(
-                "DELETE FROM pipeline_events WHERE project_id = ?", (self.project_id,)
-            )
-            conn.execute(
-                "DELETE FROM results WHERE project_id = ?", (self.project_id,)
-            )
-            conn.execute(
-                "DELETE FROM phase_costs WHERE project_id = ?", (self.project_id,)
-            )
-            conn.execute(
-                "UPDATE projects SET status = 'new' WHERE id = ?", (self.project_id,)
-            )
+            conn.execute("DELETE FROM pipeline_events WHERE project_id = ?", (self.project_id,))
+            conn.execute("DELETE FROM results WHERE project_id = ?", (self.project_id,))
+            conn.execute("DELETE FROM phase_costs WHERE project_id = ?", (self.project_id,))
+            conn.execute("UPDATE projects SET status = 'new' WHERE id = ?", (self.project_id,))
             conn.commit()
 
     @rx.event(background=True)
@@ -570,9 +556,7 @@ class WikiState(rx.State):
 
         wiki = await get_wiki(project_id)
         if query:
-            results = await wiki.search(
-                query, type=category if category else None, k=20
-            )
+            results = await wiki.search(query, type=category if category else None, k=20)
             items = [
                 {
                     "id": r.node.id,
@@ -733,18 +717,22 @@ class GraphState(rx.State):
                 node_type = getattr(node_obj, "type", "") if node_obj else ""
                 content = getattr(node_obj, "content", {}) if node_obj else {}
                 label = _preview_content(content) if content else str(node_id)
-                viz_nodes.append({
-                    "id": str(node_id),
-                    "name": label[:60],
-                    "group": node_type,
-                })
+                viz_nodes.append(
+                    {
+                        "id": str(node_id),
+                        "name": label[:60],
+                        "group": node_type,
+                    }
+                )
             for _, _, data in nx_graph.edges(data=True):
                 edge = data.get("edge")
                 if edge:
-                    viz_links.append({
-                        "source": str(edge.source),
-                        "target": str(edge.target),
-                    })
+                    viz_links.append(
+                        {
+                            "source": str(edge.source),
+                            "target": str(edge.target),
+                        }
+                    )
 
         graph_data = {"nodes": viz_nodes, "links": viz_links}
 
@@ -771,8 +759,11 @@ class GraphState(rx.State):
 
         nodes = await backend.bfs(start)
         items = [
-            {"id": n.id, "type": str(getattr(n, "type", "")),
-             "preview": _preview_content(getattr(n, "content", {}))}
+            {
+                "id": n.id,
+                "type": str(getattr(n, "type", "")),
+                "preview": _preview_content(getattr(n, "content", {})),
+            }
             for n in nodes[:50]
         ]
         async with self:
@@ -798,8 +789,11 @@ class GraphState(rx.State):
 
         nodes = await backend.dfs(start)
         items = [
-            {"id": n.id, "type": str(getattr(n, "type", "")),
-             "preview": _preview_content(getattr(n, "content", {}))}
+            {
+                "id": n.id,
+                "type": str(getattr(n, "type", "")),
+                "preview": _preview_content(getattr(n, "content", {})),
+            }
             for n in nodes[:50]
         ]
         async with self:
@@ -879,11 +873,13 @@ class GraphState(rx.State):
         for node_id, score in sorted_scores:
             node = await wiki.get(node_id)
             preview = _preview_content(node.content) if node else node_id
-            items.append({
-                "id": node_id,
-                "type": getattr(node, "type", "") if node else "",
-                "preview": f"{preview} (score: {score:.4f})",
-            })
+            items.append(
+                {
+                    "id": node_id,
+                    "type": getattr(node, "type", "") if node else "",
+                    "preview": f"{preview} (score: {score:.4f})",
+                }
+            )
         async with self:
             self.algorithm_name = "PageRank (top 20)"
             self.ranking_result = items
@@ -910,11 +906,13 @@ class GraphState(rx.State):
         for node_id, score in sorted_scores:
             node = await wiki.get(node_id)
             preview = _preview_content(node.content) if node else node_id
-            items.append({
-                "id": node_id,
-                "type": getattr(node, "type", "") if node else "",
-                "preview": f"{preview} (centrality: {score:.4f})",
-            })
+            items.append(
+                {
+                    "id": node_id,
+                    "type": getattr(node, "type", "") if node else "",
+                    "preview": f"{preview} (centrality: {score:.4f})",
+                }
+            )
         async with self:
             self.algorithm_name = "Degree Centrality (top 20)"
             self.ranking_result = items
@@ -940,11 +938,13 @@ class GraphState(rx.State):
         for i, comp in enumerate(components[:20]):
             ids_preview = ", ".join(list(comp)[:5])
             suffix = f"... +{len(comp) - 5}" if len(comp) > 5 else ""
-            items.append({
-                "id": str(i + 1),
-                "type": f"{len(comp)} nodes",
-                "preview": ids_preview + suffix,
-            })
+            items.append(
+                {
+                    "id": str(i + 1),
+                    "type": f"{len(comp)} nodes",
+                    "preview": ids_preview + suffix,
+                }
+            )
         async with self:
             self.algorithm_name = f"Connected Components ({len(components)} found)"
             self.components_result = items
@@ -970,8 +970,11 @@ class GraphState(rx.State):
         ego_backend = await backend.ego_graph(node_id, radius=radius)
         nodes = await ego_backend.list_nodes()
         items = [
-            {"id": n.id, "type": str(getattr(n, "type", "")),
-             "preview": _preview_content(getattr(n, "content", {}))}
+            {
+                "id": n.id,
+                "type": str(getattr(n, "type", "")),
+                "preview": _preview_content(getattr(n, "content", {})),
+            }
             for n in nodes[:50]
         ]
         async with self:
@@ -995,11 +998,13 @@ class GraphState(rx.State):
             edges_out = await wiki.edges(node.id, direction="out")
             edges_in = await wiki.edges(node.id, direction="in")
             if len(edges_out) == 0 and len(edges_in) == 0:
-                orphans.append({
-                    "id": node.id,
-                    "type": node.type,
-                    "preview": _preview_content(node.content),
-                })
+                orphans.append(
+                    {
+                        "id": node.id,
+                        "type": node.type,
+                        "preview": _preview_content(node.content),
+                    }
+                )
         async with self:
             self.algorithm_name = f"Orphan Nodes ({len(orphans)} found)"
             self.orphan_nodes = orphans

@@ -26,7 +26,7 @@ def graph_stats_card() -> rx.Component:
     )
 
 
-def _result_item(item: dict) -> rx.Component:  # noqa: ARG001
+def _result_item(item: dict) -> rx.Component:
     """Render a node result row."""
     return rx.hstack(
         rx.badge(item["type"], variant="surface", size="1"),

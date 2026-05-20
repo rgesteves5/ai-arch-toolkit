@@ -123,7 +123,9 @@ def _trace_batch_list_payload(call_id: str, result: Any) -> None:
         error = getattr(item, "error", None)
         response = getattr(item, "response", None)
         if error:
-            _print_trace(f"[CALL {call_id}] BATCH_ITEM_{index} custom_id={custom_id} error={error}")
+            _print_trace(
+                f"[CALL {call_id}] BATCH_ITEM_{index} custom_id={custom_id} error={error}"
+            )
         if response is not None and hasattr(response, "text"):
             text = str(getattr(response, "text", ""))
             _print_trace(
@@ -222,7 +224,9 @@ def _wrap_sync_stream(cls: type[Any], method_name: str) -> None:
                     if text_chunks:
                         _print_trace_block(call_id, "STREAM_EVENTS_TEXT", "".join(text_chunks))
                     if thinking_chunks:
-                        _print_trace_block(call_id, "STREAM_EVENTS_THINKING", "".join(thinking_chunks))
+                        _print_trace_block(
+                            call_id, "STREAM_EVENTS_THINKING", "".join(thinking_chunks)
+                        )
                     _print_trace(f"[CALL {call_id}] STREAM_EVENTS_COUNTS {event_type_counts}")
                 _register_call_end()
                 _print_trace(
@@ -235,7 +239,9 @@ def _wrap_sync_stream(cls: type[Any], method_name: str) -> None:
                     _print_trace_block(call_id, "STREAM_TEXT_PARTIAL", "".join(text_chunks))
                 elif method_name == "stream_events":
                     if text_chunks:
-                        _print_trace_block(call_id, "STREAM_EVENTS_TEXT_PARTIAL", "".join(text_chunks))
+                        _print_trace_block(
+                            call_id, "STREAM_EVENTS_TEXT_PARTIAL", "".join(text_chunks)
+                        )
                     if thinking_chunks:
                         _print_trace_block(
                             call_id, "STREAM_EVENTS_THINKING_PARTIAL", "".join(thinking_chunks)
@@ -390,7 +396,9 @@ def _install_tracing() -> None:
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run one example with ai-arch call tracing enabled.")
+    parser = argparse.ArgumentParser(
+        description="Run one example with ai-arch call tracing enabled."
+    )
     parser.add_argument("example", type=Path, help="Path to the example script to execute.")
     return parser.parse_args()
 

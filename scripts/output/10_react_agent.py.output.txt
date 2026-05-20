@@ -43,4 +43,3 @@ Total tokens: 1172
 
 === OUTPUT VALIDATION ===
 PASS
-

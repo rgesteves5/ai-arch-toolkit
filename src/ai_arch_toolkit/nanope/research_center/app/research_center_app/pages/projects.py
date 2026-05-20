@@ -18,7 +18,7 @@ def _status_color(status: str) -> str:
     return "gray"
 
 
-def _project_card(project: dict) -> rx.Component:  # noqa: ARG001
+def _project_card(project: dict) -> rx.Component:
     """Render a single project card."""
     return rx.card(
         rx.vstack(

@@ -150,9 +150,7 @@ def _format_forecast(data: dict, display: str, days: int) -> str:
         lo = lows[i] if i < len(lows) else "?"
         rain = precip[i] if i < len(precip) else 0
         w = wind[i] if i < len(wind) else "?"
-        lines.append(
-            f"  {date}: {lo}°C - {hi}°C, {condition}, precip: {rain}mm, wind: {w} km/h"
-        )
+        lines.append(f"  {date}: {lo}°C - {hi}°C, {condition}, precip: {rain}mm, wind: {w} km/h")
 
     return "\n".join(lines)
 

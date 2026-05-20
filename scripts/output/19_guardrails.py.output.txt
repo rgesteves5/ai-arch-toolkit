@@ -27,4 +27,3 @@ Output was blocked by guardrails: Blocked output content matched pattern: 'passw
 
 === OUTPUT VALIDATION ===
 PASS
-

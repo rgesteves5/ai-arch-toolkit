@@ -121,17 +121,13 @@ def monitor_page() -> rx.Component:
             rx.separator(),
             _tab_nav(),
             rx.separator(),
-
             # Budget meter
             budget_meter(),
-
             # Agent step indicator
             rx.text("Agent Progress", size="2", weight="bold"),
             agent_step_indicator(),
-
             # Pipeline controls
             _pipeline_controls(),
-
             # Error display
             rx.cond(
                 PipelineState.error != "",
@@ -143,7 +139,6 @@ def monitor_page() -> rx.Component:
                 ),
                 rx.fragment(),
             ),
-
             # Directives accordion
             rx.cond(
                 PipelineState.directives_by_cycle.length() > 0,  # type: ignore[union-attr]
@@ -154,7 +149,6 @@ def monitor_page() -> rx.Component:
                 ),
                 rx.fragment(),
             ),
-
             # Event log
             rx.cond(
                 PipelineState.events.length() > 0,  # type: ignore[union-attr]
@@ -165,7 +159,6 @@ def monitor_page() -> rx.Component:
                 ),
                 rx.fragment(),
             ),
-
             spacing="4",
             width="100%",
         ),

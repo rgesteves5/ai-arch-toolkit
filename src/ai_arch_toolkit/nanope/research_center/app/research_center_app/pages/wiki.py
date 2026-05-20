@@ -33,7 +33,6 @@ def wiki_page() -> rx.Component:
                 align="center",
             ),
             rx.separator(),
-
             # Tab nav
             rx.hstack(
                 rx.link(
@@ -55,7 +54,6 @@ def wiki_page() -> rx.Component:
                 spacing="2",
             ),
             rx.separator(),
-
             # Two-column layout
             rx.hstack(
                 rx.box(

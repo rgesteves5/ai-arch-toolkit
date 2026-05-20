@@ -74,4 +74,3 @@ CAP theorem states that in a distributed data store it is impossible to simultan
 
 === OUTPUT VALIDATION ===
 PASS
-

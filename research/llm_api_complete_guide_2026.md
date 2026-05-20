@@ -2,7 +2,7 @@
 
 **The Ultimate Reference:** Practical code + comprehensive schemas for all major LLM providers.
 
-**Last Updated:** February 8, 2026  
+**Last Updated:** February 8, 2026
 **Status:** ✅ Production-ready with runnable code examples
 
 ---
@@ -167,19 +167,19 @@ def extract_text(resp: dict) -> str:
     # OpenAI Chat Completions
     if "choices" in resp and resp.get("object") == "chat.completion":
         return extract_openai_chat_text(resp)
-    
+
     # OpenAI Responses API
     if "output" in resp:
         return extract_openai_responses_text(resp)
-    
+
     # Anthropic
     if "content" in resp and isinstance(resp.get("content"), list):
         return extract_anthropic_text(resp)
-    
+
     # Gemini
     if "candidates" in resp and "usageMetadata" in resp:
         return extract_gemini_text(resp)
-    
+
     # Fallback
     return str(resp)
 
@@ -198,7 +198,7 @@ def extract_usage(resp: dict) -> dict:
                 "total_tokens": usage.get("total_tokens", 0),
                 "raw": usage
             }
-    
+
     # OpenAI Chat Completions (uses prompt_tokens/completion_tokens)
     if "usage" in resp:
         usage = resp["usage"]
@@ -208,7 +208,7 @@ def extract_usage(resp: dict) -> dict:
             "total_tokens": usage.get("total_tokens", 0),
             "raw": usage
         }
-    
+
     # Gemini
     if "usageMetadata" in resp:
         usage = resp["usageMetadata"]
@@ -218,7 +218,7 @@ def extract_usage(resp: dict) -> dict:
             "total_tokens": usage.get("totalTokenCount", 0),
             "raw": usage
         }
-    
+
     return {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
 ```
 
@@ -255,7 +255,7 @@ def extract_usage(resp: dict) -> dict:
             "content": "string or array of content parts"
         }
     ],
-    
+
     # GENERATION PARAMETERS
     "max_completion_tokens": 1024,      # Preferred over max_tokens
     "max_tokens": 1024,                 # Deprecated
@@ -266,10 +266,10 @@ def extract_usage(resp: dict) -> dict:
     "presence_penalty": 0.0,            # -2.0 to 2.0
     "frequency_penalty": 0.0,           # -2.0 to 2.0
     "seed": 42,                         # For deterministic outputs
-    
+
     # REASONING (o-series models)
     "reasoning_effort": "medium",       # none|low|medium|high|xhigh
-    
+
     # OUTPUT FORMAT
     "response_format": {
         "type": "text|json_object|json_schema",
@@ -279,12 +279,12 @@ def extract_usage(resp: dict) -> dict:
             "strict": true
         }
     },
-    
+
     # LOGPROBS
     "logprobs": true,
     "top_logprobs": 5,                  # 0-20
     "logit_bias": {"1234": 10},         # Token ID bias
-    
+
     # TOOLS
     "tools": [
         {
@@ -298,14 +298,14 @@ def extract_usage(resp: dict) -> dict:
     ],
     "tool_choice": "auto|required|none",
     "parallel_tool_calls": true,
-    
+
     # MULTIMODAL (select models)
     "modalities": ["text", "audio"],
     "audio": {
         "voice": "alloy|echo|fable|onyx|nova|shimmer",
         "format": "wav|mp3|flac|opus|pcm16"
     },
-    
+
     # ADVANCED
     "prediction": {                     # Predicted outputs
         "type": "content",
@@ -328,7 +328,7 @@ def extract_usage(resp: dict) -> dict:
     "created": 1234567890,
     "model": "gpt-4o-2024-11-20",
     "system_fingerprint": "fp_abc123",
-    
+
     "choices": [
         {
             "index": 0,
@@ -364,7 +364,7 @@ def extract_usage(resp: dict) -> dict:
             }
         }
     ],
-    
+
     "usage": {
         "prompt_tokens": 100,
         "completion_tokens": 50,
@@ -396,25 +396,25 @@ def extract_usage(resp: dict) -> dict:
     # REQUIRED
     "model": "gpt-5.2",
     "input": "string or array of input items",
-    
+
     # INSTRUCTIONS & STATE
     "instructions": "System-level instructions",
     "previous_response_id": "resp_123",     # Continue conversation
     "conversation": "conv_456",             # Or conversation object
     "background": "Background context",
-    
+
     # GENERATION
     "max_output_tokens": 2048,
     "temperature": 0.7,
     "top_p": 0.95,
     "top_logprobs": 5,
     "truncation": "disabled",
-    
+
     # OUTPUT FORMAT
     "text": {
         "format": {"type": "text|json_object|json_schema"}
     },
-    
+
     # BUILT-IN SERVER-SIDE TOOLS
     "tools": [
         {"type": "web_search", "max_results": 10},
@@ -425,17 +425,17 @@ def extract_usage(resp: dict) -> dict:
     ],
     "tool_choice": "auto|required|none",
     "parallel_tool_calls": true,
-    
+
     # REASONING
     "reasoning": {
         "effort": "low|medium|high",
         "budget_tokens": 10000
     },
-    
+
     # STREAMING
     "stream": false,
     "include": ["usage", "thoughts"],
-    
+
     # METADATA
     "metadata": {},
     "store": false,
@@ -453,7 +453,7 @@ def extract_usage(resp: dict) -> dict:
     "model": "gpt-5.2",
     "status": "completed|in_progress|failed",
     "conversation_id": "conv_456",
-    
+
     "output": [
         {
             "type": "message",
@@ -469,13 +469,13 @@ def extract_usage(resp: dict) -> dict:
             }
         }
     ],
-    
+
     "usage": {
         "input_tokens": 150,
         "output_tokens": 200,
         "total_tokens": 350
     },
-    
+
     "metadata": {}
 }
 ```
@@ -484,7 +484,7 @@ def extract_usage(resp: dict) -> dict:
 
 ### Anthropic Messages API
 
-**Endpoint:** `POST /v1/messages`  
+**Endpoint:** `POST /v1/messages`
 **Required Headers:** `x-api-key`, `anthropic-version: 2023-06-01`
 
 #### Request Schema
@@ -500,18 +500,18 @@ def extract_usage(resp: dict) -> dict:
             "content": "string or array of content blocks"
         }
     ],
-    
+
     # SYSTEM PROMPT (not a message role)
     "system": "You are helpful" or [
         {"type": "text", "text": "System prompt"}
     ],
-    
+
     # GENERATION
     "temperature": 0.7,                 # 0.0 - 1.0
     "top_p": 0.95,
     "top_k": 40,
     "stop_sequences": ["END"],
-    
+
     # TOOLS
     "tools": [
         {
@@ -524,16 +524,16 @@ def extract_usage(resp: dict) -> dict:
         "type": "auto|any|tool",
         "name": "function_name"         # When type=tool
     },
-    
+
     # EXTENDED THINKING (Claude 4.5 models)
     "thinking": {
         "type": "enabled",
         "budget_tokens": 10000          # Min 1024
     },
-    
+
     # STREAMING
     "stream": false,
-    
+
     # METADATA
     "metadata": {
         "user_id": "user_123"
@@ -597,7 +597,7 @@ def extract_usage(resp: dict) -> dict:
     "type": "message",
     "role": "assistant",
     "model": "claude-opus-4-5-20251101",
-    
+
     "content": [
         {
             "type": "text",
@@ -614,10 +614,10 @@ def extract_usage(resp: dict) -> dict:
             "input": {"location": "SF"}
         }
     ],
-    
+
     "stop_reason": "end_turn|max_tokens|stop_sequence|tool_use",
     "stop_sequence": null,
-    
+
     "usage": {
         "input_tokens": 100,
         "cache_creation_input_tokens": 50,      # Prompt caching
@@ -631,7 +631,7 @@ def extract_usage(resp: dict) -> dict:
 
 ### Google Gemini generateContent API
 
-**Endpoint:** `POST /v1beta/models/{model}:generateContent`  
+**Endpoint:** `POST /v1beta/models/{model}:generateContent`
 **Auth:** `x-goog-api-key` header or query parameter
 
 #### Request Schema
@@ -671,12 +671,12 @@ def extract_usage(resp: dict) -> dict:
             ]
         }
     ],
-    
+
     # SYSTEM INSTRUCTION
     "systemInstruction": {
         "parts": [{"text": "You are helpful"}]
     },
-    
+
     # TOOLS
     "tools": [
         {
@@ -704,7 +704,7 @@ def extract_usage(resp: dict) -> dict:
             "allowedFunctionNames": ["get_weather"]
         }
     },
-    
+
     # GENERATION CONFIG
     "generationConfig": {
         "temperature": 0.7,
@@ -716,7 +716,7 @@ def extract_usage(resp: dict) -> dict:
         "responseMimeType": "text/plain|application/json",
         "responseSchema": {...}         # For JSON mode
     },
-    
+
     # SAFETY
     "safetySettings": [
         {
@@ -724,7 +724,7 @@ def extract_usage(resp: dict) -> dict:
             "threshold": "BLOCK_NONE|BLOCK_ONLY_HIGH"
         }
     ],
-    
+
     # CACHING
     "cachedContent": "cachedContents/123"
 }
@@ -774,14 +774,14 @@ def extract_usage(resp: dict) -> dict:
             }
         }
     ],
-    
+
     "usageMetadata": {
         "promptTokenCount": 100,
         "candidatesTokenCount": 50,
         "totalTokenCount": 150,
         "cachedContentTokenCount": 200
     },
-    
+
     "modelVersion": "gemini-3-pro-preview-001"
 }
 ```
@@ -794,9 +794,9 @@ def extract_usage(resp: dict) -> dict:
 
 #### gpt-5.2
 
-**Released:** December 2025  
-**Context:** 400K tokens (128K max output)  
-**Best for:** Maximum intelligence, complex reasoning  
+**Released:** December 2025
+**Context:** 400K tokens (128K max output)
+**Best for:** Maximum intelligence, complex reasoning
 **Pricing:**
 - GPT-5.2 Instant: $1.75 input / $14 output per 1M tokens
 - GPT-5.2 Thinking: Higher tier (reasoning)
@@ -826,11 +826,11 @@ print(f"Usage: {extract_openai_responses_usage(resp)}")
 
 #### gpt-5.2-codex
 
-**Released:** January 2026  
-**Context:** 400K tokens with context compaction  
-**Best for:** Agentic coding, long-horizon software engineering  
-**Pricing:** Same as GPT-5.2 Thinking tier  
-**Features:** Context compaction, stronger Windows support, enhanced cybersecurity  
+**Released:** January 2026
+**Context:** 400K tokens with context compaction
+**Best for:** Agentic coding, long-horizon software engineering
+**Pricing:** Same as GPT-5.2 Thinking tier
+**Features:** Context compaction, stronger Windows support, enhanced cybersecurity
 **Benchmarks:** SWE-Bench Pro 56.4%, Terminal-Bench 2.0 64.0%; state-of-the-art for long-horizon coding
 
 ```python
@@ -852,8 +852,8 @@ print(extract_openai_responses_usage(resp))
 
 #### gpt-5.1
 
-**Released:** November 2025  
-**Context:** 400K tokens (128K max output)  
+**Released:** November 2025
+**Context:** 400K tokens (128K max output)
 **Note:** Superseded by GPT-5.2 (slightly more expensive)
 
 ```python
@@ -866,14 +866,14 @@ payload = {
 
 #### gpt-5
 
-**Released:** 2025  
+**Released:** 2025
 **Status:** Legacy - use GPT-5.1 or GPT-5.2
 
 #### gpt-5-mini
 
-**Released:** 2025  
-**Context:** 400K tokens (128K max output)  
-**Best for:** Fast reasoning at lower cost  
+**Released:** 2025
+**Context:** 400K tokens (128K max output)
+**Best for:** Fast reasoning at lower cost
 **Pricing:** More affordable than GPT-5
 
 ```python
@@ -893,9 +893,9 @@ payload = {
 
 #### gpt-4.1
 
-**Released:** April 2025  
-**Context:** 1M tokens  
-**Best for:** Coding, instruction following, long context  
+**Released:** April 2025
+**Context:** 1M tokens
+**Best for:** Coding, instruction following, long context
 **Pricing:** Mid-tier
 
 ```python
@@ -920,9 +920,9 @@ print(f"Usage: {extract_openai_usage(resp)}")
 
 #### gpt-4.1-mini
 
-**Released:** April 2025  
-**Context:** 1M tokens  
-**Best for:** Fast coding tasks  
+**Released:** April 2025
+**Context:** 1M tokens
+**Best for:** Fast coding tasks
 **Pricing:** 83% cheaper than GPT-4o
 
 ```python
@@ -937,9 +937,9 @@ payload = {
 
 #### gpt-4.1-nano
 
-**Released:** April 2025  
-**Context:** 1M tokens  
-**Best for:** Classification, autocompletion, simple tasks  
+**Released:** April 2025
+**Context:** 1M tokens
+**Best for:** Classification, autocompletion, simple tasks
 **Pricing:** Cheapest, fastest
 
 ```python
@@ -958,9 +958,9 @@ payload = {
 
 #### gpt-4o
 
-**Released:** 2024 (updated Nov 2024, June 2024)  
-**Context:** 128K tokens  
-**Best for:** General-purpose, multimodal (text + vision)  
+**Released:** 2024 (updated Nov 2024, June 2024)
+**Context:** 128K tokens
+**Best for:** General-purpose, multimodal (text + vision)
 **Pricing:** Standard tier
 
 ```python
@@ -985,14 +985,14 @@ payload = {
 
 #### gpt-4o-mini
 
-**Released:** 2024  
-**Context:** 128K tokens  
-**Best for:** Fast, affordable multimodal  
+**Released:** 2024
+**Context:** 128K tokens
+**Best for:** Fast, affordable multimodal
 **Pricing:** Budget tier
 
 #### gpt-4o-audio-preview
 
-**Best for:** Audio input/output  
+**Best for:** Audio input/output
 **Features:** Real-time speech capabilities
 
 ```python
@@ -1012,8 +1012,8 @@ payload = {
 
 #### o3
 
-**Released:** 2025  
-**Best for:** Complex multi-step reasoning  
+**Released:** 2025
+**Best for:** Complex multi-step reasoning
 **Pricing:** Premium
 
 ```python
@@ -1028,13 +1028,13 @@ payload = {
 
 #### o3-pro
 
-**Best for:** Extended thinking, maximum reliability  
+**Best for:** Extended thinking, maximum reliability
 **Features:** Thinks longer for better responses
 
 #### o4-mini
 
-**Released:** 2025  
-**Best for:** Fast, affordable reasoning  
+**Released:** 2025
+**Best for:** Fast, affordable reasoning
 **Benchmarks:** Best on AIME 2024/2025
 
 ```python
@@ -1057,7 +1057,7 @@ payload = {
 
 #### computer-use-preview
 
-**Best for:** Computer control via API  
+**Best for:** Computer control via API
 **Features:** Navigate UI, click, type, screenshot
 
 ```python
@@ -1076,14 +1076,14 @@ payload = {
 
 #### codex-mini-latest
 
-**Released:** 2025  
-**Best for:** Code completion in CLI  
+**Released:** 2025
+**Best for:** Code completion in CLI
 **Use case:** Codex CLI tool
 
 #### gpt-image-1.5
 
-**Released:** December 2025  
-**Best for:** Image generation  
+**Released:** December 2025
+**Best for:** Image generation
 **Replaces:** DALL-E 3
 
 ```python
@@ -1098,14 +1098,14 @@ payload = {
 
 #### sora-2
 
-**Released:** December 2025  
-**Best for:** Video generation  
+**Released:** December 2025
+**Best for:** Video generation
 **Features:** Text/image/video to video
 
 #### whisper-1
 
-**Best for:** Audio transcription  
-**Pricing:** $0.006 per minute  
+**Best for:** Audio transcription
+**Pricing:** $0.006 per minute
 **Languages:** Multilingual
 
 ```python
@@ -1116,13 +1116,13 @@ data = {"model": "whisper-1"}
 
 #### gpt-4o-transcribe, gpt-4o-mini-transcribe
 
-**Released:** 2025  
-**Best for:** Superior transcription accuracy  
+**Released:** 2025
+**Best for:** Superior transcription accuracy
 **Recommendation:** Use gpt-4o-mini-transcribe over gpt-4o-transcribe
 
 #### gpt-4o-mini-tts
 
-**Best for:** Text-to-speech  
+**Best for:** Text-to-speech
 **Features:** Expressive, controllable voices
 
 ---
@@ -1131,13 +1131,13 @@ data = {"model": "whisper-1"}
 
 #### gpt-oss-120b
 
-**License:** Apache 2.0  
-**Best for:** Self-hosted, most powerful open model  
+**License:** Apache 2.0
+**Best for:** Self-hosted, most powerful open model
 **Hardware:** Runs on single H100 GPU
 
 #### gpt-oss-20b
 
-**License:** Apache 2.0  
+**License:** Apache 2.0
 **Best for:** Smaller self-hosted deployments
 
 ---
@@ -1146,14 +1146,14 @@ data = {"model": "whisper-1"}
 
 ### Claude 4.5 Family (Latest - November 2025)
 
-**Price Reduction:** 67% cheaper than Claude 4.1  
+**Price Reduction:** 67% cheaper than Claude 4.1
 **Features:** Extended thinking, computer use, citations
 
 #### claude-opus-4-5-20251101
 
-**Pricing:** $5 input / $25 output per 1M tokens  
-**Context:** 200K (1M with beta header)  
-**Best for:** Most capable, coding, agents, computer use  
+**Pricing:** $5 input / $25 output per 1M tokens
+**Context:** 200K (1M with beta header)
+**Best for:** Most capable, coding, agents, computer use
 
 ```python
 import os
@@ -1185,8 +1185,8 @@ print(f"Usage: {extract_anthropic_usage(resp)}")
 
 #### claude-sonnet-4-5-20250929
 
-**Pricing:** $3 input / $15 output per 1M tokens  
-**Context:** 200K (1M with beta header)  
+**Pricing:** $3 input / $15 output per 1M tokens
+**Context:** 200K (1M with beta header)
 **Best for:** Balanced performance, production apps
 
 ```python
@@ -1204,8 +1204,8 @@ payload = {
 
 #### claude-haiku-4-5-20251001
 
-**Pricing:** $1 input / $5 output per 1M tokens  
-**Context:** 200K (1M with beta header)  
+**Pricing:** $1 input / $5 output per 1M tokens
+**Context:** 200K (1M with beta header)
 **Best for:** Fast, affordable, high-volume
 
 ```python
@@ -1224,11 +1224,11 @@ payload = {
 
 #### claude-opus-4-6-20260205
 
-**Released:** February 2026  
-**Pricing:** $5 input / $25 output per 1M tokens (same as 4.5)  
-**Context:** 200K (1M with beta header); 128K max output  
-**Best for:** Newest flagship, agentic tasks  
-**Features:** Adaptive Thinking (effort-based), Agent Teams  
+**Released:** February 2026
+**Pricing:** $5 input / $25 output per 1M tokens (same as 4.5)
+**Context:** 200K (1M with beta header); 128K max output
+**Best for:** Newest flagship, agentic tasks
+**Features:** Adaptive Thinking (effort-based), Agent Teams
 **Note:** Opus 4.6 uses **Adaptive Thinking** (5 effort levels: none, minimal, low, medium, high), not Extended Thinking (`thinking.budget_tokens`). Use `thinking.type = "adaptive"` and `thinking.effort`.
 
 **Adaptive Thinking levels:** `none` (no reasoning), `minimal`, `low`, `medium` (recommended), `high` (max depth)
@@ -1260,22 +1260,22 @@ print(extract_anthropic_usage(resp))
 
 #### claude-opus-4-1-20250805
 
-**Released:** August 2025  
+**Released:** August 2025
 **Best for:** Code generation, agentic search
 
 #### claude-opus-4-20250522
 
-**Released:** May 2025  
+**Released:** May 2025
 **Status:** Superseded by 4.1
 
 #### claude-sonnet-4-20250522
 
-**Released:** May 2025  
+**Released:** May 2025
 **Status:** Superseded by Sonnet 4.5
 
 #### claude-haiku-3-5-20241022
 
-**Released:** October 2024  
+**Released:** October 2024
 **Best for:** Budget option (older generation)
 
 ---
@@ -1284,8 +1284,8 @@ print(extract_anthropic_usage(resp))
 
 #### Extended Thinking
 
-**Available on:** Opus 4.5, Sonnet 4.5, Haiku 4.5  
-**Minimum budget:** 1024 tokens  
+**Available on:** Opus 4.5, Sonnet 4.5, Haiku 4.5
+**Minimum budget:** 1024 tokens
 **Pricing:** Billed as output tokens
 
 ```python
@@ -1310,7 +1310,7 @@ payload = {
 
 #### Computer Use
 
-**Available on:** Sonnet 4.5, Opus 4.5  
+**Available on:** Sonnet 4.5, Opus 4.5
 **Beta header:** `anthropic-beta: computer-use-2025-01-24`
 
 ```python
@@ -1336,7 +1336,7 @@ payload = {
 
 #### Prompt Caching
 
-**Savings:** Up to 90% cost reduction  
+**Savings:** Up to 90% cost reduction
 **Beta header:** `anthropic-beta: prompt-caching-2024-07-31`
 
 ```python
@@ -1364,13 +1364,13 @@ payload = {
 
 ### Grok 4 Series (Latest)
 
-**Knowledge Cutoff:** November 2024  
+**Knowledge Cutoff:** November 2024
 **Features:** Agent Tools, Collections API, Live Search
 
 #### grok-4-1-fast-reasoning
 
-**Pricing:** $0.20 input / $0.50 output per 1M tokens  
-**Context:** 2M tokens (industry leading)  
+**Pricing:** $0.20 input / $0.50 output per 1M tokens
+**Context:** 2M tokens (industry leading)
 **Best for:** Agentic tool calling with reasoning
 
 ```python
@@ -1398,7 +1398,7 @@ print(f"Usage: {extract_openai_usage(resp)}")
 
 #### grok-4-1-fast-non-reasoning
 
-**Context:** 2M tokens  
+**Context:** 2M tokens
 **Best for:** Fast responses without reasoning overhead
 
 #### grok-4-1-fast
@@ -1407,7 +1407,7 @@ print(f"Usage: {extract_openai_usage(resp)}")
 
 #### grok-4
 
-**Context:** 256K tokens  
+**Context:** 256K tokens
 **Best for:** Standard use cases
 
 ```python
@@ -1429,7 +1429,7 @@ payload = {
 
 #### grok-3
 
-**Context:** 128K tokens  
+**Context:** 128K tokens
 **Status:** Previous generation
 
 ```python
@@ -1449,8 +1449,8 @@ payload = {
 
 #### grok-code-fast-1
 
-**Pricing:** $0.30 input / $0.90 output per 1M tokens  
-**Context:** 256K tokens  
+**Pricing:** $0.30 input / $0.90 output per 1M tokens
+**Context:** 256K tokens
 **Best for:** Agentic coding tasks
 
 ```python
@@ -1464,7 +1464,7 @@ payload = {
 
 #### grok-2-image-1212
 
-**Best for:** Text-to-image generation  
+**Best for:** Text-to-image generation
 **Features:** Stylized image creation
 
 ```python
@@ -1478,7 +1478,7 @@ payload = {
 
 #### grok-voice
 
-**Best for:** Voice agent interactions  
+**Best for:** Voice agent interactions
 **Features:** Low-latency, multilingual, tool calling
 
 ---
@@ -1519,7 +1519,7 @@ resp = post_json(url, headers, payload)
 
 ### Live Search (Deprecated)
 
-**Deprecation:** December 15, 2025  
+**Deprecation:** December 15, 2025
 **Replacement:** Agent Tools API
 
 ```python
@@ -1543,9 +1543,9 @@ payload = {
 
 #### gemini-3-pro-preview
 
-**Pricing:** $2.00 input / $12.00 output per 1M tokens (standard); >200K context: $4 input / $18 output per 1M  
-**Context:** 1M tokens  
-**Best for:** Most powerful reasoning & multimodal  
+**Pricing:** $2.00 input / $12.00 output per 1M tokens (standard); >200K context: $4 input / $18 output per 1M
+**Context:** 1M tokens
+**Best for:** Most powerful reasoning & multimodal
 **Features:** Adaptive thinking, grounding
 
 ```python
@@ -1578,8 +1578,8 @@ print(f"Usage: {extract_gemini_usage(resp)}")
 
 #### gemini-3-flash-preview
 
-**Pricing:** $0.10 input / $0.40 output per 1M tokens  
-**Context:** 1M tokens  
+**Pricing:** $0.10 input / $0.40 output per 1M tokens
+**Context:** 1M tokens
 **Best for:** Fast frontier performance, coding
 
 ```python
@@ -1593,7 +1593,7 @@ payload = {
 
 #### gemini-3-pro-image-preview
 
-**Best for:** Image generation ("Nano Banana Pro")  
+**Best for:** Image generation ("Nano Banana Pro")
 **Features:** Advanced image synthesis
 
 ---
@@ -1602,8 +1602,8 @@ payload = {
 
 #### gemini-2.5-pro
 
-**Pricing:** $1.25 input / $5.00 output per 1M tokens  
-**Context:** 2M tokens  
+**Pricing:** $1.25 input / $5.00 output per 1M tokens
+**Context:** 2M tokens
 **Best for:** Long-context, general-purpose
 
 ```python
@@ -1623,8 +1623,8 @@ payload = {
 
 #### gemini-2.5-flash
 
-**Pricing:** $0.075 input / $0.30 output per 1M tokens  
-**Context:** Up to 1M tokens  
+**Pricing:** $0.075 input / $0.30 output per 1M tokens
+**Context:** Up to 1M tokens
 **Best for:** Efficient, balanced performance
 
 ```python
@@ -1638,7 +1638,7 @@ payload = {
 
 #### gemini-2.5-flash-lite
 
-**Pricing:** $0.04 input / $0.12 output per 1M tokens  
+**Pricing:** $0.04 input / $0.12 output per 1M tokens
 **Best for:** Ultra-efficient, high-frequency tasks
 
 ---
@@ -1647,12 +1647,12 @@ payload = {
 
 #### gemini-2.0-flash
 
-**Status:** ⚠️ Retiring March 31, 2026  
+**Status:** ⚠️ Retiring March 31, 2026
 **Replacement:** gemini-2.5-flash-lite
 
 #### gemini-2.0-flash-lite
 
-**Status:** ⚠️ Retiring March 31, 2026  
+**Status:** ⚠️ Retiring March 31, 2026
 **Replacement:** gemini-2.5-flash-lite
 
 ---
@@ -1661,7 +1661,7 @@ payload = {
 
 #### gemini-2.5-flash-native-audio-preview
 
-**Best for:** Gemini Live API (real-time audio)  
+**Best for:** Gemini Live API (real-time audio)
 **Features:** Low-latency, conversational
 
 ```python
@@ -1671,7 +1671,7 @@ payload = {
 
 #### text-embedding-004
 
-**Best for:** Text embeddings  
+**Best for:** Text embeddings
 **Dimensions:** Configurable
 
 ---
@@ -1744,14 +1744,14 @@ payload = {
 
 ### Mistral 3 Family (Latest - December 2025)
 
-**License:** Apache 2.0 (Open-source)  
+**License:** Apache 2.0 (Open-source)
 **Training:** 3000 H200 GPUs
 
 #### mistral-large-3-25-12
 
-**Architecture:** MoE (675B total, 41B active)  
-**Pricing:** $0.50 input / $1.50 output per 1M tokens  
-**Context:** 256K tokens  
+**Architecture:** MoE (675B total, 41B active)
+**Pricing:** $0.50 input / $1.50 output per 1M tokens
+**Context:** 256K tokens
 **Best for:** Frontier-level performance
 
 ```python
@@ -1787,7 +1787,7 @@ print(f"Usage: {extract_openai_usage(resp)}")
 
 #### mistral-medium-3-1
 
-**Pricing:** $0.40 input / $2.00 output per 1M tokens  
+**Pricing:** $0.40 input / $2.00 output per 1M tokens
 **Best for:** GPT-4 class performance, cost-effective
 
 ```python
@@ -1809,8 +1809,8 @@ payload = {
 
 #### mistral-small-3-2-24b
 
-**Released:** June 2025  
-**Pricing:** $0.06 input / $0.18 output per 1M tokens  
+**Released:** June 2025
+**Pricing:** $0.06 input / $0.18 output per 1M tokens
 **Parameters:** 24B
 
 ```python
@@ -1830,22 +1830,22 @@ payload = {
 
 ### Ministral (Compact Models)
 
-**Released:** December 2025  
+**Released:** December 2025
 **License:** Apache 2.0
 
 #### ministral-3-3b-2512
 
-**Parameters:** 3B  
+**Parameters:** 3B
 **Best for:** Edge devices, mobile
 
 #### ministral-3-8b-2512
 
-**Parameters:** 8B  
+**Parameters:** 8B
 **Best for:** Balanced edge deployment
 
 #### ministral-3-14b-2512
 
-**Parameters:** 14B  
+**Parameters:** 14B
 **Best for:** Maximum edge performance
 
 ---
@@ -1854,8 +1854,8 @@ payload = {
 
 #### codestral-2508
 
-**Released:** August 2025  
-**Pricing:** $0.30 input / $0.90 output per 1M tokens  
+**Released:** August 2025
+**Pricing:** $0.30 input / $0.90 output per 1M tokens
 **Best for:** Code generation
 
 ```python
@@ -1873,9 +1873,9 @@ payload = {
 
 #### devstral-2
 
-**Parameters:** 123B  
-**Pricing:** $0.40 input / $2.00 output per 1M tokens  
-**Best for:** Frontier agentic coding  
+**Parameters:** 123B
+**Pricing:** $0.40 input / $2.00 output per 1M tokens
+**Best for:** Frontier agentic coding
 **Benchmark:** 72.2% on SWE-bench Verified
 
 ```python
@@ -1889,21 +1889,21 @@ payload = {
 
 #### devstral-small-2
 
-**Parameters:** 24B  
-**Pricing:** $0.10 input / $0.30 output per 1M tokens  
+**Parameters:** 24B
+**Pricing:** $0.10 input / $0.30 output per 1M tokens
 **Best for:** Efficient coding tasks
 
 ---
 
 ### Reasoning Models (Magistral)
 
-**Released:** June 2025  
+**Released:** June 2025
 **Features:** Chain-of-thought, transparent reasoning
 
 #### magistral-small-2506
 
-**Parameters:** 24B  
-**License:** Apache 2.0  
+**Parameters:** 24B
+**License:** Apache 2.0
 **Best for:** Open-source reasoning
 
 ```python
@@ -1930,8 +1930,8 @@ payload = {
 
 #### voxtral-small-24b-2507
 
-**Released:** October 2025  
-**Pricing:** $0.10 input / $0.30 output per 1M tokens  
+**Released:** October 2025
+**Pricing:** $0.10 input / $0.30 output per 1M tokens
 **Best for:** Audio input processing
 
 ```python
@@ -1951,7 +1951,7 @@ payload = {
 
 #### mistral-ocr-3
 
-**Best for:** Document processing, OCR  
+**Best for:** Document processing, OCR
 **Features:** Forms, tables, handwriting, low-quality scans
 
 ---
@@ -2006,7 +2006,7 @@ Groq provides **inference hosting** for third-party open-source models on their 
 
 #### llama-4-scout
 
-**Pricing:** $0.11 input / $0.34 output per 1M tokens  
+**Pricing:** $0.11 input / $0.34 output per 1M tokens
 **Provider:** Meta (running on Groq LPUs)
 
 ```python
@@ -2029,14 +2029,14 @@ payload = {
 resp = post_json(url, headers, payload)
 print(f"Text: {extract_openai_chat_text(resp)}")
 print(f"Usage: {extract_openai_usage(resp)}")
-print(f"Speed: {resp.get('usage', {}).get('total_tokens', 0) / 
+print(f"Speed: {resp.get('usage', {}).get('total_tokens', 0) /
              resp.get('x-groq-time-seconds', 1):.1f} tokens/sec")
 ```
 
 #### llama-3.3-70b-versatile
 
-**Pricing:** $0.59 input / $0.79 output per 1M tokens  
-**Context:** 128K tokens  
+**Pricing:** $0.59 input / $0.79 output per 1M tokens
+**Context:** 128K tokens
 **Provider:** Meta
 
 ```python
@@ -2051,7 +2051,7 @@ payload = {
 
 #### llama-3.1-405b
 
-**Context:** 128K tokens  
+**Context:** 128K tokens
 **Best for:** Largest Llama model
 
 #### llama-3.1-70b-versatile
@@ -2072,7 +2072,7 @@ payload = {
 
 #### mixtral-8x7b-32768
 
-**Context:** 32K tokens  
+**Context:** 32K tokens
 **Provider:** Mistral AI (MoE architecture)
 
 ```python
@@ -2113,11 +2113,11 @@ payload = {
 payload = {
     "model": "llama-3.3-70b-versatile",
     "messages": [...],
-    
+
     # Standard OpenAI fields
     "max_tokens": 1024,
     "temperature": 0.7,
-    
+
     # Groq-specific (optional)
     "citation_options": {...},
     "documents": [...],
@@ -2135,10 +2135,10 @@ payload = {
 
 ### Extended Thinking (Anthropic)
 
-**Models:** Claude Opus 4.5, Sonnet 4.5, Haiku 4.5  
-**Note:** Claude Opus 4.6 uses **Adaptive Thinking** instead (see [Claude Opus 4.6](#claude-opus-4-6-20260205)): use `thinking.type = "adaptive"` and `thinking.effort` (none|minimal|low|medium|high), not `budget_tokens`.  
-**Minimum:** 1024 tokens (for 4.5 Extended Thinking)  
-**Pricing:** Billed as output tokens  
+**Models:** Claude Opus 4.5, Sonnet 4.5, Haiku 4.5
+**Note:** Claude Opus 4.6 uses **Adaptive Thinking** instead (see [Claude Opus 4.6](#claude-opus-4-6-20260205)): use `thinking.type = "adaptive"` and `thinking.effort` (none|minimal|low|medium|high), not `budget_tokens`.
+**Minimum:** 1024 tokens (for 4.5 Extended Thinking)
+**Pricing:** Billed as output tokens
 **Recommended:** Start at 1024, increase incrementally
 
 ```python
@@ -2300,7 +2300,7 @@ if resp["choices"][0]["finish_reason"] == "tool_calls":
         arguments = json.loads(call["function"]["arguments"])
         # Execute function...
         result = get_weather(**arguments)
-        
+
         # Continue conversation with tool result
         messages.append({
             "role": "tool",
@@ -2337,7 +2337,7 @@ for block in resp["content"]:
     if block["type"] == "tool_use":
         tool_input = block["input"]
         result = get_weather(**tool_input)
-        
+
         # Next message includes tool result
         messages.append({
             "role": "user",
@@ -2357,7 +2357,7 @@ for block in resp["content"]:
 
 #### Anthropic Prompt Caching
 
-**Savings:** Up to 90% cost reduction  
+**Savings:** Up to 90% cost reduction
 **Use case:** Large context documents, system prompts
 
 ```python
@@ -2417,8 +2417,8 @@ payload = {
 
 ### Batch API
 
-**Providers:** OpenAI, Anthropic  
-**Savings:** 50% cost reduction  
+**Providers:** OpenAI, Anthropic
+**Savings:** 50% cost reduction
 **Use case:** Non-urgent, high-volume processing
 
 #### OpenAI Batch API
@@ -2526,17 +2526,17 @@ with requests.post(url, headers=headers, json=payload, stream=True) as r:
     for line in r.iter_lines(decode_unicode=True):
         if not line or not line.startswith("data: "):
             continue
-        
+
         data = line[len("data: "):]
         if data.strip() == "[DONE]":
             break
-        
+
         chunk = json.loads(data)
         delta = chunk["choices"][0].get("delta", {})
-        
+
         if "content" in delta:
             print(delta["content"], end="", flush=True)
-        
+
         # Usage in final chunk (when stream_options.include_usage=true)
         if "usage" in chunk:
             print(f"\n\nUsage: {chunk['usage']}")
@@ -2571,14 +2571,14 @@ with requests.post(url, headers=headers, json=payload, stream=True) as r:
     for line in r.iter_lines(decode_unicode=True):
         if not line or not line.startswith("data: "):
             continue
-        
+
         data = line[len("data: "):]
         event = json.loads(data)
-        
+
         if event["type"] == "content_block_delta":
             if event["delta"]["type"] == "text_delta":
                 print(event["delta"]["text"], end="", flush=True)
-        
+
         elif event["type"] == "message_stop":
             print()  # Final newline
 
@@ -2610,9 +2610,9 @@ with requests.post(url, headers=headers, json=payload, stream=True) as r:
     for line in r.iter_lines(decode_unicode=True):
         if not line:
             continue
-        
+
         chunk = json.loads(line)
-        
+
         for candidate in chunk.get("candidates", []):
             for part in candidate.get("content", {}).get("parts", []):
                 if "text" in part:
@@ -2632,25 +2632,25 @@ def stream_completion(url, headers, payload):
     Works with: OpenAI, xAI, Mistral, Groq
     """
     payload["stream"] = True
-    
+
     with requests.post(url, headers=headers, json=payload, stream=True) as r:
         r.raise_for_status()
-        
+
         for line in r.iter_lines(decode_unicode=True):
             if not line or not line.startswith("data: "):
                 continue
-            
+
             data = line[len("data: "):]
             if data.strip() == "[DONE]":
                 break
-            
+
             try:
                 chunk = json.loads(data)
                 delta = chunk["choices"][0].get("delta", {})
-                
+
                 if "content" in delta:
                     yield delta["content"]
-                    
+
             except (json.JSONDecodeError, KeyError, IndexError):
                 continue
 
@@ -2781,7 +2781,7 @@ print()
 | Claude Haiku 4.5 | $1 | $5 | 200K / 1M† |
 | Claude Opus 4.6 | $5 | $25 | 200K / 1M† |
 
-† 1M context with `context-1m-2025-08-07` beta header  
+† 1M context with `context-1m-2025-08-07` beta header
 **Long context pricing:** >200K tokens at $6 input / $22.50 output per 1M
 
 ---
@@ -2908,35 +2908,35 @@ def call_llm_with_retry(
     for attempt in range(max_retries):
         try:
             resp = requests.post(url, headers=headers, json=payload, timeout=60)
-            
+
             # Rate limit - retry with backoff
             if resp.status_code == 429:
                 wait_time = backoff_factor ** attempt
                 print(f"Rate limited. Waiting {wait_time}s...")
                 time.sleep(wait_time)
                 continue
-            
+
             # Server error - retry
             if resp.status_code >= 500:
                 wait_time = backoff_factor ** attempt
                 print(f"Server error. Retrying in {wait_time}s...")
                 time.sleep(wait_time)
                 continue
-            
+
             # Client error - don't retry
             if not resp.ok:
                 error = resp.json()
                 raise ValueError(f"API error: {error}")
-            
+
             return resp.json()
-            
+
         except requests.Timeout:
             if attempt == max_retries - 1:
                 raise
             wait_time = backoff_factor ** attempt
             print(f"Timeout. Retrying in {wait_time}s...")
             time.sleep(wait_time)
-    
+
     return None
 ```
 
@@ -3010,7 +3010,7 @@ requests.post(
 requests.post(
     "https://api.anthropic.com/v1/messages",
     headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
-    json={"model": "claude-opus-4-5-20251101", "max_tokens": 1024, 
+    json={"model": "claude-opus-4-5-20251101", "max_tokens": 1024,
           "messages": [{"role": "user", "content": "Hi"}]}
 ).json()["content"][0]["text"]
 ```

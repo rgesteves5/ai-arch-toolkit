@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import time
-from unittest.mock import patch
 
 from ai_arch_toolkit.core import LLM
 from ai_arch_toolkit.core._state import State
@@ -112,7 +110,7 @@ async def run():
     executor_mod._execute_sequential = _original
 
     response = state.get("response")
-    print(f"\n=== FINAL STATE ===")
+    print("\n=== FINAL STATE ===")
     print(f"turn: {state.get('turn')}")
     print(f"needs_llm_call: {state.get('needs_llm_call')}")
     print(f"has_tool_calls: {state.get('has_tool_calls')}")
@@ -130,7 +128,9 @@ async def run():
                     if p.get("type") == "tool_use":
                         parts.append(f"tool_use({p['name']})")
                     elif p.get("type") == "tool_result":
-                        parts.append(f"tool_result({str(p.get('text', p.get('content', '')))[:50]})")
+                        parts.append(
+                            f"tool_result({str(p.get('text', p.get('content', '')))[:50]})"
+                        )
                     elif p.get("type") == "text":
                         parts.append(f"text({p.get('text', '')[:50]})")
                     else:

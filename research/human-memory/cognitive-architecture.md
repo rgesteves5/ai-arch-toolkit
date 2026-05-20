@@ -533,7 +533,7 @@ Each event record contains:
 
 **Purpose:** Not a separate storage system, but a **modulatory system** that tags all other memories with emotional significance and influences processing priority.
 
-**Data Structure:** 
+**Data Structure:**
 - Valence-arousal state: A continuous 2D vector representing current emotional state
   - Valence: negative (-1.0) to positive (+1.0)
   - Arousal: calm (0.0) to intense (1.0)
