@@ -6,8 +6,9 @@ simple for the common case, rich when you need it.
 """
 
 from __future__ import annotations
-from typing import Any, AsyncIterator, Callable as Fn
 
+from collections.abc import Callable as Fn
+from typing import Any
 
 # ═══════════════════════════════════════════════════════════════════
 #
@@ -22,15 +23,16 @@ from typing import Any, AsyncIterator, Callable as Fn
 
 # ─── Creating tools ──────────────────────────────────────────────
 
+
 def tool(
     fn=None,
     *,
     name: str = "",
     description: str = "",
-    schema: dict | None = None,    # override auto-inferred schema
-    retry: int = 0,                # auto-retry on failure
+    schema: dict | None = None,  # override auto-inferred schema
+    retry: int = 0,  # auto-retry on failure
     timeout: float | None = None,  # seconds
-    cache: bool = False,           # cache identical calls
+    cache: bool = False,  # cache identical calls
 ):
     """
     Decorator. Turns any function into a tool.
@@ -66,6 +68,7 @@ def tool(
 
 
 # ─── Tools from other sources ───────────────────────────────────
+
 
 class Tools:
     """
@@ -112,8 +115,8 @@ class Tools:
     async def from_mcp(
         server: str,
         *,
-        tools: list[str] | None = None,    # filter: only these tools
-        env: dict | None = None,            # environment variables for the server
+        tools: list[str] | None = None,  # filter: only these tools
+        env: dict | None = None,  # environment variables for the server
     ) -> list:
         """
         Connect to an MCP server and import its tools.
@@ -156,6 +159,7 @@ class Tools:
 
 # ─── Tool groups (optional organization) ────────────────────────
 
+
 class ToolGroup:
     """
     A named group of related tools. Optional organization.
@@ -188,6 +192,7 @@ class ToolGroup:
 #  Rich case: persistent, shared, observable, with history.
 #
 # ═══════════════════════════════════════════════════════════════════
+
 
 class Memory:
     """
@@ -235,8 +240,7 @@ class Memory:
     def __init__(
         self,
         initial: dict[str, str] | None = None,
-    ):
-        ...
+    ): ...
 
     # ─── Dict-like access ────────────────────────────────────────
 
@@ -248,11 +252,9 @@ class Memory:
         """Write a memory section (if not locked)."""
         ...
 
-    def __contains__(self, key: str) -> bool:
-        ...
+    def __contains__(self, key: str) -> bool: ...
 
-    def keys(self) -> list[str]:
-        ...
+    def keys(self) -> list[str]: ...
 
     # ─── Access control ──────────────────────────────────────────
 
@@ -264,8 +266,7 @@ class Memory:
         """Make a section read_write again. Only callable by user, not agent."""
         ...
 
-    def is_locked(self, key: str) -> bool:
-        ...
+    def is_locked(self, key: str) -> bool: ...
 
     # ─── History (observability) ─────────────────────────────────
 
@@ -309,8 +310,7 @@ class Memory:
 
     # ─── Representation ──────────────────────────────────────────
 
-    def __repr__(self) -> str:
-        ...
+    def __repr__(self) -> str: ...
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -327,6 +327,7 @@ class Memory:
 #    - Memory = WHAT YOU'VE LEARNED (knowledge, preferences) — mutable
 #
 # ═══════════════════════════════════════════════════════════════════
+
 
 class Prompt:
     """
@@ -393,9 +394,8 @@ class Prompt:
         rules: list[str] | None = None,
         context: str = "",
         examples: list[dict] | None = None,
-        style: str = "",            # output style guidance
-    ):
-        ...
+        style: str = "",  # output style guidance
+    ): ...
 
     def render(self, **variables) -> str:
         """

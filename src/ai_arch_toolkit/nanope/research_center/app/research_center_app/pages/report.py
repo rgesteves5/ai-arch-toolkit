@@ -78,7 +78,6 @@ def report_page() -> rx.Component:
                 align="center",
             ),
             rx.separator(),
-
             # Tab nav
             rx.hstack(
                 rx.link(
@@ -100,10 +99,8 @@ def report_page() -> rx.Component:
                 spacing="2",
             ),
             rx.separator(),
-
             # Cost summary
             _cost_summary(),
-
             # Report body
             rx.cond(
                 PipelineState.report != "",

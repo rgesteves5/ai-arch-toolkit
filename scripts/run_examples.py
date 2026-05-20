@@ -78,7 +78,9 @@ def _render_output_header(
         if exit_code == 124
         else "A non-zero exit code usually means missing env vars or runtime errors."
     )
-    interpretation = "Command completed without process errors." if exit_code == 0 else timeout_hint
+    interpretation = (
+        "Command completed without process errors." if exit_code == 0 else timeout_hint
+    )
     return (
         "=== EXAMPLE RUN REPORT ===\n"
         f"example_script: {example_path}\n"
@@ -108,7 +110,9 @@ def _render_validation_section(errors: list[str]) -> str:
 def _render_output_notes(stdout: str, stderr: str) -> str:
     """Return human-readable notes that help interpret common output patterns."""
     notes: list[str] = []
-    assistant_lines = sum(1 for line in stdout.splitlines() if line.strip().startswith("Assistant:"))
+    assistant_lines = sum(
+        1 for line in stdout.splitlines() if line.strip().startswith("Assistant:")
+    )
     user_lines = sum(1 for line in stdout.splitlines() if line.strip().startswith("User:"))
 
     if assistant_lines > 0 and user_lines == 0:
@@ -162,9 +166,7 @@ def _validate_output_content(content: str) -> list[str]:
             f"Call START marker count mismatch: summary={total_calls}, markers={len(start_ids)}."
         )
     if completed_calls + failed_calls > total_calls:
-        errors.append(
-            "Invalid call summary: completed_calls + failed_calls exceeds total_calls."
-        )
+        errors.append("Invalid call summary: completed_calls + failed_calls exceeds total_calls.")
     if total_calls > 0 and not start_ids:
         errors.append("Missing `[CALL ...] START` markers for traced calls.")
 
@@ -178,8 +180,7 @@ def _validate_output_content(content: str) -> list[str]:
     orphan_terminal = sorted(terminal_ids - start_ids)
     if orphan_terminal:
         errors.append(
-            "Found terminal markers without matching START markers: "
-            + ", ".join(orphan_terminal)
+            "Found terminal markers without matching START markers: " + ", ".join(orphan_terminal)
         )
 
     return errors
@@ -201,10 +202,12 @@ def _run_example(
     env = dict(os.environ)
     existing_pythonpath = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = (
-        f"{project_src_path}:{existing_pythonpath}" if existing_pythonpath else str(project_src_path)
+        f"{project_src_path}:{existing_pythonpath}"
+        if existing_pythonpath
+        else str(project_src_path)
     )
     try:
-        proc = subprocess.run(  # noqa: S603 - command is controlled and local file paths only
+        proc = subprocess.run(
             command,
             capture_output=True,
             text=True,
@@ -224,7 +227,9 @@ def _run_example(
         validation_errors = _validate_output_content(proc.stdout)
         body += _render_validation_section(validation_errors)
         output_path.write_text(body, encoding="utf-8")
-        effective_exit_code = proc.returncode if proc.returncode != 0 else (1 if validation_errors else 0)
+        effective_exit_code = (
+            proc.returncode if proc.returncode != 0 else (1 if validation_errors else 0)
+        )
         return RunResult(
             example_path=example_path,
             output_path=output_path,
@@ -234,21 +239,23 @@ def _run_example(
         )
     except subprocess.TimeoutExpired as exc:
         duration_seconds = time.monotonic() - started
-        stdout = exc.stdout if isinstance(exc.stdout, str) else (exc.stdout or b"").decode(
-            "utf-8", errors="replace"
+        stdout = (
+            exc.stdout
+            if isinstance(exc.stdout, str)
+            else (exc.stdout or b"").decode("utf-8", errors="replace")
         )
-        stderr = exc.stderr if isinstance(exc.stderr, str) else (exc.stderr or b"").decode(
-            "utf-8", errors="replace"
+        stderr = (
+            exc.stderr
+            if isinstance(exc.stderr, str)
+            else (exc.stderr or b"").decode("utf-8", errors="replace")
         )
         header = _render_output_header(example_path, command, duration_seconds, exit_code=124)
         timeout_content = (
-            (
-                f"{header}"
-                f"timeout_seconds: {timeout_seconds}\n\n"
-                f"{_render_output_notes(stdout, stderr)}"
-                f"{_render_stream_section('PARTIAL STDOUT', stdout)}"
-                f"{_render_stream_section('PARTIAL STDERR', stderr)}"
-            )
+            f"{header}"
+            f"timeout_seconds: {timeout_seconds}\n\n"
+            f"{_render_output_notes(stdout, stderr)}"
+            f"{_render_stream_section('PARTIAL STDOUT', stdout)}"
+            f"{_render_stream_section('PARTIAL STDERR', stderr)}"
         )
         validation_errors = _validate_output_content(stdout)
         timeout_content += _render_validation_section(validation_errors)

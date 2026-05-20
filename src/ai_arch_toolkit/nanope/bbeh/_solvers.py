@@ -288,8 +288,7 @@ def baseline_solver(model: str = "gpt-5-nano", thinking: bool = False, **kwargs:
 def _catalog_to_modules(catalog: dict[str, dict[str, str]]) -> tuple[str, ...]:
     """Convert a thinking systems catalog into Self-Discovery module descriptions."""
     return tuple(
-        f"{name.replace('_', ' ').title()}: {entry['summary']}"
-        for name, entry in catalog.items()
+        f"{name.replace('_', ' ').title()}: {entry['summary']}" for name, entry in catalog.items()
     )
 
 
@@ -333,9 +332,7 @@ def self_discovery_solver(
                     flow_kwargs or None,
                 )
             else:
-                flow = self_discovery_flow(
-                    llm, tools, system=SYSTEM_TS_PYEVAL, **flow_kwargs
-                )
+                flow = self_discovery_flow(llm, tools, system=SYSTEM_TS_PYEVAL, **flow_kwargs)
                 flow_state = State(operational=self_discovery_initial_state(question))
                 result = await flow.run(flow_state)
                 response = flow_state.get("response")

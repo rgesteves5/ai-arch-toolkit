@@ -263,4 +263,3 @@ react_full didn't crack any of the 0% tasks. These require either: (a) stronger 
 - **Round 3 baselines:** `baseline_o4-mini.json`, `baseline_claude-haiku-4-5-20251001.json`, `baseline_gemini-3_1-flash-lite-preview.json`, `baseline_gpt-5-mini.json`, `baseline_grok-4-1-fast-reasoning.json`
 - **Round 3 strategy:** `react_full.json`
 - **See also:** [REPORT.md](REPORT.md) for detailed Round 1-2 analysis, tool ablation, and per-task breakdowns
-

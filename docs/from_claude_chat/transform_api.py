@@ -12,8 +12,9 @@ Users need exactly four things:
 """
 
 from __future__ import annotations
-from typing import Any, AsyncIterator, overload
 
+from collections.abc import AsyncIterator
+from typing import Any
 
 # ═══════════════════════════════════════════════════════════════════
 # 1. CONTENT — building messages
@@ -23,17 +24,21 @@ from typing import Any, AsyncIterator, overload
 # Users can always just pass raw dicts.
 # ═══════════════════════════════════════════════════════════════════
 
+
 def system(content: str) -> dict:
     """System instruction."""
     return {"role": "system", "content": content}
+
 
 def user(content: str | list) -> dict:
     """User message. Accepts str or multimodal list."""
     return {"role": "user", "content": content}
 
+
 def assistant(content: str) -> dict:
     """Assistant message (for conversation history)."""
     return {"role": "assistant", "content": content}
+
 
 def tool_result(content: Any, tool_use_id: str) -> dict:
     """Result from a tool call."""
@@ -46,6 +51,7 @@ def tool_result(content: Any, tool_use_id: str) -> dict:
 # Behaves like a string (the common case).
 # But carries everything when you need it.
 # ═══════════════════════════════════════════════════════════════════
+
 
 class Response:
     """
@@ -67,9 +73,14 @@ class Response:
     """
 
     __slots__ = (
-        "text", "tool_calls",
-        "input_tokens", "output_tokens", "cost",
-        "stop_reason", "model", "raw",
+        "cost",
+        "input_tokens",
+        "model",
+        "output_tokens",
+        "raw",
+        "stop_reason",
+        "text",
+        "tool_calls",
     )
 
     def __init__(
@@ -131,6 +142,7 @@ class Response:
 # The user should not care.
 # ═══════════════════════════════════════════════════════════════════
 
+
 class Transform:
     """
     An LLM. Content → Content.
@@ -167,8 +179,7 @@ class Transform:
         api_key: str | None = None,
         base_url: str | None = None,
         **kwargs,
-    ):
-        ...
+    ): ...
 
     async def __call__(
         self,
@@ -211,6 +222,7 @@ class Transform:
 # Optional. Transform("model") already works.
 # This exists only if you want a shorter name.
 # ═══════════════════════════════════════════════════════════════════
+
 
 def model(name: str, **kwargs) -> Transform:
     """

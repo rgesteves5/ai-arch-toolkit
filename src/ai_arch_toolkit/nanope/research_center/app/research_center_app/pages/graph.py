@@ -56,7 +56,8 @@ def graph_page() -> rx.Component:
                 rx.heading("Wiki Graph", size="5"),
                 rx.spacer(),
                 rx.text(
-                    "Nodes: ", GraphState.stats["nodes"],
+                    "Nodes: ",
+                    GraphState.stats["nodes"],
                     size="2",
                     color="var(--gray-a11)",
                 ),
@@ -66,7 +67,6 @@ def graph_page() -> rx.Component:
             rx.separator(),
             _tab_nav(),
             rx.separator(),
-
             # 3D graph visualization
             rx.box(
                 force_graph_3d(
@@ -87,10 +87,8 @@ def graph_page() -> rx.Component:
                 overflow="hidden",
                 border="1px solid var(--gray-a5)",
             ),
-
             # Algorithm status
             algorithm_status(),
-
             # Single collapsible for all algorithm tools
             rx.accordion.root(
                 rx.accordion.item(
@@ -98,7 +96,6 @@ def graph_page() -> rx.Component:
                     content=rx.vstack(
                         # Stats
                         graph_stats_card(),
-
                         # Two-column layout for algorithm panels
                         rx.hstack(
                             rx.vstack(
@@ -117,10 +114,8 @@ def graph_page() -> rx.Component:
                             width="100%",
                             align="start",
                         ),
-
                         # Full-width structure panel
                         structure_panel(),
-
                         spacing="4",
                         width="100%",
                         padding_y="8px",
@@ -130,7 +125,6 @@ def graph_page() -> rx.Component:
                 collapsible=True,
                 width="100%",
             ),
-
             spacing="4",
             width="100%",
         ),

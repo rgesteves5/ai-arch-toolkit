@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from ai_arch_toolkit.toolkit.tools._python import python_repl
 
 

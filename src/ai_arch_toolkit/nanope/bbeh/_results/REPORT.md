@@ -286,4 +286,3 @@ Full per-sample results in:
 
 - Round 1: `baseline.json`, `react_tools.json`, `self_discovery.json`
 - Round 2: `react_ts_only.json`, `react_pyeval_only.json`, `react_ts_pyeval.json`
-

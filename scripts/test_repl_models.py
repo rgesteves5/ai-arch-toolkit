@@ -16,7 +16,6 @@ import logging
 import traceback
 
 from ai_arch_toolkit.core import LLM
-from ai_arch_toolkit.core._content import user
 from ai_arch_toolkit.core._state import State
 from ai_arch_toolkit.core._tools._group import ToolGroup
 from ai_arch_toolkit.toolkit.agents.flows._react import react_flow, react_initial_state
@@ -57,9 +56,9 @@ MODELS = [
 
 
 async def test_model(model_name: str, temperature: float) -> None:
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"MODEL: {model_name}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     llm = LLM(model_name, temperature=temperature, max_tokens=4096)
     tools = ToolGroup(python_repl)
@@ -87,7 +86,9 @@ async def test_model(model_name: str, temperature: float) -> None:
                     if isinstance(content, list):
                         for part in content:
                             if isinstance(part, dict) and part.get("type") == "tool_use":
-                                print(f"  TOOL CALL: {part['name']}({json.dumps(part.get('input', {}))[:100]})")
+                                print(
+                                    f"  TOOL CALL: {part['name']}({json.dumps(part.get('input', {}))[:100]})"
+                                )
                     elif isinstance(content, str) and content.strip():
                         print(f"  ASSISTANT: {content[:120]}")
                 elif role == "tool":

@@ -13,8 +13,9 @@ Users need:
 """
 
 from __future__ import annotations
-from typing import Any, AsyncIterator
 
+from collections.abc import AsyncIterator
+from typing import Any
 
 # ═══════════════════════════════════════════════════════════════════
 # STEP — one iteration of the agent loop
@@ -22,6 +23,7 @@ from typing import Any, AsyncIterator
 # Not a final answer. An intermediate state.
 # "Here's what I did, here's what happened."
 # ═══════════════════════════════════════════════════════════════════
+
 
 class Step:
     """
@@ -47,9 +49,13 @@ class Step:
     """
 
     __slots__ = (
-        "kind", "content",
-        "tool", "tool_input", "tool_output",
-        "cost", "done",
+        "content",
+        "cost",
+        "done",
+        "kind",
+        "tool",
+        "tool_input",
+        "tool_output",
     )
 
     def __init__(
@@ -86,6 +92,7 @@ class Step:
 # Still behaves like a string.
 # ═══════════════════════════════════════════════════════════════════
 
+
 class Response:
     """
     Final result of an agent run.
@@ -105,9 +112,13 @@ class Response:
     """
 
     __slots__ = (
-        "text", "steps",
-        "total_cost", "total_tokens", "total_steps",
-        "elapsed", "model",
+        "elapsed",
+        "model",
+        "steps",
+        "text",
+        "total_cost",
+        "total_steps",
+        "total_tokens",
     )
 
     def __init__(
@@ -149,6 +160,7 @@ class Response:
 # Same content → content shape as Transform.
 # Different verbs because the operational weight is different.
 # ═══════════════════════════════════════════════════════════════════
+
 
 class Agent:
     """
@@ -193,7 +205,7 @@ class Agent:
         memory: dict[str, str] | None = None,
         # Limits
         max_steps: int = 50,
-        max_time: float = 300.0,       # seconds
+        max_time: float = 300.0,  # seconds
         max_cost: float | None = None,  # USD
         # Permissions
         allow_self_modify: bool = False,
@@ -201,8 +213,7 @@ class Agent:
         # Identity
         name: str = "",
         description: str = "",
-    ):
-        ...
+    ): ...
 
     # ─── The three verbs ─────────────────────────────────────────
 
@@ -286,6 +297,7 @@ class Agent:
 # This is the power-user interface.
 # ═══════════════════════════════════════════════════════════════════
 
+
 class Session:
     """
     Manual control of an agent run.
@@ -359,6 +371,7 @@ class Session:
 # A tool is just a function with a description.
 # The @tool decorator is the public API.
 # ═══════════════════════════════════════════════════════════════════
+
 
 def tool(
     fn=None,

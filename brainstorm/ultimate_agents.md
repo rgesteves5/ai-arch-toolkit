@@ -127,8 +127,8 @@ This is the most natural merge. The LLM replaces the reasoning/inference/plannin
 Strip out Doc 11's full thinking system orchestration. Keep the memory substrate from the Cognitive Architecture. Use the LLM with a single well-crafted system prompt that encodes the kernel principles (metacognition, bounded rationality, dual-process awareness). No Cynefin dispatch, no 24-module registry.
 
 ```
-Input → Attention/Salience → Memory Retrieval → 
-  LLM (single call with rich context from memory) → 
+Input → Attention/Salience → Memory Retrieval →
+  LLM (single call with rich context from memory) →
     Output → Learning Updates → Periodic Consolidation
 ```
 
@@ -398,14 +398,14 @@ class RubberDuckSystem:
         return SystemOutput(
             insights=["Explain the problem out loud, step by step, "
                       "as if teaching it to someone who knows nothing."],
-            prompt=f"""Explain this problem step by step as if 
-            teaching a complete beginner. Often the act of 
+            prompt=f"""Explain this problem step by step as if
+            teaching a complete beginner. Often the act of
             explaining reveals where your understanding breaks down.
-            
+
             PROBLEM: {problem}
-            
-            Walk through it from the very beginning. Where does 
-            the explanation get hard? That's where the real 
+
+            Walk through it from the very beginning. Where does
+            the explanation get hard? That's where the real
             problem is.""",
             confidence=0.6,
         )
@@ -413,10 +413,10 @@ class RubberDuckSystem:
 # Custom memory backend — wraps an existing vector DB
 class PineconeEpisodicMemory:
     """Implements MemoryStore protocol using Pinecone."""
-    
+
     def store(self, item):
         self.index.upsert([(item.id, item.embedding, item.metadata)])
-    
+
     def retrieve(self, cue, k=5):
         results = self.index.query(cue.embedding, top_k=k)
         return [self._to_representation(r) for r in results.matches]
@@ -424,11 +424,11 @@ class PineconeEpisodicMemory:
 # Custom kernel monitor
 class CostMonitor:
     """Tracks spend and halts if budget exceeded."""
-    
+
     def __init__(self, max_usd: float):
         self.max_usd = max_usd
         self.spent = 0.0
-    
+
     def post_check(self, output, context):
         self.spent += output.cost
         if self.spent > self.max_usd:

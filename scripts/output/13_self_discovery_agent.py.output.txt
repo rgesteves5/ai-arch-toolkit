@@ -82,47 +82,47 @@ Determine what proportion of Spanish speakers also possess English proficiency.
     "description": "Define the given sets and their properties",
     "action": "Create Set E (English speakers = 60) and Set S (Spanish speakers = 50), with intersection E ∩ S (both languages = 20). Total employees = 100"
   },
-  
+
   "step_2_apply_inclusion_exclusion": {
     "description": "Calculate total employees speaking at least one language without double-counting",
     "formula": "Total(≥1 language) = E + S - (E ∩ S)",
     "calculation": "60 + 50 - 20 = 90"
   },
-  
+
   "step_3_find_english_only": {
     "description": "Calculate employees who speak only English",
     "action": "Subtract bilingual employees from total English speakers",
     "calculation": "60 - 20 = 40 employees"
   },
-  
+
   "step_4_find_spanish_only": {
     "description": "Calculate employees who speak only Spanish",
     "action": "Subtract bilingual employees from total Spanish speakers",
     "calculation": "50 - 20 = 30 employees"
   },
-  
+
   "step_5_verify_coverage": {
     "description": "Verify all single-language and bilingual groups account correctly",
     "calculation": "English-only (40) + Spanish-only (30) + Both (20) = 90 employees"
   },
-  
+
   "step_6_find_neither_language": {
     "description": "Calculate employees speaking neither language",
     "action": "Subtract those speaking at least one language from total",
     "calculation": "100 - 90 = 10 employees",
     "answer": "10 employees speak neither language"
   },
-  
+
   "step_7_identify_bilingual_subset": {
     "description": "Identify the bilingual employees relevant to percentage calculation",
     "action": "Note bilingual employees = 20"
   },
-  
+
   "step_8_identify_reference_group": {
     "description": "Identify the reference population for percentage",
     "action": "All Spanish speakers (both Spanish-only and bilingual) = 50"
   },
-  
+
   "step_9_calculate_percentage": {
     "description": "Calculate what percentage of Spanish speakers also speak English",
     "formula": "(Bilingual / Total Spanish speakers) × 100",
@@ -241,4 +241,3 @@ Phases completed: 4
 
 === OUTPUT VALIDATION ===
 PASS
-

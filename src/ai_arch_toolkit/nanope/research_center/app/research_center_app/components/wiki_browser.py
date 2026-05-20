@@ -61,7 +61,7 @@ def wiki_search_panel() -> rx.Component:
     )
 
 
-def _search_result_item(item: dict) -> rx.Component:  # noqa: ARG001
+def _search_result_item(item: dict) -> rx.Component:
     """Render a single search result as a clickable card."""
     return rx.card(
         rx.vstack(
@@ -161,7 +161,7 @@ def wiki_node_detail() -> rx.Component:
     )
 
 
-def _neighbor_item(neighbor: dict) -> rx.Component:  # noqa: ARG001
+def _neighbor_item(neighbor: dict) -> rx.Component:
     """Render a neighbor node link."""
     return rx.card(
         rx.hstack(

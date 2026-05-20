@@ -55,7 +55,7 @@ def budget_meter() -> rx.Component:
     )
 
 
-def _event_item(event: dict) -> rx.Component:  # noqa: ARG001
+def _event_item(event: dict) -> rx.Component:
     """Render a single pipeline event in the log."""
     return rx.hstack(
         rx.badge(event["type"], variant="outline", size="1"),
@@ -87,7 +87,7 @@ def event_log() -> rx.Component:
     )
 
 
-def _directive_accordion_item(directives: dict) -> rx.Component:  # noqa: ARG001
+def _directive_accordion_item(directives: dict) -> rx.Component:
     """Render a single cycle's directives in an accordion."""
     return rx.accordion.item(
         header=rx.text("Decision: ", directives["decision"], weight="medium"),

@@ -141,11 +141,7 @@ def timezone_lookup(lat: float, lon: float) -> str:
         return f"No timezone found for coordinates: {lat}, {lon}"
 
     offset = _format_utc_offset(data.get("utc_offset_seconds"))
-    return (
-        f"Coordinates: {lat}, {lon}\n"
-        f"Timezone: {timezone}\n"
-        f"UTC offset: {offset}"
-    )
+    return f"Coordinates: {lat}, {lon}\nTimezone: {timezone}\nUTC offset: {offset}"
 
 
 @tool
