@@ -7,31 +7,49 @@ on:
   pull_request:
 
 jobs:
-  test:
-    name: Python ${{ matrix.python-version }}
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: uv sync --extra dev
+      - name: ruff check
+        run: uv run ruff check src tests examples
+      - name: ruff format --check
+        run: uv run ruff format --check src tests examples
+
+  typecheck:
+    name: Type check (informational)
+    runs-on: ubuntu-latest
+    # Pyright is non-blocking while we drive the existing error count down.
+    # Remove `continue-on-error` once `uv run pyright src` is clean.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: uv sync --extra dev
+      - run: uv run pyright src
+
+  test:
+    name: Test — Python ${{ matrix.python-version }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        python-version:
-          - "3.13"
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.13"]
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup uv
-        uses: astral-sh/setup-uv@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-
-      - name: Install dependencies
-        run: uv sync --extra dev
-
-      - name: Lint
-        run: uv run ruff check src tests examples
-
-      - name: Test
-        run: uv run pytest
+      - run: uv sync --extra dev
+      - run: uv run pytest --cov=ai_arch_toolkit --cov-report=term-missing
