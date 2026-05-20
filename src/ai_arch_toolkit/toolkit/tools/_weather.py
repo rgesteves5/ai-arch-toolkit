@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from ai_arch_toolkit.core import tool
@@ -44,7 +45,7 @@ def _geocode(city: str) -> tuple[float, float, str] | str:
     """Geocode a city name → (lat, lon, display_name) or error string."""
     url = (
         f"https://geocoding-api.open-meteo.com/v1/search"
-        f"?name={urllib.request.quote(city)}&count=1&language=en&format=json"
+        f"?name={urllib.parse.quote(city)}&count=1&language=en&format=json"
     )
     try:
         req = urllib.request.Request(url)

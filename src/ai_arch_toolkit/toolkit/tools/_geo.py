@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from ai_arch_toolkit.core import tool
@@ -22,7 +23,7 @@ def geocode(city: str) -> str:
     """
     url = (
         f"https://geocoding-api.open-meteo.com/v1/search"
-        f"?name={urllib.request.quote(city)}&count=3&language=en&format=json"
+        f"?name={urllib.parse.quote(city)}&count=3&language=en&format=json"
     )
     try:
         req = urllib.request.Request(url)
@@ -230,7 +231,7 @@ def country_info(name: str) -> str:
         name: Country name, e.g. "Japan", "France", "Brazil".
     """
     url = (
-        f"https://restcountries.com/v3.1/name/{urllib.request.quote(name)}"
+        f"https://restcountries.com/v3.1/name/{urllib.parse.quote(name)}"
         f"?fields=name,capital,population,area,region,subregion,languages,"
         f"currencies,timezones,flags,borders"
     )
