@@ -21,10 +21,11 @@ A lightweight, unified LLM client and agent architecture toolkit for Python.
 
 ## Quick install
 
+The package is not on PyPI yet — install from the repo:
+
 ```bash
-# Pick the provider extra that matches the model you plan to use
-uv add "ai-arch-toolkit[openai]"
-# or: [anthropic], [gemini], [xai], [all]
+uv add "git+https://github.com/rgesteves5/ai-arch-toolkit.git#egg=ai-arch-toolkit[openai]"
+# or substitute another extra: [anthropic], [gemini], [xai], or [all]
 ```
 
 ## Quick start

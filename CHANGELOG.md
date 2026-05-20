@@ -9,18 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - nanope research_center, agent_swarm scaffold, and advanced configurable agent (work in progress, not part of the public toolkit API).
-- AGENTS.md project guidance file for Codex.
+- `AGENTS.md` project guidance file for Codex.
 - `app` optional-dependency extra (`reflex>=0.7` + graph + yaml).
+- `pyright>=1.1.390` and `pre-commit>=4.0` in the `dev` extra; `[tool.pyright]` configured in standard mode over `src/`.
+- `.pre-commit-config.yaml` with ruff-check / ruff-format and standard hygiene hooks (trailing whitespace, EOF newline, yaml/toml validity, merge-conflict + large-file guards).
+- `CONTRIBUTING.md` covering setup, conventions, and how to add a provider / tool / agent flow.
 
 ### Changed
+- README rewritten with badges, copy-paste snippets (completion, streaming, tools, ReAct), a provider × feature matrix, and an agent-architecture table.
+- CI split into `lint`, `typecheck` (non-blocking), and `test` (ubuntu + macos with coverage) jobs.
+- `[tool.ruff]` and `[tool.pyright]` both exclude `src/ai_arch_toolkit/nanope` (sub-projects have their own idioms).
 - Pricing registry refreshed (2026-05-19): Claude 4.7 added; Claude 4.6/4.7 now ship with 1M context at standard rates (long-context tier removed).
 - Examples 31–33 updated to the variadic `Flow(*steps)` API and async `flow.run(state)`.
 - Docs and example index aligned with the Flow-based architecture; legacy "pipelines" and "8 agent architectures" wording removed.
 - Sync timeouts in `core/_sync.py` no longer expose the dead `SYNC_TIMEOUT` / `STREAM_JOIN_TIMEOUT` aliases; use `configure_sync_timeouts()` instead.
 - `RateLimitMiddleware` docstring documents the streaming-bypass limitation explicitly (previously a TODO).
+- `uv lock --upgrade` brought every transitive dependency to its latest compatible version (pydantic 2.13, urllib3 2.7, requests 2.34, websockets 16, xai-sdk 1.12, ruff 0.15.13, …); resolved the four Dependabot alerts.
 
 ### Fixed
 - Structured output: parsed JSON is now validated against the Pydantic model before being returned.
+- Lint fixes: ternary form in `toolkit/tools/_datetime.py`; unused `pytest` import in `tests/test_python_eval.py`; misc `ruff format` across toolkit tools.
 
 ## Historical log
 
