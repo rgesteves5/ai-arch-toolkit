@@ -26,7 +26,6 @@ async def phase_parse(snap):
     return Result(
         value="parsed",
         artifacts={"parsed": snap["raw_data"].upper()},
-        usage=None,
     )
 
 
@@ -42,13 +41,11 @@ async def phase_store(snap):
 
 async def main():
     flow = Flow(
+        FlowStep(step=Step(name="fetch", fn=phase_fetch)),
+        FlowStep(step=Step(name="parse", fn=phase_parse)),
+        FlowStep(step=Step(name="validate", fn=phase_validate)),
+        FlowStep(step=Step(name="store", fn=phase_store)),
         name="etl",
-        steps=[
-            FlowStep(step=Step(name="fetch", fn=phase_fetch)),
-            FlowStep(step=Step(name="parse", fn=phase_parse)),
-            FlowStep(step=Step(name="validate", fn=phase_validate)),
-            FlowStep(step=Step(name="store", fn=phase_store)),
-        ],
     )
 
     # --- 1. iter() for step-by-step streaming ---

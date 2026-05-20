@@ -1,6 +1,6 @@
 # Examples
 
-All examples live in the `examples/` directory. Each is a self-contained script. Run with `uv run python examples/NN_name.py` (requires API keys — see [UV guide](uv-guide.md)).
+All examples live in the `examples/` directory. Each is a self-contained script. Run with `uv run python examples/NN_name.py`. Some examples require API keys — see [UV guide](uv-guide.md).
 
 ---
 
@@ -48,7 +48,7 @@ All examples live in the `examples/` directory. Each is a self-contained script.
 | 21 | `21_stream_fallback.py` | Automatic provider fallback during streaming when primary fails |
 | 22 | `22_retry_config.py` | Automatic retries with exponential backoff for transient API failures |
 | 23 | `23_prompt_caching.py` | Anthropic prompt caching with `cache()` for reduced latency and cost |
-| 24 | `24_toolkit_tools_showcase.py` | 25+ pre-built tools across 11 categories, all stdlib-only |
+| 24 | `24_toolkit_tools_showcase.py` | Dozens of pre-built tools across datetime, math, files, web, weather, geo, shell, Python, and knowledge lookups |
 | 25 | `25_server_tools.py` | Provider-hosted server tools (web search, code execution) |
 | 36 | `36_fallback_chains_and_attempts.py` | Fallback chains, attempt tracking across retries/fallbacks, flow-level traces |
 

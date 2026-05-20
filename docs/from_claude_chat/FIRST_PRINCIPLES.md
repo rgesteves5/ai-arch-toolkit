@@ -72,7 +72,7 @@ Every architecture in the LLM ecosystem is some combination:
 - **Chatbot** = single Transform, no loop
 - **Tool-using LLM** = Transform + Conditional(tool needed?) + Sequence(call tool, feed back)
 - **Agent** = Loop(Transform → Conditional → side-effect Transform) with Memory
-- **Pipeline orchestrator** = Sequence of Transforms
+- **Flow orchestrator** = Sequence of Transforms
 - **Parallel orchestrator** = Parallel Transforms + Aggregate
 - **Dynamic orchestrator** = Loop(Transform decides next Transform) — the LLM is the control flow
 - **Multi-agent** = Recursion of Transforms communicating via Content

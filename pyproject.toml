@@ -39,6 +39,7 @@ dev = [
     "pyyaml>=6.0",
     "tiktoken>=0.7",
 ]
+app = ["reflex>=0.7", "ai-arch-toolkit[graph,yaml]"]
 bench = ["inspect-ai", "inspect-evals"]
 docs = ["mkdocs>=1.6", "pdoc>=15.0"]
 telemetry = ["opentelemetry-api>=1.27"]

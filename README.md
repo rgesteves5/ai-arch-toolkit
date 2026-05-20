@@ -1,6 +1,8 @@
 # ai-arch-toolkit
 
-Lightweight unified LLM client for OpenAI, Anthropic, xAI, and Gemini — plus 8 agent architectures, a graph layer, graph-backed memory, pipelines, and a knowledge registry.
+Lightweight unified LLM client for OpenAI, Anthropic, xAI, and Gemini — plus
+Flow orchestration, built-in agent flows, graph-backed memory, knowledge
+loading, and moderation.
 
 ## Quick Start
 
@@ -10,7 +12,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Clone and install
 git clone <repo-url> && cd ai-arch-toolkit
-uv sync --dev
+uv sync --extra dev
 
 # Run tests
 uv run pytest
@@ -25,7 +27,7 @@ including how to load environment variables from `.env`.
 ## Documentation
 
 ```bash
-uv sync --group docs
+uv sync --extra dev --extra docs
 uv run mkdocs serve
 ```
 
