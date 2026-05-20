@@ -1,6 +1,30 @@
 # Changelog
 
-All notable features and major changes to this project, ordered by date (newest first).
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Added
+- nanope research_center, agent_swarm scaffold, and advanced configurable agent (work in progress, not part of the public toolkit API).
+- AGENTS.md project guidance file for Codex.
+- `app` optional-dependency extra (`reflex>=0.7` + graph + yaml).
+
+### Changed
+- Pricing registry refreshed (2026-05-19): Claude 4.7 added; Claude 4.6/4.7 now ship with 1M context at standard rates (long-context tier removed).
+- Examples 31–33 updated to the variadic `Flow(*steps)` API and async `flow.run(state)`.
+- Docs and example index aligned with the Flow-based architecture; legacy "pipelines" and "8 agent architectures" wording removed.
+- Sync timeouts in `core/_sync.py` no longer expose the dead `SYNC_TIMEOUT` / `STREAM_JOIN_TIMEOUT` aliases; use `configure_sync_timeouts()` instead.
+- `RateLimitMiddleware` docstring documents the streaming-bypass limitation explicitly (previously a TODO).
+
+### Fixed
+- Structured output: parsed JSON is now validated against the Pydantic model before being returned.
+
+## Historical log
+
+Chronological worklog of features and major changes prior to adopting Keep a Changelog.
 
 | Date | Change |
 |------------|--------|

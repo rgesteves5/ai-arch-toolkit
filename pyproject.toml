@@ -11,39 +11,46 @@ license = "MIT"
 dependencies = []
 
 [project.optional-dependencies]
+# Provider SDKs — install the one matching the model you plan to call.
 anthropic = ["anthropic>=0.40"]
-openai = ["openai>=1.50"]
 gemini = ["google-genai>=1.0"]
+openai = ["openai>=1.50"]
+xai = ["xai-sdk>=1.7.0"]
+
+# Optional features.
 graph = ["networkx>=3.0"]
 tokens = ["tiktoken>=0.7"]
 yaml = ["pyyaml>=6.0"]
+
+# Aggregate: install every provider plus every optional feature.
 all = [
     "ai-arch-toolkit[anthropic]",
-    "ai-arch-toolkit[openai]",
     "ai-arch-toolkit[gemini]",
-    "ai-arch-toolkit[xai]",
     "ai-arch-toolkit[graph]",
+    "ai-arch-toolkit[openai]",
     "ai-arch-toolkit[tokens]",
+    "ai-arch-toolkit[xai]",
     "ai-arch-toolkit[yaml]",
 ]
-dev = [
-    "pytest>=8.0",
-    "ruff>=0.9",
-    "pytest-cov>=6.0",
-    "pytest-asyncio>=0.24",
-    "anthropic>=0.40",
-    "openai>=1.50",
-    "google-genai>=1.0",
-    "xai-sdk>=1.7.0",
-    "networkx>=3.0",
-    "pyyaml>=6.0",
-    "tiktoken>=0.7",
-]
+
+# Downstream consumers / tooling.
 app = ["reflex>=0.7", "ai-arch-toolkit[graph,yaml]"]
 bench = ["inspect-ai", "inspect-evals"]
 docs = ["mkdocs>=1.6", "pdoc>=15.0"]
 telemetry = ["opentelemetry-api>=1.27"]
-xai = [
+
+# Local development — pulls in test runners, lint, and all providers/features.
+dev = [
+    "anthropic>=0.40",
+    "google-genai>=1.0",
+    "networkx>=3.0",
+    "openai>=1.50",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "pyyaml>=6.0",
+    "ruff>=0.9",
+    "tiktoken>=0.7",
     "xai-sdk>=1.7.0",
 ]
 
