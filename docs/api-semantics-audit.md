@@ -728,7 +728,7 @@ def _is_cancelled(self, token: object | None) -> bool:
     return False
 ```
 
-All 8 agents pop `cancellation_token` from kwargs, pass it through
+All agent implementations in scope of this audit pop `cancellation_token` from kwargs, pass it through
 `_resolve_cancellation_token`, and check `_is_cancelled` in every loop
 iteration — but it always returns `False`. This is ~50 lines of dead code
 per agent that misleads users into thinking cancellation works.

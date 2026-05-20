@@ -324,6 +324,27 @@ class TestParseSdkResponse:
 # ---------------------------------------------------------------------------
 
 
+def test_provider_timeout_is_converted_to_sdk_milliseconds(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        "ai_arch_toolkit.core._providers._gemini.genai.Client",
+        FakeClient,
+    )
+
+    GeminiProvider("gemini-2.0-flash", "test-key", timeout=45)
+
+    assert captured["api_key"] == "test-key"
+    assert captured["http_options"] == {"timeout": 45_000}
+
+
 class TestGeminiProviderComplete:
     async def test_complete(self):
         mock_client = MagicMock()

@@ -51,18 +51,16 @@ async def draft_content(snap):
 
 async def main():
     flow = Flow(
+        FlowStep(step=Step(name="gather_requirements", fn=gather_requirements)),
+        FlowStep(step=Step(name="create_outline", fn=create_outline)),
+        FlowStep(step=Step(name="draft_content", fn=draft_content)),
         name="essay",
-        steps=[
-            FlowStep(step=Step(name="gather_requirements", fn=gather_requirements)),
-            FlowStep(step=Step(name="create_outline", fn=create_outline)),
-            FlowStep(step=Step(name="draft_content", fn=draft_content)),
-        ],
     )
 
     # Pre-populate state with initial data
     state = State(operational={"topic": "async programming"})
 
-    result = flow.run_sync(state)
+    result = await flow.run(state)
 
     # --- 3. Inspect the result ---
     print(f"Flow: {flow.name}")

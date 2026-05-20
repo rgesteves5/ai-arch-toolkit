@@ -3,14 +3,20 @@
 ## Installation
 
 ```bash
-uv add ai-arch-toolkit
+# Pick the provider extra that matches the model you plan to use
+uv add "ai-arch-toolkit[openai]"
+# or: [anthropic], [gemini], [xai], [all]
 ```
 
 Or with pip:
 
 ```bash
-pip install ai-arch-toolkit
+pip install "ai-arch-toolkit[openai]"
+# or: [anthropic], [gemini], [xai], [all]
 ```
+
+The base package has no provider SDK dependencies. If you want to call a model,
+install the extra for that provider.
 
 ## Quick Start
 
@@ -108,9 +114,9 @@ llm = LLM("gemini-2.0-flash")
 llm = LLM("grok-2")
 ```
 
-## Agent Architectures
+## Agent Flows
 
-The toolkit includes 8 agent architectures as Flow factories:
+The toolkit exposes these built-in flow factories:
 
 - **`react_flow()`** — Thought-Action-Observation loop
 - **`reflexion_flow()`** — ReAct with self-critique retry
@@ -120,12 +126,16 @@ The toolkit includes 8 agent architectures as Flow factories:
 - **`lats_flow()`** — Language Agent Tree Search (MCTS)
 - **`self_discovery_flow()`** — Select reasoning modules, adapt, operationalize, solve
 - **`llm_compiler_flow()`** — Plan a DAG, parallel execute, join
+- **`generate_review_flow()`** — Generator-reviewer loop with retry feedback
 
 Each factory returns a `Flow` and has a companion `*_initial_state(task)` helper.
 
 ## Graph
 
 Build typed, directed graphs with algorithms and persistence:
+
+Install the `graph` extra for this section, for example
+`ai-arch-toolkit[openai,graph]` or `ai-arch-toolkit[all]`.
 
 ```python
 from ai_arch_toolkit import Graph, GraphNode

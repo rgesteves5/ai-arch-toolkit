@@ -6,7 +6,7 @@ This document covers the agent system and all framework capabilities that suppor
 
 ## Agent Flows
 
-All 8 agent architectures are implemented as **Flow factories** — functions that return a configured Flow. See [Flow Architecture](flow-architecture.md) for the underlying primitives (State, Step, Result, Policy, Trace, Scope).
+The package exposes these built-in flow factories. See [Flow Architecture](flow-architecture.md) for the underlying primitives (State, Step, Result, Policy, Trace, Scope).
 
 ```python
 from ai_arch_toolkit.toolkit.agents.flows import (
@@ -18,6 +18,7 @@ from ai_arch_toolkit.toolkit.agents.flows import (
     lats_flow, lats_initial_state,
     self_discovery_flow, self_discovery_initial_state,
     llm_compiler_flow, llm_compiler_initial_state,
+    generate_review_flow, generate_review_initial_state,
 )
 ```
 
@@ -26,7 +27,7 @@ from ai_arch_toolkit.toolkit.agents.flows import (
 Every flow factory follows the same pattern:
 
 ```python
-from ai_arch_toolkit.core import LLM, State
+from ai_arch_toolkit.core import LLM, State, ToolGroup
 from ai_arch_toolkit.toolkit.agents.flows import react_flow, react_initial_state
 
 llm = LLM("claude-sonnet-4-20250514")
@@ -74,7 +75,7 @@ result = await flow.run(state)
 
 result.total_cost        # sum across all steps
 result.total_duration    # wall clock seconds
-result.total_usage       # summed Usage(input_tokens, output_tokens, ...)
+result.trace.total_usage # summed Usage(input_tokens, output_tokens, ...)
 result.trace             # Trace with per-step detail
 
 # Per-step inspection
@@ -99,7 +100,7 @@ flow = plan_execute_flow(
 
 ---
 
-## The 8 Agent Architectures
+## Built-in Agent Flows
 
 ### ReAct
 
@@ -209,6 +210,21 @@ state = State(operational=llm_compiler_initial_state("Multi-step research task")
 Steps: `compile` (internally: plan → parallel execute → join → optional replan)
 
 The planner generates `$N. task [deps: $1, $2]` format. Independent tasks run concurrently via `asyncio.gather`.
+
+### Generate-Review
+
+Cyclic flow — generator and reviewer cooperate until the reviewer accepts the answer
+or the retry budget is exhausted.
+
+```python
+flow = generate_review_flow(gen_llm, review_llm, max_cycles=3)
+state = State(operational=generate_review_initial_state("Draft a release note"))
+```
+
+Steps: `generate` → `review` → loop while not accepted
+
+This is useful when you want an explicit critique pass, optional tool use in both
+phases, and accumulated reviewer feedback injected into later generation attempts.
 
 ---
 
@@ -370,7 +386,7 @@ result = tools.execute(tool_call)        # sync
 result = await tools.async_execute(tool_call)  # async
 ```
 
-### Pre-built tools (25)
+### Pre-built tools
 
 All use stdlib only (zero pip dependencies). All return error strings instead of raising exceptions.
 

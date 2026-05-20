@@ -387,7 +387,7 @@ When a Flow runs as a Step:
 
 ## Agent Flows
 
-All 8 agent architectures are implemented as **Flow factories** — functions that return a configured Flow:
+The package exposes these built-in agent flow factories:
 
 ```python
 from ai_arch_toolkit.toolkit.agents.flows import (
@@ -399,6 +399,7 @@ from ai_arch_toolkit.toolkit.agents.flows import (
     lats_flow, lats_initial_state,
     self_discovery_flow, self_discovery_initial_state,
     llm_compiler_flow, llm_compiler_initial_state,
+    generate_review_flow, generate_review_initial_state,
 )
 ```
 
@@ -409,7 +410,7 @@ Each flow factory has a companion `*_initial_state(task)` helper that creates th
 Every flow factory follows the same pattern:
 
 ```python
-from ai_arch_toolkit.core import LLM, State
+from ai_arch_toolkit.core import LLM, State, ToolGroup
 from ai_arch_toolkit.toolkit.agents.flows import react_flow, react_initial_state
 
 llm = LLM("claude-sonnet-4-20250514")

@@ -3,33 +3,40 @@
 ## Auto-generate API docs with pdoc
 
 ```bash
-uv sync --group docs
+uv sync --extra dev --extra docs
 uv run pdoc ai_arch_toolkit -o site/api
 uv run pdoc ai_arch_toolkit --http :8080  # serve locally
 ```
 
 ## Public API Surface
 
-All public types are re-exported from `ai_arch_toolkit` (top-level) or from `ai_arch_toolkit.core` / `ai_arch_toolkit.toolkit`.
+This page summarizes the main public API. For exhaustive symbol-level reference,
+generate the pdoc site above.
+
+Most public types are re-exported from `ai_arch_toolkit` (top-level) or from
+`ai_arch_toolkit.core` / `ai_arch_toolkit.toolkit`.
 
 ### Core — LLM & Providers
 
 | Symbol | Module | Description |
 |--------|--------|-------------|
-| `LLM` | `_llm.py` | Unified facade. `complete()` / `stream()` / `stream_events()` + `_sync` wrappers |
+| `LLM` | `_llm.py` | Unified facade. `complete()` / `stream()` / `stream_events()`, batch helpers, token counting, and `_sync` wrappers |
 | `Response` | `_response.py` | LLM response with `text`, `tool_calls`, `usage`, `cost` |
-| `Usage`, `ToolCall`, `ThinkingBlock`, `Citation` | `_response.py` | Response components |
+| `Attempt`, `Usage`, `ToolCall`, `ThinkingBlock`, `Citation` | `_response.py` | Response components and attempt tracking |
 | `OutputSchema` | `_response.py` | Structured output constraint |
 | `StreamEvent`, `RichStreamResponse` | `_response.py` | Streaming types |
 | `Content`, `ContentPart` | `_content.py` | `str | list[ContentPart]` message content |
 | `user()`, `assistant()`, `system()`, `tool_result()` | `_content.py` | Message constructors |
 | `ImagePart`, `DocumentPart`, `CachePart` | `_content.py` | Multimodal content parts |
 | `Middleware`, `Request` | `_middleware.py` | Before/after hooks protocol |
+| `RateLimitMiddleware`, `TracingMiddleware` | `_rate_limit.py`, `_telemetry.py` | Built-in middleware for rate limiting and tracing |
 | `RetryConfig` | `_retry.py` | Exponential backoff configuration |
 | `pricing` | `_pricing.py` | Per-model pricing registry singleton |
+| `count_tokens_local()`, `count_tokens_local_batch()`, `chars_to_tokens()`, `tokens_to_chars()` | `_tokens.py` | Local token estimation helpers |
 | `ServerTool`, `code_execution()`, `web_search()` | `_server_tools.py` | Provider-hosted tools |
 | `BatchRequest`, `BatchResult` | `_batch.py` | Batch API types |
 | `APIError`, `RateLimitError` | `_exceptions.py` | Exception types |
+| `Moderator`, `ModerationResult`, `ModerationError` | `_moderation.py` | Core moderation protocol and results |
 
 ### Core — Tools
 
@@ -93,6 +100,7 @@ All public types are re-exported from `ai_arch_toolkit` (top-level) or from `ai_
 | `lats_flow()` | MCTS + ReAct rollouts |
 | `self_discovery_flow()` | Reasoning module selection → Solve |
 | `llm_compiler_flow()` | DAG plan → parallel execute → join |
+| `generate_review_flow()` | Generator → reviewer loop with retry feedback |
 
 Each factory has a companion `*_initial_state(task)` helper that creates the initial operational dict for `State(operational=...)`.
 
@@ -119,3 +127,11 @@ Each factory has a companion `*_initial_state(task)` helper that creates the ini
 | `KnowledgeEntry` | Entry with `key`, `content`, `format`, `category`, `tags` |
 | `load_text()`, `load_json()`, `load_toml()`, `load_yaml()`, `load_markdown()` | File loaders |
 | `load_directory()` | Bulk loader (flat or recursive) |
+
+### Toolkit — Moderation
+
+| Symbol | Description |
+|--------|-------------|
+| `LLMModerator` | Moderation via a regular LLM using a classification prompt |
+| `ModerationMiddleware` | Middleware that blocks or annotates requests using a moderator |
+| `OpenAIModerator` | OpenAI Moderation API adapter, available from `ai_arch_toolkit.toolkit.moderation` |

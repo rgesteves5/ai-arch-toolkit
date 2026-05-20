@@ -24,14 +24,23 @@ _MODEL_PREFIXES: dict[str, str] = {
     "gemini-": "gemini",
 }
 
+_MODEL_IDS: dict[str, str] = {
+    "o1": "openai",
+    "o3": "openai",
+    "o4": "openai",
+}
+
 
 def _detect_provider(model: str) -> str:
     """Map a model string to a provider name via prefix matching."""
+    if provider := _MODEL_IDS.get(model):
+        return provider
     for prefix, provider in _MODEL_PREFIXES.items():
         if model.startswith(prefix):
             return provider
     raise ValueError(
-        f"Cannot detect provider for model {model!r}. Known prefixes: {sorted(_MODEL_PREFIXES)}"
+        f"Cannot detect provider for model {model!r}. "
+        f"Known model IDs: {sorted(_MODEL_IDS)}. Known prefixes: {sorted(_MODEL_PREFIXES)}"
     )
 
 

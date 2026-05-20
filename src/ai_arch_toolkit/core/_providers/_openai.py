@@ -39,6 +39,9 @@ _SDK_PARAMS = {
     "parallel_tool_calls",
 }
 
+_MAX_COMPLETION_TOKEN_MODELS = {"o1", "o3", "o4"}
+_MAX_COMPLETION_TOKEN_PREFIXES = ("gpt-5", "o1-", "o3-", "o4-")
+
 
 # ---------------------------------------------------------------------------
 # Adapter helpers
@@ -98,6 +101,25 @@ def _tool_to_sdk(tool: dict[str, Any]) -> dict[str, Any]:
             "parameters": tool.get("input_schema", tool.get("parameters", {})),
         },
     }
+
+
+def _uses_max_completion_tokens(model: str) -> bool:
+    """Return True for Chat Completions models that reject ``max_tokens``."""
+    return model in _MAX_COMPLETION_TOKEN_MODELS or model.startswith(
+        _MAX_COMPLETION_TOKEN_PREFIXES
+    )
+
+
+def _drop_temperature_for_reasoning(
+    model: str, reasoning_effort: str | None, kwargs: dict[str, Any]
+) -> None:
+    """Drop sampling temperature for reasoning models unless only default sampling is used."""
+    if not _uses_max_completion_tokens(model):
+        return
+    if reasoning_effort and reasoning_effort.lower() == "none":
+        return
+    if kwargs.get("temperature") not in (None, 1, 1.0):
+        kwargs.pop("temperature", None)
 
 
 def _messages_to_sdk(
@@ -294,6 +316,16 @@ class OpenAIProvider(BaseProvider):
                 f"Valid: {sorted(_SDK_PARAMS)}",
                 stacklevel=4,
             )
+
+        if _uses_max_completion_tokens(self._model) and "max_tokens" in kwargs:
+            if "max_completion_tokens" not in kwargs:
+                kwargs["max_completion_tokens"] = kwargs["max_tokens"]
+            kwargs.pop("max_tokens", None)
+
+        reasoning_effort = (thinking_effort or "high") if thinking else None
+        if thinking:
+            _drop_temperature_for_reasoning(self._model, reasoning_effort, kwargs)
+
         filtered = {k: v for k, v in kwargs.items() if k in _SDK_PARAMS}
 
         sdk_kwargs: dict[str, Any] = {
@@ -304,7 +336,7 @@ class OpenAIProvider(BaseProvider):
 
         # Thinking → reasoning_effort (OpenAI naming)
         if thinking:
-            sdk_kwargs["reasoning_effort"] = thinking_effort or "high"
+            sdk_kwargs["reasoning_effort"] = reasoning_effort
         if thinking_budget:
             warnings.warn(
                 "thinking_budget is not supported by OpenAI (only reasoning_effort string), "

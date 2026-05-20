@@ -206,3 +206,11 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 .DS_Store
+# inspect-evals run artifacts
+logs/*.eval
+
+# Manual live model probe artifacts
+scripts/output/model-probes/
+
+# Local memory dumps from interactive sessions
+private-memory.json

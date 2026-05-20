@@ -20,7 +20,10 @@ uv --version
 
 ```bash
 # Install all dependencies (creates .venv/ automatically)
-uv sync --dev
+uv sync --extra dev
+
+# If you want to build docs locally too
+uv sync --extra dev --extra docs
 ```
 
 That's it. `uv sync` reads `pyproject.toml`, resolves dependencies using
@@ -35,8 +38,8 @@ typically in under a second.
 # Run any Python script
 uv run python examples/01_hello_world.py
 
-# Run a module
-uv run python -m ai_arch_toolkit
+# Quick import smoke test
+uv run python -c "import ai_arch_toolkit; print(ai_arch_toolkit.__version__)"
 
 # Run a tool directly
 uv run pytest
@@ -76,14 +79,14 @@ set -a; source .env; set +a; uv run python examples/01_hello_world.py
 uv add httpx
 
 # Add a dev dependency
-uv add --dev pytest-cov
+uv add --optional dev pytest-cov
 
 # Remove a dependency
 uv remove httpx
 
 # Update all dependencies to latest compatible versions
 uv lock --upgrade
-uv sync --dev
+uv sync --extra dev
 ```
 
 Changes are written to `pyproject.toml` and `uv.lock` automatically.
@@ -114,7 +117,7 @@ uv run pytest
 uv run pytest -v
 
 # Run a specific file
-uv run pytest tests/llm/test_providers/test_gemini.py
+uv run pytest tests/test_gemini_provider.py
 
 # Run with coverage
 uv run pytest --cov=src --cov-report=term-missing
@@ -158,7 +161,7 @@ If you previously used Poetry with this project:
 rm -f poetry.lock
 
 # Install with uv instead
-uv sync --dev
+uv sync --extra dev
 
 # Replace "poetry run X" with "uv run X" everywhere
 ```

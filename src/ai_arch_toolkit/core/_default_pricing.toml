@@ -1,5 +1,5 @@
 # Default pricing table — USD per 1M tokens
-# Last updated: 2026-03-05
+# Last updated: 2026-05-19
 # Override with: pricing.load("your_file.toml") or pricing.register(...)
 # Known simplification: cache_write uses Anthropic's 5-min TTL tier (1.25x input).
 # The 1-hour tier (2x input) can be overridden via pricing.register().
@@ -9,8 +9,24 @@
 # Source: https://docs.anthropic.com/en/docs/about-claude/models
 # ═══════════════════════════════════════════════════════════════════
 
+# ── Claude 4.7 ──
+
+# Opus 4.7 ships with full 1M context at standard pricing (no long-context tier).
+# Fast mode (research preview) is 6x standard rates.
+[claude-opus-4-7]
+input = 5.0
+output = 25.0
+cache_write = 6.25
+cache_read = 0.50
+batch_input = 2.50
+batch_output = 12.50
+fast_input = 30.0
+fast_output = 150.0
+
 # ── Claude 4.6 ──
 
+# Opus 4.6 and Sonnet 4.6 ship with full 1M context at standard pricing
+# (no long-context tier). Fast mode (Opus 4.6 only) is 6x standard rates.
 [claude-opus-4-6]
 input = 5.0
 output = 25.0
@@ -18,9 +34,6 @@ cache_write = 6.25
 cache_read = 0.50
 batch_input = 2.50
 batch_output = 12.50
-long_context_threshold = 200_000
-long_context_input = 10.0
-long_context_output = 37.50
 fast_input = 30.0
 fast_output = 150.0
 
@@ -31,9 +44,6 @@ cache_write = 3.75
 cache_read = 0.30
 batch_input = 1.50
 batch_output = 7.50
-long_context_threshold = 200_000
-long_context_input = 6.0
-long_context_output = 22.50
 
 # ── Claude 4.5 ──
 
@@ -157,6 +167,57 @@ batch_output = 0.625
 # ═══════════════════════════════════════════════════════════════════
 
 # ── GPT-5 family ──
+
+# gpt-5.5 base — covers gpt-5.5 ID only (pro variant is separate below).
+["gpt-5.5-pro"]
+input = 30.0
+output = 180.0
+batch_input = 15.0
+batch_output = 90.0
+
+["gpt-5.5"]
+input = 5.0
+output = 30.0
+cache_read = 0.50
+batch_input = 2.50
+batch_output = 15.0
+
+# gpt-5.4 family — distinct entries because nano/mini/pro have very different rates.
+["gpt-5.4-pro"]
+input = 30.0
+output = 180.0
+batch_input = 15.0
+batch_output = 90.0
+
+["gpt-5.4-nano"]
+input = 0.20
+output = 1.25
+cache_read = 0.02
+batch_input = 0.10
+batch_output = 0.625
+
+["gpt-5.4-mini"]
+input = 0.75
+output = 4.50
+cache_read = 0.075
+batch_input = 0.375
+batch_output = 2.25
+
+["gpt-5.4"]
+input = 2.50
+output = 15.0
+cache_read = 0.25
+batch_input = 1.25
+batch_output = 7.50
+
+# gpt-5.3 covers gpt-5.3, gpt-5.3-codex, gpt-5.3-codex-spark, gpt-5.3-chat-latest
+# (all share pricing with gpt-5.2 base).
+["gpt-5.3"]
+input = 1.75
+output = 14.0
+cache_read = 0.175
+batch_input = 0.875
+batch_output = 7.0
 
 ["gpt-5.2-pro"]
 input = 21.0
@@ -320,6 +381,15 @@ batch_output = 30.0
 
 # ── Gemini 3.x (preview) ──
 
+# gemini-3-pro-preview — same pricing as 3.1-pro family.
+["gemini-3-pro"]
+input = 2.0
+output = 12.0
+cache_read = 0.20
+long_context_threshold = 200_000
+long_context_input = 4.0
+long_context_output = 18.0
+
 ["gemini-3.1-pro"]
 input = 2.0
 output = 12.0
@@ -383,50 +453,62 @@ output = 0.30
 # Source: https://docs.x.ai/developers/models
 # ═══════════════════════════════════════════════════════════════════
 
-# grok-4-0709 is the flagship; grok-4 prefix catches it
+# grok-4.3 — 1M context window, standard pricing across full context.
+# Per xAI docs, the following model IDs are aliases routing to grok-4.3 and
+# billed at grok-4.3 rates: grok-4, grok-4-0709, grok-4-latest, grok-4-fast,
+# grok-4-fast-reasoning, grok-4-fast-non-reasoning, grok-4-1-fast,
+# grok-4-1-fast-reasoning, grok-4-1-fast-non-reasoning, grok-3, grok-3-fast,
+# grok-3-mini, grok-3-mini-fast, grok-3-mini-high, grok-code-fast-1.
+# The entries below exist purely for longest-prefix-match resolution of those
+# IDs; all share grok-4.3's pricing.
+["grok-4.3"]
+input = 1.25
+output = 2.50
+cache_read = 0.20
+batch_input = 0.625
+batch_output = 1.25
+
 [grok-4]
-input = 3.0
-output = 15.0
-cache_read = 0.75
-batch_input = 1.50
-batch_output = 7.50
+input = 1.25
+output = 2.50
+cache_read = 0.20
+batch_input = 0.625
+batch_output = 1.25
 
-# Covers grok-4-1-fast-reasoning and grok-4-1-fast-non-reasoning
 ["grok-4-1-fast"]
-input = 0.20
-output = 0.50
-cache_read = 0.05
-batch_input = 0.10
-batch_output = 0.25
+input = 1.25
+output = 2.50
+cache_read = 0.20
+batch_input = 0.625
+batch_output = 1.25
 
-# Covers grok-4-fast-reasoning and grok-4-fast-non-reasoning
 [grok-4-fast]
-input = 0.20
-output = 0.50
-cache_read = 0.05
-batch_input = 0.10
-batch_output = 0.25
+input = 1.25
+output = 2.50
+cache_read = 0.20
+batch_input = 0.625
+batch_output = 1.25
 
 [grok-code-fast-1]
-input = 0.20
-output = 1.50
-cache_read = 0.02
-batch_input = 0.10
-batch_output = 0.75
+input = 1.25
+output = 2.50
+cache_read = 0.20
+batch_input = 0.625
+batch_output = 1.25
 
 [grok-3]
-input = 3.0
-output = 15.0
-cache_read = 0.75
-batch_input = 1.50
-batch_output = 7.50
+input = 1.25
+output = 2.50
+cache_read = 0.20
+batch_input = 0.625
+batch_output = 1.25
 
 [grok-3-mini]
-input = 0.30
-output = 0.50
-cache_read = 0.07
-batch_input = 0.15
-batch_output = 0.25
+input = 1.25
+output = 2.50
+cache_read = 0.20
+batch_input = 0.625
+batch_output = 1.25
 
 [grok-2]
 input = 2.0

@@ -137,9 +137,9 @@ class TestPricingRegistryGet:
     def test_grok_code_fast(self):
         p = pricing.get("grok-code-fast-1")
         assert p is not None
-        assert p.input == 0.20
-        assert p.output == 1.50
-        assert p.cache_read == 0.02
+        assert p.input == 1.25
+        assert p.output == 2.50
+        assert p.cache_read == 0.20
 
 
 class TestPricingRegistryRegister:
@@ -240,7 +240,7 @@ class TestLongContextPricing:
     def test_standard_below_threshold(self):
         # 100K tokens is below 200K threshold — use standard rates
         cost = pricing.estimate_cost(
-            "claude-opus-4-6-20260101", input_tokens=100_000, output_tokens=1000
+            "claude-opus-4-5-20260101", input_tokens=100_000, output_tokens=1000
         )
         expected = 5.0 * 100_000 / 1_000_000 + 25.0 * 1000 / 1_000_000
         assert cost is not None
@@ -249,7 +249,7 @@ class TestLongContextPricing:
     def test_long_context_above_threshold(self):
         # 300K total_input > 200K threshold — use long-context rates
         cost = pricing.estimate_cost(
-            "claude-opus-4-6-20260101", input_tokens=300_000, output_tokens=1000
+            "claude-opus-4-5-20260101", input_tokens=300_000, output_tokens=1000
         )
         expected = 10.0 * 300_000 / 1_000_000 + 37.50 * 1000 / 1_000_000
         assert cost is not None
@@ -258,7 +258,7 @@ class TestLongContextPricing:
     def test_cache_tokens_count_toward_threshold(self):
         # 100K input + 60K cache_write + 50K cache_read = 210K > 200K
         cost = pricing.estimate_cost(
-            "claude-sonnet-4-6-20260101",
+            "claude-sonnet-4-5-20260101",
             input_tokens=100_000,
             output_tokens=1000,
             cache_write_tokens=60_000,
@@ -277,7 +277,7 @@ class TestLongContextPricing:
     def test_exact_threshold_uses_standard_rates(self):
         # total_input == threshold (not strictly greater) → standard rates
         cost = pricing.estimate_cost(
-            "claude-opus-4-6-20260101", input_tokens=200_000, output_tokens=1000
+            "claude-opus-4-5-20260101", input_tokens=200_000, output_tokens=1000
         )
         expected = 5.0 * 200_000 / 1_000_000 + 25.0 * 1000 / 1_000_000
         assert cost is not None
@@ -286,7 +286,7 @@ class TestLongContextPricing:
     def test_one_above_threshold_uses_long_context(self):
         # total_input == threshold + 1 → long-context rates
         cost = pricing.estimate_cost(
-            "claude-opus-4-6-20260101", input_tokens=200_001, output_tokens=1000
+            "claude-opus-4-5-20260101", input_tokens=200_001, output_tokens=1000
         )
         expected = 10.0 * 200_001 / 1_000_000 + 37.50 * 1000 / 1_000_000
         assert cost is not None
@@ -299,7 +299,7 @@ class TestLongContextPricing:
         assert p.long_context_threshold is None
 
     def test_model_pricing_fields(self):
-        p = pricing.get("claude-opus-4-6-20260101")
+        p = pricing.get("claude-opus-4-5-20260101")
         assert p is not None
         assert p.long_context_threshold == 200_000
         assert p.long_context_input == 10.0
