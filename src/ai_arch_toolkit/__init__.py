@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from importlib.metadata import PackageNotFoundError, version
+from importlib.metadata import PackageNotFoundError as _PackageNotFoundError
+from importlib.metadata import version as _version
 
 # --- Core primitives ---
 from ai_arch_toolkit.core import (
@@ -129,8 +130,8 @@ from ai_arch_toolkit.toolkit import (
 )
 
 try:
-    __version__ = version("ai-arch-toolkit")
-except PackageNotFoundError:
+    __version__ = _version("ai-arch-toolkit")
+except _PackageNotFoundError:
     __version__ = "0.0.0"
 
 __all__ = [

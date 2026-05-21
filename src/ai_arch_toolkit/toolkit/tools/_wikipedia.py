@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from ai_arch_toolkit.core import tool
@@ -23,7 +24,7 @@ def wikipedia_search(query: str, results: int = 3) -> str:
     results = max(1, min(results, 10))
     url = (
         f"https://en.wikipedia.org/w/api.php"
-        f"?action=query&list=search&srsearch={urllib.request.quote(query)}"
+        f"?action=query&list=search&srsearch={urllib.parse.quote(query)}"
         f"&srlimit={results}&format=json&utf8=1"
     )
     try:
@@ -56,7 +57,7 @@ def wikipedia_article(title: str, max_chars: int = 4000) -> str:
     """
     url = (
         f"https://en.wikipedia.org/w/api.php"
-        f"?action=query&titles={urllib.request.quote(title)}"
+        f"?action=query&titles={urllib.parse.quote(title)}"
         f"&prop=extracts&exintro=1&explaintext=1&format=json&utf8=1"
     )
     try:
@@ -93,7 +94,7 @@ def wikipedia_related(title: str, limit: int = 5) -> str:
     limit = max(1, min(limit, 20))
     url = (
         f"https://en.wikipedia.org/w/api.php"
-        f"?action=query&titles={urllib.request.quote(title)}"
+        f"?action=query&titles={urllib.parse.quote(title)}"
         f"&prop=links&plnamespace=0&pllimit={limit}&redirects=1&format=json&utf8=1"
     )
     try:

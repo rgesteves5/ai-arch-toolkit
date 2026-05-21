@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from ai_arch_toolkit.core import tool
@@ -18,7 +19,7 @@ def define_word(word: str) -> str:
     Args:
         word: The word to define.
     """
-    url = f"https://api.dictionaryapi.dev/api/v2/entries/en/{urllib.request.quote(word)}"
+    url = f"https://api.dictionaryapi.dev/api/v2/entries/en/{urllib.parse.quote(word)}"
     try:
         req = urllib.request.Request(url)
         with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
