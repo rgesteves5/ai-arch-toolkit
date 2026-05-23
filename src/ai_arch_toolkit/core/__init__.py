@@ -19,6 +19,7 @@ from ai_arch_toolkit.core._content import (
     tool_result,
     user,
 )
+from ai_arch_toolkit.core._deprecation import deprecated
 from ai_arch_toolkit.core._exceptions import APIError, RateLimitError
 from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._middleware import Middleware, Request
@@ -143,6 +144,7 @@ __all__ = [
     "configure_sync_timeouts",
     "count_tokens_local",
     "count_tokens_local_batch",
+    "deprecated",
     "document",
     "execute_step",
     "execute_tool",
