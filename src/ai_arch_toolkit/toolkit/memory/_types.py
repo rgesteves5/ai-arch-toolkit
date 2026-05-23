@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
 from ai_arch_toolkit.core.graph import Edge, NodeID, NodeType  # noqa: F401
+from ai_arch_toolkit.core.graph._types import Node as _GraphNode
 
 type EmbedFn = Callable[[str], Awaitable[list[float]]]
 
@@ -18,16 +18,18 @@ def _now_utc() -> datetime:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class Node:
-    """A node in the memory graph.
+class Node(_GraphNode[dict[str, Any]]):
+    """A node in the memory graph — a ``core.graph.Node[dict[str, Any]]`` with
+    the bookkeeping memory needs.
 
-    Content convention: only string values are keyword-searchable.
+    Inheriting from the core graph ``Node`` means a ``MemoryBackend`` IS a
+    ``GraphBackend[dict[str, Any]]`` for free — no parallel type hierarchy,
+    no runtime-only duck typing. Content convention: only string values are
+    keyword-searchable.
     """
 
-    id: NodeID = field(default_factory=lambda: uuid.uuid4().hex[:16])
     type: NodeType = "generic"
     content: dict[str, Any] = field(default_factory=dict)
-    metadata: dict[str, Any] = field(default_factory=dict)
     embedding: list[float] | None = None
     # Temporal (bi-temporal)
     timestamp: datetime = field(default_factory=_now_utc)
