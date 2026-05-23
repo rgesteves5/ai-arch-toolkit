@@ -23,11 +23,8 @@ jobs:
         run: uv run ruff format --check src tests examples
 
   typecheck:
-    name: Type check (informational)
+    name: Type check
     runs-on: ubuntu-latest
-    # Pyright is non-blocking while we drive the existing error count down.
-    # Remove `continue-on-error` once `uv run pyright src` is clean.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4

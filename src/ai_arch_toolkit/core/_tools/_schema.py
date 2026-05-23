@@ -102,9 +102,10 @@ def _hint_to_json_schema(hint: Any) -> tuple[dict[str, object], bool]:
         return hint.model_json_schema(), False
 
     # Primitive types
-    json_type = _PYTHON_TYPE_TO_JSON.get(hint)
-    if json_type is not None:
-        return {"type": json_type}, False
+    if isinstance(hint, type):
+        json_type = _PYTHON_TYPE_TO_JSON.get(hint)
+        if json_type is not None:
+            return {"type": json_type}, False
 
     # Unknown — fallback to string
     return {"type": "string"}, False

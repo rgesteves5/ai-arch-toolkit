@@ -6,7 +6,7 @@ import json
 import logging
 import warnings
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, cast
 
 from ai_arch_toolkit.core._content import CachePart, DocumentPart, ImagePart, _encode_b64, _is_url
 from ai_arch_toolkit.core._exceptions import APIError, RateLimitError
@@ -478,19 +478,26 @@ class AnthropicProvider(BaseProvider):
             try:
                 async with self._client.messages.stream(**sdk_kwargs) as stream:
                     async for event in stream:
+                        # The SDK stream yields a discriminated union keyed by ``event.type``.
+                        # We narrow with ``cast`` once per branch so pyright can resolve the
+                        # subsequent attribute access; the runtime check is the string match.
                         event_type = event.type
 
                         if event_type == "content_block_start":
-                            current_block = event.content_block
+                            ev = cast(anthropic.types.RawContentBlockStartEvent, event)
+                            current_block = ev.content_block
                             tool_args_acc = ""
 
                         elif event_type == "content_block_delta":
-                            delta = event.delta
+                            ev = cast(anthropic.types.RawContentBlockDeltaEvent, event)
+                            delta = ev.delta
                             delta_type = delta.type
                             if delta_type == "text_delta":
-                                yield delta.text
+                                yield cast(anthropic.types.TextDelta, delta).text
                             elif delta_type == "input_json_delta":
-                                tool_args_acc += delta.partial_json
+                                tool_args_acc += cast(
+                                    anthropic.types.InputJSONDelta, delta
+                                ).partial_json
 
                         elif event_type == "content_block_stop":
                             if current_block and getattr(current_block, "type", "") == "tool_use":
@@ -512,14 +519,16 @@ class AnthropicProvider(BaseProvider):
                             tool_args_acc = ""
 
                         elif event_type == "message_start":
-                            state.model = getattr(event.message, "model", self._model)
-                            if hasattr(event.message, "usage"):
-                                state.usage = _extract_usage(event.message.usage)
+                            ev = cast(anthropic.types.RawMessageStartEvent, event)
+                            state.model = getattr(ev.message, "model", self._model)
+                            if hasattr(ev.message, "usage"):
+                                state.usage = _extract_usage(ev.message.usage)
 
                         elif event_type == "message_delta":
-                            state.stop_reason = getattr(event.delta, "stop_reason", "") or ""
-                            if hasattr(event, "usage") and event.usage:
-                                delta_usage = _extract_usage(event.usage)
+                            ev = cast(anthropic.types.RawMessageDeltaEvent, event)
+                            state.stop_reason = ev.delta.stop_reason or ""
+                            if getattr(ev, "usage", None):
+                                delta_usage = _extract_usage(ev.usage)
                                 prev = state.usage or Usage()
                                 state.usage = Usage(
                                     input_tokens=prev.input_tokens + delta_usage.input_tokens,
@@ -537,7 +546,11 @@ class AnthropicProvider(BaseProvider):
                     state.raw = final
                     for block in final.content:
                         if getattr(block, "type", "") == "thinking":
-                            state.thinking.append(ThinkingBlock(text=block.thinking))
+                            state.thinking.append(
+                                ThinkingBlock(
+                                    text=cast(anthropic.types.ThinkingBlock, block).thinking
+                                )
+                            )
 
             except anthropic.RateLimitError as exc:
                 retry_after = exc.response.headers.get("retry-after")
@@ -576,22 +589,29 @@ class AnthropicProvider(BaseProvider):
             try:
                 async with self._client.messages.stream(**sdk_kwargs) as stream:
                     async for event in stream:
+                        # See comment in ``stream`` — same cast-per-branch pattern.
                         event_type = event.type
 
                         if event_type == "content_block_start":
-                            current_block = event.content_block
+                            ev = cast(anthropic.types.RawContentBlockStartEvent, event)
+                            current_block = ev.content_block
                             tool_args_acc = ""
                             thinking_acc = ""
 
                         elif event_type == "content_block_delta":
-                            delta = event.delta
+                            ev = cast(anthropic.types.RawContentBlockDeltaEvent, event)
+                            delta = ev.delta
                             delta_type = delta.type
                             if delta_type == "text_delta":
-                                yield StreamEvent(kind="text", text=delta.text)
+                                yield StreamEvent(
+                                    kind="text", text=cast(anthropic.types.TextDelta, delta).text
+                                )
                             elif delta_type == "input_json_delta":
-                                tool_args_acc += delta.partial_json
+                                tool_args_acc += cast(
+                                    anthropic.types.InputJSONDelta, delta
+                                ).partial_json
                             elif delta_type == "thinking_delta":
-                                thinking_acc += getattr(delta, "thinking", "")
+                                thinking_acc += cast(anthropic.types.ThinkingDelta, delta).thinking
 
                         elif event_type == "content_block_stop":
                             if current_block and getattr(current_block, "type", "") == "tool_use":
@@ -623,14 +643,16 @@ class AnthropicProvider(BaseProvider):
                             thinking_acc = ""
 
                         elif event_type == "message_start":
-                            state.model = getattr(event.message, "model", self._model)
-                            if hasattr(event.message, "usage"):
-                                state.usage = _extract_usage(event.message.usage)
+                            ev = cast(anthropic.types.RawMessageStartEvent, event)
+                            state.model = getattr(ev.message, "model", self._model)
+                            if hasattr(ev.message, "usage"):
+                                state.usage = _extract_usage(ev.message.usage)
 
                         elif event_type == "message_delta":
-                            state.stop_reason = getattr(event.delta, "stop_reason", "") or ""
-                            if hasattr(event, "usage") and event.usage:
-                                delta_usage = _extract_usage(event.usage)
+                            ev = cast(anthropic.types.RawMessageDeltaEvent, event)
+                            state.stop_reason = ev.delta.stop_reason or ""
+                            if getattr(ev, "usage", None):
+                                delta_usage = _extract_usage(ev.usage)
                                 prev = state.usage or Usage()
                                 state.usage = Usage(
                                     input_tokens=prev.input_tokens + delta_usage.input_tokens,
