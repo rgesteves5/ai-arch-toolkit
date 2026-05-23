@@ -68,6 +68,8 @@ def _content_parts_to_gemini(content: Any) -> list[types.Part]:
             parts.append(types.Part(text=part))
         elif isinstance(part, ImagePart):
             if _is_url(part.source):
+                # _is_url returns False for bytes, so part.source is str here.
+                assert isinstance(part.source, str)
                 parts.append(
                     types.Part(
                         file_data=types.FileData(
@@ -367,12 +369,12 @@ class GeminiProvider(BaseProvider):
         cfg_kwargs: dict[str, Any] = {}
         if effective_system:
             cfg_kwargs["system_instruction"] = effective_system
-        config = types.GenerateContentConfig(**cfg_kwargs) if cfg_kwargs else None
+        config = types.CountTokensConfig(**cfg_kwargs) if cfg_kwargs else None
         try:
             result = await self._client.aio.models.count_tokens(
                 model=self._model, contents=contents, config=config
             )
-            return result.total_tokens
+            return result.total_tokens or 0
         except genai_errors.ClientError as exc:
             raise APIError(exc.code, str(exc)) from exc
         except genai_errors.ServerError as exc:
@@ -445,7 +447,11 @@ class GeminiProvider(BaseProvider):
 
         # tool_choice
         if tool_choice is not None:
-            mode_map = {"auto": "AUTO", "required": "ANY", "none": "NONE"}
+            mode_map = {
+                "auto": types.FunctionCallingConfigMode.AUTO,
+                "required": types.FunctionCallingConfigMode.ANY,
+                "none": types.FunctionCallingConfigMode.NONE,
+            }
             if tool_choice in mode_map:
                 cfg_kwargs["tool_config"] = types.ToolConfig(
                     function_calling_config=types.FunctionCallingConfig(
@@ -455,7 +461,7 @@ class GeminiProvider(BaseProvider):
             else:
                 cfg_kwargs["tool_config"] = types.ToolConfig(
                     function_calling_config=types.FunctionCallingConfig(
-                        mode="ANY",
+                        mode=types.FunctionCallingConfigMode.ANY,
                         allowed_function_names=[tool_choice],
                     )
                 )
@@ -555,7 +561,7 @@ class GeminiProvider(BaseProvider):
                         continue
 
                     candidate = candidates[0]
-                    parts = candidate.content.parts if candidate.content else []
+                    parts = (candidate.content.parts if candidate.content else None) or []
 
                     for part in parts:
                         if getattr(part, "thought", False) and part.text:
@@ -567,7 +573,7 @@ class GeminiProvider(BaseProvider):
                             state.tool_calls.append(
                                 ToolCall(
                                     id=getattr(fc, "id", "") or uuid.uuid4().hex[:24],
-                                    name=fc.name,
+                                    name=fc.name or "",
                                     input=dict(fc.args) if fc.args else {},
                                 )
                             )

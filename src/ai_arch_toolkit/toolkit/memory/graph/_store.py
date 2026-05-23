@@ -45,12 +45,16 @@ class GraphStore:
 
     def __init__(
         self,
-        backend: GraphBackend & MemoryBackend,
+        # GraphBackend & MemoryBackend is intersection-type syntax that Python
+        # doesn't have natively — backends must implement both protocols. This
+        # is enforced by docstring and not by the type checker; see
+        # ``_backends.py`` for the individual contracts.
+        backend: GraphBackend & MemoryBackend,  # pyright: ignore[reportInvalidTypeForm]
         *,
         embed: EmbedFn | None = None,
         index: VectorIndex | None = None,
     ) -> None:
-        self._backend: GraphBackend & MemoryBackend = backend
+        self._backend: GraphBackend & MemoryBackend = backend  # pyright: ignore[reportInvalidTypeForm]
         self._embed = embed
         self._index: VectorIndex | None = index
         if embed is not None and index is None:
@@ -111,12 +115,16 @@ class GraphStore:
             text = _embeddable_text(updated)
             if text.strip():
                 embedding = await self._embed(text)
-                updated = await self._backend.update_node(node_id, embedding=embedding)
-                if updated is not None and self._index is not None:
-                    await self._index.update(node_id, updated.embedding or embedding)
+                reembedded = await self._backend.update_node(node_id, embedding=embedding)
+                if reembedded is not None:
+                    updated = reembedded
+                    if self._index is not None:
+                        await self._index.update(node_id, updated.embedding or embedding)
             elif old.embedding is not None:
                 # Content no longer has embeddable text — clear stale embedding
-                updated = await self._backend.update_node(node_id, embedding=None)
+                cleared = await self._backend.update_node(node_id, embedding=None)
+                if cleared is not None:
+                    updated = cleared
                 if self._index is not None:
                     await self._index.remove(node_id)
         # Update type index if type changed
@@ -341,8 +349,10 @@ class GraphStore:
                 confidence=nd.get("confidence", 1.0),
                 source=nd.get("source", "unknown"),
             )
-            # Add directly to backend to preserve original state (no re-embedding)
-            await backend.add_node(node)
+            # Add directly to backend to preserve original state (no re-embedding).
+            # The memory ``Node`` and core ``Node[T]`` share the name but are
+            # different classes; the backend duck-types on the shared attributes.
+            await backend.add_node(node)  # pyright: ignore[reportArgumentType]
             if node.embedding is not None and store._index is not None:
                 await store._index.add(node.id, node.embedding)
             store._type_index.setdefault(node.type, set()).add(node.id)

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from ai_arch_toolkit.core._policy import Policy
 from ai_arch_toolkit.core._state import State, StateSnapshot
@@ -199,7 +199,9 @@ class Flow:
                 current=dict(snapshot.current),
                 operational=dict(snapshot.operational),
                 persistent=dict(snapshot.persistent),
-                world=snapshot.world,  # share by reference
+                # Share by reference. State stores world as ``dict[str, Any]``
+                # but only reads from it, so a MappingProxyType is safe in practice.
+                world=cast(dict[str, Any], snapshot.world),
             )
             flow_result = await flow.run(state)
             final = flow_result.final_result

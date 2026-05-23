@@ -13,6 +13,7 @@ try:
 
     _HAS_OTEL = True
 except ImportError:
+    trace = None  # type: ignore[assignment]
     _HAS_OTEL = False
 
 
@@ -20,7 +21,7 @@ class TracingMiddleware:
     """Creates OpenTelemetry spans for LLM calls. No-op if otel not installed."""
 
     def __init__(self, tracer_name: str = "ai_arch_toolkit") -> None:
-        if _HAS_OTEL:
+        if _HAS_OTEL and trace is not None:
             self._tracer: Any = trace.get_tracer(tracer_name)
         else:
             self._tracer = None

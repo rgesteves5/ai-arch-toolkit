@@ -154,7 +154,12 @@ class LLM:
         self._provider = create_provider(
             model, api_key=api_key, base_url=base_url, timeout=timeout
         )
-        self._retry: RetryConfig | None = RetryConfig() if retry is True else retry
+        if retry is True:
+            self._retry: RetryConfig | None = RetryConfig()
+        elif retry is False:
+            self._retry = None
+        else:
+            self._retry = retry
         self._middleware: list[Any] = list(middleware) if middleware else []
         self._fallback_on = fallback_on or PROVIDER_ERRORS
         self._fallbacks, self._owned_fallbacks = _normalize_fallbacks(

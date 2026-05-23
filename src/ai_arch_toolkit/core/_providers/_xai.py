@@ -346,10 +346,13 @@ class XAIProvider(BaseProvider):
             all_tools = fn_tools
             for st in server_tools:
                 st_type = st["type"]
-                if st_type == "web_search":
-                    all_tools.append(xai_chat.web_search())
-                elif st_type == "code_execution":
-                    all_tools.append(xai_chat.code_interpreter())
+                # xAI doesn't currently expose server-hosted tools through the SDK.
+                # ``xai_sdk.chat`` lacks ``web_search`` / ``code_interpreter`` factories,
+                # so reaching here means the caller asked for an unsupported feature.
+                raise NotImplementedError(
+                    f"xAI provider does not support server-hosted tool {st_type!r}; "
+                    "use Anthropic or OpenAI for web_search / code_execution."
+                )
             if all_tools:
                 create_kwargs["tools"] = all_tools
 
