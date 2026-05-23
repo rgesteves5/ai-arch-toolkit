@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ai-arch-toolkit"
-version = "0.1.0"
+version = "0.1.0.dev0"
 description = "Lightweight unified LLM client for OpenAI, Anthropic, xAI, and Gemini"
 requires-python = ">=3.13"
 license = "MIT"
