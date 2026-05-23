@@ -1,11 +1,18 @@
 site_name: ai-arch-toolkit
 site_description: Unified LLM client and agent architecture toolkit
-repo_url: https://github.com/example/ai-arch-toolkit
+repo_url: https://github.com/rgesteves5/ai-arch-toolkit
 theme:
   name: mkdocs
 nav:
   - Home: index.md
   - Getting Started: getting-started.md
+  - Framework Overview: framework-overview.md
+  - Flow Architecture: flow-architecture.md
+  - Agents & Capabilities: agents-and-capabilities.md
+  - Graph: graph.md
+  - Examples: examples.md
   - Model Compatibility: model-compatibility.md
   - UV Guide: uv-guide.md
   - API Docs: api.md
+exclude_docs: |
+  internal/
