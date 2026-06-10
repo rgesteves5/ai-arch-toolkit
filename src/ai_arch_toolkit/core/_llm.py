@@ -49,10 +49,13 @@ def _normalize_fallbacks(
     fallback: str | LLM | list[str | LLM] | None,
     api_key: str | None,
     base_url: str | None,
+    provider: str | None = None,
 ) -> tuple[list[LLM], list[LLM]]:
     """Normalize fallback param into (all_fallbacks, owned_fallbacks).
 
-    Strings are converted to new ``LLM`` instances (owned for lifecycle).
+    Strings are converted to new ``LLM`` instances (owned for lifecycle),
+    inheriting the parent's connection settings (``api_key``, ``base_url``,
+    ``provider``) — pass ``LLM`` instances for per-fallback overrides.
     Nested fallbacks are flattened into the parent chain.
 
     .. note:: Flattening **clears** the nested LLM's ``_fallbacks`` list so
@@ -67,7 +70,7 @@ def _normalize_fallbacks(
     owned: list[LLM] = []
     for item in items:
         if isinstance(item, str):
-            fb = LLM(item, api_key=api_key, base_url=base_url)
+            fb = LLM(item, api_key=api_key, base_url=base_url, provider=provider)
             all_fbs.append(fb)
             owned.append(fb)
         else:
@@ -128,6 +131,7 @@ class LLM:
         *,
         temperature: float = 0.0,
         max_tokens: int = 4096,
+        provider: str | None = None,
         api_key: str | None = None,
         base_url: str | None = None,
         timeout: float | None = None,
@@ -152,7 +156,7 @@ class LLM:
             **kwargs,
         }
         self._provider = create_provider(
-            model, api_key=api_key, base_url=base_url, timeout=timeout
+            model, provider=provider, api_key=api_key, base_url=base_url, timeout=timeout
         )
         if retry is True:
             self._retry: RetryConfig | None = RetryConfig()
@@ -163,7 +167,7 @@ class LLM:
         self._middleware: list[Any] = list(middleware) if middleware else []
         self._fallback_on = fallback_on or PROVIDER_ERRORS
         self._fallbacks, self._owned_fallbacks = _normalize_fallbacks(
-            fallback, api_key=api_key, base_url=base_url
+            fallback, api_key=api_key, base_url=base_url, provider=provider
         )
 
     _REPR_DEFAULTS: ClassVar[dict[str, Any]] = {"temperature": 0.0, "max_tokens": 4096}

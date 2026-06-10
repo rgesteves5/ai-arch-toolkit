@@ -50,7 +50,7 @@ The stateless, async-first foundation. All new code should build on this.
 - **`_llm.py`**: `LLM` class — user-facing facade. `complete()` / `stream()` / `stream_events()` (async) with `complete_sync()` / `stream_sync()` / `stream_events_sync()` wrappers. Accepts `Content` (str or multimodal parts). Stream methods support fallback + middleware.
 - **`_content.py`**: Message constructors (`user()`, `assistant()`, `system()`, `tool_result()`) and multimodal types (`ImagePart`, `DocumentPart`, `CachePart`). `type Content = str | list[ContentPart]`.
 - **`_response.py`**: `Response`, `Usage`, `ToolCall`, `ThinkingBlock`, `Citation`, `OutputSchema`, `StreamResponse`, `SyncStreamResponse`, `StreamEvent`, `RichStreamResponse`, `SyncRichStreamResponse`.
-- **`_providers/`**: `BaseProvider` ABC → `AnthropicProvider`, `OpenAIProvider`, `XAIProvider`, `GeminiProvider`. Factory: `create_provider()` routes by model prefix (`claude-` → Anthropic, `gpt-`/`o1-`/`o3-`/`o4-` → OpenAI, `grok-` → xAI, `gemini-` → Gemini).
+- **`_providers/`**: `BaseProvider` ABC → `AnthropicProvider`, `OpenAIProvider`, `XAIProvider`, `GeminiProvider`. Factory: `create_provider()` routes by model prefix (`claude-` → Anthropic, `gpt-`/`o1-`/`o3-`/`o4-` → OpenAI, `grok-` → xAI, `gemini-` → Gemini). `provider=` forces an adapter (bypasses prefix detection); an unknown model with `base_url=` set falls back to the OpenAI-compatible adapter (Ollama, LM Studio, vLLM); with `base_url=` set, a missing API key resolves to a placeholder instead of raising.
 - **`_tools/`**: `@tool` decorator (auto-generates JSON Schema from type hints + Google-style docstrings), `ToolGroup` (collection with execute/async_execute), `infer_schema()`, `prepare_tools()`.
 - **`_pricing.py`**: `PricingRegistry` with `_default_pricing.toml`. Access via `pricing` singleton.
 - **`_sync.py`**: `_run_sync()` and `_stream_sync()` helpers used by LLM and agents.
@@ -126,7 +126,7 @@ Sync in-memory registry for prompt-injectable reference data. `KnowledgeRegistry
 
 - **Anthropic**: `input_schema` for tools (not `parameters`), `system` is a top-level field (not a message role), supports extended thinking. Native structured output via `output_config` (not tool trick).
 - **Gemini**: `contents`/`parts` structure (not `messages`/`content`), uses NDJSON streaming (not SSE).
-- **OpenAI**: Chat Completions and Responses API — both have provider implementations.
+- **OpenAI**: Chat Completions API only (no Responses API provider). The adapter also serves OpenAI-compatible servers (Ollama, LM Studio, vLLM) via `base_url=`; vendor reasoning deltas (`reasoning_content`/`reasoning`) surface as thinking events.
 - **xAI**: Separate provider (not OpenAI-compat), API key via `XAI_API_KEY`.
 
 ## Research Docs

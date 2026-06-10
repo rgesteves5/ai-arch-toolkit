@@ -261,6 +261,28 @@ class TestModelRouting:
         mock_create.assert_called_once()
         assert mock_create.call_args[0][0] == "claude-sonnet-4-20250514"
 
+    @patch("ai_arch_toolkit.core._llm.create_provider")
+    def test_provider_kwarg_forwarded(self, mock_create):
+        mock_create.return_value = AsyncMock()
+        LLM("gemma4:e4b", provider="openai", base_url="http://localhost:11434/v1")
+        mock_create.assert_called_once()
+        assert mock_create.call_args.kwargs["provider"] == "openai"
+        assert mock_create.call_args.kwargs["base_url"] == "http://localhost:11434/v1"
+
+    @patch("ai_arch_toolkit.core._llm.create_provider")
+    def test_provider_forwarded_to_string_fallbacks(self, mock_create):
+        mock_create.return_value = AsyncMock()
+        LLM(
+            "model-a",
+            provider="openai",
+            base_url="http://localhost:11434/v1",
+            fallback="model-b",
+        )
+        assert mock_create.call_count == 2
+        for call in mock_create.call_args_list:
+            assert call.kwargs["provider"] == "openai"
+            assert call.kwargs["base_url"] == "http://localhost:11434/v1"
+
 
 class TestLifecycle:
     @patch("ai_arch_toolkit.core._llm.create_provider")

@@ -18,7 +18,7 @@ from ai_arch_toolkit.core._providers._openai import (
     _parse_sdk_response,
     _tool_to_sdk,
 )
-from ai_arch_toolkit.core._response import OutputSchema, Response, ToolCall
+from ai_arch_toolkit.core._response import OutputSchema, Response, ThinkingBlock, ToolCall
 
 # ---------------------------------------------------------------------------
 # Helpers — build fake SDK objects
@@ -33,6 +33,8 @@ def _sdk_completion(
     finish_reason: str = "stop",
     prompt_tokens: int = 10,
     completion_tokens: int = 5,
+    reasoning: str | None = None,
+    reasoning_field: str = "reasoning_content",
 ) -> SimpleNamespace:
     """Build a fake openai.types.chat.ChatCompletion-like object."""
     tc_objs = None
@@ -55,6 +57,8 @@ def _sdk_completion(
         role="assistant",
         refusal=None,
     )
+    if reasoning is not None:
+        setattr(message, reasoning_field, reasoning)
     choice = SimpleNamespace(
         finish_reason=finish_reason,
         index=0,
@@ -282,6 +286,22 @@ class TestParseSdkResponse:
         r = _parse_sdk_response(comp, "gpt-4o")
         assert r.raw is comp
 
+    def test_reasoning_content_populates_thinking(self):
+        comp = _sdk_completion(text="42", reasoning="Let me think.")
+        r = _parse_sdk_response(comp, "gpt-4o")
+        assert r.thinking == (ThinkingBlock(text="Let me think."),)
+        assert r.text == "42"
+
+    def test_reasoning_alt_spelling(self):
+        comp = _sdk_completion(text="42", reasoning="Hmm.", reasoning_field="reasoning")
+        r = _parse_sdk_response(comp, "gpt-4o")
+        assert r.thinking == (ThinkingBlock(text="Hmm."),)
+
+    def test_no_reasoning_empty_thinking(self):
+        comp = _sdk_completion(text="42")
+        r = _parse_sdk_response(comp, "gpt-4o")
+        assert r.thinking == ()
+
 
 class TestStreamState:
     def test_initial_state(self):
@@ -308,6 +328,18 @@ class TestOpenAIProviderComplete:
         assert result.text == "Hello!"
         assert isinstance(result, Response)
         mock_client.chat.completions.create.assert_called_once()
+
+    async def test_complete_surfaces_reasoning(self):
+        mock_client = AsyncMock()
+        mock_client.chat.completions.create.return_value = _sdk_completion(
+            text="42", reasoning="Step by step."
+        )
+
+        provider = OpenAIProvider("gemma4:e4b", "not-needed")
+        provider._client = mock_client
+        result = await provider.complete([{"role": "user", "content": "Hi"}])
+        assert result.thinking == (ThinkingBlock(text="Step by step."),)
+        assert result.text == "42"
 
     async def test_complete_with_tools(self):
         mock_client = AsyncMock()

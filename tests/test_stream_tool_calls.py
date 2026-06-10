@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from ai_arch_toolkit.core._providers._anthropic import AnthropicProvider
 from ai_arch_toolkit.core._providers._base import StreamState
 from ai_arch_toolkit.core._providers._openai import OpenAIProvider
-from ai_arch_toolkit.core._response import ToolCall, Usage
+from ai_arch_toolkit.core._response import ThinkingBlock, ToolCall, Usage
 
 # ---------------------------------------------------------------------------
 # Helpers — build fake SDK stream events
@@ -331,9 +331,13 @@ def _oai_chunk(
     finish_reason: str | None = None,
     model: str = "gpt-4o",
     usage: dict | None = None,
+    reasoning: str | None = None,
+    reasoning_field: str = "reasoning_content",
 ) -> SimpleNamespace:
     """Build a fake OpenAI ChatCompletionChunk-like object."""
     delta = SimpleNamespace(content=content, tool_calls=None)
+    if reasoning is not None:
+        setattr(delta, reasoning_field, reasoning)
     if tool_calls:
         delta.tool_calls = [
             SimpleNamespace(
@@ -542,6 +546,158 @@ class TestOpenAIStreamToolCalls:
             text_chunks.append(chunk)
 
         assert text_chunks == ["Hi"]
+        assert state.usage is not None
+        assert state.usage.input_tokens == 25
+        assert state.usage.output_tokens == 10
+        assert state.stop_reason == "stop"
+
+
+# ---------------------------------------------------------------------------
+# OpenAI stream reasoning deltas (local OpenAI-compatible servers)
+# ---------------------------------------------------------------------------
+
+
+def _make_openai_provider(chunks: list[SimpleNamespace]) -> OpenAIProvider:
+    """Build an OpenAIProvider whose client streams the given fake chunks."""
+
+    async def _fake_stream():
+        for c in chunks:
+            yield c
+
+    mock_client = AsyncMock()
+    mock_client.chat.completions.create.return_value = _fake_stream()
+    provider = OpenAIProvider("gemma4:e4b", "not-needed")
+    provider._client = mock_client
+    return provider
+
+
+class TestOpenAIStreamReasoning:
+    async def test_reasoning_not_yielded_as_text(self):
+        provider = _make_openai_provider(
+            [
+                _oai_chunk(reasoning="Let me "),
+                _oai_chunk(reasoning="think."),
+                _oai_chunk(content="Hi"),
+                _oai_chunk(finish_reason="stop"),
+            ]
+        )
+
+        aiter, state = provider.stream([{"role": "user", "content": "Hi"}])
+        text_chunks = [chunk async for chunk in aiter]
+
+        assert text_chunks == ["Hi"]
+        assert state.thinking == [ThinkingBlock(text="Let me think.")]
+
+    async def test_reasoning_field_alt_spelling(self):
+        provider = _make_openai_provider(
+            [
+                _oai_chunk(reasoning="Hmm.", reasoning_field="reasoning"),
+                _oai_chunk(content="Hi"),
+                _oai_chunk(finish_reason="stop"),
+            ]
+        )
+
+        aiter, state = provider.stream([{"role": "user", "content": "Hi"}])
+        text_chunks = [chunk async for chunk in aiter]
+
+        assert text_chunks == ["Hi"]
+        assert state.thinking == [ThinkingBlock(text="Hmm.")]
+
+    async def test_empty_reasoning_ignored(self):
+        provider = _make_openai_provider(
+            [
+                _oai_chunk(reasoning=""),
+                _oai_chunk(content="Hi", finish_reason="stop"),
+            ]
+        )
+
+        aiter, state = provider.stream([{"role": "user", "content": "Hi"}])
+        async for _ in aiter:
+            pass
+
+        assert state.thinking == []
+
+    async def test_no_reasoning_thinking_empty(self):
+        provider = _make_openai_provider(
+            [
+                _oai_chunk(content="Hi"),
+                _oai_chunk(finish_reason="stop"),
+            ]
+        )
+
+        aiter, state = provider.stream([{"role": "user", "content": "Hi"}])
+        async for _ in aiter:
+            pass
+
+        assert state.thinking == []
+
+
+class TestOpenAIStreamEvents:
+    async def test_thinking_events_realtime(self):
+        provider = _make_openai_provider(
+            [
+                _oai_chunk(reasoning="Let me "),
+                _oai_chunk(reasoning="think."),
+                _oai_chunk(content="Hi"),
+                _oai_chunk(finish_reason="stop"),
+            ]
+        )
+
+        event_iter, state = provider.stream_events([{"role": "user", "content": "Hi"}])
+        events = [event async for event in event_iter]
+
+        assert [e.kind for e in events] == ["thinking", "thinking", "text"]
+        assert [e.thinking.text for e in events if e.thinking] == ["Let me ", "think."]
+        assert events[2].text == "Hi"
+        assert state.thinking == [ThinkingBlock(text="Let me think.")]
+
+    async def test_reasoning_and_content_same_chunk(self):
+        provider = _make_openai_provider(
+            [
+                _oai_chunk(reasoning="Thinking.", content="Hi"),
+                _oai_chunk(finish_reason="stop"),
+            ]
+        )
+
+        event_iter, _ = provider.stream_events([{"role": "user", "content": "Hi"}])
+        events = [event async for event in event_iter]
+
+        assert [e.kind for e in events] == ["thinking", "text"]
+
+    async def test_tool_call_events_emitted_realtime(self):
+        provider = _make_openai_provider(
+            [
+                _oai_chunk(tool_calls=[{"index": 0, "id": "tc_1", "name": "get_weather"}]),
+                _oai_chunk(
+                    tool_calls=[{"index": 0, "arguments": '{"city": "NYC"}'}],
+                    finish_reason="tool_calls",
+                ),
+            ]
+        )
+
+        event_iter, state = provider.stream_events([{"role": "user", "content": "Hi"}])
+        events = [event async for event in event_iter]
+
+        tool_events = [e for e in events if e.kind == "tool_call"]
+        assert len(tool_events) == 1
+        assert tool_events[0].tool_call == ToolCall(
+            id="tc_1", name="get_weather", input={"city": "NYC"}
+        )
+        assert state.tool_calls == [tool_events[0].tool_call]
+
+    async def test_usage_and_stop_reason_tracked(self):
+        provider = _make_openai_provider(
+            [
+                _oai_chunk(content="Hi"),
+                _oai_chunk(finish_reason="stop"),
+                _oai_usage_chunk(prompt_tokens=25, completion_tokens=10),
+            ]
+        )
+
+        event_iter, state = provider.stream_events([{"role": "user", "content": "Hi"}])
+        async for _ in event_iter:
+            pass
+
         assert state.usage is not None
         assert state.usage.input_tokens == 25
         assert state.usage.output_tokens == 10
