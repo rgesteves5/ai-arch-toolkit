@@ -207,14 +207,16 @@ def _extract_usage(sdk_usage: Any) -> Usage:
 
 
 def _reasoning_text(obj: Any) -> str:
-    """Extract vendor reasoning text from a streaming delta or message.
+    """Extract vendor reasoning text from a streaming delta, message, or dict.
 
     Reads ``reasoning_content`` (DeepSeek, vLLM, LM Studio, SGLang) then
-    ``reasoning`` (Ollama /v1, OpenRouter). The SDK pydantic models use
-    ``extra="allow"``, so unknown wire fields surface as attributes.
+    ``reasoning`` (Ollama /v1, OpenRouter), per-field so a non-string value in
+    one does not mask a valid string in the other. SDK pydantic models use
+    ``extra="allow"``, so unknown wire fields surface as attributes; batch
+    bodies arrive as plain dicts.
     """
     for attr in ("reasoning_content", "reasoning"):
-        value = getattr(obj, attr, None)
+        value = obj.get(attr) if isinstance(obj, dict) else getattr(obj, attr, None)
         if isinstance(value, str) and value:
             return value
     return ""
@@ -458,10 +460,25 @@ class OpenAIProvider(BaseProvider):
     ) -> AsyncIterator[StreamEvent]:
         """Single SDK chunk loop shared by ``stream()`` and ``stream_events()``.
 
-        Thinking events carry incremental reasoning fragments as they arrive;
-        their concatenation is appended to ``state.thinking`` as one complete
-        block once the stream is exhausted.
+        Each reasoning delta is emitted as a ``partial`` thinking event in real
+        time; ``state.thinking`` holds one block that is kept up to date after
+        every fragment, so an early-abandoned stream still finalizes with the
+        reasoning received so far.
         """
+
+        async def _flush_tool_calls(
+            tc_acc: dict[int, dict[str, str]],
+        ) -> AsyncIterator[StreamEvent]:
+            for _idx in sorted(tc_acc):
+                acc = tc_acc[_idx]
+                tool_call = ToolCall(
+                    id=acc["id"],
+                    name=acc["name"],
+                    input=parse_tool_args(acc["arguments"]),
+                )
+                state.tool_calls.append(tool_call)
+                yield StreamEvent(kind="tool_call", tool_call=tool_call)
+            tc_acc.clear()
 
         async def _generate() -> AsyncIterator[StreamEvent]:
             tc_acc: dict[int, dict[str, str]] = {}
@@ -485,10 +502,20 @@ class OpenAIProvider(BaseProvider):
                     choice = choices[0]
                     delta = choice.delta
 
-                    # Vendor reasoning deltas (local OpenAI-compatible servers)
+                    # Vendor reasoning deltas (local OpenAI-compatible servers).
+                    # Keep state.thinking's single block current per fragment so
+                    # early-abandoned streams still finalize with the reasoning.
                     if delta and (fragment := _reasoning_text(delta)):
+                        first = not reasoning_acc
                         reasoning_acc += fragment
-                        yield StreamEvent(kind="thinking", thinking=ThinkingBlock(text=fragment))
+                        block = ThinkingBlock(text=reasoning_acc)
+                        if first:
+                            state.thinking.append(block)
+                        else:
+                            state.thinking[-1] = block
+                        yield StreamEvent(
+                            kind="thinking", thinking=ThinkingBlock(text=fragment), partial=True
+                        )
 
                     # Text content
                     if delta and delta.content:
@@ -518,16 +545,8 @@ class OpenAIProvider(BaseProvider):
 
                     finish = choice.finish_reason
                     if finish == "tool_calls" and tc_acc:
-                        for _idx in sorted(tc_acc):
-                            acc = tc_acc[_idx]
-                            tool_call = ToolCall(
-                                id=acc["id"],
-                                name=acc["name"],
-                                input=parse_tool_args(acc["arguments"]),
-                            )
-                            state.tool_calls.append(tool_call)
-                            yield StreamEvent(kind="tool_call", tool_call=tool_call)
-                        tc_acc.clear()
+                        async for event in _flush_tool_calls(tc_acc):
+                            yield event
 
                     if finish:
                         state.stop_reason = finish
@@ -536,6 +555,12 @@ class OpenAIProvider(BaseProvider):
                         state.model = chunk.model
 
                     state.raw = chunk
+
+                # Some OpenAI-compatible servers end tool-call turns with
+                # finish_reason "stop" — flush whatever was accumulated.
+                if tc_acc:
+                    async for event in _flush_tool_calls(tc_acc):
+                        yield event
 
             except openai.RateLimitError as exc:
                 retry_after = exc.response.headers.get("retry-after") if exc.response else None
@@ -549,9 +574,6 @@ class OpenAIProvider(BaseProvider):
                     exc.response.status_code if exc.response else 500,
                     str(exc.body),
                 ) from exc
-
-            if reasoning_acc:
-                state.thinking.append(ThinkingBlock(text=reasoning_acc))
 
         return _generate()
 
@@ -708,8 +730,7 @@ class OpenAIProvider(BaseProvider):
         text = (message.get("content") or "").strip()
 
         thinking: tuple[ThinkingBlock, ...] = ()
-        reasoning = message.get("reasoning_content") or message.get("reasoning")
-        if isinstance(reasoning, str) and reasoning:
+        if reasoning := _reasoning_text(message):
             thinking = (ThinkingBlock(text=reasoning),)
 
         tool_calls: list[ToolCall] = []

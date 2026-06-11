@@ -9,6 +9,7 @@ import pytest
 
 from ai_arch_toolkit.core._providers import (
     _detect_provider,
+    _is_local_url,
     _match_provider,
     _resolve_key,
     create_provider,
@@ -88,17 +89,18 @@ class TestResolveKey:
         with pytest.raises(ValueError, match="No API key provided"):
             _resolve_key("FOO_KEY", None)
 
-    def test_not_required_returns_placeholder(self, monkeypatch):
+    def test_local_returns_placeholder(self, monkeypatch):
         monkeypatch.delenv("FOO_KEY", raising=False)
-        assert _resolve_key("FOO_KEY", None, required=False) == "not-needed"
+        assert _resolve_key("FOO_KEY", None, local=True) == "not-needed"
 
-    def test_not_required_env_still_wins(self, monkeypatch):
+    def test_local_ignores_env_key(self, monkeypatch):
+        # A real cloud key is never sent to a local server.
         monkeypatch.setenv("FOO_KEY", "env-value")
-        assert _resolve_key("FOO_KEY", None, required=False) == "env-value"
+        assert _resolve_key("FOO_KEY", None, local=True) == "not-needed"
 
-    def test_not_required_explicit_still_wins(self, monkeypatch):
+    def test_local_explicit_still_wins(self, monkeypatch):
         monkeypatch.delenv("FOO_KEY", raising=False)
-        assert _resolve_key("FOO_KEY", "explicit", required=False) == "explicit"
+        assert _resolve_key("FOO_KEY", "explicit", local=True) == "explicit"
 
 
 class TestCreateProvider:
@@ -173,7 +175,7 @@ class TestCreateProvider:
         with pytest.raises(ValueError, match="Valid providers"):
             create_provider("gemma4:e4b", provider="nope")
 
-    def test_unknown_model_with_base_url_infers_openai(self, monkeypatch):
+    def test_unknown_model_with_localhost_infers_openai(self, monkeypatch):
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         with patch("ai_arch_toolkit.core._providers._openai.OpenAIProvider") as cls:
             create_provider("gemma4:e4b", base_url="http://localhost:11434/v1")
@@ -181,13 +183,34 @@ class TestCreateProvider:
                 "gemma4:e4b", "not-needed", base_url="http://localhost:11434/v1", timeout=None
             )
 
-    def test_known_prefix_with_base_url_missing_key_uses_placeholder(self, monkeypatch):
+    def test_localhost_known_prefix_uses_placeholder(self, monkeypatch):
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         with patch("ai_arch_toolkit.core._providers._openai.OpenAIProvider") as cls:
-            create_provider("gpt-4o", base_url="http://localhost:8000/v1")
+            create_provider("gpt-4o", base_url="http://127.0.0.1:8000/v1")
             cls.assert_called_once_with(
-                "gpt-4o", "not-needed", base_url="http://localhost:8000/v1", timeout=None
+                "gpt-4o", "not-needed", base_url="http://127.0.0.1:8000/v1", timeout=None
             )
+
+    def test_localhost_ignores_env_key(self, monkeypatch):
+        # A real cloud key in the environment is never sent to a local server.
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-real")
+        with patch("ai_arch_toolkit.core._providers._openai.OpenAIProvider") as cls:
+            create_provider("gemma4:e4b", base_url="http://localhost:11434/v1")
+            cls.assert_called_once_with(
+                "gemma4:e4b", "not-needed", base_url="http://localhost:11434/v1", timeout=None
+            )
+
+    def test_remote_base_url_missing_key_raises(self, monkeypatch):
+        # A remote endpoint (gateway/proxy) still needs a key — fail fast.
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        with pytest.raises(ValueError, match="No API key"):
+            create_provider("gpt-4o", base_url="https://openrouter.ai/api/v1")
+
+    def test_empty_base_url_normalized_requires_key(self, monkeypatch):
+        # base_url="" must not disable the key check for a real cloud model.
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        with pytest.raises(ValueError, match="No API key"):
+            create_provider("gpt-4o", base_url="")
 
     def test_explicit_provider_without_base_url_still_requires_key(self, monkeypatch):
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -197,3 +220,21 @@ class TestCreateProvider:
     def test_unknown_model_without_base_url_still_raises(self):
         with pytest.raises(ValueError, match="Cannot detect provider"):
             create_provider("gemma4:e4b")
+
+
+class TestIsLocalUrl:
+    def test_loopback_hosts(self):
+        assert _is_local_url("http://localhost:11434/v1")
+        assert _is_local_url("http://127.0.0.1:8000/v1")
+        assert _is_local_url("http://127.5.5.5/v1")
+        assert _is_local_url("http://[::1]:8000/v1")
+        assert _is_local_url("http://0.0.0.0:1234")
+
+    def test_remote_hosts(self):
+        assert not _is_local_url("https://openrouter.ai/api/v1")
+        assert not _is_local_url("https://api.openai.com/v1")
+        assert not _is_local_url("http://192.168.1.50:11434/v1")
+
+    def test_none_and_empty(self):
+        assert not _is_local_url(None)
+        assert not _is_local_url("")

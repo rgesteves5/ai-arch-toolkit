@@ -19,9 +19,9 @@ for event in stream:
     if event.kind == "text":
         print(event.text, end="", flush=True)
     elif event.kind == "thinking":
-        print(f"\n[thinking] {event.thinking.thinking[:80]}...")
+        print(f"\n[thinking] {event.thinking.text[:80]}...")
     elif event.kind == "tool_call":
-        print(f"\n[tool_call] {event.tool_call.name}({event.tool_call.arguments})")
+        print(f"\n[tool_call] {event.tool_call.name}({event.tool_call.input})")
 
 print(
     f"\n\n[Tokens — in: {stream.response.usage.input_tokens}, "
