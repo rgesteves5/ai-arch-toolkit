@@ -37,6 +37,64 @@ News — _news.py
 
 - hacker_news — Top stories from Hacker News
 
+Research — _arxiv.py
+
+- arxiv_search — Search arXiv papers via the public arXiv API
+- arxiv_paper — Get metadata for a specific arXiv paper by ID
+
+Biomedical Research — _pubmed.py
+
+- pubmed_search — Search PubMed articles via the public NCBI E-utilities API
+- pubmed_article — Get metadata for a specific PubMed article by PMID
+
+Clinical Studies — _clinical_trials.py
+
+- clinical_trials_search — Search ClinicalTrials.gov studies via the public API v2
+- clinical_trial_study — Get detailed metadata for a specific ClinicalTrials.gov NCT ID
+
+Academic Graph — _semantic_scholar.py
+
+- semantic_scholar_search — Search Semantic Scholar papers via the public Academic Graph API
+- semantic_scholar_paper — Get detailed metadata for a Semantic Scholar paper
+- semantic_scholar_citations — Get papers that cite a Semantic Scholar paper
+
+Books — _open_library.py
+
+- open_library_search — Search Open Library books and works
+- open_library_work — Get metadata for a specific Open Library work
+- open_library_isbn — Get edition metadata for an ISBN
+
+Scholarly Metadata — _crossref.py
+
+- crossref_search — Search Crossref works by title, DOI, topic, or citation fragment
+- crossref_work — Get Crossref metadata for a specific DOI
+
+Knowledge Graph — _wikidata.py
+
+- wikidata_search — Search Wikidata entities by label or alias
+- wikidata_entity — Get labels, aliases, claims, and Wikipedia links for a Wikidata QID
+- wikidata_sparql — Run read-only Wikidata SPARQL SELECT/ASK queries
+
+News & Events — _gdelt.py
+
+- gdelt_news_search — Search global news coverage via GDELT DOC 2.0
+- gdelt_timeline — Get a GDELT volume timeline for a news query
+
+Security — _nvd.py
+
+- nvd_cve_search — Search CVEs in the NVD 2.0 API by keyword, CVE, CPE, severity, or publication date
+- nvd_cve — Get NVD metadata for a specific CVE ID
+
+Research Data — _datacite.py
+
+- datacite_search — Search DataCite DOI metadata for datasets, software, text, and other research outputs
+- datacite_doi — Get DataCite metadata for a specific DOI
+
+Digital Archives — _internet_archive.py
+
+- internet_archive_search — Search Internet Archive items with optional mediatype and collection filters
+- internet_archive_item — Get Internet Archive item metadata and file listings
+
 Math — _math.py
 
 - math_eval — Safely evaluate math expressions (functions, constants, operators)
