@@ -18,7 +18,14 @@ from ai_arch_toolkit.core._providers._base import (
     parse_tool_args,
 )
 from ai_arch_toolkit.core._providers._imports import require_sdk
-from ai_arch_toolkit.core._response import OutputSchema, Response, ToolCall, Usage
+from ai_arch_toolkit.core._response import (
+    OutputSchema,
+    Response,
+    StreamEvent,
+    ThinkingBlock,
+    ToolCall,
+    Usage,
+)
 
 require_sdk("openai", "openai")
 import openai  # noqa: E402
@@ -199,6 +206,20 @@ def _extract_usage(sdk_usage: Any) -> Usage:
     )
 
 
+def _reasoning_text(obj: Any) -> str:
+    """Extract vendor reasoning text from a streaming delta or message.
+
+    Reads ``reasoning_content`` (DeepSeek, vLLM, LM Studio, SGLang) then
+    ``reasoning`` (Ollama /v1, OpenRouter). The SDK pydantic models use
+    ``extra="allow"``, so unknown wire fields surface as attributes.
+    """
+    for attr in ("reasoning_content", "reasoning"):
+        value = getattr(obj, attr, None)
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
 def _parse_sdk_response(
     completion: Any,
     model: str,
@@ -213,6 +234,10 @@ def _parse_sdk_response(
     choice = choices[0]
     message = choice.message
     text = message.content or ""
+
+    thinking: tuple[ThinkingBlock, ...] = ()
+    if reasoning := _reasoning_text(message):
+        thinking = (ThinkingBlock(text=reasoning),)
 
     tool_calls: list[ToolCall] = []
     for tc in message.tool_calls or []:
@@ -247,6 +272,7 @@ def _parse_sdk_response(
     return Response(
         text=text.strip(),
         tool_calls=tuple(tool_calls),
+        thinking=thinking,
         parsed=parsed,
         usage=usage,
         cost=cost,
@@ -425,23 +451,21 @@ class OpenAIProvider(BaseProvider):
     # stream
     # ------------------------------------------------------------------
 
-    def stream(
+    def _stream_core(
         self,
-        messages: list[dict[str, Any]],
-        *,
-        system: str | None = None,
-        tools: list[dict[str, Any]] | None = None,
-        **kwargs: Any,
-    ) -> tuple[AsyncIterator[str], StreamState]:
-        wire = _messages_to_sdk(messages, system=system)
-        sdk_kwargs = self._build_sdk_kwargs(wire, tools=tools, **kwargs)
+        sdk_kwargs: dict[str, Any],
+        state: StreamState,
+    ) -> AsyncIterator[StreamEvent]:
+        """Single SDK chunk loop shared by ``stream()`` and ``stream_events()``.
 
-        logger.debug("stream start model=%s", self._model)
-        state = StreamState()
-        state.model = self._model
+        Thinking events carry incremental reasoning fragments as they arrive;
+        their concatenation is appended to ``state.thinking`` as one complete
+        block once the stream is exhausted.
+        """
 
-        async def _generate() -> AsyncIterator[str]:
+        async def _generate() -> AsyncIterator[StreamEvent]:
             tc_acc: dict[int, dict[str, str]] = {}
+            reasoning_acc = ""
 
             try:
                 stream = await self._client.chat.completions.create(
@@ -461,9 +485,14 @@ class OpenAIProvider(BaseProvider):
                     choice = choices[0]
                     delta = choice.delta
 
+                    # Vendor reasoning deltas (local OpenAI-compatible servers)
+                    if delta and (fragment := _reasoning_text(delta)):
+                        reasoning_acc += fragment
+                        yield StreamEvent(kind="thinking", thinking=ThinkingBlock(text=fragment))
+
                     # Text content
                     if delta and delta.content:
-                        yield delta.content
+                        yield StreamEvent(kind="text", text=delta.content)
 
                     # Accumulate tool call deltas
                     if delta and delta.tool_calls:
@@ -491,13 +520,13 @@ class OpenAIProvider(BaseProvider):
                     if finish == "tool_calls" and tc_acc:
                         for _idx in sorted(tc_acc):
                             acc = tc_acc[_idx]
-                            state.tool_calls.append(
-                                ToolCall(
-                                    id=acc["id"],
-                                    name=acc["name"],
-                                    input=parse_tool_args(acc["arguments"]),
-                                )
+                            tool_call = ToolCall(
+                                id=acc["id"],
+                                name=acc["name"],
+                                input=parse_tool_args(acc["arguments"]),
                             )
+                            state.tool_calls.append(tool_call)
+                            yield StreamEvent(kind="tool_call", tool_call=tool_call)
                         tc_acc.clear()
 
                     if finish:
@@ -521,7 +550,49 @@ class OpenAIProvider(BaseProvider):
                     str(exc.body),
                 ) from exc
 
-        return _generate(), state
+            if reasoning_acc:
+                state.thinking.append(ThinkingBlock(text=reasoning_acc))
+
+        return _generate()
+
+    def stream(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        system: str | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        **kwargs: Any,
+    ) -> tuple[AsyncIterator[str], StreamState]:
+        wire = _messages_to_sdk(messages, system=system)
+        sdk_kwargs = self._build_sdk_kwargs(wire, tools=tools, **kwargs)
+
+        logger.debug("stream start model=%s", self._model)
+        state = StreamState()
+        state.model = self._model
+        events = self._stream_core(sdk_kwargs, state)
+
+        async def _text_only() -> AsyncIterator[str]:
+            async for event in events:
+                if event.kind == "text" and event.text:
+                    yield event.text
+
+        return _text_only(), state
+
+    def stream_events(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        system: str | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        **kwargs: Any,
+    ) -> tuple[AsyncIterator[StreamEvent], StreamState]:
+        wire = _messages_to_sdk(messages, system=system)
+        sdk_kwargs = self._build_sdk_kwargs(wire, tools=tools, **kwargs)
+
+        logger.debug("stream_events start model=%s", self._model)
+        state = StreamState()
+        state.model = self._model
+        return self._stream_core(sdk_kwargs, state), state
 
     # ------------------------------------------------------------------
     # batch
@@ -636,6 +707,11 @@ class OpenAIProvider(BaseProvider):
         message = choice.get("message", {})
         text = (message.get("content") or "").strip()
 
+        thinking: tuple[ThinkingBlock, ...] = ()
+        reasoning = message.get("reasoning_content") or message.get("reasoning")
+        if isinstance(reasoning, str) and reasoning:
+            thinking = (ThinkingBlock(text=reasoning),)
+
         tool_calls: list[ToolCall] = []
         for tc in message.get("tool_calls") or []:
             fn = tc.get("function", {})
@@ -657,6 +733,7 @@ class OpenAIProvider(BaseProvider):
         return Response(
             text=text,
             tool_calls=tuple(tool_calls),
+            thinking=thinking,
             usage=usage,
             cost=cost,
             stop_reason=choice.get("finish_reason", ""),

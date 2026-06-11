@@ -21,7 +21,6 @@ from ai_arch_toolkit.toolkit.memory._types import (
 )
 from ai_arch_toolkit.toolkit.memory.graph._backends import (
     GraphAlgorithms,
-    GraphBackend,
     MemoryBackend,
 )
 from ai_arch_toolkit.toolkit.memory.graph._index import BruteForceIndex, VectorIndex
@@ -45,16 +44,12 @@ class GraphStore:
 
     def __init__(
         self,
-        # GraphBackend & MemoryBackend is intersection-type syntax that Python
-        # doesn't have natively — backends must implement both protocols. This
-        # is enforced by docstring and not by the type checker; see
-        # ``_backends.py`` for the individual contracts.
-        backend: GraphBackend & MemoryBackend,  # pyright: ignore[reportInvalidTypeForm]
+        backend: MemoryBackend,
         *,
         embed: EmbedFn | None = None,
         index: VectorIndex | None = None,
     ) -> None:
-        self._backend: GraphBackend & MemoryBackend = backend  # pyright: ignore[reportInvalidTypeForm]
+        self._backend: MemoryBackend = backend
         self._embed = embed
         self._index: VectorIndex | None = index
         if embed is not None and index is None:
@@ -64,7 +59,7 @@ class GraphStore:
     # --- Properties ---
 
     @property
-    def backend(self) -> GraphBackend:
+    def backend(self) -> MemoryBackend:
         return self._backend
 
     @property
@@ -327,7 +322,7 @@ class GraphStore:
     async def from_dict(
         cls,
         data: dict[str, Any],
-        backend: GraphBackend,
+        backend: MemoryBackend,
         *,
         embed: EmbedFn | None = None,
         index: VectorIndex | None = None,
@@ -350,9 +345,7 @@ class GraphStore:
                 source=nd.get("source", "unknown"),
             )
             # Add directly to backend to preserve original state (no re-embedding).
-            # The memory ``Node`` and core ``Node[T]`` share the name but are
-            # different classes; the backend duck-types on the shared attributes.
-            await backend.add_node(node)  # pyright: ignore[reportArgumentType]
+            await backend.add_node(node)
             if node.embedding is not None and store._index is not None:
                 await store._index.add(node.id, node.embedding)
             store._type_index.setdefault(node.type, set()).add(node.id)
@@ -378,7 +371,7 @@ class GraphStore:
     async def load(
         cls,
         path: str | Path,
-        backend: GraphBackend,
+        backend: MemoryBackend,
         *,
         embed: EmbedFn | None = None,
         index: VectorIndex | None = None,

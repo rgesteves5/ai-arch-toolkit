@@ -23,13 +23,17 @@ def mock_provider():
 def test_llm_passes_timeout_to_create_provider(mock_provider):
     """LLM passes timeout to create_provider."""
     LLM("gpt-4", timeout=30.0, api_key="k")
-    mock_provider.assert_called_once_with("gpt-4", api_key="k", base_url=None, timeout=30.0)
+    mock_provider.assert_called_once_with(
+        "gpt-4", provider=None, api_key="k", base_url=None, timeout=30.0
+    )
 
 
 def test_llm_without_timeout(mock_provider):
     """LLM without timeout passes None."""
     LLM("gpt-4", api_key="k")
-    mock_provider.assert_called_once_with("gpt-4", api_key="k", base_url=None, timeout=None)
+    mock_provider.assert_called_once_with(
+        "gpt-4", provider=None, api_key="k", base_url=None, timeout=None
+    )
 
 
 def test_llm_repr_includes_timeout(mock_provider):

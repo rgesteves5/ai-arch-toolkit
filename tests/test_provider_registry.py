@@ -7,7 +7,12 @@ from unittest.mock import patch
 
 import pytest
 
-from ai_arch_toolkit.core._providers import _detect_provider, _resolve_key, create_provider
+from ai_arch_toolkit.core._providers import (
+    _detect_provider,
+    _match_provider,
+    _resolve_key,
+    create_provider,
+)
 from ai_arch_toolkit.core._providers._imports import require_sdk
 
 
@@ -40,6 +45,21 @@ class TestDetectProvider:
         with pytest.raises(ValueError, match="Cannot detect provider"):
             _detect_provider("unknown-model-v1")
 
+    def test_unknown_error_mentions_provider_hint(self):
+        with pytest.raises(ValueError, match="provider="):
+            _detect_provider("gemma4:e4b")
+
+
+class TestMatchProvider:
+    def test_known_prefix(self):
+        assert _match_provider("gpt-4o") == "openai"
+
+    def test_known_model_id(self):
+        assert _match_provider("o3") == "openai"
+
+    def test_unknown_returns_none(self):
+        assert _match_provider("gemma4:e4b") is None
+
 
 class TestRequireSdk:
     def test_installed_package_passes(self):
@@ -67,6 +87,18 @@ class TestResolveKey:
         monkeypatch.delenv("FOO_KEY", raising=False)
         with pytest.raises(ValueError, match="No API key provided"):
             _resolve_key("FOO_KEY", None)
+
+    def test_not_required_returns_placeholder(self, monkeypatch):
+        monkeypatch.delenv("FOO_KEY", raising=False)
+        assert _resolve_key("FOO_KEY", None, required=False) == "not-needed"
+
+    def test_not_required_env_still_wins(self, monkeypatch):
+        monkeypatch.setenv("FOO_KEY", "env-value")
+        assert _resolve_key("FOO_KEY", None, required=False) == "env-value"
+
+    def test_not_required_explicit_still_wins(self, monkeypatch):
+        monkeypatch.delenv("FOO_KEY", raising=False)
+        assert _resolve_key("FOO_KEY", "explicit", required=False) == "explicit"
 
 
 class TestCreateProvider:
@@ -123,3 +155,45 @@ class TestCreateProvider:
     def test_unknown_model_raises(self):
         with pytest.raises(ValueError, match="Cannot detect provider"):
             create_provider("unknown-model-id")
+
+    def test_explicit_provider_overrides_detection(self, monkeypatch):
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        with patch("ai_arch_toolkit.core._providers._openai.OpenAIProvider") as cls:
+            create_provider(
+                "gemma4:e4b",
+                provider="openai",
+                api_key="k",
+                base_url="http://localhost:11434/v1",
+            )
+            cls.assert_called_once_with(
+                "gemma4:e4b", "k", base_url="http://localhost:11434/v1", timeout=None
+            )
+
+    def test_explicit_provider_invalid_raises(self):
+        with pytest.raises(ValueError, match="Valid providers"):
+            create_provider("gemma4:e4b", provider="nope")
+
+    def test_unknown_model_with_base_url_infers_openai(self, monkeypatch):
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        with patch("ai_arch_toolkit.core._providers._openai.OpenAIProvider") as cls:
+            create_provider("gemma4:e4b", base_url="http://localhost:11434/v1")
+            cls.assert_called_once_with(
+                "gemma4:e4b", "not-needed", base_url="http://localhost:11434/v1", timeout=None
+            )
+
+    def test_known_prefix_with_base_url_missing_key_uses_placeholder(self, monkeypatch):
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        with patch("ai_arch_toolkit.core._providers._openai.OpenAIProvider") as cls:
+            create_provider("gpt-4o", base_url="http://localhost:8000/v1")
+            cls.assert_called_once_with(
+                "gpt-4o", "not-needed", base_url="http://localhost:8000/v1", timeout=None
+            )
+
+    def test_explicit_provider_without_base_url_still_requires_key(self, monkeypatch):
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        with pytest.raises(ValueError, match="No API key"):
+            create_provider("gemma4:e4b", provider="openai")
+
+    def test_unknown_model_without_base_url_still_raises(self):
+        with pytest.raises(ValueError, match="Cannot detect provider"):
+            create_provider("gemma4:e4b")

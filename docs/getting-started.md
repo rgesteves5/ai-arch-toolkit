@@ -112,7 +112,19 @@ llm = LLM("gemini-2.0-flash")
 
 # xAI
 llm = LLM("grok-2")
+
+# Local OpenAI-compatible server (Ollama, LM Studio, vLLM) — no API key needed
+llm = LLM("gemma4:e4b", base_url="http://localhost:11434/v1")
+
+# Force the adapter explicitly if needed
+llm = LLM("my-model", provider="openai", base_url="http://localhost:8000/v1")
 ```
+
+Unknown model names with `base_url=` set route to the OpenAI-compatible adapter
+automatically, and a missing API key resolves to a placeholder (local servers
+ignore it). Reasoning deltas from these servers (`reasoning_content` /
+`reasoning`) surface as real-time `thinking` events in `stream_events()` and as
+`Response.thinking` blocks.
 
 ## Agent Flows
 
