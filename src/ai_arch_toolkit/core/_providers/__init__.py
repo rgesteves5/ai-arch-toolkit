@@ -6,6 +6,7 @@ import logging
 import os
 import warnings
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
 if TYPE_CHECKING:
     from ai_arch_toolkit.core._providers._base import BaseProvider
@@ -30,7 +31,11 @@ _MODEL_IDS: dict[str, str] = {
     "o4": "openai",
 }
 
-_PROVIDER_NAMES: tuple[str, ...] = ("anthropic", "openai", "xai", "gemini")
+# Derived from the routing table so it can never drift from what create_provider builds.
+_PROVIDER_NAMES: frozenset[str] = frozenset(_MODEL_PREFIXES.values())
+
+# Loopback hosts run on the user's own machine — no auth, key is optional.
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
 
 # Local OpenAI-compatible servers (Ollama, LM Studio, vLLM) ignore Authorization.
 _PLACEHOLDER_KEY = "not-needed"
@@ -46,22 +51,44 @@ def _match_provider(model: str) -> str | None:
     return None
 
 
-def _detect_provider(model: str) -> str:
-    """Map a model string to a provider name via prefix matching."""
-    if provider := _match_provider(model):
-        return provider
-    raise ValueError(
+def _unknown_model_error(model: str) -> ValueError:
+    return ValueError(
         f"Cannot detect provider for model {model!r}. "
         f"Known model IDs: {sorted(_MODEL_IDS)}. Known prefixes: {sorted(_MODEL_PREFIXES)}. "
         "For local or OpenAI-compatible servers, pass provider='openai' and/or base_url=."
     )
 
 
-def _resolve_key(env_var: str, api_key: str | None, *, required: bool = True) -> str:
-    key = api_key or os.environ.get(env_var, "")
+def _detect_provider(model: str) -> str:
+    """Map a model string to a provider name via prefix matching."""
+    if provider := _match_provider(model):
+        return provider
+    raise _unknown_model_error(model)
+
+
+def _is_local_url(base_url: str | None) -> bool:
+    """Return True when base_url points at a loopback host (local server)."""
+    if not base_url:
+        return False
+    host = urlsplit(base_url).hostname
+    if not host:
+        return False
+    return host in _LOOPBACK_HOSTS or host.startswith("127.") or host.endswith(".localhost")
+
+
+def _resolve_key(env_var: str, api_key: str | None, *, local: bool = False) -> str:
+    """Resolve an API key, preferring an explicit one, then the env var.
+
+    For a local (loopback) server the env var is **not** consulted — a real
+    cloud key is never sent to localhost — and a placeholder is used when no
+    key is passed explicitly. Remote endpoints still require a key.
+    """
+    if api_key:
+        return api_key
+    if local:
+        return _PLACEHOLDER_KEY
+    key = os.environ.get(env_var, "")
     if not key:
-        if not required:
-            return _PLACEHOLDER_KEY
         raise ValueError(
             f"No API key provided. Pass api_key= or set the {env_var} environment variable."
         )
@@ -78,14 +105,22 @@ def create_provider(
 ) -> BaseProvider:
     """Create a provider instance from a model string.
 
+    Routing precedence: an explicit ``provider`` wins; otherwise the model
+    prefix is matched (``claude-`` → Anthropic, ``gpt-``/``o1-`` → OpenAI,
+    ``grok-`` → xAI, ``gemini-`` → Gemini); otherwise an unknown model with
+    ``base_url`` set falls back to the OpenAI-compatible adapter (Ollama, LM
+    Studio, vLLM). The API key is required unless ``base_url`` points at a
+    loopback host (localhost), where local servers ignore it.
+
     Args:
-        provider: Force a specific provider ("anthropic", "openai", "xai",
-            "gemini"), bypassing prefix detection. Combine with base_url=
-            for local OpenAI-compatible servers (Ollama, LM Studio, vLLM).
-            When omitted, an unknown model with base_url= set routes to the
-            OpenAI-compatible provider. With base_url= set, a missing API
-            key resolves to a placeholder instead of raising.
+        provider: Force a specific provider, bypassing prefix detection.
+            One of ``anthropic``, ``openai``, ``xai``, ``gemini``.
+        base_url: Override the endpoint. Only the Anthropic and OpenAI
+            adapters honor it; xAI and Gemini ignore it with a warning.
     """
+    base_url = base_url or None  # normalize "" so it never masks the key check
+    local = _is_local_url(base_url)
+
     if provider is not None:
         if provider not in _PROVIDER_NAMES:
             raise ValueError(
@@ -100,14 +135,14 @@ def create_provider(
         )
         name = "openai"
     else:
-        name = _detect_provider(model)  # raises with the canonical message
+        raise _unknown_model_error(model)
 
     if name == "anthropic":
         from ai_arch_toolkit.core._providers._anthropic import AnthropicProvider
 
         return AnthropicProvider(
             model,
-            _resolve_key("ANTHROPIC_API_KEY", api_key, required=base_url is None),
+            _resolve_key("ANTHROPIC_API_KEY", api_key, local=local),
             base_url=base_url,
             timeout=timeout,
         )
@@ -117,7 +152,7 @@ def create_provider(
 
         return OpenAIProvider(
             model,
-            _resolve_key("OPENAI_API_KEY", api_key, required=base_url is None),
+            _resolve_key("OPENAI_API_KEY", api_key, local=local),
             base_url=base_url,
             timeout=timeout,
         )

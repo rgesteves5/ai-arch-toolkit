@@ -12,7 +12,7 @@ your own provider SDK.
 ## Why
 
 - **One client, every provider.** `LLM("claude-…")`, `LLM("gpt-…")`, `LLM("gemini-…")`, `LLM("grok-…")` — same call surface, automatic routing.
-- **Local models.** Point at Ollama, LM Studio, or vLLM with `base_url=` — arbitrary model tags, no API key needed, real-time reasoning events.
+- **Local models.** Point at Ollama, LM Studio, or vLLM with `base_url=` — arbitrary model tags, no API key needed on localhost, real-time reasoning events.
 - **Async-first, sync everywhere.** Every coroutine has a `_sync` wrapper, so you never have to choose.
 - **Agent architectures as building blocks.** ReAct, Reflexion, ReWOO, Plan-Execute, Tree of Thoughts, LATS, Self-Discovery, LLM Compiler, and Generate-Review — all as `Flow` factories.
 - **No mandatory deps.** Install only the provider SDKs you actually use.

@@ -284,12 +284,21 @@ class SyncStreamResponse:
 
 @dataclass(frozen=True, slots=True)
 class StreamEvent:
-    """Structured streaming event (text chunk, thinking block, or tool call)."""
+    """Structured streaming event (text chunk, thinking block, or tool call).
+
+    ``partial`` marks an incremental fragment rather than a finished unit.
+    Providers that stream reasoning token-by-token (OpenAI-compatible servers)
+    set ``partial=True`` on each ``thinking`` event; concatenate consecutive
+    partial thinking events for the full trace. Providers that emit complete
+    thinking blocks (Anthropic) leave it ``False``. The finalized
+    ``Response.thinking`` always holds complete blocks regardless.
+    """
 
     kind: Literal["text", "thinking", "tool_call"]
     text: str = ""
     thinking: ThinkingBlock | None = None
     tool_call: ToolCall | None = None
+    partial: bool = False
 
 
 class RichStreamResponse:
