@@ -648,6 +648,8 @@ class TestOpenAIStreamEvents:
 
         assert [e.kind for e in events] == ["thinking", "thinking", "text"]
         assert [e.thinking.text for e in events if e.thinking] == ["Let me ", "think."]
+        # Reasoning events are incremental fragments.
+        assert all(e.partial for e in events if e.kind == "thinking")
         assert events[2].text == "Hi"
         assert state.thinking == [ThinkingBlock(text="Let me think.")]
 
@@ -702,6 +704,47 @@ class TestOpenAIStreamEvents:
         assert state.usage.input_tokens == 25
         assert state.usage.output_tokens == 10
         assert state.stop_reason == "stop"
+
+    async def test_thinking_preserved_on_early_break(self):
+        # Reasoning precedes content; breaking before the end must still leave
+        # the reasoning-so-far in state.thinking (matches Anthropic).
+        provider = _make_openai_provider(
+            [
+                _oai_chunk(reasoning="Let me "),
+                _oai_chunk(reasoning="think."),
+                _oai_chunk(content="Hi"),
+                _oai_chunk(finish_reason="stop"),
+            ]
+        )
+
+        event_iter, state = provider.stream_events([{"role": "user", "content": "Hi"}])
+        async for event in event_iter:
+            if event.kind == "text":
+                break
+
+        assert state.thinking == [ThinkingBlock(text="Let me think.")]
+
+    async def test_tool_calls_flushed_on_finish_stop(self):
+        # Some OpenAI-compatible servers end tool-call turns with "stop".
+        provider = _make_openai_provider(
+            [
+                _oai_chunk(tool_calls=[{"index": 0, "id": "tc_1", "name": "get_weather"}]),
+                _oai_chunk(
+                    tool_calls=[{"index": 0, "arguments": '{"city": "NYC"}'}],
+                    finish_reason="stop",
+                ),
+            ]
+        )
+
+        event_iter, state = provider.stream_events([{"role": "user", "content": "Hi"}])
+        events = [event async for event in event_iter]
+
+        tool_events = [e for e in events if e.kind == "tool_call"]
+        assert len(tool_events) == 1
+        assert tool_events[0].tool_call == ToolCall(
+            id="tc_1", name="get_weather", input={"city": "NYC"}
+        )
+        assert state.tool_calls == [tool_events[0].tool_call]
 
 
 # ---------------------------------------------------------------------------

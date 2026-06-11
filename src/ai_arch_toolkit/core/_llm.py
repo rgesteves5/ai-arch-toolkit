@@ -18,7 +18,7 @@ from ai_arch_toolkit.core._middleware import (
     _run_before,
 )
 from ai_arch_toolkit.core._pricing import _estimate_response_cost
-from ai_arch_toolkit.core._providers import create_provider
+from ai_arch_toolkit.core._providers import _match_provider, create_provider
 from ai_arch_toolkit.core._response import (
     Attempt,
     OutputSchema,
@@ -53,10 +53,13 @@ def _normalize_fallbacks(
 ) -> tuple[list[LLM], list[LLM]]:
     """Normalize fallback param into (all_fallbacks, owned_fallbacks).
 
-    Strings are converted to new ``LLM`` instances (owned for lifecycle),
-    inheriting the parent's connection settings (``api_key``, ``base_url``,
-    ``provider``) — pass ``LLM`` instances for per-fallback overrides.
-    Nested fallbacks are flattened into the parent chain.
+    Strings are converted to new ``LLM`` instances (owned for lifecycle). A
+    string fallback is routed by its own name: a recognizable model (e.g.
+    ``claude-...``) is built standalone with its own connection, so a local
+    primary can fail over to a cloud model; a bare, unroutable tag (e.g.
+    ``llama3:8b``) inherits the parent's ``api_key``/``base_url``/``provider``,
+    assuming it lives on the same server. Pass ``LLM`` instances for full
+    per-fallback control. Nested fallbacks are flattened into the parent chain.
 
     .. note:: Flattening **clears** the nested LLM's ``_fallbacks`` list so
        that the parent owns the full chain. Passing the same ``LLM`` instance
@@ -70,7 +73,10 @@ def _normalize_fallbacks(
     owned: list[LLM] = []
     for item in items:
         if isinstance(item, str):
-            fb = LLM(item, api_key=api_key, base_url=base_url, provider=provider)
+            if _match_provider(item):
+                fb = LLM(item)  # recognizable model → route by its own name
+            else:
+                fb = LLM(item, api_key=api_key, base_url=base_url, provider=provider)
             all_fbs.append(fb)
             owned.append(fb)
         else:

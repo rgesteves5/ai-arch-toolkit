@@ -270,7 +270,8 @@ class TestModelRouting:
         assert mock_create.call_args.kwargs["base_url"] == "http://localhost:11434/v1"
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
-    def test_provider_forwarded_to_string_fallbacks(self, mock_create):
+    def test_unroutable_fallback_inherits_connection(self, mock_create):
+        # A bare tag is assumed to live on the same server as the primary.
         mock_create.return_value = AsyncMock()
         LLM(
             "model-a",
@@ -282,6 +283,24 @@ class TestModelRouting:
         for call in mock_create.call_args_list:
             assert call.kwargs["provider"] == "openai"
             assert call.kwargs["base_url"] == "http://localhost:11434/v1"
+
+    @patch("ai_arch_toolkit.core._llm.create_provider")
+    def test_routable_fallback_is_standalone(self, mock_create):
+        # A recognizable model name fails over to its own provider/connection,
+        # not the local primary's — so local→cloud failover works.
+        mock_create.return_value = AsyncMock()
+        LLM(
+            "gemma4:e4b",
+            provider="openai",
+            base_url="http://localhost:11434/v1",
+            fallback="claude-sonnet-4-20250514",
+        )
+        assert mock_create.call_count == 2
+        primary, fb = mock_create.call_args_list
+        assert primary.kwargs["provider"] == "openai"
+        assert fb.args[0] == "claude-sonnet-4-20250514"
+        assert fb.kwargs["provider"] is None
+        assert fb.kwargs["base_url"] is None
 
 
 class TestLifecycle:
