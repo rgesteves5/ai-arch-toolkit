@@ -275,7 +275,7 @@ def _valid_text(value: str) -> bool:
 
 def _valid_api_url(value: str) -> bool:
     parsed = urllib.parse.urlparse(value.strip())
-    return parsed.scheme == "https" and parsed.netloc and parsed.path.endswith("api.php")
+    return bool(parsed.scheme == "https" and parsed.netloc and parsed.path.endswith("api.php"))
 
 
 def _bounded(value: int) -> int:

@@ -8,7 +8,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, overload
 
 from ai_arch_toolkit.core import tool
 
@@ -441,7 +441,7 @@ def _fetch_world_bank(path: str, params: dict[str, str]) -> tuple[dict[str, Any]
     with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
         payload = json.loads(resp.read().decode("utf-8", errors="replace"))
     if isinstance(payload, list) and len(payload) >= 2:
-        metadata = payload[0] if isinstance(payload[0], dict) else {}
+        metadata = _dict(payload[0])
         items = payload[1] if isinstance(payload[1], list) else []
         return metadata, items
     if (
@@ -541,9 +541,9 @@ def _parse_country(data: dict[str, Any]) -> _WorldBankCountry | None:
     name = _string(data.get("name"))
     if not country_id and not name:
         return None
-    region = data.get("region") if isinstance(data.get("region"), dict) else {}
-    income_level = data.get("incomeLevel") if isinstance(data.get("incomeLevel"), dict) else {}
-    lending_type = data.get("lendingType") if isinstance(data.get("lendingType"), dict) else {}
+    region = _dict(data.get("region"))
+    income_level = _dict(data.get("incomeLevel"))
+    lending_type = _dict(data.get("lendingType"))
     return _WorldBankCountry(
         id=country_id,
         iso2=_string(data.get("iso2Code")),
@@ -565,7 +565,7 @@ def _parse_indicator(data: dict[str, Any]) -> _WorldBankIndicator | None:
     name = _string(data.get("name"))
     if not indicator_id and not name:
         return None
-    source = data.get("source") if isinstance(data.get("source"), dict) else {}
+    source = _dict(data.get("source"))
     return _WorldBankIndicator(
         id=indicator_id,
         name=name or "(unnamed)",
@@ -579,8 +579,8 @@ def _parse_indicator(data: dict[str, Any]) -> _WorldBankIndicator | None:
 
 
 def _parse_series_point(data: dict[str, Any]) -> _WorldBankSeriesPoint | None:
-    indicator = data.get("indicator") if isinstance(data.get("indicator"), dict) else {}
-    country = data.get("country") if isinstance(data.get("country"), dict) else {}
+    indicator = _dict(data.get("indicator"))
+    country = _dict(data.get("country"))
     date = _string(data.get("date"))
     if not date:
         return None
@@ -891,6 +891,18 @@ def _string(value: Any) -> str:
     if value is None:
         return ""
     return " ".join(str(value).split())
+
+
+def _dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+@overload
+def _int_or_none(value: Any, default: int) -> int: ...
+
+
+@overload
+def _int_or_none(value: Any, default: None = ...) -> int | None: ...
 
 
 def _int_or_none(value: Any, default: int | None = None) -> int | None:

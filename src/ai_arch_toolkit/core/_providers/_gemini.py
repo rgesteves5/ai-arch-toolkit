@@ -109,7 +109,7 @@ def _content_parts_to_gemini(content: Any) -> list[types.Part]:
 
 def _messages_to_sdk(
     messages: list[dict[str, Any]],
-) -> tuple[str | None, list[types.Content]]:
+) -> tuple[str | None, list[types.ContentUnion]]:
     """Extract system messages and convert the rest to SDK Content objects.
 
     Tool results are identified by ``tool_use_id`` (role is ignored) and batched
@@ -117,7 +117,7 @@ def _messages_to_sdk(
     expected format.
     """
     system_parts: list[str] = []
-    contents: list[types.Content] = []
+    contents: list[types.ContentUnion] = []
     pending_fn_responses: list[types.Part] = []
 
     def _flush_fn_responses() -> None:
