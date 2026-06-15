@@ -21,6 +21,7 @@ xai = ["xai-sdk>=1.7.0"]
 graph = ["networkx>=3.0"]
 tokens = ["tiktoken>=0.7"]
 yaml = ["pyyaml>=6.0"]
+youtube = ["youtube-transcript-api>=1.2.4"]
 
 # Aggregate: install every provider plus every optional feature.
 all = [
@@ -30,6 +31,7 @@ all = [
     "ai-arch-toolkit[openai]",
     "ai-arch-toolkit[tokens]",
     "ai-arch-toolkit[xai]",
+    "ai-arch-toolkit[youtube]",
     "ai-arch-toolkit[yaml]",
 ]
 # Downstream consumers / tooling.
@@ -53,6 +55,7 @@ dev = [
     "ruff>=0.9",
     "tiktoken>=0.7",
     "xai-sdk>=1.7.0",
+    "youtube-transcript-api>=1.2.4",
 ]
 
 [tool.pyright]

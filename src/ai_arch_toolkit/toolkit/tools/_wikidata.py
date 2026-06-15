@@ -151,9 +151,9 @@ def wikidata_sparql(query: str, max_results: int = 20) -> str:
 
     max_results = max(1, min(max_results, _MAX_RESULTS_LIMIT))
     sparql = query
-    if re.match(
-        r"^(PREFIX\s+\w+:\s*<[^>]+>\s*)*SELECT\b", query, re.IGNORECASE
-    ) and not re.search(r"\bLIMIT\s+\d+\b", query, re.IGNORECASE):
+    if re.match(r"^(PREFIX\s+\w+:\s*<[^>]+>\s*)*SELECT\b", query, re.IGNORECASE) and not re.search(
+        r"\bLIMIT\s+\d+\b", query, re.IGNORECASE
+    ):
         sparql = f"{query}\nLIMIT {max_results}"
 
     try:
