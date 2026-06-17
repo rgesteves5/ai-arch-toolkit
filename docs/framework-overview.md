@@ -11,7 +11,7 @@ This document summarizes the **ai-arch-toolkit** package: its structure, feature
 3. A **tool layer** (`@tool` decorator + `ToolGroup`) for LLM function calling
 4. A **Flow orchestration system** — composable Steps, Policies, Traces, and Scopes
 5. **Built-in agent flow factories** built on the same core primitives
-6. **Pre-built tools** for files, web, weather, geo, shell, Python, and knowledge lookups
+6. **Pre-built safe tools** plus explicit opt-in dangerous tools for files, shell, Python, and arbitrary URL fetching
 7. A **general-purpose graph layer** (`Graph`, `Node[T]`, `Edge`, algorithms)
 8. **Graph-backed memory** for agents (search, views, middleware, presets)
 9. **Knowledge registry** for prompt-injectable reference data
@@ -147,23 +147,23 @@ Each factory has a companion `*_initial_state(task)` helper that creates the ini
 
 ### Pre-built Tools (`toolkit/tools/`)
 
-Pre-built tools are organized across the toolkit tool modules and use stdlib-only implementations:
+Pre-built tools are organized across the toolkit tool modules and use stdlib-only implementations.
+The default public namespace is safe-by-default; shell execution, filesystem
+access, arbitrary URL fetching, and Python execution require explicit opt-in via
+`ai_arch_toolkit.toolkit.tools.dangerous`.
 
 | Module | Tools |
 |--------|-------|
 | `_datetime.py` | current time, date math |
 | `_math.py` | calculator, unit conversion |
 | `_text.py` | word count, text summarization helpers |
-| `_filesystem.py` | read/write/list files |
-| `_shell.py` | run shell commands |
-| `_python.py` | Python REPL / evaluation helper |
 | `_json.py` | JSON/CSV parsing |
-| `_web.py` | URL fetching |
 | `_weather.py` | Open-Meteo forecast |
 | `_wikipedia.py` | Wikipedia search and article retrieval |
 | `_dictionary.py` | Free Dictionary lookups |
 | `_geo.py` | geocoding, IP lookup, country info |
 | `_news.py` | Hacker News |
+| `tools.dangerous` | filesystem, shell, Python execution, arbitrary URL fetching |
 
 All use `@tool` decorator from core/. All return error strings (never raise) for graceful agent handling.
 

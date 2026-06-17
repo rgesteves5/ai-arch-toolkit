@@ -26,7 +26,17 @@ class ResolvedTools:
     names: tuple[str, ...]
 
 
-DANGEROUS_TOOLS = frozenset({"run_command", "python_repl"})
+DANGEROUS_TOOLS = frozenset(
+    {
+        "http_get",
+        "list_directory",
+        "python_repl",
+        "read_file",
+        "run_command",
+        "scrape_text",
+        "search_files",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -181,18 +191,11 @@ def built_in_tool_registry() -> ToolRegistry:
         get_weather,
         get_weather_by_coords,
         hacker_news,
-        http_get,
         ip_lookup,
         json_extract,
-        list_directory,
         math_eval,
-        python_repl,
-        read_file,
         regex_search,
         reverse_geocode,
-        run_command,
-        scrape_text,
-        search_files,
         text_stats,
         timezone_convert,
         timezone_lookup,
@@ -201,6 +204,15 @@ def built_in_tool_registry() -> ToolRegistry:
         wikipedia_article,
         wikipedia_related,
         wikipedia_search,
+    )
+    from ai_arch_toolkit.toolkit.tools.dangerous import (
+        http_get,
+        list_directory,
+        python_repl,
+        read_file,
+        run_command,
+        scrape_text,
+        search_files,
     )
 
     registry = ToolRegistry.from_mapping(

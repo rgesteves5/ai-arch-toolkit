@@ -1,10 +1,10 @@
 """24 — Toolkit Tools Showcase.
 
-The toolkit includes 25+ pre-built tools across 11 categories. All use
-stdlib only (zero pip dependencies). Here's a quick demo of several.
+The default toolkit namespace exposes safe-by-default tools. Tools that can
+inspect local files, execute commands or Python-like code, or fetch arbitrary
+URLs are available only through ai_arch_toolkit.toolkit.tools.dangerous.
 
-Most tools require network access (weather, geo, wiki APIs).
-Filesystem and shell tools work locally.
+Most safe lookup tools require network access (weather, geo, wiki APIs).
 """
 
 from ai_arch_toolkit.toolkit.tools import (
@@ -38,8 +38,13 @@ print("\nAll tools available:")
 print(
     "  datetime_now, timezone_convert, math_eval, unit_convert, "
     "base64_encode, base64_decode, regex_search, text_stats, "
-    "list_directory, read_file, search_files, run_command, "
-    "json_extract, csv_read, http_get, scrape_text, "
+    "json_extract, csv_read, "
     "get_weather, get_forecast, geocode, ip_lookup, country_info, "
     "wikipedia_search, wikipedia_article, define_word, hacker_news"
+)
+print("\nDangerous opt-in tools:")
+print(
+    "  from ai_arch_toolkit.toolkit.tools.dangerous import "
+    "list_directory, read_file, search_files, run_command, "
+    "python_repl, http_get, scrape_text"
 )
