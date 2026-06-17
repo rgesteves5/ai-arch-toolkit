@@ -16,7 +16,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - run: uv sync --extra dev
+      - run: uv lock --check
+      - run: uv sync --locked --extra dev
       - name: ruff check
         run: uv run ruff check src tests examples
       - name: ruff format --check
@@ -31,7 +32,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - run: uv sync --extra dev
+      - run: uv lock --check
+      - run: uv sync --locked --extra dev
       - run: uv run pyright src
 
   test:
@@ -48,5 +50,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: uv sync --extra dev
+      - run: uv lock --check
+      - run: uv sync --locked --extra dev
       - run: uv run pytest --cov=ai_arch_toolkit --cov-report=term-missing
