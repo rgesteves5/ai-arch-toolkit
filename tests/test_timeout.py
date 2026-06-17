@@ -8,6 +8,7 @@ import pytest
 
 from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._sync import (
+    _read_positive_float_env,
     configure_sync_timeouts,
 )
 
@@ -72,6 +73,38 @@ def test_configure_sync_timeouts_rejects_zero_stream():
     """configure_sync_timeouts rejects zero stream_join_timeout."""
     with pytest.raises(ValueError):
         configure_sync_timeouts(stream_join_timeout=0)
+
+
+def test_sync_timeout_env_default(monkeypatch):
+    """Sync timeout env helper uses default when unset."""
+    monkeypatch.delenv("AI_ARCH_SYNC_TIMEOUT", raising=False)
+    assert _read_positive_float_env("AI_ARCH_SYNC_TIMEOUT", 300.0) == 300.0
+
+
+def test_sync_timeout_env_accepts_positive_number(monkeypatch):
+    """Sync timeout env helper parses positive numeric values."""
+    monkeypatch.setenv("AI_ARCH_SYNC_TIMEOUT", "12.5")
+    assert _read_positive_float_env("AI_ARCH_SYNC_TIMEOUT", 300.0) == 12.5
+
+
+def test_sync_timeout_env_rejects_invalid_number(monkeypatch):
+    """Sync timeout env helper rejects invalid values with a clear error."""
+    monkeypatch.setenv("AI_ARCH_SYNC_TIMEOUT", "soon")
+    with pytest.raises(
+        ValueError,
+        match="AI_ARCH_SYNC_TIMEOUT must be a positive number of seconds, got 'soon'",
+    ):
+        _read_positive_float_env("AI_ARCH_SYNC_TIMEOUT", 300.0)
+
+
+def test_sync_timeout_env_rejects_non_positive_number(monkeypatch):
+    """Sync timeout env helper rejects non-positive values with a clear error."""
+    monkeypatch.setenv("AI_ARCH_STREAM_JOIN_TIMEOUT", "0")
+    with pytest.raises(
+        ValueError,
+        match="AI_ARCH_STREAM_JOIN_TIMEOUT must be a positive number of seconds, got '0'",
+    ):
+        _read_positive_float_env("AI_ARCH_STREAM_JOIN_TIMEOUT", 5.0)
 
 
 def test_llm_rejects_negative_timeout(mock_provider):
