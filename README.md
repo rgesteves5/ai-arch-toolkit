@@ -39,8 +39,10 @@ Pip works the same way. Extras:
 | `yaml`     | `pyyaml>=6.0` (yaml knowledge loader)                 |
 | `all`      | Every provider plus every optional feature            |
 
-API keys are read from `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`,
-or `XAI_API_KEY` — copy `.env.example` to `.env` and `set -a && source .env && set +a` (or use a tool like `direnv`).
+API keys are read from `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`
+(or `GEMINI_API_KEY`), or `XAI_API_KEY` — copy `.env.example` to `.env` and
+`set -a && source .env && set +a` (or use a tool like `direnv`). If both Gemini
+keys are set, `GOOGLE_API_KEY` wins.
 
 ## Quick start
 

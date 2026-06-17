@@ -102,6 +102,22 @@ class TestResolveKey:
         monkeypatch.delenv("FOO_KEY", raising=False)
         assert _resolve_key("FOO_KEY", "explicit", local=True) == "explicit"
 
+    def test_multiple_env_vars_use_first_set(self, monkeypatch):
+        monkeypatch.setenv("FIRST_KEY", "first")
+        monkeypatch.setenv("SECOND_KEY", "second")
+        assert _resolve_key(("FIRST_KEY", "SECOND_KEY"), None) == "first"
+
+    def test_multiple_env_vars_fall_back_in_order(self, monkeypatch):
+        monkeypatch.delenv("FIRST_KEY", raising=False)
+        monkeypatch.setenv("SECOND_KEY", "second")
+        assert _resolve_key(("FIRST_KEY", "SECOND_KEY"), None) == "second"
+
+    def test_multiple_env_vars_error_mentions_all_names(self, monkeypatch):
+        monkeypatch.delenv("FIRST_KEY", raising=False)
+        monkeypatch.delenv("SECOND_KEY", raising=False)
+        with pytest.raises(ValueError, match="FIRST_KEY, or SECOND_KEY"):
+            _resolve_key(("FIRST_KEY", "SECOND_KEY"), None)
+
 
 class TestCreateProvider:
     """Verify the factory routes to the right adapter and honors base_url / timeout."""
@@ -140,9 +156,37 @@ class TestCreateProvider:
 
     def test_gemini_route(self, monkeypatch):
         monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
         with patch("ai_arch_toolkit.core._providers._gemini.GeminiProvider") as cls:
             create_provider("gemini-2.5-flash", timeout=12.0)
             cls.assert_called_once_with("gemini-2.5-flash", "test-key", timeout=12.0)
+
+    def test_gemini_route_accepts_gemini_api_key(self, monkeypatch):
+        monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+        monkeypatch.setenv("GEMINI_API_KEY", "gemini-key")
+        with patch("ai_arch_toolkit.core._providers._gemini.GeminiProvider") as cls:
+            create_provider("gemini-2.5-flash", timeout=12.0)
+            cls.assert_called_once_with("gemini-2.5-flash", "gemini-key", timeout=12.0)
+
+    def test_gemini_route_prefers_google_api_key(self, monkeypatch):
+        monkeypatch.setenv("GOOGLE_API_KEY", "google-key")
+        monkeypatch.setenv("GEMINI_API_KEY", "gemini-key")
+        with patch("ai_arch_toolkit.core._providers._gemini.GeminiProvider") as cls:
+            create_provider("gemini-2.5-flash", timeout=12.0)
+            cls.assert_called_once_with("gemini-2.5-flash", "google-key", timeout=12.0)
+
+    def test_gemini_route_explicit_key_overrides_env(self, monkeypatch):
+        monkeypatch.setenv("GOOGLE_API_KEY", "google-key")
+        monkeypatch.setenv("GEMINI_API_KEY", "gemini-key")
+        with patch("ai_arch_toolkit.core._providers._gemini.GeminiProvider") as cls:
+            create_provider("gemini-2.5-flash", api_key="explicit-key", timeout=12.0)
+            cls.assert_called_once_with("gemini-2.5-flash", "explicit-key", timeout=12.0)
+
+    def test_gemini_missing_key_mentions_supported_env_vars(self, monkeypatch):
+        monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        with pytest.raises(ValueError, match="GOOGLE_API_KEY, or GEMINI_API_KEY"):
+            create_provider("gemini-2.5-flash")
 
     def test_gemini_warns_on_base_url(self, monkeypatch):
         monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
