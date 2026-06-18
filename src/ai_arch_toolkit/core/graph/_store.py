@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import dataclasses
-import json
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
+from ai_arch_toolkit.core._persistence import atomic_write_json, load_json_object
 from ai_arch_toolkit.core._sync import _run_sync
 from ai_arch_toolkit.core.graph._backends import GraphAlgorithms, GraphBackend
 from ai_arch_toolkit.core.graph._types import Direction, Edge, Node, NodeID, NodeType
+
+_GRAPH_SCHEMA_VERSION = 1
 
 
 class Graph:
@@ -371,7 +373,11 @@ class Graph:
                         "metadata": edge.metadata,
                     }
                 )
-        return {"nodes": nodes_data, "edges": edges_data}
+        return {
+            "schema_version": _GRAPH_SCHEMA_VERSION,
+            "nodes": nodes_data,
+            "edges": edges_data,
+        }
 
     @classmethod
     async def from_dict(
@@ -382,35 +388,43 @@ class Graph:
         content_loader: Callable[[Any], Any] | None = None,
     ) -> Graph:
         """Deserialize a dict into a Graph."""
+        _validate_graph_payload(data)
         graph = cls(backend)
-        for nd in data.get("nodes", []):
+        nodes: list[Node[Any]] = []
+        edges: list[Edge] = []
+        for nd in data["nodes"]:
             content = nd.get("content")
             if content_loader is not None:
                 content = content_loader(content)
-            node: Node[Any] = Node(
-                id=nd["id"],
-                type=nd.get("type", "default"),
-                content=content,
-                metadata=nd.get("metadata", {}),
+            nodes.append(
+                Node(
+                    id=nd["id"],
+                    type=nd.get("type", "default"),
+                    content=content,
+                    metadata=nd.get("metadata", {}),
+                )
             )
+        for ed in data["edges"]:
+            edges.append(
+                Edge(
+                    source=ed["source"],
+                    target=ed["target"],
+                    relation=ed["relation"],
+                    weight=ed.get("weight", 1.0),
+                    metadata=ed.get("metadata", {}),
+                )
+            )
+
+        for node in nodes:
             await graph.add(node)
-        for ed in data.get("edges", []):
-            edge = Edge(
-                source=ed["source"],
-                target=ed["target"],
-                relation=ed["relation"],
-                weight=ed.get("weight", 1.0),
-                metadata=ed.get("metadata", {}),
-            )
+        for edge in edges:
             await backend.add_edge(edge)
         return graph
 
     async def save(self, path: str | Path) -> None:
         """Save the graph to a JSON file."""
         data = await self.to_dict()
-        p = Path(path)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(data, indent=2, default=str))
+        atomic_write_json(path, data)
 
     @classmethod
     async def load(
@@ -421,8 +435,7 @@ class Graph:
         content_loader: Callable[[Any], Any] | None = None,
     ) -> Graph:
         """Load a graph from a JSON file."""
-        p = Path(path)
-        data = json.loads(p.read_text())
+        data = load_json_object(path)
         return await cls.from_dict(data, backend, content_loader=content_loader)
 
     # --- Sync wrappers ---
@@ -583,3 +596,40 @@ class Graph:
         content_loader: Callable[[Any], Any] | None = None,
     ) -> Graph:
         return _run_sync(cls.load(path, backend, content_loader=content_loader))
+
+
+def _validate_graph_payload(data: dict[str, Any]) -> None:
+    version = data.get("schema_version", 0)
+    if not isinstance(version, int):
+        raise ValueError("Graph payload schema_version must be an integer")
+    if version > _GRAPH_SCHEMA_VERSION:
+        raise ValueError(
+            f"Unsupported graph schema_version {version}; "
+            f"maximum supported is {_GRAPH_SCHEMA_VERSION}"
+        )
+    if version < 0:
+        raise ValueError(f"Unsupported graph schema_version {version}")
+
+    nodes = data.get("nodes")
+    edges = data.get("edges")
+    if not isinstance(nodes, list):
+        raise ValueError("Graph payload must contain a 'nodes' list")
+    if not isinstance(edges, list):
+        raise ValueError("Graph payload must contain an 'edges' list")
+
+    for index, node in enumerate(nodes):
+        if not isinstance(node, dict):
+            raise ValueError(f"Graph node at index {index} must be an object")
+        if "id" not in node:
+            raise ValueError(f"Graph node at index {index} missing required field 'id'")
+        if "metadata" in node and not isinstance(node["metadata"], dict):
+            raise ValueError(f"Graph node {node['id']!r} metadata must be an object")
+
+    for index, edge in enumerate(edges):
+        if not isinstance(edge, dict):
+            raise ValueError(f"Graph edge at index {index} must be an object")
+        for field in ("source", "target", "relation"):
+            if field not in edge:
+                raise ValueError(f"Graph edge at index {index} missing required field {field!r}")
+        if "metadata" in edge and not isinstance(edge["metadata"], dict):
+            raise ValueError(f"Graph edge at index {index} metadata must be an object")

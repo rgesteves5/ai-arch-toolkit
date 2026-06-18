@@ -332,6 +332,7 @@ class TestPersistence:
         await graph.add(Node(id="n2", type="place", content="Wonderland"))
         await graph.connect("n1", "n2", "VISITS")
         data = await graph.to_dict()
+        assert data["schema_version"] == 1
         assert len(data["nodes"]) == 2
         assert len(data["edges"]) == 1
         restored = await Graph.from_dict(data, NetworkXBackend())
@@ -376,6 +377,40 @@ class TestPersistence:
         edges = await restored.edges("a")
         assert edges[0].weight == 0.75
         assert edges[0].metadata["reason"] == "fun"
+
+    async def test_legacy_payload_without_schema_version_is_accepted(self, graph: Graph):
+        await graph.add(Node(id="n1", content="legacy"))
+        data = await graph.to_dict()
+        data.pop("schema_version")
+        restored = await Graph.from_dict(data, NetworkXBackend())
+        node = await restored.get("n1")
+        assert node is not None
+        assert node.content == "legacy"
+
+    async def test_future_schema_version_rejected(self):
+        data = {"schema_version": 999, "nodes": [], "edges": []}
+        with pytest.raises(ValueError, match="Unsupported graph schema_version"):
+            await Graph.from_dict(data, NetworkXBackend())
+
+    async def test_invalid_payload_does_not_partially_mutate_backend(self):
+        backend = NetworkXBackend()
+        data = {
+            "schema_version": 1,
+            "nodes": [{"id": "ok"}, {"type": "missing_id"}],
+            "edges": [],
+        }
+
+        with pytest.raises(ValueError, match="missing required field 'id'"):
+            await Graph.from_dict(data, backend)
+
+        assert await backend.list_nodes() == []
+
+    async def test_corrupt_json_load_fails_clearly(self, tmp_path):
+        path = tmp_path / "bad_graph.json"
+        path.write_text("{not-json", encoding="utf-8")
+
+        with pytest.raises(ValueError, match="Invalid JSON"):
+            await Graph.load(path, NetworkXBackend())
 
 
 class TestBulk:
