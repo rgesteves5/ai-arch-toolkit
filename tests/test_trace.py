@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from ai_arch_toolkit.core._response import Usage
+from ai_arch_toolkit.core._tools._result import ToolResult
 from ai_arch_toolkit.core._trace import StepTrace, Trace
 
 
@@ -36,6 +39,55 @@ class TestStepTrace:
         assert st2.policy_decisions == ("retry",)
         assert len(st2.children) == 1
         assert st2.children[0].name == "child1"
+
+    def test_to_dict_redacts_sensitive_payloads_by_default(self) -> None:
+        st = StepTrace(
+            name="secret_step",
+            input_state={
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "OPENAI_API_KEY=sk-testsecret1234567890",
+                    }
+                ],
+                "headers": {"authorization": "Bearer abc.def.ghi"},
+            },
+            output_result={
+                "value": "postgresql://user:pass@example.com/db",
+                "artifacts": {
+                    "tool_results": [
+                        ToolResult.failure(
+                            "runtime_error",
+                            "password=supersecret",
+                            details={"api_key": "sk-detailsecret1234567890"},
+                        )
+                    ]
+                },
+            },
+            error=("-----BEGIN PRIVATE KEY-----\nabc123\n-----END PRIVATE KEY-----"),
+        )
+
+        payload = json.dumps(st.to_dict())
+
+        assert "sk-testsecret1234567890" not in payload
+        assert "abc.def.ghi" not in payload
+        assert "user:pass@example.com" not in payload
+        assert "supersecret" not in payload
+        assert "sk-detailsecret1234567890" not in payload
+        assert "BEGIN PRIVATE KEY" not in payload
+        assert "[REDACTED]" in payload
+
+    def test_full_debug_requires_explicit_opt_in(self) -> None:
+        st = StepTrace(
+            name="debug_step",
+            input_state={"api_key": "sk-fullsecret1234567890"},
+        )
+
+        default_payload = json.dumps(st.to_dict())
+        full_payload = json.dumps(st.to_dict(trace_mode="full_debug"))
+
+        assert "sk-fullsecret1234567890" not in default_payload
+        assert "sk-fullsecret1234567890" in full_payload
 
     def test_skipped(self) -> None:
         st = StepTrace(name="skipped_step", skipped=True, skip_reason="condition not met")
@@ -124,3 +176,42 @@ class TestTrace:
         assert t2.flow_name == "test_flow"
         assert len(t2.steps) == 2
         assert t2.duration == 5.0
+
+    def test_trace_to_dict_redacts_initial_state_by_default(self) -> None:
+        trace = Trace(
+            flow_name="secret_flow",
+            initial_state={
+                "operational": {
+                    "env": "ANTHROPIC_API_KEY=sk-ant-secret1234567890",
+                    "authorization": "Bearer secret-token",
+                }
+            },
+            steps=(
+                StepTrace(
+                    name="provider_error",
+                    error="Provider failed with token=secret-token",
+                ),
+            ),
+        )
+
+        payload = trace.to_dict()
+        serialized = json.dumps(payload)
+
+        assert payload["trace_mode"] == "redacted"
+        assert "sk-ant-secret1234567890" not in serialized
+        assert "secret-token" not in serialized
+        assert "[REDACTED]" in serialized
+
+    def test_metadata_only_omits_payloads(self) -> None:
+        trace = Trace(
+            flow_name="metadata",
+            initial_state={"operational": {"password": "secret"}},
+            steps=(StepTrace(name="step", input_state={"token": "secret"}),),
+        )
+
+        payload = trace.to_dict(trace_mode="metadata_only")
+
+        assert payload["trace_mode"] == "metadata_only"
+        assert payload["initial_state"] == {}
+        assert payload["steps"][0]["input_state"] == {}
+        assert payload["steps"][0]["output_result"] == {}

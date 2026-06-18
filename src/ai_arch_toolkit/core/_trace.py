@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from ai_arch_toolkit.core._redaction import RedactionPolicy, Redactor, TraceMode
 from ai_arch_toolkit.core._response import Usage
 
 type PolicyDecision = Literal[
@@ -37,11 +38,25 @@ class StepTrace:
     children: tuple[StepTrace, ...] = ()
     started_at: float = 0.0
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(
+        self,
+        *,
+        trace_mode: TraceMode = "redacted",
+        redactor: Redactor | None = None,
+    ) -> dict[str, Any]:
+        active_redactor = redactor or Redactor(RedactionPolicy(trace_mode=trace_mode))
+        if trace_mode == "metadata_only":
+            input_state: dict[str, Any] = {}
+            output_result: dict[str, Any] = {}
+            error = active_redactor.redact_text(self.error) if self.error else None
+        else:
+            input_state = active_redactor.redact(self.input_state)
+            output_result = active_redactor.redact(self.output_result)
+            error = active_redactor.redact_text(self.error) if self.error else None
         return {
             "name": self.name,
-            "input_state": self.input_state,
-            "output_result": self.output_result,
+            "input_state": input_state,
+            "output_result": output_result,
             "duration": self.duration,
             "cost": self.cost,
             "confidence": self.confidence,
@@ -53,10 +68,14 @@ class StepTrace:
             },
             "attempts": self.attempts,
             "policy_decisions": list(self.policy_decisions),
-            "error": self.error,
+            "error": error,
             "skipped": self.skipped,
-            "skip_reason": self.skip_reason,
-            "children": [c.to_dict() for c in self.children],
+            "skip_reason": active_redactor.redact_text(self.skip_reason)
+            if self.skip_reason
+            else None,
+            "children": [
+                c.to_dict(trace_mode=trace_mode, redactor=active_redactor) for c in self.children
+            ],
             "started_at": self.started_at,
         }
 
@@ -135,11 +154,23 @@ class Trace:
 
     # --- Serialization ---
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(
+        self,
+        *,
+        trace_mode: TraceMode = "redacted",
+        redactor: Redactor | None = None,
+    ) -> dict[str, Any]:
+        active_redactor = redactor or Redactor(RedactionPolicy(trace_mode=trace_mode))
+        initial_state = (
+            {} if trace_mode == "metadata_only" else active_redactor.redact(self.initial_state)
+        )
         return {
             "flow_name": self.flow_name,
-            "steps": [s.to_dict() for s in self.steps],
-            "initial_state": self.initial_state,
+            "trace_mode": trace_mode,
+            "steps": [
+                s.to_dict(trace_mode=trace_mode, redactor=active_redactor) for s in self.steps
+            ],
+            "initial_state": initial_state,
             "duration": self.duration,
         }
 
