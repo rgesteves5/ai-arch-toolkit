@@ -76,25 +76,26 @@ print(f"\nCost: ${stream.response.cost:.6f}")
 
 ### Tools with `@tool` and `ToolGroup`
 
+Tools should expose explicit, typed operations. Avoid executing arbitrary code
+from user or model input; prefer narrow functions with clear parameters.
+
 ```python
 from ai_arch_toolkit import LLM, run_tools_sync
 from ai_arch_toolkit.core import ToolGroup, tool
 
 
 @tool
-def calculate(expression: str) -> str:
-    """Evaluate a mathematical expression.
+def multiply(a: float, b: float) -> str:
+    """Multiply two numbers.
 
     Args:
-        expression: A math expression to evaluate, e.g. "2 + 2".
+        a: First number.
+        b: Second number.
     """
-    try:
-        return str(eval(expression, {"__builtins__": {}}))
-    except Exception as e:
-        return f"Error: {e}"
+    return str(a * b)
 
 
-tools = ToolGroup(calculate)
+tools = ToolGroup(multiply)
 llm = LLM("gpt-4.1-nano")
 messages = [{"role": "user", "content": "What is 42 * 17?"}]
 
