@@ -183,6 +183,7 @@ Browse `docs/` for guides, or jump straight to:
 - [`docs/graph.md`](docs/graph.md)
 - [`docs/model-compatibility.md`](docs/model-compatibility.md)
 - [`docs/api-stability.md`](docs/api-stability.md)
+- [`docs/production.md`](docs/production.md)
 
 ## Development
 

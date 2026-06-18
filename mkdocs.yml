@@ -13,6 +13,7 @@ nav:
   - Examples: examples.md
   - Model Compatibility: model-compatibility.md
   - API Stability: api-stability.md
+  - Production Guide: production.md
   - UV Guide: uv-guide.md
   - API Docs: api.md
 exclude_docs: |
