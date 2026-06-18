@@ -50,3 +50,31 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --extra dev
       - run: uv run pytest --cov=ai_arch_toolkit --cov-report=term-missing
+
+  package-smoke:
+    name: Package smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Build wheel and sdist
+        run: uv build
+      - name: Smoke minimal wheel install
+        run: |
+          WHEEL="$(python -c 'from pathlib import Path; print(next(Path("dist").glob("*.whl")).resolve())')"
+          cd /tmp
+          uv run --no-project --with "$WHEEL" -- python -c "import importlib.util; import ai_arch_toolkit; from ai_arch_toolkit.core import pricing; assert pricing.has('gpt-4o'); assert importlib.util.find_spec('openai') is None"
+      - name: Smoke optional extras
+        run: |
+          WHEEL="$(python -c 'from pathlib import Path; print(next(Path("dist").glob("*.whl")).resolve())')"
+          URI="file://${WHEEL}"
+          cd /tmp
+          uv run --no-project --with "ai-arch-toolkit[openai] @ ${URI}" -- python -c "from ai_arch_toolkit.core._providers._openai import OpenAIProvider; assert OpenAIProvider is not None"
+          uv run --no-project --with "ai-arch-toolkit[anthropic] @ ${URI}" -- python -c "from ai_arch_toolkit.core._providers._anthropic import AnthropicProvider; assert AnthropicProvider is not None"
+          uv run --no-project --with "ai-arch-toolkit[gemini] @ ${URI}" -- python -c "from ai_arch_toolkit.core._providers._gemini import GeminiProvider; assert GeminiProvider is not None"
+          uv run --no-project --with "ai-arch-toolkit[xai] @ ${URI}" -- python -c "from ai_arch_toolkit.core._providers._xai import XAIProvider; assert XAIProvider is not None"
+          uv run --no-project --with "ai-arch-toolkit[graph] @ ${URI}" -- python -c "from ai_arch_toolkit.core.graph._networkx import NetworkXBackend; assert NetworkXBackend is not None"
+          uv run --no-project --with "ai-arch-toolkit[all] @ ${URI}" -- python -c "import ai_arch_toolkit; from ai_arch_toolkit.core.graph._networkx import NetworkXBackend; assert ai_arch_toolkit.__version__; assert NetworkXBackend is not None"
