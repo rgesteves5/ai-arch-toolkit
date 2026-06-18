@@ -243,17 +243,21 @@ Data — _json.py
 - json_extract — Extract values from JSON via dot-notation paths
 - csv_read — Read CSV files, return formatted table
 
-Filesystem — _filesystem.py
+Dangerous Filesystem — tools.dangerous
 
 - read_file — Read file contents with optional line limit
 - list_directory — List files/dirs with sizes and types
 - search_files — Recursively search for text in files
 
-Shell — _shell.py
+Dangerous Shell — tools.dangerous
 
 - run_command — Execute shell commands and return output
 
-Web — _web.py
+Dangerous Python — tools.dangerous
+
+- python_repl — Execute Python-like code in the restricted toolkit evaluator
+
+Dangerous Web — tools.dangerous
 
 - http_get — Fetch a URL, return raw response text
 - scrape_text — Fetch web page, extract visible text (strips HTML)
