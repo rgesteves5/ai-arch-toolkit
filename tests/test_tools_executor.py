@@ -6,7 +6,12 @@ import pytest
 
 from ai_arch_toolkit.core._response import ToolCall
 from ai_arch_toolkit.core._tools._decorator import tool
-from ai_arch_toolkit.core._tools._executor import async_execute_tool, execute_tool
+from ai_arch_toolkit.core._tools._executor import (
+    async_execute_tool,
+    async_execute_tool_result,
+    execute_tool,
+    execute_tool_result,
+)
 
 
 @tool
@@ -25,6 +30,12 @@ def multiply(a: int, b: int) -> dict:
 async def async_lookup(key: str) -> str:
     """Async lookup."""
     return f"value_for_{key}"
+
+
+@tool
+def fail_hard() -> str:
+    """Raise a runtime error."""
+    raise RuntimeError("boom")
 
 
 class TestExecuteTool:
@@ -61,6 +72,40 @@ class TestExecuteTool:
         assert result == '{"result": 10}'
 
 
+class TestExecuteToolResult:
+    def test_success_result(self):
+        tc = ToolCall(id="tc_1", name="get_weather", input={"city": "NYC"})
+        result = execute_tool_result(tc, [get_weather])
+        assert result.ok is True
+        assert result.value == "Sunny in NYC"
+        assert result.error is None
+
+    def test_validation_error_result(self):
+        tc = ToolCall(id="tc_1", name="get_weather", input={})
+        result = execute_tool_result(tc, [get_weather])
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.type == "validation_error"
+        assert result.error.details["tool_name"] == "get_weather"
+
+    def test_runtime_error_result(self):
+        tc = ToolCall(id="tc_1", name="fail_hard", input={})
+        result = execute_tool_result(tc, [fail_hard])
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.type == "runtime_error"
+        assert result.error.retryable is True
+        assert result.error.details["exception_type"] == "RuntimeError"
+
+    def test_unknown_tool_result(self):
+        tc = ToolCall(id="tc_1", name="unknown", input={})
+        result = execute_tool_result(tc, [get_weather])
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.type == "unknown_tool"
+        assert result.error.details["tool_name"] == "unknown"
+
+
 class TestAsyncExecuteTool:
     async def test_sync_function(self):
         tc = ToolCall(id="tc_1", name="get_weather", input={"city": "LA"})
@@ -76,3 +121,16 @@ class TestAsyncExecuteTool:
         tc = ToolCall(id="tc_1", name="missing", input={})
         with pytest.raises(KeyError, match="missing"):
             await async_execute_tool(tc, [get_weather])
+
+    async def test_async_success_result(self):
+        tc = ToolCall(id="tc_1", name="async_lookup", input={"key": "foo"})
+        result = await async_execute_tool_result(tc, [async_lookup])
+        assert result.ok is True
+        assert result.value == "value_for_foo"
+
+    async def test_async_unknown_tool_result(self):
+        tc = ToolCall(id="tc_1", name="missing", input={})
+        result = await async_execute_tool_result(tc, [get_weather])
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.type == "unknown_tool"

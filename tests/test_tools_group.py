@@ -27,6 +27,12 @@ async def async_fetch(url: str) -> str:
     return f"content_of_{url}"
 
 
+@tool
+def explode() -> str:
+    """Raise a runtime error."""
+    raise RuntimeError("boom")
+
+
 def plain_function(x: int) -> int:
     """Double a number."""
     return x * 2
@@ -64,6 +70,37 @@ class TestToolGroup:
         with pytest.raises(KeyError, match="missing"):
             group.execute(tc)
 
+    def test_execute_result_success(self):
+        group = ToolGroup(get_weather)
+        tc = ToolCall(id="tc_1", name="get_weather", input={"city": "NYC"})
+        result = group.execute_result(tc)
+        assert result.ok is True
+        assert result.value == "Sunny in NYC"
+
+    def test_execute_result_validation_error(self):
+        group = ToolGroup(get_weather)
+        tc = ToolCall(id="tc_1", name="get_weather", input={})
+        result = group.execute_result(tc)
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.type == "validation_error"
+
+    def test_execute_result_runtime_error(self):
+        group = ToolGroup(explode)
+        tc = ToolCall(id="tc_1", name="explode", input={})
+        result = group.execute_result(tc)
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.type == "runtime_error"
+
+    def test_execute_result_unknown(self):
+        group = ToolGroup(get_weather)
+        tc = ToolCall(id="tc_1", name="missing", input={})
+        result = group.execute_result(tc)
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.type == "unknown_tool"
+
     async def test_async_execute_sync_fn(self):
         group = ToolGroup(get_weather)
         tc = ToolCall(id="tc_1", name="get_weather", input={"city": "LA"})
@@ -81,6 +118,21 @@ class TestToolGroup:
         tc = ToolCall(id="tc_1", name="missing", input={})
         with pytest.raises(KeyError, match="missing"):
             await group.async_execute(tc)
+
+    async def test_async_execute_result_success(self):
+        group = ToolGroup(async_fetch)
+        tc = ToolCall(id="tc_1", name="async_fetch", input={"url": "http://example.com"})
+        result = await group.async_execute_result(tc)
+        assert result.ok is True
+        assert result.value == "content_of_http://example.com"
+
+    async def test_async_execute_result_unknown(self):
+        group = ToolGroup(get_weather)
+        tc = ToolCall(id="tc_1", name="missing", input={})
+        result = await group.async_execute_result(tc)
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.type == "unknown_tool"
 
     def test_plain_function_auto_inferred(self):
         group = ToolGroup(plain_function)

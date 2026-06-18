@@ -12,6 +12,7 @@ from ai_arch_toolkit.core._response import Usage
 from ai_arch_toolkit.core._state import StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
+from ai_arch_toolkit.core._tools._result import ToolResult
 from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowStep
 
 
@@ -111,25 +112,47 @@ def react_flow(
         messages: list[dict[str, Any]] = snap.require("messages")
 
         tool_result_dicts: list[dict[str, Any]] = []
+        structured_results: list[ToolResult] = []
 
         if parallel_tool_calls and len(response.tool_calls) > 1:
 
-            async def _safe_execute(tc: Any) -> str:
+            async def _safe_execute(tc: Any) -> ToolResult:
                 try:
-                    return await tools.async_execute(tc)
+                    result = await tools.async_execute_result(tc)
                 except Exception as exc:
-                    return f"Error: {exc}"
+                    return ToolResult.failure(
+                        "runtime_error",
+                        str(exc),
+                        retryable=True,
+                        details={"tool_name": tc.name, "exception_type": type(exc).__name__},
+                    )
+                if isinstance(result, ToolResult):
+                    return result
+                return ToolResult.success(result)
 
             results = await asyncio.gather(*[_safe_execute(tc) for tc in response.tool_calls])
-            for tc, result_str in zip(response.tool_calls, results, strict=True):
-                tool_result_dicts.append(tool_result(result_str, tool_use_id=tc.id, name=tc.name))
+            for tc, result in zip(response.tool_calls, results, strict=True):
+                structured_results.append(result)
+                tool_result_dicts.append(
+                    tool_result(result.to_model_text(), tool_use_id=tc.id, name=tc.name)
+                )
         else:
             for tc in response.tool_calls:
                 try:
-                    result_str = await tools.async_execute(tc)
+                    result = await tools.async_execute_result(tc)
                 except Exception as exc:
-                    result_str = f"Error: {exc}"
-                tool_result_dicts.append(tool_result(result_str, tool_use_id=tc.id, name=tc.name))
+                    result = ToolResult.failure(
+                        "runtime_error",
+                        str(exc),
+                        retryable=True,
+                        details={"tool_name": tc.name, "exception_type": type(exc).__name__},
+                    )
+                if not isinstance(result, ToolResult):
+                    result = ToolResult.success(result)
+                structured_results.append(result)
+                tool_result_dicts.append(
+                    tool_result(result.to_model_text(), tool_use_id=tc.id, name=tc.name)
+                )
 
         updated_messages = [*messages, response.to_message(), *tool_result_dicts]
 
@@ -139,6 +162,7 @@ def react_flow(
                 "messages": updated_messages,
                 "has_tool_calls": False,
                 "needs_llm_call": True,
+                "tool_results": structured_results,
             },
         )
 

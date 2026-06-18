@@ -8,6 +8,7 @@ from typing import Any
 
 from ai_arch_toolkit.core._response import ToolCall
 from ai_arch_toolkit.core._tools._group import ToolGroup
+from ai_arch_toolkit.core._tools._result import ToolResult
 from ai_arch_toolkit.core._tools._schema import infer_schema
 from ai_arch_toolkit.nanope.advanced_multi_purpose_configurable_agent._config import ToolsConfig
 from ai_arch_toolkit.nanope.advanced_multi_purpose_configurable_agent._profiles import (
@@ -69,6 +70,18 @@ class GovernedToolGroup(ToolGroup):
         if decision is not None:
             return decision
         return await super().async_execute(tool_call)
+
+    def execute_result(self, tool_call: ToolCall) -> ToolResult:
+        decision = self._check(tool_call)
+        if decision is not None:
+            return ToolResult.success(decision)
+        return super().execute_result(tool_call)
+
+    async def async_execute_result(self, tool_call: ToolCall) -> ToolResult:
+        decision = self._check(tool_call)
+        if decision is not None:
+            return ToolResult.success(decision)
+        return await super().async_execute_result(tool_call)
 
     def _check(self, tool_call: ToolCall) -> str | None:
         if self._governance.max_calls is not None and self._calls >= self._governance.max_calls:
