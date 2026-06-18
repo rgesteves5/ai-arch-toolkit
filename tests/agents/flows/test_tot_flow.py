@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock
 
+from ai_arch_toolkit.core._budget import BudgetPolicy
 from ai_arch_toolkit.core._response import Response, Usage
 from ai_arch_toolkit.core._state import State
 from ai_arch_toolkit.core._tools._group import ToolGroup
@@ -79,6 +80,30 @@ class TestToTFlow:
 
         # Should complete without error
         assert result.trace.flow_name == "tot"
+
+    async def test_llm_call_budget_stops_search(self) -> None:
+        llm = AsyncMock()
+        llm.complete = AsyncMock(
+            side_effect=[
+                _make_response(text="1. Think"),
+                _make_response(text="0.5"),
+            ]
+        )
+        tools = ToolGroup()
+
+        flow = tot_flow(
+            llm,
+            tools,
+            n_candidates=1,
+            max_iterations=5,
+            budget_policy=BudgetPolicy(max_llm_calls=1),
+        )
+        state = State(operational=tot_initial_state("test"))
+        result = await flow.run(state)
+
+        assert llm.complete.call_count == 1
+        assert "budget_exceeded" in result.results
+        assert result.trace.metadata["budget"]["exceeded"]["limit"] == "llm_calls"
 
 
 class TestToTInitialState:

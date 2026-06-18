@@ -12,6 +12,7 @@ type PolicyDecision = Literal[
     "retry",
     "fallback",
     "timeout",
+    "budget_exceeded",
     "cost_exceeded",
     "low_confidence",
     "escalate",
@@ -108,6 +109,7 @@ class Trace:
     steps: tuple[StepTrace, ...] = ()
     initial_state: dict[str, dict[str, Any]] = field(default_factory=dict)
     duration: float = 0.0
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     # --- Navigation ---
 
@@ -172,6 +174,7 @@ class Trace:
             ],
             "initial_state": initial_state,
             "duration": self.duration,
+            "metadata": active_redactor.redact(self.metadata),
         }
 
     @classmethod
@@ -181,6 +184,7 @@ class Trace:
             steps=tuple(StepTrace.from_dict(s) for s in data.get("steps", ())),
             initial_state=data.get("initial_state", {}),
             duration=data.get("duration", 0.0),
+            metadata=data.get("metadata", {}),
         )
 
     # --- Internal ---

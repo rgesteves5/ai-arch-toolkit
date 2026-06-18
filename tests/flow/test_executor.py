@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import pytest
 
+from ai_arch_toolkit.core._budget import BudgetPolicy
 from ai_arch_toolkit.core._policy import Policy
+from ai_arch_toolkit.core._response import Usage
 from ai_arch_toolkit.core._state import State, StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowEvent, FlowStep
@@ -76,6 +78,40 @@ class TestSequentialExecution:
         result = await flow.run(state)
         assert "after" in result.results
         assert result.results["after"].value == "reached"
+
+    async def test_cumulative_cost_budget_stops_flow(self) -> None:
+        async def expensive(snap: StateSnapshot) -> Result:
+            return Result(value="spent", cost=0.75)
+
+        flow = Flow(
+            Step(name="a", fn=expensive),
+            Step(name="b", fn=expensive),
+            name="budgeted",
+            budget_policy=BudgetPolicy(max_cost=1.0),
+        )
+        state = State()
+
+        result = await flow.run(state)
+
+        assert "budget_exceeded" in result.results
+        assert result.trace.metadata["budget"]["exceeded"]["limit"] == "total_cost"
+        assert result.trace.steps[-1].name == "budget_exceeded"
+
+    async def test_cumulative_token_budget_stops_flow(self) -> None:
+        async def use_tokens(snap: StateSnapshot) -> Result:
+            return Result(usage=Usage(input_tokens=8, output_tokens=5))
+
+        flow = Flow(
+            Step(name="tokens", fn=use_tokens),
+            name="token_budgeted",
+            budget_policy=BudgetPolicy(max_total_tokens=10),
+        )
+        state = State()
+
+        result = await flow.run(state)
+
+        assert "budget_exceeded" in result.results
+        assert result.trace.metadata["budget"]["exceeded"]["limit"] == "total_tokens"
 
 
 class TestCyclicExecution:

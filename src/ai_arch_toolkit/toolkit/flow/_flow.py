@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
+from ai_arch_toolkit.core._budget import BudgetPolicy
 from ai_arch_toolkit.core._policy import Policy
 from ai_arch_toolkit.core._state import State, StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
@@ -78,18 +79,28 @@ class FlowEvent:
 class Flow:
     """Composable orchestration of Steps with DAG, sequential, and cyclic modes."""
 
-    __slots__ = ("_is_dag", "_max_iterations", "_name", "_policy", "_scope", "_steps")
+    __slots__ = (
+        "_budget_policy",
+        "_is_dag",
+        "_max_iterations",
+        "_name",
+        "_policy",
+        "_scope",
+        "_steps",
+    )
 
     def __init__(
         self,
         *steps: FlowStep | Step | Flow,
         name: str = "flow",
         policy: Policy | None = None,
+        budget_policy: BudgetPolicy | None = None,
         scope: Scope | None = None,
         max_iterations: int | None = None,
     ) -> None:
         self._name = name
         self._policy = policy
+        self._budget_policy = budget_policy
         self._scope = scope
         self._max_iterations = max_iterations
 
@@ -150,6 +161,10 @@ class Flow:
     @property
     def policy(self) -> Policy | None:
         return self._policy
+
+    @property
+    def budget_policy(self) -> BudgetPolicy | None:
+        return self._budget_policy
 
     @property
     def scope(self) -> Scope | None:

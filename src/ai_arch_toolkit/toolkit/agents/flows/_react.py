@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from ai_arch_toolkit.core._budget import BudgetExceeded, BudgetPolicy, BudgetState
 from ai_arch_toolkit.core._content import Content, tool_result, user
 from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._policy import Policy
@@ -25,6 +26,7 @@ def react_flow(
     parallel_tool_calls: bool = True,
     timeout: float | None = None,
     policy: Policy | None = None,
+    budget_policy: BudgetPolicy | None = None,
     llm_kwargs: dict[str, Any] | None = None,
     final_answer_hint: bool = True,
     strip_tools_on_final: bool = False,
@@ -40,6 +42,7 @@ def react_flow(
         parallel_tool_calls: Whether to execute tool calls in parallel.
         timeout: Overall timeout in seconds.
         policy: Optional execution policy for the flow.
+        budget_policy: Optional cumulative runtime budget for the flow.
         llm_kwargs: Additional kwargs passed to llm.complete().
         final_answer_hint: On the last turn, inject a message asking the model
             to provide a final text answer without calling tools. Fixes models
@@ -57,6 +60,12 @@ def react_flow(
         total_usage: Usage = snap.get("total_usage", Usage())
         turn: int = snap.get("turn", 0) + 1
         is_final = turn >= max_iterations
+        budget_state = _budget_state_from_snapshot(snap)
+        if budget_state is not None:
+            try:
+                budget_state.check_llm_calls()
+            except BudgetExceeded as exc:
+                return _budget_exceeded_result(exc, budget_state)
 
         call_messages = list(messages)
 
@@ -101,6 +110,7 @@ def react_flow(
                 "needs_llm_call": False,
                 "total_usage": new_usage,
                 "turn": turn,
+                "budget_llm_calls": 1,
             },
             usage=response.usage,
             cost=response.cost or 0.0,
@@ -110,6 +120,12 @@ def react_flow(
         """Execute tool calls from the LLM response."""
         response = snap.require("response")
         messages: list[dict[str, Any]] = snap.require("messages")
+        budget_state = _budget_state_from_snapshot(snap)
+        if budget_state is not None:
+            try:
+                budget_state.check_tool_calls(len(response.tool_calls))
+            except BudgetExceeded as exc:
+                return _budget_exceeded_result(exc, budget_state)
 
         tool_result_dicts: list[dict[str, Any]] = []
         structured_results: list[ToolResult] = []
@@ -163,6 +179,7 @@ def react_flow(
                 "has_tool_calls": False,
                 "needs_llm_call": True,
                 "tool_results": structured_results,
+                "budget_tool_calls": len(response.tool_calls),
             },
         )
 
@@ -181,6 +198,7 @@ def react_flow(
         FlowStep(step=Step(name="execute_tools", fn=execute_tools), when=has_tool_calls),
         name="react",
         policy=flow_policy,
+        budget_policy=budget_policy,
         max_iterations=max_iterations,
     )
 
@@ -196,3 +214,19 @@ def react_initial_state(task: Content) -> dict[str, Any]:
         "has_tool_calls": False,
         "total_usage": Usage(),
     }
+
+
+def _budget_state_from_snapshot(snap: StateSnapshot) -> BudgetState | None:
+    value = snap.get("budget_state")
+    return value if isinstance(value, BudgetState) else None
+
+
+def _budget_exceeded_result(exc: BudgetExceeded, budget_state: BudgetState) -> Result:
+    exceeded = budget_state.with_exceeded(exc)
+    return Result(
+        error=str(exc),
+        artifacts={
+            "budget_exceeded": exc.to_dict(),
+            "budget_state": exceeded,
+        },
+    )
