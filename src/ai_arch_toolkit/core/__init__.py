@@ -26,6 +26,14 @@ from ai_arch_toolkit.core._moderation import ModerationError, ModerationResult, 
 from ai_arch_toolkit.core._policy import OnExhausted, OnLowConfidence, OnTimeout, Policy
 from ai_arch_toolkit.core._pricing import pricing
 from ai_arch_toolkit.core._rate_limit import RateLimitMiddleware
+from ai_arch_toolkit.core._redaction import (
+    RedactionMode,
+    RedactionPolicy,
+    Redactor,
+    TraceMode,
+    redact,
+    redact_text,
+)
 from ai_arch_toolkit.core._response import (
     Attempt,
     Citation,
@@ -120,6 +128,9 @@ __all__ = [
     "PolicyDecision",
     "RateLimitError",
     "RateLimitMiddleware",
+    "RedactionMode",
+    "RedactionPolicy",
+    "Redactor",
     "Request",
     "Response",
     "Result",
@@ -139,6 +150,7 @@ __all__ = [
     "ToolGroup",
     "ToolResult",
     "Trace",
+    "TraceMode",
     "TracingMiddleware",
     "Usage",
     "assistant",
@@ -158,6 +170,8 @@ __all__ = [
     "infer_schema",
     "prepare_tools",
     "pricing",
+    "redact",
+    "redact_text",
     "system",
     "tokens_to_chars",
     "tool",
