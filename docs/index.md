@@ -42,6 +42,7 @@ print(response.text)
 
 - [Getting Started](getting-started.md) — installation, first steps, examples
 - [Model Compatibility](model-compatibility.md) — live-probed model feature matrix
+- [API Stability](api-stability.md) — stable, experimental, internal, and dangerous APIs
 - [API Docs](api.md) — detailed API reference
 - [UV Guide](uv-guide.md) — development setup
 
