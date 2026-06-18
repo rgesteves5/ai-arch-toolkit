@@ -13,8 +13,23 @@ from typing import Any, cast
 logger = logging.getLogger(__name__)
 
 # Configurable timeout defaults (seconds) — overridable via env vars or configure_sync_timeouts()
-_sync_timeout: float = float(os.environ.get("AI_ARCH_SYNC_TIMEOUT", "300"))
-_stream_join_timeout: float = float(os.environ.get("AI_ARCH_STREAM_JOIN_TIMEOUT", "5"))
+
+
+def _read_positive_float_env(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a positive number of seconds, got {raw!r}") from exc
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive number of seconds, got {raw!r}")
+    return value
+
+
+_sync_timeout: float = _read_positive_float_env("AI_ARCH_SYNC_TIMEOUT", 300.0)
+_stream_join_timeout: float = _read_positive_float_env("AI_ARCH_STREAM_JOIN_TIMEOUT", 5.0)
 
 _SENTINEL = object()
 
