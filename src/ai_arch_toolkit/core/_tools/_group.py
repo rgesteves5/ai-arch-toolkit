@@ -9,7 +9,12 @@ from collections.abc import Callable
 from typing import Any
 
 from ai_arch_toolkit.core._response import ToolCall
-from ai_arch_toolkit.core._tools._executor import _format_result
+from ai_arch_toolkit.core._tools._executor import (
+    _coerce_result,
+    _format_result,
+    _result_from_exception,
+)
+from ai_arch_toolkit.core._tools._result import ToolResult
 from ai_arch_toolkit.core._tools._schema import infer_schema
 
 
@@ -70,6 +75,20 @@ class ToolGroup:
             raise KeyError(msg)
         return _format_result(fn(**tool_call.input))
 
+    def execute_result(self, tool_call: ToolCall) -> ToolResult:
+        """Execute a tool call synchronously, returning a structured result."""
+        fn = self._fns.get(tool_call.name)
+        if fn is None:
+            return ToolResult.failure(
+                "unknown_tool",
+                f"Unknown tool: {tool_call.name!r}",
+                details={"tool_name": tool_call.name},
+            )
+        try:
+            return _coerce_result(fn(**tool_call.input))
+        except Exception as exc:
+            return _result_from_exception(tool_call.name, exc)
+
     async def async_execute(self, tool_call: ToolCall) -> str:
         """Execute a tool call asynchronously."""
         fn = self._fns.get(tool_call.name)
@@ -81,6 +100,22 @@ class ToolGroup:
         else:
             result = await asyncio.to_thread(fn, **tool_call.input)
         return _format_result(result)
+
+    async def async_execute_result(self, tool_call: ToolCall) -> ToolResult:
+        """Execute a tool call asynchronously, returning a structured result."""
+        fn = self._fns.get(tool_call.name)
+        if fn is None:
+            return ToolResult.failure(
+                "unknown_tool",
+                f"Unknown tool: {tool_call.name!r}",
+                details={"tool_name": tool_call.name},
+            )
+        try:
+            if inspect.iscoroutinefunction(fn):
+                return _coerce_result(await fn(**tool_call.input))
+            return _coerce_result(await asyncio.to_thread(fn, **tool_call.input))
+        except Exception as exc:
+            return _result_from_exception(tool_call.name, exc)
 
     def __contains__(self, name: str) -> bool:
         return name in self._fns

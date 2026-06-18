@@ -8,14 +8,24 @@ from typing import Any
 
 from ai_arch_toolkit.core._server_tools import ServerTool
 from ai_arch_toolkit.core._tools._decorator import tool
-from ai_arch_toolkit.core._tools._executor import async_execute_tool, execute_tool
+from ai_arch_toolkit.core._tools._executor import (
+    async_execute_tool,
+    async_execute_tool_result,
+    execute_tool,
+    execute_tool_result,
+)
 from ai_arch_toolkit.core._tools._group import ToolGroup
+from ai_arch_toolkit.core._tools._result import ToolError, ToolResult
 from ai_arch_toolkit.core._tools._schema import infer_schema
 
 __all__ = [
+    "ToolError",
     "ToolGroup",
+    "ToolResult",
     "async_execute_tool",
+    "async_execute_tool_result",
     "execute_tool",
+    "execute_tool_result",
     "infer_schema",
     "prepare_tools",
     "tool",
