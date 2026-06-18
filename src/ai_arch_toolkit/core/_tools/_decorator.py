@@ -7,6 +7,7 @@ import inspect
 from collections.abc import Callable
 from typing import Any, overload
 
+from ai_arch_toolkit.core._tools._approval import RiskLevel, approval_metadata
 from ai_arch_toolkit.core._tools._schema import infer_schema
 
 
@@ -19,6 +20,10 @@ def tool(
     *,
     name: str | None = None,
     schema: dict[str, dict[str, object]] | None = None,
+    capability: str | None = None,
+    risk_level: RiskLevel = "low",
+    requires_approval: bool = False,
+    approval_reason: str = "",
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]: ...
 
 
@@ -28,6 +33,10 @@ def tool(
     *,
     name: str | None = None,
     schema: dict[str, dict[str, object]] | None = None,
+    capability: str | None = None,
+    risk_level: RiskLevel = "low",
+    requires_approval: bool = False,
+    approval_reason: str = "",
 ) -> Callable[..., Any] | Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Decorator that auto-generates a tool schema from type hints and docstring.
 
@@ -38,6 +47,14 @@ def tool(
 
     def _wrap(f: Callable[..., Any]) -> Callable[..., Any]:
         tool_def = infer_schema(f, name=name, overrides=schema)
+        tool_def.update(
+            approval_metadata(
+                capability=capability,
+                risk_level=risk_level,
+                requires_approval=requires_approval,
+                approval_reason=approval_reason,
+            )
+        )
 
         if inspect.iscoroutinefunction(f):
 

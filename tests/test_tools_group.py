@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from ai_arch_toolkit.core._response import ToolCall
+from ai_arch_toolkit.core._tools._approval import ApprovalDecision
 from ai_arch_toolkit.core._tools._decorator import tool
 from ai_arch_toolkit.core._tools._group import ToolGroup
 
@@ -31,6 +32,12 @@ async def async_fetch(url: str) -> str:
 def explode() -> str:
     """Raise a runtime error."""
     raise RuntimeError("boom")
+
+
+@tool(capability="shell", risk_level="critical", requires_approval=True)
+def dangerous_echo(command: str) -> str:
+    """Echo a dangerous command."""
+    return command
 
 
 def plain_function(x: int) -> int:
@@ -101,6 +108,31 @@ class TestToolGroup:
         assert result.error is not None
         assert result.error.type == "unknown_tool"
 
+    def test_execute_result_missing_approval_handler_denies(self):
+        group = ToolGroup(dangerous_echo)
+        tc = ToolCall(id="tc_1", name="dangerous_echo", input={"command": "rm -rf /"})
+        result = group.execute_result(tc)
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.type == "approval_denied"
+
+    def test_execute_result_approved(self):
+        group = ToolGroup(
+            dangerous_echo,
+            approval_handler=lambda _: ApprovalDecision.approve(reviewer="human"),
+        )
+        tc = ToolCall(id="tc_1", name="dangerous_echo", input={"command": "echo ok"})
+        result = group.execute_result(tc)
+        assert result.ok is True
+        assert result.value == "echo ok"
+        assert result.metadata["approval_decision"]["reviewer"] == "human"
+
+    def test_execute_string_api_denied_raises_permission_error(self):
+        group = ToolGroup(dangerous_echo)
+        tc = ToolCall(id="tc_1", name="dangerous_echo", input={"command": "rm -rf /"})
+        with pytest.raises(PermissionError, match="requires approval"):
+            group.execute(tc)
+
     async def test_async_execute_sync_fn(self):
         group = ToolGroup(get_weather)
         tc = ToolCall(id="tc_1", name="get_weather", input={"city": "LA"})
@@ -133,6 +165,16 @@ class TestToolGroup:
         assert result.ok is False
         assert result.error is not None
         assert result.error.type == "unknown_tool"
+
+    async def test_async_execute_result_approved(self):
+        async def approve(_request):
+            return ApprovalDecision.approve(modified_args={"command": "echo safe"})
+
+        group = ToolGroup(dangerous_echo, approval_handler=approve)
+        tc = ToolCall(id="tc_1", name="dangerous_echo", input={"command": "rm -rf /"})
+        result = await group.async_execute_result(tc)
+        assert result.ok is True
+        assert result.value == "echo safe"
 
     def test_plain_function_auto_inferred(self):
         group = ToolGroup(plain_function)

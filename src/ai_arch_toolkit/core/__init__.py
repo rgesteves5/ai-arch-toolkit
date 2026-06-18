@@ -60,6 +60,10 @@ from ai_arch_toolkit.core._tokens import (
     tokens_to_chars,
 )
 from ai_arch_toolkit.core._tools import (
+    ApprovalDecision,
+    ApprovalHandler,
+    ApprovalRequest,
+    RiskLevel,
     ToolError,
     ToolGroup,
     ToolResult,
@@ -98,6 +102,9 @@ if not any(isinstance(h, logging.NullHandler) for h in _pkg_logger.handlers):
 __all__ = [
     "LLM",
     "APIError",
+    "ApprovalDecision",
+    "ApprovalHandler",
+    "ApprovalRequest",
     "Attempt",
     "BatchRequest",
     "BatchResult",
@@ -136,6 +143,7 @@ __all__ = [
     "Result",
     "RetryConfig",
     "RichStreamResponse",
+    "RiskLevel",
     "ServerTool",
     "State",
     "StateSnapshot",

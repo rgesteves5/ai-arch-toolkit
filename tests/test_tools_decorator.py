@@ -39,6 +39,23 @@ class TestToolDecorator:
         td = get_weather.__tool__
         assert td["input_schema"]["properties"]["city"]["description"] == "Override desc"
 
+    def test_decorator_with_approval_metadata(self):
+        @tool(
+            capability="shell",
+            risk_level="critical",
+            requires_approval=True,
+            approval_reason="Needs human review.",
+        )
+        def run(command: str) -> str:
+            """Run a command."""
+            return command
+
+        td = run.__tool__
+        assert td["capability"] == "shell"
+        assert td["risk_level"] == "critical"
+        assert td["requires_approval"] is True
+        assert td["approval_reason"] == "Needs human review."
+
     def test_decorated_function_still_callable(self):
         @tool
         def add(a: int, b: int) -> int:

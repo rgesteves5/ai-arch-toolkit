@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 
 from ai_arch_toolkit.core._response import Response, ToolCall, Usage
 from ai_arch_toolkit.core._state import State
+from ai_arch_toolkit.core._tools._decorator import tool
 from ai_arch_toolkit.core._tools._group import ToolGroup
 from ai_arch_toolkit.core._tools._result import ToolResult
 from ai_arch_toolkit.toolkit.agents.flows._react import react_flow, react_initial_state
@@ -86,6 +87,32 @@ class TestReactFlow:
             "Tool error [runtime_error]: backend down" in str(message)
             for message in second_call_messages
         )
+
+    async def test_approval_required_tool_is_blocked_without_handler(self) -> None:
+        @tool(capability="shell", risk_level="critical", requires_approval=True)
+        def dangerous(command: str) -> str:
+            """Run a dangerous command."""
+            return command
+
+        tc = ToolCall(id="tc1", name="dangerous", input={"command": "rm -rf /tmp/x"})
+
+        llm = AsyncMock()
+        llm.complete = AsyncMock(
+            side_effect=[
+                _make_response(tool_calls=(tc,)),
+                _make_response(text="Blocked."),
+            ]
+        )
+
+        flow = react_flow(llm, ToolGroup(dangerous), max_iterations=5)
+        state = State(operational=react_initial_state("run command"))
+        await flow.run(state)
+
+        tool_results = state["tool_results"]
+        assert len(tool_results) == 1
+        assert tool_results[0].ok is False
+        assert tool_results[0].error is not None
+        assert tool_results[0].error.type == "approval_denied"
 
     async def test_max_iterations_stops(self) -> None:
         tc = ToolCall(id="tc1", name="search", input={"q": "test"})

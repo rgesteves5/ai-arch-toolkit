@@ -7,6 +7,12 @@ from collections.abc import Callable
 from typing import Any
 
 from ai_arch_toolkit.core._server_tools import ServerTool
+from ai_arch_toolkit.core._tools._approval import (
+    ApprovalDecision,
+    ApprovalHandler,
+    ApprovalRequest,
+    RiskLevel,
+)
 from ai_arch_toolkit.core._tools._decorator import tool
 from ai_arch_toolkit.core._tools._executor import (
     async_execute_tool,
@@ -19,6 +25,10 @@ from ai_arch_toolkit.core._tools._result import ToolError, ToolResult
 from ai_arch_toolkit.core._tools._schema import infer_schema
 
 __all__ = [
+    "ApprovalDecision",
+    "ApprovalHandler",
+    "ApprovalRequest",
+    "RiskLevel",
     "ToolError",
     "ToolGroup",
     "ToolResult",

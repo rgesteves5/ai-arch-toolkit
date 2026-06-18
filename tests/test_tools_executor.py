@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from ai_arch_toolkit.core._response import ToolCall
+from ai_arch_toolkit.core._tools._approval import ApprovalDecision
 from ai_arch_toolkit.core._tools._decorator import tool
 from ai_arch_toolkit.core._tools._executor import (
     async_execute_tool,
@@ -36,6 +37,17 @@ async def async_lookup(key: str) -> str:
 def fail_hard() -> str:
     """Raise a runtime error."""
     raise RuntimeError("boom")
+
+
+@tool(
+    capability="shell",
+    risk_level="critical",
+    requires_approval=True,
+    approval_reason="Needs review.",
+)
+def dangerous_echo(command: str) -> str:
+    """Echo a dangerous command."""
+    return command
 
 
 class TestExecuteTool:
@@ -71,6 +83,11 @@ class TestExecuteTool:
         result = execute_tool(tc, [get_weather, multiply])
         assert result == '{"result": 10}'
 
+    def test_approval_required_tool_raises_permission_error(self):
+        tc = ToolCall(id="tc_1", name="dangerous_echo", input={"command": "rm -rf /"})
+        with pytest.raises(PermissionError, match="requires approval"):
+            execute_tool(tc, [dangerous_echo])
+
 
 class TestExecuteToolResult:
     def test_success_result(self):
@@ -105,6 +122,54 @@ class TestExecuteToolResult:
         assert result.error.type == "unknown_tool"
         assert result.error.details["tool_name"] == "unknown"
 
+    def test_missing_approval_handler_denies_by_default(self):
+        tc = ToolCall(id="tc_1", name="dangerous_echo", input={"command": "rm -rf /tmp/x"})
+        result = execute_tool_result(tc, [dangerous_echo])
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.type == "approval_denied"
+        assert "approval_request" in result.error.details
+
+    def test_approved_tool_executes_with_audit_metadata(self):
+        tc = ToolCall(id="tc_1", name="dangerous_echo", input={"command": "echo ok"})
+
+        def approve(request):
+            assert request.tool_name == "dangerous_echo"
+            assert request.capability == "shell"
+            assert request.risk_level == "critical"
+            return ApprovalDecision.approve(reviewer="human")
+
+        result = execute_tool_result(tc, [dangerous_echo], approval_handler=approve)
+        assert result.ok is True
+        assert result.value == "echo ok"
+        assert result.metadata["approval_decision"]["reviewer"] == "human"
+
+    def test_approval_can_modify_arguments(self):
+        tc = ToolCall(id="tc_1", name="dangerous_echo", input={"command": "rm -rf /tmp/x"})
+
+        result = execute_tool_result(
+            tc,
+            [dangerous_echo],
+            approval_handler=lambda _: ApprovalDecision.approve(
+                modified_args={"command": "echo safe"}
+            ),
+        )
+        assert result.ok is True
+        assert result.value == "echo safe"
+
+    def test_denied_tool_does_not_execute(self):
+        tc = ToolCall(id="tc_1", name="dangerous_echo", input={"command": "echo no"})
+
+        result = execute_tool_result(
+            tc,
+            [dangerous_echo],
+            approval_handler=lambda _: ApprovalDecision.deny(reason="not allowed"),
+        )
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.type == "approval_denied"
+        assert result.error.details["approval_decision"]["reason"] == "not allowed"
+
 
 class TestAsyncExecuteTool:
     async def test_sync_function(self):
@@ -134,3 +199,18 @@ class TestAsyncExecuteTool:
         assert result.ok is False
         assert result.error is not None
         assert result.error.type == "unknown_tool"
+
+    async def test_async_approval_handler(self):
+        tc = ToolCall(id="tc_1", name="dangerous_echo", input={"command": "echo ok"})
+
+        async def approve(_request):
+            return ApprovalDecision.approve(reviewer="async-human")
+
+        result = await async_execute_tool_result(
+            tc,
+            [dangerous_echo],
+            approval_handler=approve,
+        )
+        assert result.ok is True
+        assert result.value == "echo ok"
+        assert result.metadata["approval_decision"]["reviewer"] == "async-human"

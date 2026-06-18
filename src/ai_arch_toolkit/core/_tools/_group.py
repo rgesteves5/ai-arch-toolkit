@@ -9,7 +9,10 @@ from collections.abc import Callable
 from typing import Any
 
 from ai_arch_toolkit.core._response import ToolCall
+from ai_arch_toolkit.core._tools._approval import ApprovalHandler
 from ai_arch_toolkit.core._tools._executor import (
+    _approved_args_or_error,
+    _approved_args_or_error_async,
     _coerce_result,
     _format_result,
     _result_from_exception,
@@ -35,9 +38,14 @@ class ToolGroup:
             result = group.execute(tc)
     """
 
-    __slots__ = ("_definitions", "_fns")
+    __slots__ = ("_approval_handler", "_definitions", "_fns")
 
-    def __init__(self, *fns: Callable[..., Any]) -> None:
+    def __init__(
+        self,
+        *fns: Callable[..., Any],
+        approval_handler: ApprovalHandler | None = None,
+    ) -> None:
+        self._approval_handler = approval_handler
         self._fns: dict[str, Callable[..., Any]] = {}
         self._definitions: dict[str, dict[str, Any]] = {}
         for fn in fns:
@@ -73,7 +81,14 @@ class ToolGroup:
         if fn is None:
             msg = f"Unknown tool: {tool_call.name!r}"
             raise KeyError(msg)
-        return _format_result(fn(**tool_call.input))
+        approved_args, approval_error, _ = _approved_args_or_error(
+            tool_call,
+            fn,
+            self._approval_handler,
+        )
+        if approval_error is not None:
+            raise PermissionError(approval_error.error.message if approval_error.error else "")
+        return _format_result(fn(**(approved_args or {})))
 
     def execute_result(self, tool_call: ToolCall) -> ToolResult:
         """Execute a tool call synchronously, returning a structured result."""
@@ -84,8 +99,23 @@ class ToolGroup:
                 f"Unknown tool: {tool_call.name!r}",
                 details={"tool_name": tool_call.name},
             )
+        approved_args, approval_error, approval_metadata = _approved_args_or_error(
+            tool_call,
+            fn,
+            self._approval_handler,
+        )
+        if approval_error is not None:
+            return approval_error
         try:
-            return _coerce_result(fn(**tool_call.input))
+            result = _coerce_result(fn(**(approved_args or {})))
+            if approval_metadata:
+                return ToolResult(
+                    ok=result.ok,
+                    value=result.value,
+                    error=result.error,
+                    metadata={**result.metadata, **approval_metadata},
+                )
+            return result
         except Exception as exc:
             return _result_from_exception(tool_call.name, exc)
 
@@ -95,10 +125,17 @@ class ToolGroup:
         if fn is None:
             msg = f"Unknown tool: {tool_call.name!r}"
             raise KeyError(msg)
+        approved_args, approval_error, _ = await _approved_args_or_error_async(
+            tool_call,
+            fn,
+            self._approval_handler,
+        )
+        if approval_error is not None:
+            raise PermissionError(approval_error.error.message if approval_error.error else "")
         if inspect.iscoroutinefunction(fn):
-            result = await fn(**tool_call.input)
+            result = await fn(**(approved_args or {}))
         else:
-            result = await asyncio.to_thread(fn, **tool_call.input)
+            result = await asyncio.to_thread(fn, **(approved_args or {}))
         return _format_result(result)
 
     async def async_execute_result(self, tool_call: ToolCall) -> ToolResult:
@@ -110,10 +147,26 @@ class ToolGroup:
                 f"Unknown tool: {tool_call.name!r}",
                 details={"tool_name": tool_call.name},
             )
+        approved_args, approval_error, approval_metadata = await _approved_args_or_error_async(
+            tool_call,
+            fn,
+            self._approval_handler,
+        )
+        if approval_error is not None:
+            return approval_error
         try:
             if inspect.iscoroutinefunction(fn):
-                return _coerce_result(await fn(**tool_call.input))
-            return _coerce_result(await asyncio.to_thread(fn, **tool_call.input))
+                result = _coerce_result(await fn(**(approved_args or {})))
+            else:
+                result = _coerce_result(await asyncio.to_thread(fn, **(approved_args or {})))
+            if approval_metadata:
+                return ToolResult(
+                    ok=result.ok,
+                    value=result.value,
+                    error=result.error,
+                    metadata={**result.metadata, **approval_metadata},
+                )
+            return result
         except Exception as exc:
             return _result_from_exception(tool_call.name, exc)
 

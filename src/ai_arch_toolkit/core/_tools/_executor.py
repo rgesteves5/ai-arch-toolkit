@@ -5,9 +5,17 @@ from __future__ import annotations
 import asyncio
 import inspect
 from collections.abc import Callable
-from typing import Any
+from typing import Any, NoReturn
 
 from ai_arch_toolkit.core._response import ToolCall
+from ai_arch_toolkit.core._tools._approval import (
+    ApprovalDecision,
+    ApprovalHandler,
+    ApprovalRequest,
+    approval_request_for,
+    resolve_approval,
+    resolve_approval_sync,
+)
 from ai_arch_toolkit.core._tools._result import ToolResult, _format_value
 
 
@@ -64,9 +72,94 @@ def _coerce_result(value: Any) -> ToolResult:
     return ToolResult.success(value)
 
 
+def _tool_def(fn: Callable[..., Any]) -> dict[str, Any]:
+    return getattr(fn, "__tool__", {})
+
+
+def _approval_error(
+    error_type: str,
+    message: str,
+    *,
+    request: ApprovalRequest | None = None,
+    decision: ApprovalDecision | None = None,
+) -> ToolResult:
+    details: dict[str, Any] = {}
+    if request is not None:
+        details["approval_request"] = request.to_dict()
+    if decision is not None:
+        details["approval_decision"] = decision.to_dict()
+    return ToolResult.failure(
+        error_type,
+        message,
+        safe_to_show=True,
+        details=details,
+        metadata=details,
+    )
+
+
+def _approved_args_or_error(
+    tool_call: ToolCall,
+    fn: Callable[..., Any],
+    approval_handler: ApprovalHandler | None,
+) -> tuple[dict[str, Any] | None, ToolResult | None, dict[str, Any]]:
+    tool_def = _tool_def(fn)
+    if not tool_def.get("requires_approval", False):
+        return dict(tool_call.input), None, {}
+
+    request = approval_request_for(tool_call, tool_def)
+    decision = resolve_approval_sync(request, approval_handler)
+    if not decision.approved or decision.denied:
+        return (
+            None,
+            _approval_error(
+                "approval_denied",
+                f"Tool {tool_call.name!r} requires approval and was denied",
+                request=request,
+                decision=decision,
+            ),
+            {},
+        )
+    metadata = {
+        "approval_request": request.to_dict(),
+        "approval_decision": decision.to_dict(),
+    }
+    return decision.modified_args or dict(tool_call.input), None, metadata
+
+
+async def _approved_args_or_error_async(
+    tool_call: ToolCall,
+    fn: Callable[..., Any],
+    approval_handler: ApprovalHandler | None,
+) -> tuple[dict[str, Any] | None, ToolResult | None, dict[str, Any]]:
+    tool_def = _tool_def(fn)
+    if not tool_def.get("requires_approval", False):
+        return dict(tool_call.input), None, {}
+
+    request = approval_request_for(tool_call, tool_def)
+    decision = await resolve_approval(request, approval_handler)
+    if not decision.approved or decision.denied:
+        return (
+            None,
+            _approval_error(
+                "approval_denied",
+                f"Tool {tool_call.name!r} requires approval and was denied",
+                request=request,
+                decision=decision,
+            ),
+            {},
+        )
+    metadata = {
+        "approval_request": request.to_dict(),
+        "approval_decision": decision.to_dict(),
+    }
+    return decision.modified_args or dict(tool_call.input), None, metadata
+
+
 def execute_tool_result(
     tool_call: ToolCall,
     tools: list[Callable[..., Any]],
+    *,
+    approval_handler: ApprovalHandler | None = None,
 ) -> ToolResult:
     """Execute a tool call synchronously, returning a structured result.
 
@@ -83,8 +176,24 @@ def execute_tool_result(
             details={"tool_name": tool_call.name},
         )
 
+    approved_args, approval_error, approval_metadata = _approved_args_or_error(
+        tool_call,
+        fn,
+        approval_handler,
+    )
+    if approval_error is not None:
+        return approval_error
+
     try:
-        return _coerce_result(fn(**tool_call.input))
+        result = _coerce_result(fn(**(approved_args or {})))
+        if approval_metadata:
+            return ToolResult(
+                ok=result.ok,
+                value=result.value,
+                error=result.error,
+                metadata={**result.metadata, **approval_metadata},
+            )
+        return result
     except Exception as exc:
         return _result_from_exception(tool_call.name, exc)
 
@@ -92,6 +201,8 @@ def execute_tool_result(
 async def async_execute_tool_result(
     tool_call: ToolCall,
     tools: list[Callable[..., Any]],
+    *,
+    approval_handler: ApprovalHandler | None = None,
 ) -> ToolResult:
     """Execute a tool call asynchronously, returning a structured result.
 
@@ -108,42 +219,79 @@ async def async_execute_tool_result(
             details={"tool_name": tool_call.name},
         )
 
+    approved_args, approval_error, approval_metadata = await _approved_args_or_error_async(
+        tool_call,
+        fn,
+        approval_handler,
+    )
+    if approval_error is not None:
+        return approval_error
+
     try:
         if inspect.iscoroutinefunction(fn):
-            return _coerce_result(await fn(**tool_call.input))
-        return _coerce_result(await asyncio.to_thread(fn, **tool_call.input))
+            result = _coerce_result(await fn(**(approved_args or {})))
+        else:
+            result = _coerce_result(await asyncio.to_thread(fn, **(approved_args or {})))
+        if approval_metadata:
+            return ToolResult(
+                ok=result.ok,
+                value=result.value,
+                error=result.error,
+                metadata={**result.metadata, **approval_metadata},
+            )
+        return result
     except Exception as exc:
         return _result_from_exception(tool_call.name, exc)
 
 
-def execute_tool(tool_call: ToolCall, tools: list[Callable[..., Any]]) -> str:
+def execute_tool(
+    tool_call: ToolCall,
+    tools: list[Callable[..., Any]],
+    *,
+    approval_handler: ApprovalHandler | None = None,
+) -> str:
     """Execute a tool call synchronously, returning a string result.
 
     Args:
         tool_call: The ToolCall from an LLM response.
         tools: List of decorated tool functions to search.
     """
-    fn = _resolve_fn(tool_call, tools)
-    try:
-        result = fn(**tool_call.input)
-    except TypeError as exc:
-        raise TypeError(f"Tool {tool_call.name!r} argument mismatch: {exc}") from exc
-    return _format_result(result)
+    result = execute_tool_result(tool_call, tools, approval_handler=approval_handler)
+    if result.ok:
+        return result.to_model_text()
+    _raise_legacy_error(tool_call.name, result)
 
 
-async def async_execute_tool(tool_call: ToolCall, tools: list[Callable[..., Any]]) -> str:
+async def async_execute_tool(
+    tool_call: ToolCall,
+    tools: list[Callable[..., Any]],
+    *,
+    approval_handler: ApprovalHandler | None = None,
+) -> str:
     """Execute a tool call asynchronously, returning a string result.
 
     Args:
         tool_call: The ToolCall from an LLM response.
         tools: List of decorated tool functions to search.
     """
-    fn = _resolve_fn(tool_call, tools)
-    try:
-        if inspect.iscoroutinefunction(fn):
-            result = await fn(**tool_call.input)
-        else:
-            result = await asyncio.to_thread(fn, **tool_call.input)
-    except TypeError as exc:
-        raise TypeError(f"Tool {tool_call.name!r} argument mismatch: {exc}") from exc
-    return _format_result(result)
+    result = await async_execute_tool_result(
+        tool_call,
+        tools,
+        approval_handler=approval_handler,
+    )
+    if result.ok:
+        return result.to_model_text()
+    _raise_legacy_error(tool_call.name, result)
+
+
+def _raise_legacy_error(tool_name: str, result: ToolResult) -> NoReturn:
+    error = result.error
+    if error is None:
+        raise RuntimeError(f"Tool {tool_name!r} failed")
+    if error.type == "unknown_tool":
+        raise KeyError(error.message)
+    if error.type == "validation_error":
+        raise TypeError(error.message)
+    if error.type == "approval_denied":
+        raise PermissionError(error.message)
+    raise RuntimeError(error.message)
