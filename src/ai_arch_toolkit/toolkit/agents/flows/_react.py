@@ -118,7 +118,7 @@ def react_flow(
 
             async def _safe_execute(tc: Any) -> ToolResult:
                 try:
-                    result = await tools.async_execute_result(tc)
+                    result = await tools.async_execute(tc)
                 except Exception as exc:
                     return ToolResult.failure(
                         "runtime_error",
@@ -139,7 +139,7 @@ def react_flow(
         else:
             for tc in response.tool_calls:
                 try:
-                    result = await tools.async_execute_result(tc)
+                    result = await tools.async_execute(tc)
                 except Exception as exc:
                     result = ToolResult.failure(
                         "runtime_error",
