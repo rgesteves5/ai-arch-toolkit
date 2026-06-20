@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock
 
+import pytest
+
 from ai_arch_toolkit.toolkit.memory.graph._networkx import NetworkXBackend
 from ai_arch_toolkit.toolkit.memory.graph._store import GraphStore
 from tests.memory.conftest import make_node, mock_embed_fn
@@ -191,6 +193,7 @@ class TestPersistenceRoundtrip:
         await store.add(make_node(id="b"))
         await store.connect("a", "b", "LIKES", weight=0.75, metadata={"reason": "fun"})
         data = await store.to_dict()
+        assert data["schema_version"] == 1
         restored = await GraphStore.from_dict(data, NetworkXBackend())
         edges = await restored.edges("a")
         assert len(edges) == 1
@@ -214,6 +217,49 @@ class TestPersistenceRoundtrip:
         assert got.source == "user_stated"
         assert got.confidence == 0.8
         assert got.type == "fact"
+
+    async def test_legacy_payload_without_schema_version_is_accepted(self):
+        store = GraphStore(NetworkXBackend())
+        await store.add(make_node(id="n1", content={"text": "legacy"}))
+        data = await store.to_dict()
+        data.pop("schema_version")
+        restored = await GraphStore.from_dict(data, NetworkXBackend())
+        got = await restored.backend.get_node("n1")
+        assert got is not None
+        assert got.content["text"] == "legacy"
+
+    async def test_future_schema_version_rejected(self):
+        data = {"schema_version": 999, "nodes": [], "edges": []}
+        with pytest.raises(ValueError, match="Unsupported memory graph schema_version"):
+            await GraphStore.from_dict(data, NetworkXBackend())
+
+    async def test_invalid_payload_does_not_partially_mutate_backend(self):
+        backend = NetworkXBackend()
+        node = make_node(id="ok")
+        data = {
+            "schema_version": 1,
+            "nodes": [
+                {
+                    "id": node.id,
+                    "timestamp": node.timestamp.isoformat(),
+                    "created_at": node.created_at.isoformat(),
+                },
+                {"id": "missing_created_at", "timestamp": node.timestamp.isoformat()},
+            ],
+            "edges": [],
+        }
+
+        with pytest.raises(ValueError, match="missing required field 'created_at'"):
+            await GraphStore.from_dict(data, backend)
+
+        assert await backend.list_nodes() == []
+
+    async def test_corrupt_json_load_fails_clearly(self, tmp_path):
+        path = tmp_path / "bad_memory.json"
+        path.write_text("{not-json", encoding="utf-8")
+
+        with pytest.raises(ValueError, match="Invalid JSON"):
+            await GraphStore.load(path, NetworkXBackend())
 
 
 class TestProperties:

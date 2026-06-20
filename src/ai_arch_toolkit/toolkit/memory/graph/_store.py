@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import dataclasses
-import json
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from ai_arch_toolkit.core._persistence import atomic_write_json, load_json_object
 from ai_arch_toolkit.core.graph import Direction
 from ai_arch_toolkit.toolkit.memory._types import (
     Edge,
@@ -24,6 +24,8 @@ from ai_arch_toolkit.toolkit.memory.graph._backends import (
     MemoryBackend,
 )
 from ai_arch_toolkit.toolkit.memory.graph._index import BruteForceIndex, VectorIndex
+
+_MEMORY_SCHEMA_VERSION = 1
 
 
 def _embeddable_text(node: Node) -> str:
@@ -316,7 +318,11 @@ class GraphStore:
                         "metadata": edge.metadata,
                     }
                 )
-        return {"nodes": nodes_data, "edges": edges_data}
+        return {
+            "schema_version": _MEMORY_SCHEMA_VERSION,
+            "nodes": nodes_data,
+            "edges": edges_data,
+        }
 
     @classmethod
     async def from_dict(
@@ -328,44 +334,52 @@ class GraphStore:
         index: VectorIndex | None = None,
     ) -> GraphStore:
         """Deserialize a dict into a GraphStore."""
+        _validate_memory_payload(data)
         store = cls(backend, embed=embed, index=index)
-        for nd in data.get("nodes", []):
+        nodes: list[Node] = []
+        edges: list[Edge] = []
+        for nd in data["nodes"]:
             last = nd.get("last_accessed")
-            node = Node(
-                id=nd["id"],
-                type=nd.get("type", "generic"),
-                content=nd.get("content", {}),
-                metadata=nd.get("metadata", {}),
-                embedding=nd.get("embedding"),
-                timestamp=datetime.fromisoformat(nd["timestamp"]),
-                created_at=datetime.fromisoformat(nd["created_at"]),
-                access_count=nd.get("access_count", 0),
-                last_accessed=datetime.fromisoformat(last) if last else None,
-                confidence=nd.get("confidence", 1.0),
-                source=nd.get("source", "unknown"),
+            nodes.append(
+                Node(
+                    id=nd["id"],
+                    type=nd.get("type", "generic"),
+                    content=nd.get("content", {}),
+                    metadata=nd.get("metadata", {}),
+                    embedding=nd.get("embedding"),
+                    timestamp=datetime.fromisoformat(nd["timestamp"]),
+                    created_at=datetime.fromisoformat(nd["created_at"]),
+                    access_count=nd.get("access_count", 0),
+                    last_accessed=datetime.fromisoformat(last) if last else None,
+                    confidence=nd.get("confidence", 1.0),
+                    source=nd.get("source", "unknown"),
+                )
             )
+        for ed in data["edges"]:
+            edges.append(
+                Edge(
+                    source=ed["source"],
+                    target=ed["target"],
+                    relation=ed["relation"],
+                    weight=ed.get("weight", 1.0),
+                    metadata=ed.get("metadata", {}),
+                )
+            )
+
+        for node in nodes:
             # Add directly to backend to preserve original state (no re-embedding).
             await backend.add_node(node)
             if node.embedding is not None and store._index is not None:
                 await store._index.add(node.id, node.embedding)
             store._type_index.setdefault(node.type, set()).add(node.id)
-        for ed in data.get("edges", []):
-            edge = Edge(
-                source=ed["source"],
-                target=ed["target"],
-                relation=ed["relation"],
-                weight=ed.get("weight", 1.0),
-                metadata=ed.get("metadata", {}),
-            )
+        for edge in edges:
             await backend.add_edge(edge)
         return store
 
     async def save(self, path: str | Path) -> None:
         """Save the graph to a JSON file."""
         data = await self.to_dict()
-        p = Path(path)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(data, indent=2, default=str))
+        atomic_write_json(path, data)
 
     @classmethod
     async def load(
@@ -377,6 +391,59 @@ class GraphStore:
         index: VectorIndex | None = None,
     ) -> GraphStore:
         """Load a graph from a JSON file."""
-        p = Path(path)
-        data = json.loads(p.read_text())
+        data = load_json_object(path)
         return await cls.from_dict(data, backend, embed=embed, index=index)
+
+
+def _validate_memory_payload(data: dict[str, Any]) -> None:
+    version = data.get("schema_version", 0)
+    if not isinstance(version, int):
+        raise ValueError("Memory graph payload schema_version must be an integer")
+    if version > _MEMORY_SCHEMA_VERSION:
+        raise ValueError(
+            f"Unsupported memory graph schema_version {version}; "
+            f"maximum supported is {_MEMORY_SCHEMA_VERSION}"
+        )
+    if version < 0:
+        raise ValueError(f"Unsupported memory graph schema_version {version}")
+
+    nodes = data.get("nodes")
+    edges = data.get("edges")
+    if not isinstance(nodes, list):
+        raise ValueError("Memory graph payload must contain a 'nodes' list")
+    if not isinstance(edges, list):
+        raise ValueError("Memory graph payload must contain an 'edges' list")
+
+    for index, node in enumerate(nodes):
+        if not isinstance(node, dict):
+            raise ValueError(f"Memory graph node at index {index} must be an object")
+        for field in ("id", "timestamp", "created_at"):
+            if field not in node:
+                raise ValueError(
+                    f"Memory graph node at index {index} missing required field {field!r}"
+                )
+        if "content" in node and not isinstance(node["content"], dict):
+            raise ValueError(f"Memory graph node {node['id']!r} content must be an object")
+        if "metadata" in node and not isinstance(node["metadata"], dict):
+            raise ValueError(f"Memory graph node {node['id']!r} metadata must be an object")
+        try:
+            datetime.fromisoformat(node["timestamp"])
+            datetime.fromisoformat(node["created_at"])
+            last_accessed = node.get("last_accessed")
+            if last_accessed:
+                datetime.fromisoformat(last_accessed)
+        except ValueError as exc:
+            raise ValueError(
+                f"Memory graph node {node['id']!r} has invalid datetime field"
+            ) from exc
+
+    for index, edge in enumerate(edges):
+        if not isinstance(edge, dict):
+            raise ValueError(f"Memory graph edge at index {index} must be an object")
+        for field in ("source", "target", "relation"):
+            if field not in edge:
+                raise ValueError(
+                    f"Memory graph edge at index {index} missing required field {field!r}"
+                )
+        if "metadata" in edge and not isinstance(edge["metadata"], dict):
+            raise ValueError(f"Memory graph edge at index {index} metadata must be an object")
