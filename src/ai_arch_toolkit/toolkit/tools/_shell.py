@@ -10,7 +10,12 @@ _DEFAULT_TIMEOUT = 30
 _DEFAULT_MAX_OUTPUT = 8000
 
 
-@tool
+@tool(
+    capability="shell",
+    risk_level="critical",
+    requires_approval=True,
+    approval_reason="Shell command execution can read, write, or destroy local system data.",
+)
 def run_command(
     command: str,
     timeout: int = _DEFAULT_TIMEOUT,

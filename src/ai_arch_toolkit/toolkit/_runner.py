@@ -16,7 +16,7 @@ from ai_arch_toolkit.core._tools._group import ToolGroup
 def _normalize_tools(tools: list[Callable[..., Any]] | ToolGroup) -> list[Callable[..., Any]]:
     """Accept a ToolGroup or list of callables."""
     if isinstance(tools, ToolGroup):
-        return list(tools._fns.values())
+        return tools.tools
     return tools
 
 

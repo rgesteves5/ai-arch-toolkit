@@ -1,128 +1,137 @@
-"""ToolGroup — a collection of tool functions with lookup and execution."""
+"""ToolGroup — a collection of tools with lookup, governance, and execution."""
 
 from __future__ import annotations
 
-import asyncio
-import inspect
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from ai_arch_toolkit.core._response import ToolCall
+from ai_arch_toolkit.core._tools._approval import ApprovalHandler
+from ai_arch_toolkit.core._tools._definition import ToolDefinition
 from ai_arch_toolkit.core._tools._executor import (
-    _coerce_result,
-    _format_result,
-    _result_from_exception,
+    _arun_tool,
+    _definition_for,
+    _run_tool_sync,
+)
+from ai_arch_toolkit.core._tools._governance import (
+    ApprovalGate,
+    RunState,
+    ToolGate,
+    default_redactor,
 )
 from ai_arch_toolkit.core._tools._result import ToolResult
-from ai_arch_toolkit.core._tools._schema import infer_schema
 
 
 class ToolGroup:
-    """A named collection of tool functions.
+    """A named collection of tools with execution-time governance.
 
-    Provides tool definitions (for passing to LLM) and execution (for
-    handling tool calls from LLM responses).
-
-    Functions passed to the constructor can be ``@tool``-decorated (their
-    ``__tool__`` schema is reused) or plain callables (schema is inferred).
+    Stores canonical :class:`ToolDefinition` objects. ``execute`` /
+    ``async_execute`` run a single governed pipeline and return a structured
+    :class:`ToolResult`. Governance is configured at construction — an optional
+    approval handler, extra pre-execution ``gates`` (e.g. dangerous-tool
+    blocking, dry-run), and a call-count budget (``max_calls``).
 
     Usage::
 
-        group = ToolGroup(get_weather, search_web)
+        group = ToolGroup(get_weather, search)
         response = await llm.complete("...", tools=group)
         for tc in response.tool_calls:
-            result = group.execute(tc)
+            result = group.execute(tc)            # -> ToolResult
+            text = result.to_model_text()
     """
 
-    __slots__ = ("_definitions", "_fns")
+    __slots__ = ("_defs", "_gates", "_max_calls", "_redactor", "_run_state")
 
-    def __init__(self, *fns: Callable[..., Any]) -> None:
-        self._fns: dict[str, Callable[..., Any]] = {}
-        self._definitions: dict[str, dict[str, Any]] = {}
+    def __init__(
+        self,
+        *fns: Callable[..., Any],
+        approval_handler: ApprovalHandler | None = None,
+        gates: Sequence[ToolGate] = (),
+        max_calls: int | None = None,
+    ) -> None:
+        self._defs: dict[str, ToolDefinition] = {}
         for fn in fns:
             self.add(fn)
+        # Approval always runs last so dangerous-blocking / dry-run short-circuit
+        # before a (potentially human) approval prompt.
+        self._gates: tuple[ToolGate, ...] = (*gates, ApprovalGate(approval_handler))
+        self._max_calls = max_calls
+        self._run_state = RunState()
+        self._redactor = default_redactor()
 
     def add(self, fn: Callable[..., Any]) -> None:
         """Add a function to the group."""
-        tool_def = getattr(fn, "__tool__", None)
-        if tool_def is None:
-            tool_def = infer_schema(fn)
-        name = tool_def["name"]
-        if name in self._fns:
+        definition = _definition_for(fn)
+        name = definition.schema.name
+        if name in self._defs:
             warnings.warn(
                 f"Duplicate tool name {name!r} in ToolGroup; overwriting previous",
                 stacklevel=2,
             )
-        self._fns[name] = fn
-        self._definitions[name] = tool_def
+        self._defs[name] = definition
 
     @property
     def tools(self) -> list[Callable[..., Any]]:
-        """Return the registered tool functions."""
-        return list(self._fns.values())
+        """Return the registered tool callables."""
+        return [d.fn for d in self._defs.values()]
 
     @property
     def definitions(self) -> list[dict[str, Any]]:
-        """Return tool definitions suitable for passing to LLM APIs."""
-        return list(self._definitions.values())
+        """Return provider-safe tool definitions (no governance metadata)."""
+        return [d.schema.to_provider_dict() for d in self._defs.values()]
 
-    def execute(self, tool_call: ToolCall) -> str:
-        """Execute a tool call synchronously."""
-        fn = self._fns.get(tool_call.name)
-        if fn is None:
-            msg = f"Unknown tool: {tool_call.name!r}"
-            raise KeyError(msg)
-        return _format_result(fn(**tool_call.input))
+    @property
+    def runtime_definitions(self) -> list[ToolDefinition]:
+        """Return the canonical runtime definitions (internal)."""
+        return list(self._defs.values())
 
-    def execute_result(self, tool_call: ToolCall) -> ToolResult:
+    def reset(self) -> None:
+        """Reset the call-count budget so the group can be reused for a new run."""
+        self._run_state.reset()
+
+    def execute(self, tool_call: ToolCall) -> ToolResult:
         """Execute a tool call synchronously, returning a structured result."""
-        fn = self._fns.get(tool_call.name)
-        if fn is None:
+        definition = self._defs.get(tool_call.name)
+        if definition is None:
             return ToolResult.failure(
                 "unknown_tool",
                 f"Unknown tool: {tool_call.name!r}",
                 details={"tool_name": tool_call.name},
             )
-        try:
-            return _coerce_result(fn(**tool_call.input))
-        except Exception as exc:
-            return _result_from_exception(tool_call.name, exc)
+        return _run_tool_sync(
+            definition,
+            tool_call,
+            gates=self._gates,
+            run_state=self._run_state,
+            max_calls=self._max_calls,
+            redactor=self._redactor,
+        )
 
-    async def async_execute(self, tool_call: ToolCall) -> str:
-        """Execute a tool call asynchronously."""
-        fn = self._fns.get(tool_call.name)
-        if fn is None:
-            msg = f"Unknown tool: {tool_call.name!r}"
-            raise KeyError(msg)
-        if inspect.iscoroutinefunction(fn):
-            result = await fn(**tool_call.input)
-        else:
-            result = await asyncio.to_thread(fn, **tool_call.input)
-        return _format_result(result)
-
-    async def async_execute_result(self, tool_call: ToolCall) -> ToolResult:
+    async def async_execute(self, tool_call: ToolCall) -> ToolResult:
         """Execute a tool call asynchronously, returning a structured result."""
-        fn = self._fns.get(tool_call.name)
-        if fn is None:
+        definition = self._defs.get(tool_call.name)
+        if definition is None:
             return ToolResult.failure(
                 "unknown_tool",
                 f"Unknown tool: {tool_call.name!r}",
                 details={"tool_name": tool_call.name},
             )
-        try:
-            if inspect.iscoroutinefunction(fn):
-                return _coerce_result(await fn(**tool_call.input))
-            return _coerce_result(await asyncio.to_thread(fn, **tool_call.input))
-        except Exception as exc:
-            return _result_from_exception(tool_call.name, exc)
+        return await _arun_tool(
+            definition,
+            tool_call,
+            gates=self._gates,
+            run_state=self._run_state,
+            max_calls=self._max_calls,
+            redactor=self._redactor,
+        )
 
     def __contains__(self, name: str) -> bool:
-        return name in self._fns
+        return name in self._defs
 
     def __len__(self) -> int:
-        return len(self._fns)
+        return len(self._defs)
 
     def __repr__(self) -> str:
-        names = ", ".join(self._fns)
+        names = ", ".join(self._defs)
         return f"ToolGroup({names})"

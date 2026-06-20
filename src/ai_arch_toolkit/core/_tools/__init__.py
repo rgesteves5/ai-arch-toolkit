@@ -1,4 +1,4 @@
-"""Tools — schema inference, decorator, execution, and grouping."""
+"""Tools — schema inference, decorator, execution, grouping, and governance."""
 
 from __future__ import annotations
 
@@ -7,42 +7,69 @@ from collections.abc import Callable
 from typing import Any
 
 from ai_arch_toolkit.core._server_tools import ServerTool
+from ai_arch_toolkit.core._tools._approval import (
+    ApprovalDecision,
+    ApprovalHandler,
+    ApprovalRequest,
+)
 from ai_arch_toolkit.core._tools._decorator import tool
+from ai_arch_toolkit.core._tools._definition import (
+    RiskLevel,
+    ToolDefinition,
+    ToolRuntimePolicy,
+    ToolSchema,
+)
 from ai_arch_toolkit.core._tools._executor import (
     async_execute_tool,
-    async_execute_tool_result,
     execute_tool,
-    execute_tool_result,
+)
+from ai_arch_toolkit.core._tools._governance import (
+    ApprovalGate,
+    DangerousToolGate,
+    DryRunGate,
+    GovernanceOutcome,
+    RunState,
 )
 from ai_arch_toolkit.core._tools._group import ToolGroup
 from ai_arch_toolkit.core._tools._result import ToolError, ToolResult
-from ai_arch_toolkit.core._tools._schema import infer_schema
+from ai_arch_toolkit.core._tools._schema import infer_schema, tool_schema
 
 __all__ = [
+    "ApprovalDecision",
+    "ApprovalGate",
+    "ApprovalHandler",
+    "ApprovalRequest",
+    "DangerousToolGate",
+    "DryRunGate",
+    "GovernanceOutcome",
+    "RiskLevel",
+    "RunState",
+    "ToolDefinition",
     "ToolError",
     "ToolGroup",
     "ToolResult",
+    "ToolRuntimePolicy",
+    "ToolSchema",
     "async_execute_tool",
-    "async_execute_tool_result",
     "execute_tool",
-    "execute_tool_result",
     "infer_schema",
     "prepare_tools",
     "tool",
+    "tool_schema",
 ]
 
 
 def prepare_tools(
     tools: list[Any] | ToolGroup | Callable[..., Any] | None,
 ) -> list[dict[str, Any]] | None:
-    """Normalize tool inputs into a list of tool definition dicts.
+    """Normalize tool inputs into a list of provider-facing definition dicts.
 
     Accepts:
     - ``None`` → ``None``
-    - A single ``@tool``-decorated function → list with one def
-    - A ``ToolGroup`` → its ``.definitions``
+    - A single ``@tool``-decorated function → list with one provider dict
+    - A ``ToolGroup`` → its ``.definitions`` (provider-safe)
     - A list containing any mix of:
-        - ``@tool``-decorated functions (have ``__tool__`` attr)
+        - ``@tool``-decorated functions (have ``__tool_definition__``)
         - Plain dicts (``{"name": ..., "input_schema": ...}``)
         - ``ToolGroup`` instances (flattened)
     """
@@ -50,8 +77,8 @@ def prepare_tools(
         return None
 
     # Single decorated function
-    if callable(tools) and hasattr(tools, "__tool__"):
-        return [tools.__tool__]  # type: ignore[union-attr]
+    if callable(tools) and hasattr(tools, "__tool_definition__"):
+        return [tools.__tool_definition__.schema.to_provider_dict()]  # type: ignore[union-attr]
 
     # ToolGroup
     if isinstance(tools, ToolGroup):
@@ -81,9 +108,9 @@ def prepare_tools(
         elif isinstance(item, ToolGroup):
             result.extend(item.definitions)
         elif callable(item):
-            tool_def = getattr(item, "__tool__", None)
-            if tool_def is not None:
-                result.append(tool_def)
+            definition = getattr(item, "__tool_definition__", None)
+            if definition is not None:
+                result.append(definition.schema.to_provider_dict())
             else:
                 result.append(infer_schema(item))
         else:

@@ -713,7 +713,12 @@ def _run_eval(code: str) -> _SafeEvaluator:
     return evaluator
 
 
-@tool
+@tool(
+    capability="python",
+    risk_level="high",
+    requires_approval=True,
+    approval_reason="Python execution can perform high-impact computation or resource use.",
+)
 def python_repl(code: str) -> str:
     """Execute Python code and return the result. Works like a Jupyter cell:
     the last expression's value is returned automatically, and print() output

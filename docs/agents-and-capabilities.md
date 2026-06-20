@@ -358,7 +358,7 @@ def get_weather(city: str, units: str = "celsius") -> str:
     return f"Weather in {city}: 22°{units[0].upper()}"
 ```
 
-The decorator attaches a `__tool__` dict with the inferred schema. This is what gets sent to the LLM.
+The decorator attaches a `__tool_definition__` (a `ToolDefinition` holding a `.schema` and a runtime `.policy`). Only `.schema` is sent to the LLM; the policy stays server-side.
 
 For custom schemas:
 
@@ -381,9 +381,11 @@ tools.definitions    # list of JSON Schema dicts (sent to LLM)
 len(tools)           # 3
 "get_weather" in tools  # True
 
-# Manual execution
-result = tools.execute(tool_call)        # sync
+# Manual execution — both return a structured ToolResult
+result = tools.execute(tool_call)              # sync
 result = await tools.async_execute(tool_call)  # async
+result.ok                                      # True/False
+text = result.to_model_text()                  # string for the LLM tool-result message
 ```
 
 ### Pre-built tools

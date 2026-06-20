@@ -13,18 +13,24 @@ class TestMemoryTools:
         store = GraphStore(NetworkXBackend())
         tools = memory_tools(store)
         # Remember
-        result = await tools.async_execute(
-            _make_tool_call("remember", {"text": "Python is great", "node_type": "fact"})
-        )
+        result = (
+            await tools.async_execute(
+                _make_tool_call("remember", {"text": "Python is great", "node_type": "fact"})
+            )
+        ).to_model_text()
         assert "Remembered" in result
         # Recall
-        result = await tools.async_execute(_make_tool_call("recall", {"query": "Python"}))
+        result = (
+            await tools.async_execute(_make_tool_call("recall", {"query": "Python"}))
+        ).to_model_text()
         assert "Python is great" in result
 
     async def test_recall_no_results(self):
         store = GraphStore(NetworkXBackend())
         tools = memory_tools(store)
-        result = await tools.async_execute(_make_tool_call("recall", {"query": "nonexistent"}))
+        result = (
+            await tools.async_execute(_make_tool_call("recall", {"query": "nonexistent"}))
+        ).to_model_text()
         assert "No matching memories" in result
 
     async def test_explore(self):
@@ -33,7 +39,9 @@ class TestMemoryTools:
         await store.add(make_node(id="n2", content={"text": "neighbor"}))
         await store.connect("n1", "n2", "RELATED")
         tools = memory_tools(store)
-        result = await tools.async_execute(_make_tool_call("explore_memory", {"node_id": "n1"}))
+        result = (
+            await tools.async_execute(_make_tool_call("explore_memory", {"node_id": "n1"}))
+        ).to_model_text()
         assert "main node" in result
         assert "neighbor" in result
 
@@ -41,7 +49,9 @@ class TestMemoryTools:
         store = GraphStore(NetworkXBackend())
         await store.add(make_node(id="n1", content={"text": "forget me"}))
         tools = memory_tools(store)
-        result = await tools.async_execute(_make_tool_call("forget_memory", {"node_id": "n1"}))
+        result = (
+            await tools.async_execute(_make_tool_call("forget_memory", {"node_id": "n1"}))
+        ).to_model_text()
         assert "Removed" in result
         assert await store.backend.get_node("n1") is None
 
