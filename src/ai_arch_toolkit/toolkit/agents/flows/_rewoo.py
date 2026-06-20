@@ -53,10 +53,10 @@ def rewoo_flow(
     plan_llm = planner_llm or llm
     solve_llm = solver_llm or llm
 
-    # Build tool descriptions from ToolGroup._definitions (keyed by name)
+    # Build tool descriptions from the group's provider-safe definitions.
     tool_schemas: dict[str, dict[str, Any]] = {}
-    if hasattr(tools, "_definitions"):
-        tool_schemas = dict(tools._definitions)
+    if hasattr(tools, "definitions"):
+        tool_schemas = {d["name"]: d for d in tools.definitions}
 
     tool_descriptions = "\n".join(
         f"- {name}: {schema.get('description', 'No description')}"
@@ -120,7 +120,8 @@ def rewoo_flow(
                         name=tool_name,
                         input={first_param: args.strip()},
                     )
-                    result_str = await tools.async_execute(tc)
+                    exec_result = await tools.async_execute(tc)
+                    result_str = exec_result.to_model_text()
             except Exception as exc:
                 result_str = f"Error: {exc}"
 

@@ -13,6 +13,10 @@ uv sync --extra dev          # all providers + dev tools (ruff, pyright, pytest,
 uv run pre-commit install    # ruff + hygiene hooks on every commit
 ```
 
+CI checks that `uv.lock` matches `pyproject.toml` before installing
+dependencies. Run `uv lock --check` before pushing when dependency metadata
+changes, and update the lockfile with `uv lock` when needed.
+
 For running the examples or integration tests, copy `.env.example` to `.env`
 and populate `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, and/or
 `XAI_API_KEY`. Load them with `set -a && source .env && set +a` or via
@@ -30,6 +34,7 @@ uv run ruff check src tests examples         # lint
 uv run ruff format src tests examples        # auto-format
 uv run pyright src                           # type-check (standard mode)
 uv run pre-commit run --all-files            # everything pre-commit will run
+uv lock --check                              # verify pyproject.toml and uv.lock agree
 ```
 
 CI runs three jobs in parallel — `lint`, `typecheck` (non-blocking until the
@@ -110,10 +115,10 @@ error count is driven down), and `test` across Ubuntu and macOS on Python
 
 ## Tests must pass before pushing
 
-Run `uv run pytest`, `uv run ruff check src tests examples`, and
-`uv run ruff format --check src tests examples` locally. `pre-commit` runs
-the lint/format hooks on every commit, but the full test suite is still on
-you.
+Run `uv lock --check`, `uv run pytest`, `uv run ruff check src tests examples`,
+and `uv run ruff format --check src tests examples` locally. `pre-commit`
+runs the lint/format hooks on every commit, but the full test suite is still
+on you.
 
 Pyright is currently non-blocking in CI while the existing standard-mode
 warnings (≈200) are driven down. If you add new code, please keep it

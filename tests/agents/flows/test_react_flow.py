@@ -50,7 +50,7 @@ class TestReactFlow:
         )
 
         tools = AsyncMock(spec=ToolGroup)
-        tools.async_execute_result = AsyncMock(return_value=ToolResult.success("Sunny, 72F"))
+        tools.async_execute = AsyncMock(return_value=ToolResult.success("Sunny, 72F"))
         tools.schemas = lambda: {}
 
         flow = react_flow(llm, tools, max_iterations=5)
@@ -58,7 +58,7 @@ class TestReactFlow:
         await flow.run(state)
 
         assert state["response"].text == "The weather is sunny."
-        tools.async_execute_result.assert_called_once()
+        tools.async_execute.assert_called_once()
 
     async def test_tool_error_is_structured_before_model_boundary(self) -> None:
         tc = ToolCall(id="tc1", name="search", input={"q": "test"})
@@ -73,7 +73,7 @@ class TestReactFlow:
 
         tools = AsyncMock(spec=ToolGroup)
         tool_error = ToolResult.failure("runtime_error", "backend down", retryable=True)
-        tools.async_execute_result = AsyncMock(return_value=tool_error)
+        tools.async_execute = AsyncMock(return_value=tool_error)
         tools.schemas = lambda: {}
 
         flow = react_flow(llm, tools, max_iterations=5)
@@ -161,7 +161,7 @@ class TestReactFlow:
         llm.complete = AsyncMock(return_value=_make_response(tool_calls=(tc,)))
 
         tools = AsyncMock(spec=ToolGroup)
-        tools.async_execute_result = AsyncMock(return_value=ToolResult.success("result"))
+        tools.async_execute = AsyncMock(return_value=ToolResult.success("result"))
         tools.schemas = lambda: {}
 
         flow = react_flow(llm, tools, max_iterations=3)
@@ -207,7 +207,7 @@ class TestReactFinalAnswer:
         llm.complete = AsyncMock(return_value=_make_response(tool_calls=(tc,)))
 
         tools = AsyncMock(spec=ToolGroup)
-        tools.async_execute_result = AsyncMock(return_value=ToolResult.success("result"))
+        tools.async_execute = AsyncMock(return_value=ToolResult.success("result"))
         tools.schemas = lambda: {}
 
         flow = react_flow(llm, tools, max_iterations=3, final_answer_hint=True)
@@ -236,7 +236,7 @@ class TestReactFinalAnswer:
         )
 
         tools = AsyncMock(spec=ToolGroup)
-        tools.async_execute_result = AsyncMock(return_value=ToolResult.success("result"))
+        tools.async_execute = AsyncMock(return_value=ToolResult.success("result"))
         tools.schemas = lambda: {}
 
         flow = react_flow(llm, tools, max_iterations=5, final_answer_hint=True)
@@ -260,7 +260,7 @@ class TestReactFinalAnswer:
         llm.complete = AsyncMock(return_value=_make_response(tool_calls=(tc,)))
 
         tools = AsyncMock(spec=ToolGroup)
-        tools.async_execute_result = AsyncMock(return_value=ToolResult.success("result"))
+        tools.async_execute = AsyncMock(return_value=ToolResult.success("result"))
         tools.schemas = lambda: {}
 
         flow = react_flow(llm, tools, max_iterations=2, strip_tools_on_final=True)
@@ -286,7 +286,7 @@ class TestReactFinalAnswer:
         )
 
         tools = AsyncMock(spec=ToolGroup)
-        tools.async_execute_result = AsyncMock(return_value=ToolResult.success("result"))
+        tools.async_execute = AsyncMock(return_value=ToolResult.success("result"))
         tools.schemas = lambda: {}
 
         flow = react_flow(
@@ -316,7 +316,7 @@ class TestReactFinalAnswer:
         llm.complete = AsyncMock(return_value=_make_response(tool_calls=(tc,)))
 
         tools = AsyncMock(spec=ToolGroup)
-        tools.async_execute_result = AsyncMock(return_value=ToolResult.success("result"))
+        tools.async_execute = AsyncMock(return_value=ToolResult.success("result"))
         tools.schemas = lambda: {}
 
         flow = react_flow(llm, tools, max_iterations=2, final_answer_hint=False)

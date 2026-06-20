@@ -39,8 +39,10 @@ Pip works the same way. Extras:
 | `yaml`     | `pyyaml>=6.0` (yaml knowledge loader)                 |
 | `all`      | Every provider plus every optional feature            |
 
-API keys are read from `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`,
-or `XAI_API_KEY` — copy `.env.example` to `.env` and `set -a && source .env && set +a` (or use a tool like `direnv`).
+API keys are read from `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`
+(or `GEMINI_API_KEY`), or `XAI_API_KEY` — copy `.env.example` to `.env` and
+`set -a && source .env && set +a` (or use a tool like `direnv`). If both Gemini
+keys are set, `GOOGLE_API_KEY` wins.
 
 ## Quick start
 
@@ -74,25 +76,26 @@ print(f"\nCost: ${stream.response.cost:.6f}")
 
 ### Tools with `@tool` and `ToolGroup`
 
+Tools should expose explicit, typed operations. Avoid executing arbitrary code
+from user or model input; prefer narrow functions with clear parameters.
+
 ```python
 from ai_arch_toolkit import LLM, run_tools_sync
 from ai_arch_toolkit.core import ToolGroup, tool
 
 
 @tool
-def calculate(expression: str) -> str:
-    """Evaluate a mathematical expression.
+def multiply(a: float, b: float) -> str:
+    """Multiply two numbers.
 
     Args:
-        expression: A math expression to evaluate, e.g. "2 + 2".
+        a: First number.
+        b: Second number.
     """
-    try:
-        return str(eval(expression, {"__builtins__": {}}))
-    except Exception as e:
-        return f"Error: {e}"
+    return str(a * b)
 
 
-tools = ToolGroup(calculate)
+tools = ToolGroup(multiply)
 llm = LLM("gpt-4.1-nano")
 messages = [{"role": "user", "content": "What is 42 * 17?"}]
 

@@ -350,22 +350,24 @@ def test_dangerous_tools_are_blocked_by_default() -> None:
         ToolCall(id="tc1", name="run_command", input={"command": "echo hi"})
     )
 
-    assert "blocked by governance" in result
-    assert "--allow-dangerous-tools" in result
+    assert result.ok is False
+    assert result.error is not None
+    assert result.error.type == "dangerous_tool_blocked"
+    assert "--allow-dangerous-tools" in result.to_model_text()
 
 
-def test_tool_governance_dry_run_and_max_calls() -> None:
+def test_tool_governance_dry_run_does_not_execute() -> None:
+    calls: list[str] = []
+
     def echo(text: str) -> str:
         """Echo text."""
+        calls.append(text)
         return text
 
     config = agent_config_from_mapping(
         {
             **_base_config(),
-            "tools": {
-                "enabled": ["echo"],
-                "permissions": {"dry_run": True, "max_calls": 1},
-            },
+            "tools": {"enabled": ["echo"], "permissions": {"dry_run": True}},
         }
     )
 
@@ -374,8 +376,33 @@ def test_tool_governance_dry_run_and_max_calls() -> None:
     second = resolved.group.execute(ToolCall(id="tc2", name="echo", input={"text": "again"}))
 
     assert isinstance(ToolGovernance(), ToolGovernance)
-    assert "Dry run" in first
-    assert "max tool calls exceeded" in second
+    # Dry-run never executes and never consumes the (absent) budget.
+    assert first.metadata["governance"]["outcome"] == "dry_run"
+    assert second.metadata["governance"]["outcome"] == "dry_run"
+    assert calls == []
+
+
+def test_tool_governance_max_calls_blocks_after_limit() -> None:
+    def echo(text: str) -> str:
+        """Echo text."""
+        return text
+
+    config = agent_config_from_mapping(
+        {
+            **_base_config(),
+            "tools": {"enabled": ["echo"], "permissions": {"max_calls": 1}},
+        }
+    )
+
+    resolved = resolve_tools(config.tools, ToolRegistry.from_mapping({"echo": echo}))
+    first = resolved.group.execute(ToolCall(id="tc1", name="echo", input={"text": "hi"}))
+    second = resolved.group.execute(ToolCall(id="tc2", name="echo", input={"text": "again"}))
+
+    assert first.ok is True
+    assert first.value == "hi"
+    assert second.ok is False
+    assert second.error is not None
+    assert second.error.type == "max_calls_exceeded"
 
 
 async def test_configurable_agent_run_simple_response() -> None:
@@ -695,15 +722,17 @@ async def test_private_memory_inspection_tools_find_and_consolidate_duplicates()
     )
     tools = private_memory_tools(store)
 
-    listed = await tools.async_execute(
-        ToolCall(id="tc1", name="list_memories", input={"node_type": "fact"})
-    )
-    duplicates = await tools.async_execute(
-        ToolCall(id="tc2", name="find_duplicate_memories", input={})
-    )
-    consolidated = await tools.async_execute(
-        ToolCall(id="tc3", name="consolidate_memories", input={})
-    )
+    listed = (
+        await tools.async_execute(
+            ToolCall(id="tc1", name="list_memories", input={"node_type": "fact"})
+        )
+    ).to_model_text()
+    duplicates = (
+        await tools.async_execute(ToolCall(id="tc2", name="find_duplicate_memories", input={}))
+    ).to_model_text()
+    consolidated = (
+        await tools.async_execute(ToolCall(id="tc3", name="consolidate_memories", input={}))
+    ).to_model_text()
 
     assert first.id in listed
     assert second.id in listed

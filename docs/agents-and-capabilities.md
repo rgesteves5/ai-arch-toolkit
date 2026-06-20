@@ -358,7 +358,7 @@ def get_weather(city: str, units: str = "celsius") -> str:
     return f"Weather in {city}: 22°{units[0].upper()}"
 ```
 
-The decorator attaches a `__tool__` dict with the inferred schema. This is what gets sent to the LLM.
+The decorator attaches a `__tool_definition__` (a `ToolDefinition` holding a `.schema` and a runtime `.policy`). Only `.schema` is sent to the LLM; the policy stays server-side.
 
 For custom schemas:
 
@@ -375,33 +375,34 @@ Bundle tools together for agents:
 ```python
 from ai_arch_toolkit import ToolGroup
 
-tools = ToolGroup(get_weather, search_wikipedia, run_command)
+tools = ToolGroup(get_weather, wikipedia_search, datetime_now)
 
 tools.definitions    # list of JSON Schema dicts (sent to LLM)
 len(tools)           # 3
 "get_weather" in tools  # True
 
-# Manual execution
-result = tools.execute(tool_call)        # sync
+# Manual execution — both return a structured ToolResult
+result = tools.execute(tool_call)              # sync
 result = await tools.async_execute(tool_call)  # async
+result.ok                                      # True/False
+text = result.to_model_text()                  # string for the LLM tool-result message
 ```
 
 ### Pre-built tools
 
 All use stdlib only (zero pip dependencies). All return error strings instead of raising exceptions.
+The default `ai_arch_toolkit.toolkit.tools` namespace is safe-by-default and
+does not export shell, filesystem, arbitrary URL fetching, or Python execution
+tools.
 
 ```python
-from ai_arch_toolkit import (
+from ai_arch_toolkit.toolkit.tools import (
     # Datetime
     datetime_now, timezone_convert,
     # Math
     math_eval, unit_convert,
-    # Filesystem
-    read_file, list_directory, search_files,
     # Text
     text_stats, regex_search, base64_encode, base64_decode,
-    # Web
-    http_get, scrape_text,
     # Weather (Open-Meteo, no API key needed)
     get_weather, get_forecast,
     # Knowledge
@@ -412,14 +413,29 @@ from ai_arch_toolkit import (
     json_extract, csv_read,
     # News
     hacker_news,
-    # Shell
-    run_command,
 )
 
 # Combine into a ToolGroup for a flow
 tools = ToolGroup(get_weather, wikipedia_search, math_eval, datetime_now)
 flow = react_flow(llm, tools)
 ```
+
+Dangerous tools remain available through an explicit opt-in namespace:
+
+```python
+from ai_arch_toolkit.toolkit.tools.dangerous import (
+    http_get,
+    list_directory,
+    python_repl,
+    read_file,
+    run_command,
+    scrape_text,
+    search_files,
+)
+```
+
+Only expose these tools to agents with sandboxing, permission checks, and human
+approval appropriate for the application.
 
 ### Server tools
 

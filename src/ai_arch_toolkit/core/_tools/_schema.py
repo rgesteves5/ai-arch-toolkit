@@ -12,6 +12,8 @@ import warnings
 from collections.abc import Callable
 from typing import Any, get_type_hints
 
+from ai_arch_toolkit.core._tools._definition import ToolSchema
+
 logger = logging.getLogger(__name__)
 
 _PYTHON_TYPE_TO_JSON: dict[type, str] = {
@@ -327,3 +329,18 @@ def infer_schema(
         "description": _get_summary(fn),
         "input_schema": input_schema,
     }
+
+
+def tool_schema(
+    fn: Callable[..., Any],
+    *,
+    name: str | None = None,
+    overrides: dict[str, dict[str, object]] | None = None,
+) -> ToolSchema:
+    """Build a provider-facing ``ToolSchema`` from a function."""
+    d = infer_schema(fn, name=name, overrides=overrides)
+    return ToolSchema(
+        name=d["name"],
+        description=d["description"],
+        input_schema=d["input_schema"],
+    )

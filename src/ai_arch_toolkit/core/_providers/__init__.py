@@ -76,8 +76,22 @@ def _is_local_url(base_url: str | None) -> bool:
     return host in _LOOPBACK_HOSTS or host.startswith("127.") or host.endswith(".localhost")
 
 
-def _resolve_key(env_var: str, api_key: str | None, *, local: bool = False) -> str:
-    """Resolve an API key, preferring an explicit one, then the env var.
+def _env_var_names(env_var: str | tuple[str, ...]) -> tuple[str, ...]:
+    if isinstance(env_var, str):
+        return (env_var,)
+    return env_var
+
+
+def _format_env_var_names(names: tuple[str, ...]) -> str:
+    if len(names) == 1:
+        return f"the {names[0]} environment variable"
+    return "one of the " + ", ".join(names[:-1]) + f", or {names[-1]} environment variables"
+
+
+def _resolve_key(
+    env_var: str | tuple[str, ...], api_key: str | None, *, local: bool = False
+) -> str:
+    """Resolve an API key, preferring an explicit one, then env vars in order.
 
     For a local (loopback) server the env var is **not** consulted — a real
     cloud key is never sent to localhost — and a placeholder is used when no
@@ -87,12 +101,11 @@ def _resolve_key(env_var: str, api_key: str | None, *, local: bool = False) -> s
         return api_key
     if local:
         return _PLACEHOLDER_KEY
-    key = os.environ.get(env_var, "")
-    if not key:
-        raise ValueError(
-            f"No API key provided. Pass api_key= or set the {env_var} environment variable."
-        )
-    return key
+    names = _env_var_names(env_var)
+    for name in names:
+        if key := os.environ.get(name, ""):
+            return key
+    raise ValueError(f"No API key provided. Pass api_key= or set {_format_env_var_names(names)}.")
 
 
 def create_provider(
@@ -175,7 +188,7 @@ def create_provider(
             warnings.warn(f"base_url is not supported by {name} provider, ignoring", stacklevel=2)
         return GeminiProvider(
             model,
-            _resolve_key("GOOGLE_API_KEY", api_key),
+            _resolve_key(("GOOGLE_API_KEY", "GEMINI_API_KEY"), api_key),
             timeout=timeout,
         )
 
