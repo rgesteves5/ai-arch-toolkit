@@ -347,4 +347,4 @@ store = GraphStore(graph.backend)
 - Access tracking (automatic `access_count` and `last_accessed` updates on `get()`)
 - Views: `TemporalView`, `RelationalView`, `PropertyView`, `SimilarityView`
 
-See [Agents and Capabilities — Memory](agents-and-capabilities.md#memory) for details.
+See [Memory](memory.md) for details.

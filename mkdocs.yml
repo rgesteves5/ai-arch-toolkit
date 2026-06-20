@@ -7,8 +7,18 @@ nav:
   - Home: index.md
   - Getting Started: getting-started.md
   - Framework Overview: framework-overview.md
-  - Flow Architecture: flow-architecture.md
   - Agents & Capabilities: agents-and-capabilities.md
+  - Flow Architecture: flow-architecture.md
+  - LLM Facade: llm.md
+  - Content & Messages: content.md
+  - Tools: tools.md
+  - Tools Catalog: tools-catalog.md
+  - Tool Governance & Safety: safety.md
+  - Middleware: middleware.md
+  - Memory: memory.md
+  - Knowledge Registry: knowledge.md
+  - Moderation: moderation.md
+  - Pricing & Cost Tracking: pricing.md
   - Graph: graph.md
   - Examples: examples.md
   - Model Compatibility: model-compatibility.md

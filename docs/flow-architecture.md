@@ -548,6 +548,19 @@ Steps: `compile` (internally: plan → parallel execute → join → optional re
 
 The planner generates `$N. task [deps: $1, $2]` format. Independent tasks run concurrently via `asyncio.gather`.
 
+### Generate-Review
+
+Cyclic flow — a generator and a reviewer cooperate until the reviewer accepts the answer or the retry budget is exhausted.
+
+```python
+flow = generate_review_flow(gen_llm, review_llm, max_cycles=3)
+state = State(operational=generate_review_initial_state("Draft a release note"))
+```
+
+Steps: `generate` → `review` → loop while not accepted
+
+Useful when you want an explicit critique pass, optional tool use in both phases, and accumulated reviewer feedback injected into later generation attempts. Both phases take their own LLM (`gen_llm` / `review_llm`), optional tools (`gen_tools` / `review_tools`), and iteration caps.
+
 ---
 
 ## Step Engine

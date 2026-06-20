@@ -37,9 +37,10 @@ ai_arch_toolkit/
 │   ├── agents/        # 8 agent architectures as Flow factories
 │   │   └── flows/     # react_flow, reflexion_flow, rewoo_flow, etc.
 │   ├── flow/          # Flow orchestration (Flow, FlowStep, FlowResult, FlowEvent)
-│   ├── tools/         # 25 pre-built tools (weather, geo, news, etc.)
+│   ├── tools/         # ~120 pre-built tools across 25 domains (+ opt-in dangerous/)
 │   ├── memory/        # Graph-backed memory for agents (GraphStore, views, search)
-│   └── knowledge/     # Sync registry for prompt-injectable reference data
+│   ├── knowledge/     # Sync registry for prompt-injectable reference data
+│   └── moderation/    # LLM/OpenAI moderators + ModerationMiddleware
 └── __init__.py        # Re-exports from core/ + toolkit/
 ```
 
@@ -51,8 +52,12 @@ The stateless, async-first foundation. All new code should build on this.
 - **`_content.py`**: Message constructors (`user()`, `assistant()`, `system()`, `tool_result()`) and multimodal types (`ImagePart`, `DocumentPart`, `CachePart`). `type Content = str | list[ContentPart]`.
 - **`_response.py`**: `Response`, `Usage`, `ToolCall`, `ThinkingBlock`, `Citation`, `OutputSchema`, `StreamResponse`, `SyncStreamResponse`, `StreamEvent`, `RichStreamResponse`, `SyncRichStreamResponse`.
 - **`_providers/`**: `BaseProvider` ABC → `AnthropicProvider`, `OpenAIProvider`, `XAIProvider`, `GeminiProvider`. Factory: `create_provider()` routes by model prefix (`claude-` → Anthropic, `gpt-`/`o1-`/`o3-`/`o4-` → OpenAI, `grok-` → xAI, `gemini-` → Gemini). `provider=` forces an adapter (bypasses prefix detection); an unknown model with `base_url=` set falls back to the OpenAI-compatible adapter (Ollama, LM Studio, vLLM). The API key is required unless `base_url` points at a loopback host (localhost/`127.x`/`::1`), where local servers ignore it and a cloud env key is not forwarded; remote endpoints still fail fast on a missing key. `_normalize_fallbacks` routes string fallbacks by their own name — a recognizable model fails over to its own provider, a bare tag inherits the parent's connection.
-- **`_tools/`**: `@tool` decorator (auto-generates JSON Schema from type hints + Google-style docstrings), `ToolGroup` (collection with execute/async_execute), `infer_schema()`, `prepare_tools()`.
+- **`_tools/`**: `@tool` decorator (auto-generates JSON Schema from type hints + Google-style docstrings; also carries governance metadata — `capability`, `risk_level`, `requires_approval`). `ToolGroup` (collection with execute/async_execute returning a structured `ToolResult`). Governance pipeline: `ToolDefinition`/`ToolSchema`/`ToolRuntimePolicy`/`RiskLevel` (`_definition`), gates `DangerousToolGate`/`ApprovalGate`/`DryRunGate` (`_governance`), `ApprovalRequest`/`ApprovalDecision`/`ApprovalHandler` (`_approval`), `execute_tool`/`async_execute_tool` (`_executor`), `ToolResult`/`ToolError` (`_result`).
 - **`_pricing.py`**: `PricingRegistry` with `_default_pricing.toml`. Access via `pricing` singleton.
+- **`_budget.py`**: `BudgetPolicy` (run-level caps: wall-time, LLM/tool calls, tokens, cost), `BudgetState`, `BudgetExceeded`. Attached to a `Flow` via `budget_policy=`.
+- **`_policy.py`**: `Policy` (per-step retry/timeout/confidence/cost) with declarative callbacks `on_timeout`/`on_low_confidence`/`on_exhausted`.
+- **`_redaction.py`**: `RedactionPolicy`/`RedactionMode`/`Redactor` + `redact()`/`redact_text()` — strips secrets from traces and tool results by key name and value pattern.
+- **`_moderation.py`**: `Moderator` Protocol, `ModerationResult`, `ModerationError` (toolkit moderators build on these).
 - **`_sync.py`**: `_run_sync()` and `_stream_sync()` helpers used by LLM and agents.
 - **`_middleware.py`**: `Middleware` Protocol with `before`/`after` hooks, `Request` dataclass.
 - **`_retry.py`**: `RetryConfig` + `with_retry()` for exponential backoff.
@@ -85,7 +90,7 @@ answer = state["response"].text
 
 #### Tools (`toolkit/tools/`)
 
-25 pre-built tools across 11 files, all using stdlib only (zero pip deps). Categories: datetime, math, text, filesystem, shell, JSON/CSV, web, weather (Open-Meteo), knowledge (Wikipedia, Free Dictionary), geo (geocoding, IP lookup, country info), news (Hacker News). All use `@tool` decorator from core/.
+~120 pre-built tools across ~45 files (25 domains), all using stdlib only (zero pip deps) and the `@tool` decorator from core/. Domains include datetime/math/text/JSON-CSV utilities, weather + air quality, geo + OpenStreetMap, reference (Wikipedia, Wikidata, dictionary, news), scholarly (arXiv, PubMed, Europe PMC, Semantic Scholar, Crossref, ROR, DataCite, Open Library), biomedical/chemistry (UniProt, PDB, ChEMBL, RxNorm/DailyMed, ClinicalTrials), and public data (GBIF, Open Food Facts, openFDA, World Bank, WHO, Eurostat, USGS/EONET, NVD). The default `toolkit.tools` namespace is safe-by-default; filesystem/shell/Python/web-fetch tools are opt-in via `toolkit.tools.dangerous` and should be gated (see `docs/safety.md`). Full per-tool list: `docs/tools-catalog.md`.
 
 #### Memory (`toolkit/memory/`)
 
@@ -94,6 +99,10 @@ Graph-backed memory for LLM agents, built on `core/graph/`. `GraphStore` wraps `
 #### Knowledge (`toolkit/knowledge/`)
 
 Sync in-memory registry for prompt-injectable reference data. `KnowledgeRegistry` stores `KnowledgeEntry` items with category/tags/format. Querying via `by_category()`, `by_tags()`. `as_context()` builds prompt strings with separator/transform. Loaders: `load_text()`, `load_json()`, `load_toml()`, `load_yaml()`, `load_markdown()`, `load_directory()` (flat or recursive).
+
+#### Moderation (`toolkit/moderation/`)
+
+Content moderation built on the `core/_moderation.py` `Moderator` protocol. `OpenAIModerator` (free `omni-moderation-latest` endpoint), `LLMModerator` (any `LLM` as a classifier), and `ModerationMiddleware` (wires a moderator into the LLM middleware chain for input/output checks; `on_flagged` is `raise` or `warn`).
 
 #### Runner
 
