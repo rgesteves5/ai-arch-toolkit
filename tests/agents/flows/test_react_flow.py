@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock
 
+from ai_arch_toolkit.core._budget import BudgetPolicy
 from ai_arch_toolkit.core._response import Response, ToolCall, Usage
 from ai_arch_toolkit.core._state import State
 from ai_arch_toolkit.core._tools._decorator import tool
@@ -113,6 +114,45 @@ class TestReactFlow:
         assert tool_results[0].ok is False
         assert tool_results[0].error is not None
         assert tool_results[0].error.type == "approval_denied"
+
+    async def test_llm_call_budget_stops_before_model_call(self) -> None:
+        llm = AsyncMock()
+        llm.complete = AsyncMock(return_value=_make_response(text="should not happen"))
+
+        flow = react_flow(
+            llm,
+            ToolGroup(),
+            max_iterations=5,
+            budget_policy=BudgetPolicy(max_llm_calls=0),
+        )
+        state = State(operational=react_initial_state("test"))
+        result = await flow.run(state)
+
+        llm.complete.assert_not_called()
+        assert "budget_exceeded" in result.results
+        assert result.trace.metadata["budget"]["exceeded"]["limit"] == "llm_calls"
+
+    async def test_tool_call_budget_stops_before_tool_execution(self) -> None:
+        @tool
+        def search(q: str) -> str:
+            """Search."""
+            return q
+
+        tc = ToolCall(id="tc1", name="search", input={"q": "x"})
+        llm = AsyncMock()
+        llm.complete = AsyncMock(return_value=_make_response(tool_calls=(tc,)))
+
+        flow = react_flow(
+            llm,
+            ToolGroup(search),
+            max_iterations=5,
+            budget_policy=BudgetPolicy(max_tool_calls=0),
+        )
+        state = State(operational=react_initial_state("test"))
+        result = await flow.run(state)
+
+        assert "budget_exceeded" in result.results
+        assert result.trace.metadata["budget"]["exceeded"]["limit"] == "tool_calls"
 
     async def test_max_iterations_stops(self) -> None:
         tc = ToolCall(id="tc1", name="search", input={"q": "test"})

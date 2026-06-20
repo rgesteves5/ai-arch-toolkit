@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from ai_arch_toolkit.core._batch import BatchRequest, BatchResult
+from ai_arch_toolkit.core._budget import BudgetExceeded, BudgetPolicy, BudgetState
 from ai_arch_toolkit.core._content import (
     CachePart,
     Content,
@@ -116,6 +117,9 @@ __all__ = [
     "Attempt",
     "BatchRequest",
     "BatchResult",
+    "BudgetExceeded",
+    "BudgetPolicy",
+    "BudgetState",
     "CachePart",
     "Citation",
     "Content",

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock
 
+from ai_arch_toolkit.core._budget import BudgetPolicy
 from ai_arch_toolkit.core._response import Response, Usage
 from ai_arch_toolkit.core._state import State
 from ai_arch_toolkit.core._tools._group import ToolGroup
@@ -93,6 +94,28 @@ class TestLATSFlow:
         result = await flow.run(state)
 
         assert result.trace.flow_name == "lats"
+
+    async def test_llm_call_budget_stops_after_inner_rollout(self) -> None:
+        llm = AsyncMock()
+        llm.complete = AsyncMock(return_value=_make_response(text="answer"))
+        tools = ToolGroup()
+
+        def evaluator(task: str, answer: str) -> float:
+            return 0.95
+
+        flow = lats_flow(
+            llm,
+            tools,
+            evaluator_fn=evaluator,
+            max_rollouts=2,
+            budget_policy=BudgetPolicy(max_llm_calls=1),
+        )
+        state = State(operational=lats_initial_state("test"))
+        result = await flow.run(state)
+
+        assert llm.complete.call_count == 1
+        assert "budget_exceeded" in result.results
+        assert result.trace.metadata["budget"]["exceeded"]["limit"] == "llm_calls"
 
 
 class TestLATSInitialState:
