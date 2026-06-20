@@ -6,9 +6,12 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from ai_arch_toolkit.core._response import ToolCall
+from ai_arch_toolkit.core._tools._governance import (
+    DangerousToolGate,
+    DryRunGate,
+    ToolGate,
+)
 from ai_arch_toolkit.core._tools._group import ToolGroup
-from ai_arch_toolkit.core._tools._result import ToolResult
 from ai_arch_toolkit.core._tools._schema import infer_schema
 from ai_arch_toolkit.nanope.advanced_multi_purpose_configurable_agent._config import ToolsConfig
 from ai_arch_toolkit.nanope.advanced_multi_purpose_configurable_agent._profiles import (
@@ -39,55 +42,14 @@ class ToolGovernance:
     max_calls: int | None = None
 
 
-class GovernedToolGroup(ToolGroup):
-    """ToolGroup with execution-time governance checks."""
-
-    __slots__ = ("_calls", "_governance")
-
-    def __init__(self, base: ToolGroup, governance: ToolGovernance) -> None:
-        super().__init__(*base.tools)
-        self._governance = governance
-        self._calls = 0
-
-    def execute(self, tool_call: ToolCall) -> str:
-        decision = self._check(tool_call)
-        if decision is not None:
-            return decision
-        return super().execute(tool_call)
-
-    async def async_execute(self, tool_call: ToolCall) -> str:
-        decision = self._check(tool_call)
-        if decision is not None:
-            return decision
-        return await super().async_execute(tool_call)
-
-    def execute_result(self, tool_call: ToolCall) -> ToolResult:
-        decision = self._check(tool_call)
-        if decision is not None:
-            return ToolResult.success(decision)
-        return super().execute_result(tool_call)
-
-    async def async_execute_result(self, tool_call: ToolCall) -> ToolResult:
-        decision = self._check(tool_call)
-        if decision is not None:
-            return ToolResult.success(decision)
-        return await super().async_execute_result(tool_call)
-
-    def _check(self, tool_call: ToolCall) -> str | None:
-        if self._governance.max_calls is not None and self._calls >= self._governance.max_calls:
-            return (
-                "Tool blocked by governance: max tool calls exceeded "
-                f"({self._governance.max_calls})."
-            )
-        self._calls += 1
-
-        if tool_call.name in DANGEROUS_TOOLS and not self._governance.allow_dangerous:
-            return (
-                f"Tool blocked by governance: {tool_call.name!r} requires --allow-dangerous-tools."
-            )
-        if self._governance.dry_run:
-            return f"Dry run: would execute {tool_call.name} with input {tool_call.input!r}."
-        return None
+def _governance_gates(governance: ToolGovernance) -> tuple[ToolGate, ...]:
+    """Translate configurable-agent governance into core execution gates."""
+    gates: list[ToolGate] = [
+        DangerousToolGate(blocked=DANGEROUS_TOOLS, allow=governance.allow_dangerous),
+    ]
+    if governance.dry_run:
+        gates.append(DryRunGate(dry_run=True))
+    return tuple(gates)
 
 
 class ToolRegistry:
@@ -154,10 +116,12 @@ def resolve_tools_with_limits(
     enabled = registry.names if "all" in config.enabled else config.enabled
     names = tuple(name for name in enabled if name not in disabled)
     fns = [registry.get(name) for name in names]
-    group: ToolGroup = ToolGroup(*fns)
     governance = _tool_governance(config, max_tool_calls=max_tool_calls)
-    if governance != ToolGovernance() or any(name in DANGEROUS_TOOLS for name in names):
-        group = GovernedToolGroup(group, governance)
+    group = ToolGroup(
+        *fns,
+        gates=_governance_gates(governance),
+        max_calls=governance.max_calls,
+    )
     return ResolvedTools(group=group, names=names)
 
 
@@ -264,7 +228,7 @@ def built_in_tool_registry() -> ToolRegistry:
 
 
 def _tool_name(fn: Callable[..., Any]) -> str:
-    tool_def = getattr(fn, "__tool__", None)
-    if tool_def is None:
-        tool_def = infer_schema(fn)
-    return str(tool_def["name"])
+    definition = getattr(fn, "__tool_definition__", None)
+    if definition is not None:
+        return definition.schema.name
+    return str(infer_schema(fn)["name"])

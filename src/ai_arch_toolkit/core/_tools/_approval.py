@@ -9,8 +9,9 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from ai_arch_toolkit.core._response import ToolCall
+from ai_arch_toolkit.core._tools._definition import RiskLevel, ToolRuntimePolicy
 
-type RiskLevel = Literal["low", "medium", "high", "critical"]
+type ApprovalStatus = Literal["approved", "denied"]
 type ApprovalHandler = Callable[
     ["ApprovalRequest"], "ApprovalDecision | Awaitable[ApprovalDecision]"
 ]
@@ -18,7 +19,12 @@ type ApprovalHandler = Callable[
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ApprovalRequest:
-    """Request emitted before executing a tool that requires approval."""
+    """Request emitted before executing a tool that requires approval.
+
+    The handler receives the *unredacted* arguments — it needs the real values
+    to make a decision. Redaction is applied only to what gets stored in audit
+    metadata, never to this request.
+    """
 
     tool_name: str
     arguments: dict[str, Any]
@@ -41,18 +47,28 @@ class ApprovalRequest:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ApprovalDecision:
-    """Decision returned by a human or external approval handler."""
+    """Decision returned by a human or external approval handler.
 
-    approved: bool = False
-    denied: bool = False
+    The decision is a single ``status`` — ``"approved"`` or ``"denied"``. There
+    is no ambiguous "neither" state to misinterpret; construct via
+    :meth:`approve` / :meth:`deny`.
+    """
+
+    status: ApprovalStatus
     modified_args: dict[str, Any] | None = None
     reviewer: str | None = None
     reason: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
 
-    def __post_init__(self) -> None:
-        if self.approved and self.denied:
-            raise ValueError("ApprovalDecision cannot be both approved and denied")
+    @property
+    def approved(self) -> bool:
+        """True when the decision approves execution."""
+        return self.status == "approved"
+
+    @property
+    def denied(self) -> bool:
+        """True when the decision denies execution."""
+        return self.status == "denied"
 
     @classmethod
     def approve(
@@ -65,7 +81,7 @@ class ApprovalDecision:
     ) -> ApprovalDecision:
         """Create an approval decision."""
         return cls(
-            approved=True,
+            status="approved",
             modified_args=modified_args,
             reviewer=reviewer,
             reason=reason,
@@ -82,7 +98,7 @@ class ApprovalDecision:
     ) -> ApprovalDecision:
         """Create a denial decision."""
         return cls(
-            denied=True,
+            status="denied",
             reviewer=reviewer,
             reason=reason,
             metadata=metadata or {},
@@ -91,6 +107,7 @@ class ApprovalDecision:
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-compatible representation."""
         return {
+            "status": self.status,
             "approved": self.approved,
             "denied": self.denied,
             "modified_args": self.modified_args,
@@ -100,31 +117,15 @@ class ApprovalDecision:
         }
 
 
-def approval_metadata(
-    *,
-    capability: str | None = None,
-    risk_level: RiskLevel = "low",
-    requires_approval: bool = False,
-    approval_reason: str = "",
-) -> dict[str, Any]:
-    """Build the runtime approval metadata stored on a tool definition."""
-    return {
-        "capability": capability,
-        "risk_level": risk_level,
-        "requires_approval": requires_approval,
-        "approval_reason": approval_reason,
-    }
-
-
-def approval_request_for(tool_call: ToolCall, tool_def: dict[str, Any]) -> ApprovalRequest:
-    """Create an approval request for a tool call."""
+def approval_request_for(tool_call: ToolCall, policy: ToolRuntimePolicy) -> ApprovalRequest:
+    """Create an approval request for a tool call from its runtime policy."""
     return ApprovalRequest(
         tool_name=tool_call.name,
         arguments=dict(tool_call.input),
-        capability=tool_def.get("capability"),
-        risk_level=tool_def.get("risk_level", "low"),
+        capability=policy.capability,
+        risk_level=policy.risk_level,
         preview=_preview(tool_call),
-        reason=tool_def.get("approval_reason", ""),
+        reason=policy.approval_reason,
     )
 
 

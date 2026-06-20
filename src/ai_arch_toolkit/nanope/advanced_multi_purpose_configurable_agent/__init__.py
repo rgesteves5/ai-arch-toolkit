@@ -61,7 +61,6 @@ from ai_arch_toolkit.nanope.advanced_multi_purpose_configurable_agent._resolver 
 )
 from ai_arch_toolkit.nanope.advanced_multi_purpose_configurable_agent._tools import (
     DANGEROUS_TOOLS,
-    GovernedToolGroup,
     ResolvedTools,
     ToolGovernance,
     ToolRegistry,
@@ -92,7 +91,6 @@ __all__ = [
     "CapabilityProfile",
     "ChatSession",
     "ConfigurableAgent",
-    "GovernedToolGroup",
     "LimitsConfig",
     "MemoryConfig",
     "ModelConfig",
