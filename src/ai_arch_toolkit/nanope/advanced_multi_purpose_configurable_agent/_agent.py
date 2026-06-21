@@ -43,31 +43,9 @@ from ai_arch_toolkit.nanope.advanced_multi_purpose_configurable_agent._tools imp
     built_in_tool_registry,
     resolve_tools_with_limits,
 )
-from ai_arch_toolkit.toolkit.agents.flows._generate_review import (
-    generate_review_flow,
-    generate_review_initial_state,
-)
-from ai_arch_toolkit.toolkit.agents.flows._lats import lats_flow, lats_initial_state
-from ai_arch_toolkit.toolkit.agents.flows._llm_compiler import (
-    llm_compiler_flow,
-    llm_compiler_initial_state,
-)
-from ai_arch_toolkit.toolkit.agents.flows._plan_execute import (
-    plan_execute_flow,
-    plan_execute_initial_state,
-)
-from ai_arch_toolkit.toolkit.agents.flows._react import react_flow, react_initial_state
-from ai_arch_toolkit.toolkit.agents.flows._reflexion import (
-    reflexion_flow,
-    reflexion_initial_state,
-)
-from ai_arch_toolkit.toolkit.agents.flows._rewoo import rewoo_flow, rewoo_initial_state
-from ai_arch_toolkit.toolkit.agents.flows._self_discovery import (
-    self_discovery_flow,
-    self_discovery_initial_state,
-)
-from ai_arch_toolkit.toolkit.agents.flows._tot import tot_flow, tot_initial_state
-from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowResult
+from ai_arch_toolkit.toolkit.agents._compile import build_flow, extract_text, initial_state
+from ai_arch_toolkit.toolkit.agents._spec import ReasoningSpec
+from ai_arch_toolkit.toolkit.flow._flow import FlowResult
 
 type AgentStatus = Literal["completed", "failed", "cancelled", "stopped"]
 type LLMFactory = Callable[[ModelConfig], Any]
@@ -184,25 +162,20 @@ class ConfigurableAgent:
         tools, memory_store = self._resolve_tools_for_config(config, create_memory=True)
         llm = self._llm_factory(config.model)
 
-        policy = _flow_policy(config)
-        flow = _build_flow(
-            config=config,
-            llm=llm,
-            tools=tools.group,
-            system=prompt.system,
-            policy=policy,
-        )
+        _validate_output_schema(config)
+        spec = _reasoning_spec(config, system=prompt.system)
+        flow = build_flow(spec, llm, tools.group)
         run_task = await _inject_memory_context(task, config=config, memory_store=memory_store)
 
         state = State(
-            operational=_initial_state(config, run_task),
+            operational=initial_state(spec, run_task),
             persistent={"memory": memory_store} if memory_store is not None else None,
         )
         flow_result = await flow.run(state)
         response = state.get("response") or state.get("last_response")
         if not isinstance(response, Response):
             response = None
-        final_text = _final_text(state, response)
+        final_text = extract_text(state, flow_result)
 
         errors = _flow_errors(flow_result)
         status: AgentStatus = "failed" if errors else "completed"
@@ -306,170 +279,45 @@ def _flow_policy(config: AgentConfig) -> Policy | None:
     )
 
 
-def _build_flow(
-    *,
-    config: AgentConfig,
-    llm: Any,
-    tools: Any,
-    system: str,
-    policy: Policy | None,
-) -> Flow:
-    timeout = config.reasoning.timeout or config.limits.max_runtime_seconds
-    kwargs = dict(config.reasoning.strategy_kwargs)
+def _validate_output_schema(config: AgentConfig) -> None:
+    if not config.output.schema:
+        return
     strategy = config.reasoning.strategy
-    llm_kwargs = dict(config.reasoning.llm_kwargs)
-    if config.output.schema and strategy not in {"react", "generate_review"}:
+    if strategy not in {"react", "generate_review"}:
         raise ValueError("output.schema is currently supported only for react strategy")
-    if config.output.schema and strategy == "generate_review":
+    if strategy == "generate_review":
         raise ValueError(
             "output.schema is currently not supported for generate_review because the reviewer "
             "uses ACCEPT/RETRY control text"
         )
+
+
+def _reasoning_spec(config: AgentConfig, *, system: str) -> ReasoningSpec:
+    reasoning = config.reasoning
+    knobs: dict[str, Any] = {
+        **dict(reasoning.strategy_kwargs),
+        "parallel_tool_calls": reasoning.parallel_tool_calls,
+        "final_answer_hint": reasoning.final_answer_hint,
+        "strip_tools_on_final": reasoning.strip_tools_on_final,
+        "show_turn_counter": reasoning.show_turn_counter,
+    }
+    output_schema = None
     if config.output.schema:
-        llm_kwargs.setdefault(
-            "output_schema",
-            OutputSchema(
-                name=config.output.name,
-                schema=_plain_data(config.output.schema),
-                strict=config.output.strict,
-            ),
+        output_schema = OutputSchema(
+            name=config.output.name,
+            schema=_plain_data(config.output.schema),
+            strict=config.output.strict,
         )
-
-    if strategy == "react":
-        return react_flow(
-            llm,
-            tools,
-            system=system,
-            max_iterations=config.reasoning.max_iterations,
-            parallel_tool_calls=config.reasoning.parallel_tool_calls,
-            timeout=timeout,
-            policy=policy,
-            llm_kwargs=llm_kwargs,
-            final_answer_hint=config.reasoning.final_answer_hint,
-            strip_tools_on_final=config.reasoning.strip_tools_on_final,
-            show_turn_counter=config.reasoning.show_turn_counter,
-        )
-    if strategy == "plan_execute":
-        return plan_execute_flow(
-            llm,
-            tools,
-            system=system,
-            max_replans=int(kwargs.get("max_replans", 1)),
-            max_iterations_per_step=int(
-                kwargs.get("max_iterations_per_step", config.reasoning.max_iterations)
-            ),
-            timeout=timeout,
-            policy=policy,
-        )
-    if strategy == "reflexion":
-        return reflexion_flow(
-            llm,
-            tools,
-            evaluator=kwargs.get("evaluator", _default_evaluator),
-            threshold=float(kwargs.get("threshold", 0.7)),
-            max_retries=int(kwargs.get("max_retries", 3)),
-            system=system,
-            max_iterations=config.reasoning.max_iterations,
-            timeout=timeout,
-            policy=policy,
-        )
-    if strategy == "self_discovery":
-        return self_discovery_flow(
-            llm,
-            tools,
-            system=system,
-            max_react_iterations=config.reasoning.max_iterations,
-            timeout=timeout,
-            policy=policy,
-        )
-    if strategy == "generate_review":
-        return generate_review_flow(
-            gen_llm=llm,
-            review_llm=llm,
-            gen_tools=tools,
-            review_tools=tools,
-            gen_system=system,
-            gen_kwargs=llm_kwargs,
-            review_kwargs=llm_kwargs,
-            max_cycles=int(kwargs.get("max_cycles", 3)),
-            max_gen_iterations=config.reasoning.max_iterations,
-            max_review_iterations=int(kwargs.get("max_review_iterations", 5)),
-            timeout=timeout,
-            policy=policy,
-        )
-    if strategy == "rewoo":
-        return rewoo_flow(llm, tools, system=system, timeout=timeout, policy=policy)
-    if strategy == "llm_compiler":
-        return llm_compiler_flow(
-            llm,
-            tools,
-            system=system,
-            max_replans=int(kwargs.get("max_replans", 2)),
-            max_react_iterations=config.reasoning.max_iterations,
-            timeout=timeout,
-            policy=policy,
-        )
-    if strategy == "tot":
-        return tot_flow(
-            llm,
-            tools,
-            system=system,
-            n_candidates=int(kwargs.get("n_candidates", 3)),
-            max_depth=int(kwargs.get("max_depth", 3)),
-            max_iterations=config.reasoning.max_iterations,
-            strategy=kwargs.get("search_strategy", "dfs"),
-            timeout=timeout,
-            policy=policy,
-        )
-    if strategy == "lats":
-        return lats_flow(
-            llm,
-            tools,
-            system=system,
-            n_candidates=int(kwargs.get("n_candidates", 5)),
-            max_rollouts=int(kwargs.get("max_rollouts", config.reasoning.max_iterations)),
-            max_react_iterations=config.reasoning.max_iterations,
-            timeout=timeout,
-            policy=policy,
-        )
-    raise ValueError(f"Unsupported reasoning.strategy {strategy!r}")
-
-
-def _initial_state(config: AgentConfig, task: Content) -> dict[str, Any]:
-    strategy = config.reasoning.strategy
-    if strategy == "react":
-        return react_initial_state(task)
-    if strategy == "plan_execute":
-        return plan_execute_initial_state(task)
-    if strategy == "reflexion":
-        return reflexion_initial_state(task)
-    if strategy == "self_discovery":
-        return self_discovery_initial_state(task)
-    if strategy == "generate_review":
-        return generate_review_initial_state(task)
-    if strategy == "rewoo":
-        return rewoo_initial_state(task)
-    if strategy == "llm_compiler":
-        return llm_compiler_initial_state(task)
-    if strategy == "tot":
-        return tot_initial_state(task)
-    if strategy == "lats":
-        return lats_initial_state(task)
-    raise ValueError(f"Unsupported reasoning.strategy {strategy!r}")
-
-
-def _final_text(state: State, response: Response | None) -> str:
-    if response is not None and response.text:
-        return response.text
-    for key in ("answer", "last_answer"):
-        value = state.get(key)
-        if isinstance(value, str):
-            return value
-    return ""
-
-
-def _default_evaluator(_task: str, answer: str) -> float:
-    return 1.0 if answer.strip() else 0.0
+    return ReasoningSpec(
+        strategy=reasoning.strategy,
+        system=system,
+        max_iterations=reasoning.max_iterations,
+        knobs=knobs,
+        policy=_flow_policy(config),
+        timeout=reasoning.timeout or config.limits.max_runtime_seconds,
+        llm_kwargs=dict(reasoning.llm_kwargs),
+        output_schema=output_schema,
+    )
 
 
 async def _inject_memory_context(
