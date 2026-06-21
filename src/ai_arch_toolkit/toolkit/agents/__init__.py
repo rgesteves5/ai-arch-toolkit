@@ -2,6 +2,17 @@
 
 from __future__ import annotations
 
+from ai_arch_toolkit.toolkit.agents._agent import Agent, AgentResult
+from ai_arch_toolkit.toolkit.agents._builders import (
+    BuildContext,
+    FlowStrategy,
+    StrategyBuilder,
+    get_strategy,
+    register_strategy,
+    strategy_names,
+)
+from ai_arch_toolkit.toolkit.agents._compile import build_flow, extract_text, initial_state
+from ai_arch_toolkit.toolkit.agents._spec import ReasoningSpec
 from ai_arch_toolkit.toolkit.agents.flows import (
     generate_review_flow,
     generate_review_initial_state,
@@ -24,8 +35,18 @@ from ai_arch_toolkit.toolkit.agents.flows import (
 )
 
 __all__ = [
+    "Agent",
+    "AgentResult",
+    "BuildContext",
+    "FlowStrategy",
+    "ReasoningSpec",
+    "StrategyBuilder",
+    "build_flow",
+    "extract_text",
     "generate_review_flow",
     "generate_review_initial_state",
+    "get_strategy",
+    "initial_state",
     "lats_flow",
     "lats_initial_state",
     "llm_compiler_flow",
@@ -36,10 +57,12 @@ __all__ = [
     "react_initial_state",
     "reflexion_flow",
     "reflexion_initial_state",
+    "register_strategy",
     "rewoo_flow",
     "rewoo_initial_state",
     "self_discovery_flow",
     "self_discovery_initial_state",
+    "strategy_names",
     "tot_flow",
     "tot_initial_state",
 ]
