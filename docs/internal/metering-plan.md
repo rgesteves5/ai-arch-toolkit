@@ -111,6 +111,7 @@ class OperationFacts:                    # CORE builds AFTER middleware `before`
     count: int = 1                       # 1 per llm/tool; custom -> 0 (never touches call caps)
     mode: Literal["complete", "stream"] | None = None
     model: str | None = None
+    provider: str | None = None          # for observability + the local/unpriced decision (never decide by model name)
     declared_max_output_tokens: int | None = None
     content_size_hint: int | None = None # char count of the WHOLE request: system+messages+tool schemas+output schema+textual kwargs (FACT)
     non_text_parts: int = 0              # #images/docs (for the estimator's allowance)
@@ -131,8 +132,9 @@ class MeterOperation:                    # handle; delegates to MeterStore by op
 #   mark_started:out_{llm|tool}_calls -= count; committed {llm|tool}_calls += count      (PENDING->STARTED)
 #   settle:      release token/cost reservation; committed usage += actual;
 #                committed cost += amount if Known else unknown_cost_count += 1           (STARTED->SETTLED)
-#   fail:        release token/cost reservation; count stays; if Unknown cost -> unknown_cost_count += 1
-#                (STARTED->FAILED). fail() on an already-terminal op is a NO-OP (cleanup must never raise).
+#   fail:        release token/cost reservation; count stays (STARTED->FAILED). Cost-on-fail is KIND-AWARE:
+#                llm -> Unknown (unknown_cost_count += 1); tool -> known zero (unless a tool-cost seam);
+#                custom -> per supplied cost. fail() on an already-terminal op is a NO-OP (cleanup never raises).
 #   abort:       release ALL incl. base count                                            (PENDING->ABORTED)
 #   scope close: still-PENDING op -> ABORTED ; still-STARTED op (e.g. un-drained stream) -> force fail +
 #                INCOMPLETE (count stays, cost Unknown). EVERY transition updates ancestor span aggregates.
@@ -222,6 +224,7 @@ class MeterScope:                         # ContextVar-bound; ALWAYS creates a r
     controller: AdmissionController | None # None => measure-only
     pricer: Pricer                        # the SAME pricer used by the controller's estimate AND the
                                           # charge-site settle (so enforcement and reporting can't diverge)
+    config: RunConfig                     # retain_meter_events / usage_sinks / sink_error_policy / allow_unmetered_batch
     def open(self, facts) -> MeterOperation: ...      # store.open(facts, self.controller)
     def open_span(self, scope_type, name): ...        # child span CM; binds current_span_id
 def current_meter() -> MeterScope | None
@@ -282,13 +285,16 @@ return resp
 - **tools:** governance gates FIRST (blocked/dry-run/approval-denied do NOT open an op, do NOT count);
   only an executed tool opens an op (`mark_started` before `fn`, `settle`/`fail` after). `run_tools`
   routes through this executor.
-- **batch (`batch_*`):** **not metered in v1.** Inside **any** active `MeterScope` it raises
-  `NotMeteredOperationError` (terminal, flow-caught) unless `RunConfig.allow_unmetered_batch=True`; when
-  allowed, the report flags `unmetered_operations=["batch_submit"]` (so a metering-only report isn't trusted as complete).
+- **batch (`batch_*`):** **not metered in v1.** Inside an **enforcing** scope (`controller != None`) it
+  raises `NotMeteredOperationError` (terminal, flow-caught) unless `RunConfig.allow_unmetered_batch=True`.
+  In **metering-only** mode (`controller=None`) batch is **allowed** (don't block when not enforcing) but the
+  report flags `unmetered_operations=["batch_submit"]`. The guard reads `current_meter()` INSIDE the async
+  `batch_submit` (copied context); `batch_submit_sync` inherits via `copy_context`.
 - **server tools (`web_search`/`code_execution`):** governed by `BudgetPolicy.server_tools`
   (`cost_only` default | `allow` | `deny`). They run provider-side, NEVER count toward `max_tool_calls`,
-  and their cost is part of the LLM call's cost (Unknown when the provider doesn't itemize → fail-closed
-  under `max_cost`+`FAIL_CLOSED`). `deny` blocks an LLM call that carries server tools under an enforcing scope.
+  and their cost is part of the LLM call's cost. Because `has_server_tools` is known **pre-call**, this is a
+  **pre-admit deny** (not post-hoc): `cost_only` + `max_cost` + provider can't guarantee a known cost →
+  denied at admit. `deny` blocks any server-tool LLM call under an enforcing scope.
 - **flow:** `bind_meter(MeterScope(store, controller_or_None))` at run start (default, even without
   budget); `open_span` per step; nested flows reuse the bound scope; executor reads `for_span(step)`
   for `Policy.max_cost` and fills `Result.cost`/`.usage`.
@@ -306,26 +312,26 @@ return resp
 - [ ] **EVERY transition (open/mark_started/settle/fail/abort/incomplete) updates ancestor span aggregates**, not just settle. Per-span incremental, O(depth).
 - [ ] **`UsageEvent` carries op/span ids, kind, mode, model, usage, cost, cost_kind, status ∈ {settled,failed,incomplete,aborted}, timestamps** — so `replay(events)==projection` covers all states. **No raw prompts/tool-args/secrets/PII in events or `metadata`** by default.
 - [ ] **`MeterScope` always has a `run_span_id`**; if `current_span_id()` is `None`, facts default to it.
-- [ ] **Memory:** fold a settled/failed op's aggregate into its parent step-span and **drop the per-op span node** (keep only live op-ids for idempotency); `max_events` is a bounded ring buffer; default retains nothing. (Bounds O(ops) growth in LATS/cyclic.)
+- [ ] **Memory:** fold a settled/failed op's aggregate into its parent step-span and **drop the per-op span node**; keep the terminal idempotency **tombstone in a bounded LRU** (NOT only live op-ids — late finalizers/double-settle need terminals); `max_events` is a bounded ring buffer; default retains nothing. (Bounds O(ops) growth in LATS/cyclic.)
 - [ ] **Per-dimension outstanding** (`out_llm_calls`/`out_tool_calls`/`out_input_tokens`/`out_output_tokens`/`out_cost`); caps checked against committed+outstanding.
 - [ ] **Sync bridge:** `_run_sync` `copy_context()` (in-flow `*_sync` inherit the meter); `_stream_sync` does NOT (build-time capture). Sync inside an active scope is metered; outside, unmetered.
 - [ ] **`Policy.max_cost` applied by the EXECUTOR at the step span** (reads `for_span(step)`); same mechanism as run-level, unified.
 - [ ] **`max_wall_s`** from `snapshot.elapsed_s` (monotonic clock); checked at admit + step boundaries; does NOT interrupt in-flight calls (use `Policy.timeout`).
 - [ ] **Reserve default = soft (`NONE`).** Counts always hard. With `NONE`, cost/token caps are post-hoc; **overshoot ≤ number of concurrently in-flight ops** (≤1 only sequential). `EXPECTED`/`WORST_CASE` opt-in (token worst-case needs `declared_max_output_tokens`).
-- [ ] **Fail-closed at SETTLE (exact):** `settle` ALWAYS records the spend (the call already happened — never raise mid-settle, never invent a worst-case). Under `max_cost`+`FAIL_CLOSED`, a settled/failed **Unknown** cost sets `cost_uncertain`; the breach surfaces at the **next admit** (run halts cooperatively) and ends `over_budget`. Closes the unpriced-spend hole without losing the record.
+- [ ] **Fail-closed at SETTLE (exact):** `settle` ALWAYS records the spend (the call already happened — never raise mid-settle, never invent a worst-case). Under `max_cost`+`FAIL_CLOSED`, a settled/failed **Unknown** cost increments `unknown_cost_count`; `BudgetReport.cost_uncertain` is **derived** from `unknown_cost_count>0 + a cost cap` (not a stored snapshot field); the breach surfaces at the **next admit** (run halts cooperatively) and ends `over_budget`. Closes the unpriced-spend hole without losing the record.
 - [ ] **`unpriced` auto-ALLOW is EXPLICIT-ONLY (F4):** requires `unpriced=ALLOW` or provider `local=True`. **Never inferred from the URL** — a loopback `base_url` can proxy a PAID cloud model, and the live `_is_local_url` even matches `*.localhost`/`0.0.0.0`. Do NOT reuse `_is_local_url` for this. Unknown cost under `max_cost` stays fail-closed with an actionable message.
 - [ ] **Cache-token caps are post-hoc (F2):** there is no `out_cache_*` dimension (cache split is only known at settle), so the **cache component** of `max_input_tokens`/`max_total_tokens` is soft even under `WORST_CASE` — only the non-cache input/output estimate is hard-reservable. Document it; don't present those as fully hard.
 - [ ] **`metadata`/events redacted (F1):** the store runs `OperationFacts.metadata` and any event free-text through `core/_redaction.Redactor` before persist/emit; values are low-cardinality scalars (not `Any`). No raw prompts/tool-args/secrets/PII.
 - [ ] **Batch guard runs in the async body (F3):** the `NotMeteredOperationError` check reads `current_meter()` **inside** the async `batch_submit` (under the copied context); `batch_submit_sync` inherits the meter via `copy_context` exactly like `complete_sync`. (Add a sync-batch row to the matrix.)
 - [ ] **Idempotency tombstone is BOUNDED (F5):** the per-`op_id` terminal tombstone lives in a bounded LRU (or is tied to span-fold), NOT retained-until-scope-close unbounded — a long/unbounded run must not grow O(attempts).
 - [ ] **Hard concurrency safety = `ResourceLimits` only.** The store re-validates `committed+outstanding+applied` vs `decision.limits` under the lock (hard). A custom controller's free-form admit logic NOT in `ResourceLimits` is advisory under races; the default `BudgetAdmissionController` expresses ALL hard caps as `ResourceLimits`.
-- [ ] **`Result.cost`/`.usage` are projection views** (`for_span(step)`); a manually-set `Result(cost=...)` is overwritten (warn). Non-LLM paid work emits a `custom` metered op — never sets `Result.cost` by hand.
+- [ ] **`Result.cost`/`.usage` are projection views** (`for_span(step)`); a manually-set `Result(cost=...)` is **no longer authoritative** (overwritten + warn — a documented breaking change). Non-LLM paid work is metered via a **tool** in v1 (the meter is `_`-internal); a public custom-charge seam (`meter.custom(cost, usage)`) is deferred (§14).
 - [ ] **Nested `budget_policy` ignored-with-warning** when a scope already exists (v1); sub-caps per span deferred (§14).
 - [ ] **`Cost.estimated` is reservation-only** (pre-admit); `settle` yields `Known`|`Unknown`; the projection tracks known-sum + `unknown_cost_count`, never `Estimated`.
 - [ ] **Tool monetary cost is zero unless reported** (`max_cost` covers LLM/token cost; external tool $ only via a future `ToolResult.cost` seam) — documented, not silently assumed.
 - [ ] **Token convention:** `max_input_tokens` = input+cache_read+cache_write; `max_total_tokens` = all four. `Response.tokens` stays `input+output` (do not redefine a public property); add `Usage.total` if needed.
 - [ ] **`count_tokens` (provider I/O)** is never used by the sync estimator; it is unmetered/out-of-budget by itself.
-- [ ] **Reasoning/thinking tokens** are included in `Usage.output_tokens` (or `Usage` gains `reasoning_tokens`) so reasoning models price correctly.
+- [ ] **Reasoning/thinking tokens** are **normalized into `Usage.output_tokens`** (keep `Usage` stable; no new field in v1) so reasoning models price correctly.
 - [ ] **`Money` opaque pico-int, frozen+hashable;** `BudgetPolicy(max_cost=0.10)` at the API.
 - [ ] **`Response.cost` (float) + `cost_money` (Money) + `cost_known` (property)** are compat views of one `Cost`; all public cost surfaces (`FlowResult.total_cost`, `AgentResult.cost`, `Result.cost`) stay `float`.
 
@@ -450,8 +456,8 @@ from a missing base reservation · `BudgetExceeded`/`Ledger` names in core · `a
 3. **`reserve=NONE` (soft) default** — documented loudly; `EXPECTED`/`WORST_CASE` opt-in.
 4. **`unpriced=FAIL_CLOSED` default; auto-`ALLOW` is EXPLICIT-ONLY** (`unpriced=ALLOW` / provider `local=True`)
    — **never inferred from a loopback URL** (a localhost proxy can front a paid model). Unknown under a cost cap fails closed.
-5. **Batch fail-closed inside ANY active scope** unless `RunConfig.allow_unmetered_batch=True` (then the
-   report flags `unmetered_operations`). Server tools default `cost_only` (never count toward `max_tool_calls`).
+5. **Batch fail-closed inside an ENFORCING scope** (controller != None) unless `RunConfig.allow_unmetered_batch=True`;
+   **metering-only allows batch + flags `unmetered_operations`**. Server tools default `cost_only` (pre-admit deny under a cost cap; never `max_tool_calls`).
 6. **TOCTOU breach raises a neutral core `AdmissionDenied`** (not toolkit `BudgetExceeded`); `_step_engine`/
    tool executor re-raise denials (never convert to `Result`/`ToolResult`); only the flow executor converts.
 
@@ -459,4 +465,5 @@ from a missing base reservation · `BudgetExceeded`/`Ledger` names in core · `a
 
 Sub-caps per sub-agent (modelled now, API later) · OTel exporter (a `UsageSink`) · persistence/resumable
 budgets · full batch metering (reserve N at submit, settle per item — needs a batch registry) · event
-retention beyond the bounded buffer.
+retention beyond the bounded buffer · public custom-charge API (`meter.custom(cost, usage)`) for non-LLM
+paid work outside tools · `ToolResult.cost` seam for external tool $.
