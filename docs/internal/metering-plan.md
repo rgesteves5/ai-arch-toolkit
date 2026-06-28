@@ -115,7 +115,7 @@ class OperationIntent:                          # built by the charge site BEFOR
     # — chars/tok, image allowance — lives in toolkit, NOT baked in core):
     estimated_input_tokens: int | None = None
     declared_max_output_tokens: int | None = None
-    estimated_cost: Cost = Unknown("not estimated")
+    estimated_cost: Cost = field(default_factory=lambda: Cost.unknown("not estimated"))
     metadata: Mapping[str, Any] = field(default_factory=dict)
 # The controller reads these raw numbers to enforce BOTH token caps and cost, and to
 # choose the reserve mode (worst/expected/none).
@@ -158,8 +158,9 @@ class BudgetPolicy:
     max_input_tokens / max_output_tokens / max_total_tokens: int | None
     max_cost: float | None          # user-facing dollars; -> Money at compile
     max_wall_s: float | None
-    reserve: Reserve = WORST_CASE   # WORST_CASE | EXPECTED | NONE; counts always hard
-    unpriced: Unpriced = FAIL_CLOSED
+    reserve: Reserve = Reserve.NONE  # cost/tokens knob; counts are ALWAYS hard regardless.
+                                     # default soft (post-hoc); EXPECTED/WORST_CASE opt-in.
+    unpriced: Unpriced = Unpriced.FAIL_CLOSED
 
 # toolkit/budget/_controller.py
 class BudgetAdmissionController:     # implements AdmissionController
@@ -172,21 +173,23 @@ class BudgetAdmissionController:     # implements AdmissionController
 
 - [ ] **`admit + reserve` is atomic.** `with store.lock: snapshot = store.snapshot(); d = controller.admit(snapshot, intent); store.apply(d)` — **all three in ONE critical section** (no TOCTOU; two parallel `gather` calls must not admit against the same remaining budget).
 - [ ] **`threading.Lock`, NOT `asyncio.Lock`.** The stream finalizer settles from a **different OS thread** (sync drain). Reaching for `asyncio.Lock` because the system is async is the trap.
+- [ ] **Sync bridge:** `_run_sync` must `copy_context()` so `complete_sync`/`*_sync` called **inside a flow** inherit the meter (a real bug in the old design — sync calls escaped metering). `_stream_sync` does NOT copy context — which is exactly why the stream op is captured at build-time (below).
 - [ ] **`admit()` is sync + pure** — no `await`, no I/O, no DB. Monthly/DB budgets are resolved to a per-run `BudgetPolicy` at run start, not queried mid-flight.
 - [ ] **Streaming is `kind="llm"`, `mode="stream"` — not a separate kind.** So `max_llm_calls` always counts a stream. The stream **op is captured at BUILD time**, carried in the finalizer closure. Never re-read `current_meter()` at finalize (the drain thread has the ContextVar unset). Settle at drain; un-drained → `incomplete`, never silently lost.
 - [ ] **`run_tools()` routes through the common metered + gated executor.** It STAYS in `toolkit/_runner.py` (convenience), but today it calls `fn(**input)` directly, bypassing metering **and** governance (DangerousToolGate/ApprovalGate). This is a **security** hole, not just budget. No tool path may bypass the common executor.
 - [ ] **`Policy.max_cost` applied by the EXECUTOR at the step span** — not the step engine. Executor opens step span → step runs → ops attach → executor reads `for_span(step)` projection → applies `max_cost` → fills `Result.cost` as view/compat. Step engine stays free of budget. `Policy.max_cost` (step) and `BudgetPolicy.max_cost` (run) are the SAME mechanism at different spans — **do not deprecate the step cap; unify it.**
 - [ ] **`max_wall_s` enforcement:** `MeterScope` holds `started_at`; the controller checks it on each `admit`; the executor checks it before/after each step. It does **not** interrupt an in-flight call — for that use `Policy.timeout`. (Set the expectation in docs.)
+- [ ] **Reserve default = soft.** `reserve` is a cost/tokens knob; **counts are always hard** regardless. Default `NONE` (post-hoc soft) to avoid over-blocking legitimate calls; `EXPECTED`/`WORST_CASE` opt-in. Token worst-case reservation needs `declared_max_output_tokens`.
 - [ ] **Token-cap convention (decide now; override if you disagree):**
-  `Usage` = `input_tokens` (non-cached) · `cache_read_tokens` · `cache_write_tokens` · `output_tokens`.
-  `max_input_tokens` caps `input_tokens + cache_read_tokens` (all prompt tokens) ·
+  `Usage` = `input_tokens` (non-cached) · `cache_read_tokens` · `cache_write_tokens` · `output_tokens` (disjoint after provider normalization).
+  `max_input_tokens` caps `input_tokens + cache_read_tokens + cache_write_tokens` (the **full context sent** — cache_write tokens are prompt tokens, just priced differently) ·
   `max_output_tokens` caps `output_tokens` ·
   `max_total_tokens` caps the sum of all four.
   Cache **rate** differences (read cheaper, write dearer) are a *cost* concern handled by `Cost`/pricing — **not** the token cap.
 - [ ] **Events optional; counters/projections authoritative.** Default: counters retained, events NOT retained, events streamed to `UsageSink`s if present, `retain_events=True` opt-in for debug, `max_events` cap. No O(n) memory leak on long runs.
 - [ ] **`Money` opaque, pico-int internal.** `BudgetPolicy(max_cost=0.10)` at the API; `Money` internally. Never expose "pico".
 - [ ] **Per-span projections via incremental aggregates** — maintained on `settle` (walk `parent_span_id` chain), O(depth) write / O(1) read. No fold-on-read over the whole log.
-- [ ] **estimate/intent boundary:** the intent carries FACTS + a pre-estimate from an **injected estimator** (toolkit). The controller decides the reserve mode (worst/expected/none). Estimation heuristic and reserve-mode opinion stay out of core.
+- [ ] **estimate/intent boundary:** the core charge site builds request **FACTS**; the **estimator is a dependency injected into the `MeterScope`/controller** (toolkit) and produces the pre-estimate; the controller decides the reserve mode. **Core never imports or calls toolkit code** — the heuristic and reserve-mode opinion never re-enter core.
 - [ ] **`Response.cost` (float, legacy) + `cost_money` (Money) + `cost_known`** are compat views of one `Cost`; later `cost` becomes a property of `cost_money`.
 
 ---
@@ -197,9 +200,9 @@ class BudgetAdmissionController:     # implements AdmissionController
 2. `feat(core): meter LLM operations` — `complete()` + `stream()` charge sites (incl. build-time finalizer capture; stream = `kind="llm"`, `mode="stream"`).
 3. `feat(core): meter tool operations` — `ToolGroup` **and `run_tools`** through the common metered+gated executor.
 4. `feat(toolkit): run-level budget controller` — `toolkit/budget/` (BudgetPolicy, BudgetAdmissionController + estimator, BudgetExceeded, BudgetReport, BudgetSnapshot).
-5. `feat(flow): bind budget scope during execution` — executor opens `MeterScope`, installs controller, opens step spans, derives trace/result/report from projections. **No reconciliation.**
-6. `refactor(agents): derive usage/cost from flow metering` — delete manual accumulators from the 9 flows.
-7. `refactor(flow): reimplement Policy.max_cost as step-span budget` (executor-applied; not deprecated).
+5. `feat(flow): bind meter scope + step spans` — executor opens `MeterScope`, installs controller, opens step spans, derives trace/result/report from projections. **No reconciliation.**
+6. `feat(flow): apply Policy.max_cost from the step-span projection` — move the check out of `_step_engine` into the executor (step-scope budget; **not** deprecated). Removes the old `_step_engine.py:89` `Result.cost` check in the SAME commit — no intermediate phase where spans exist but the old check still runs.
+7. `refactor(agents): derive usage/cost from flow metering` — delete manual accumulators from the 9 flows.
 8. `test+docs` — invariants/property tests; rewrite `docs/budgets.md` + budget sections; `examples/38_budget.py`.
 
 ---
@@ -212,7 +215,7 @@ class BudgetAdmissionController:     # implements AdmissionController
 - Hard count caps exact under parallel `asyncio.gather` (incl. streams — `kind="llm"`).
 - No reservation leak on fallback / abort / abandon.
 - Operation idempotency: double-settle same payload = no-op; different payload = error.
-- Unpriced under a cost cap → fail-closed (unless `allow_unpriced`).
+- Unpriced under a cost cap → fail-closed (unless `policy.unpriced == ALLOW`).
 - Stream abandoned → `incomplete`, never silently dropped.
 - `STRATEGIES` matrix (`usage == projection` per strategy × {no-breach, breach}) — **derive the strategy list from the registry** so a new strategy can't escape coverage.
 
