@@ -97,6 +97,8 @@ class Cost:
     @classmethod def known/estimated/unknown(...): ...
     @property def is_known(self) -> bool: ...
     @staticmethod def merged(*costs) -> Cost: ...   # composite of ONE op only; the projection never uses it.
+# settle() REJECTS a merged composite: its cost must be a single-op Known|Estimated|Unknown with
+# any-unknown ⇒ unknown preserved (else unknown_cost_count miscounts and fail-closed never trips). (F6)
 # Pricing lives in _pricing.py: PricingRegistry.price(facts, usage) -> Cost (NOT Cost.from_response).
 # Response.cost(float) / cost_known(property) / cost_money(Money|None) are COMPAT VIEWS of one Cost;
 # cost stays a constructable float field (~20 call sites do `response.cost or 0.0`).
@@ -113,7 +115,9 @@ class OperationFacts:                    # CORE builds AFTER middleware `before`
     content_size_hint: int | None = None # char count of the WHOLE request: system+messages+tool schemas+output schema+textual kwargs (FACT)
     non_text_parts: int = 0              # #images/docs (for the estimator's allowance)
     has_server_tools: bool = False       # provider-hosted web_search/code_execution present -> cost is Unknown-ish
-    metadata: Mapping[str, Any] = field(default_factory=dict)   # LOW-CARDINALITY, NON-SENSITIVE only
+    metadata: Mapping[str, str | int | float | bool] = field(default_factory=dict)
+    #   low-cardinality SCALARS only (never `Any`/raw payloads); the store runs metadata + any event
+    #   free-text through core `Redactor` before persist/emit (F1).
 
 class MeterOperation:                    # handle; delegates to MeterStore by op_id (handle is stateless)
     def mark_started(self): ...          # transfer base call reservation -> committed
@@ -135,7 +139,7 @@ class MeterOperation:                    # handle; delegates to MeterStore by op
 # Idempotency: settle(same op,same payload)=no-op; different payload=warn+keep-first (NOT raise);
 #   settle/abort/fail on ANY terminal op (SETTLED/FAILED/ABORTED/INCOMPLETE) = no-op+warn (late stream
 #   finalizer after scope-close INCOMPLETE must not corrupt state). The store keeps a terminal TOMBSTONE
-#   per op_id (status + payload hash) until scope close for idempotency, even after dropping the span node.
+#   per op_id (status + payload hash) in a BOUNDED LRU for idempotency, even after dropping the span node.
 #   WHY count-on-start: bounds PHYSICAL attempts incl. retries/failed fallbacks.
 
 # _admission.py
@@ -309,7 +313,11 @@ return resp
 - [ ] **`max_wall_s`** from `snapshot.elapsed_s` (monotonic clock); checked at admit + step boundaries; does NOT interrupt in-flight calls (use `Policy.timeout`).
 - [ ] **Reserve default = soft (`NONE`).** Counts always hard. With `NONE`, cost/token caps are post-hoc; **overshoot ≤ number of concurrently in-flight ops** (≤1 only sequential). `EXPECTED`/`WORST_CASE` opt-in (token worst-case needs `declared_max_output_tokens`).
 - [ ] **Fail-closed at SETTLE (exact):** `settle` ALWAYS records the spend (the call already happened — never raise mid-settle, never invent a worst-case). Under `max_cost`+`FAIL_CLOSED`, a settled/failed **Unknown** cost sets `cost_uncertain`; the breach surfaces at the **next admit** (run halts cooperatively) and ends `over_budget`. Closes the unpriced-spend hole without losing the record.
-- [ ] **`unpriced` auto-ALLOW is conservative:** only for an explicitly-local provider, a loopback `base_url` (`localhost`/`127.0.0.1`/`::1`), or explicit `local=True` — **never by model name** (a remote endpoint may be named `llama-local`). Cloud-unpriced under `max_cost` stays fail-closed. `is_local_unpriced(...)` defined narrowly.
+- [ ] **`unpriced` auto-ALLOW is EXPLICIT-ONLY (F4):** requires `unpriced=ALLOW` or provider `local=True`. **Never inferred from the URL** — a loopback `base_url` can proxy a PAID cloud model, and the live `_is_local_url` even matches `*.localhost`/`0.0.0.0`. Do NOT reuse `_is_local_url` for this. Unknown cost under `max_cost` stays fail-closed with an actionable message.
+- [ ] **Cache-token caps are post-hoc (F2):** there is no `out_cache_*` dimension (cache split is only known at settle), so the **cache component** of `max_input_tokens`/`max_total_tokens` is soft even under `WORST_CASE` — only the non-cache input/output estimate is hard-reservable. Document it; don't present those as fully hard.
+- [ ] **`metadata`/events redacted (F1):** the store runs `OperationFacts.metadata` and any event free-text through `core/_redaction.Redactor` before persist/emit; values are low-cardinality scalars (not `Any`). No raw prompts/tool-args/secrets/PII.
+- [ ] **Batch guard runs in the async body (F3):** the `NotMeteredOperationError` check reads `current_meter()` **inside** the async `batch_submit` (under the copied context); `batch_submit_sync` inherits the meter via `copy_context` exactly like `complete_sync`. (Add a sync-batch row to the matrix.)
+- [ ] **Idempotency tombstone is BOUNDED (F5):** the per-`op_id` terminal tombstone lives in a bounded LRU (or is tied to span-fold), NOT retained-until-scope-close unbounded — a long/unbounded run must not grow O(attempts).
 - [ ] **Hard concurrency safety = `ResourceLimits` only.** The store re-validates `committed+outstanding+applied` vs `decision.limits` under the lock (hard). A custom controller's free-form admit logic NOT in `ResourceLimits` is advisory under races; the default `BudgetAdmissionController` expresses ALL hard caps as `ResourceLimits`.
 - [ ] **`Result.cost`/`.usage` are projection views** (`for_span(step)`); a manually-set `Result(cost=...)` is overwritten (warn). Non-LLM paid work emits a `custom` metered op — never sets `Result.cost` by hand.
 - [ ] **Nested `budget_policy` ignored-with-warning** when a scope already exists (v1); sub-caps per span deferred (§14).
@@ -440,8 +448,8 @@ from a missing base reservation · `BudgetExceeded`/`Ledger` names in core · `a
 2. **Metering default for Flow/Agent; budget opt-in** via `run(budget_policy=)` / `Flow(budget_policy=)` /
    `RunConfig`. No `with_metering()` as the primary API.
 3. **`reserve=NONE` (soft) default** — documented loudly; `EXPECTED`/`WORST_CASE` opt-in.
-4. **`unpriced=FAIL_CLOSED` default; auto-`ALLOW` ONLY for explicit-local/loopback `base_url`** (never by
-   model name); cloud-unpriced under a cost cap fails closed with an actionable message.
+4. **`unpriced=FAIL_CLOSED` default; auto-`ALLOW` is EXPLICIT-ONLY** (`unpriced=ALLOW` / provider `local=True`)
+   — **never inferred from a loopback URL** (a localhost proxy can front a paid model). Unknown under a cost cap fails closed.
 5. **Batch fail-closed inside ANY active scope** unless `RunConfig.allow_unmetered_batch=True` (then the
    report flags `unmetered_operations`). Server tools default `cost_only` (never count toward `max_tool_calls`).
 6. **TOCTOU breach raises a neutral core `AdmissionDenied`** (not toolkit `BudgetExceeded`); `_step_engine`/
