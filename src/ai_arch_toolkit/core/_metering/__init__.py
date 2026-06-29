@@ -18,7 +18,7 @@ from ai_arch_toolkit.core._metering._admission import (
 )
 from ai_arch_toolkit.core._metering._cost import Cost, CostKind
 from ai_arch_toolkit.core._metering._money import Money
-from ai_arch_toolkit.core._metering._operation import OperationFacts
+from ai_arch_toolkit.core._metering._operation import OperationRequest
 
 __all__ = [
     "AdmissionController",
@@ -29,7 +29,7 @@ __all__ = [
     "MeterSnapshot",
     "Money",
     "NotMeteredOperationError",
-    "OperationFacts",
+    "OperationRequest",
     "Reservation",
     "ResourceLimits",
 ]

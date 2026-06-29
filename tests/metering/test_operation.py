@@ -1,24 +1,24 @@
-"""OperationFacts: pure facts + the count-vs-kind invariants."""
+"""OperationRequest: pure facts + the count-vs-kind invariants."""
 
 from __future__ import annotations
 
 import pytest
 
-from ai_arch_toolkit.core._metering._operation import OperationFacts
+from ai_arch_toolkit.core._metering._operation import OperationRequest
 
 
 def test_llm_facts():
-    f = OperationFacts(kind="llm", parent_span_id="run", mode="complete", model="claude-x")
+    f = OperationRequest(kind="llm", parent_span_id="run", mode="complete", model="claude-x")
     assert f.kind == "llm" and f.count == 1 and f.mode == "complete"
 
 
 def test_stream_is_llm_mode():
-    f = OperationFacts(kind="llm", parent_span_id="run", mode="stream")
+    f = OperationRequest(kind="llm", parent_span_id="run", mode="stream")
     assert f.kind == "llm" and f.mode == "stream"
 
 
 def test_custom_has_zero_count():
-    f = OperationFacts(kind="custom", parent_span_id="run", count=0)
+    f = OperationRequest(kind="custom", parent_span_id="run", count=0)
     assert f.count == 0
 
 
@@ -33,9 +33,9 @@ def test_custom_has_zero_count():
 )
 def test_count_and_mode_invariants(kwargs):
     with pytest.raises(ValueError):
-        OperationFacts(**kwargs)
+        OperationRequest(**kwargs)
 
 
 def test_metadata_default_is_empty():
-    f = OperationFacts(kind="tool", parent_span_id="step:1")
+    f = OperationRequest(kind="tool", parent_span_id="step:1")
     assert f.metadata == {}

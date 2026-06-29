@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Protocol
 from ai_arch_toolkit.core._metering._money import Money
 
 if TYPE_CHECKING:
-    from ai_arch_toolkit.core._metering._operation import OperationFacts
+    from ai_arch_toolkit.core._metering._operation import OperationRequest
 
 __all__ = [
     "AdmissionController",
@@ -172,4 +172,4 @@ class AdmissionController(Protocol):
     :class:`ResourceLimits`.
     """
 
-    def admit(self, snapshot: MeterSnapshot, facts: OperationFacts) -> AdmissionDecision: ...
+    def admit(self, snapshot: MeterSnapshot, request: OperationRequest) -> AdmissionDecision: ...

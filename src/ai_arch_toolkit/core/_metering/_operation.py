@@ -1,4 +1,4 @@
-"""The facts a charge site records about one operation (the handle comes with the store)."""
+"""The request a charge site submits to the meter (the operation handle comes with the store)."""
 
 from __future__ import annotations
 
@@ -6,11 +6,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Literal
 
-__all__ = ["OperationFacts"]
+__all__ = ["OperationRequest"]
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class OperationFacts:
+class OperationRequest:
     """Pure FACTS about an operation, built by ``core`` *after* middleware ``before``.
 
     Carries no estimates and no heuristics — the controller's injected estimator

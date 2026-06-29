@@ -34,7 +34,7 @@ events are optional audit; `replay(events) == projection` holds only when events
 | Layer | Responsibility |
 |---|---|
 | `core/_metering/` | Neutral mechanism: operation lifecycle, counters + per-span projections, injectable admission hook (no-op without a controller). Zero budget knowledge. |
-| `core` (LLM/tools/pricing) | Charge sites: build `OperationFacts` → `open` → `mark_started` → execute → `settle`/`fail`, **per provider attempt**. Cost via `PricingRegistry`. |
+| `core` (LLM/tools/pricing) | Charge sites: build `OperationRequest` → `open` → `mark_started` → execute → `settle`/`fail`, **per provider attempt**. Cost via `PricingRegistry`. |
 | `toolkit/budget/` | Opinion: `BudgetPolicy`, reserve modes, fail-closed, `BudgetExceeded`, report, default pricer/estimator. Implements the core admission Protocol. |
 | `toolkit/flow/` | **Always opens a `MeterScope` per run** (controller=None if no budget). Opens step spans, derives views, applies `Policy.max_cost` at the step span, **catches `AdmissionDenied` and records `policy_decision`** (preserves the cooperative non-raising flow contract). |
 | `toolkit/agents/` | Compose flows. **No manual accounting.** |
@@ -52,7 +52,7 @@ core/_metering/
   _money.py     # Money (opaque pico-USD int) + Money.zero()
   _cost.py      # Cost (one class: kind known|estimated|unknown + factories)
   _events.py    # UsageEvent (status: settled|failed|incomplete|aborted), UsageSink (Protocol)
-  _operation.py # OperationFacts, MeterOperation (lease lifecycle + state machine)
+  _operation.py # OperationRequest, MeterOperation (lease lifecycle + state machine)
   _admission.py # AdmissionController (Protocol), AdmissionDecision, Reservation, MeterSnapshot,
                 #   AdmissionDenied (NEUTRAL core exception), NotMeteredOperationError
   _store.py     # MeterStore (counters + per-span projections + optional events; injectable clock)
@@ -105,7 +105,7 @@ class Cost:
 
 # _operation.py
 @dataclass(frozen=True, slots=True, kw_only=True)
-class OperationFacts:                    # CORE builds AFTER middleware `before`; pure FACTS, NO estimates
+class OperationRequest:                    # CORE builds AFTER middleware `before`; pure FACTS, NO estimates
     kind: Literal["llm", "tool", "custom"]   # streaming = kind="llm", mode="stream"
     parent_span_id: str                  # current_span_id() (defaults to run_span_id if None)
     count: int = 1                       # 1 per llm/tool; custom -> 0 (never touches call caps)
@@ -179,7 +179,7 @@ class AdmissionDecision:
                                            # AdmissionDenied (core can't import BudgetExceeded).
 
 class AdmissionController(Protocol):
-    def admit(self, snapshot: MeterSnapshot, facts: OperationFacts) -> AdmissionDecision: ...
+    def admit(self, snapshot: MeterSnapshot, facts: OperationRequest) -> AdmissionDecision: ...
 # PURE: sync, no I/O, no await, no provider count_tokens. The injected estimator is sync too.
 # Hard caps: the controller decides using snapshot.{committed+outstanding} + facts.count.
 
@@ -229,7 +229,7 @@ class MeterScope:                         # ContextVar-bound; ALWAYS creates a r
     def open_span(self, scope_type, name): ...        # child span CM; binds current_span_id
 def current_meter() -> MeterScope | None
 def bind_meter(scope) -> Token            # nested flows REUSE the bound scope (idempotent); try/finally reset
-def current_span_id() -> str | None       # OperationFacts.parent_span_id = this or scope.run_span_id
+def current_span_id() -> str | None       # OperationRequest.parent_span_id = this or scope.run_span_id
 
 # toolkit/budget/_policy.py
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -241,7 +241,7 @@ class BudgetPolicy:
     reserve: Reserve = Reserve.NONE            # counts ALWAYS hard; cost/tokens soft by default
     unpriced: Unpriced = Unpriced.FAIL_CLOSED  # auto-ALLOW ONLY for explicit-local/loopback (see §5)
     server_tools: Literal["allow", "deny", "cost_only"] = "cost_only"
-# Estimator/Pricer are typed seams: Estimator = Callable[[OperationFacts], Reservation] (sync);
+# Estimator/Pricer are typed seams: Estimator = Callable[[OperationRequest], Reservation] (sync);
 #   Pricer.price(facts, usage) -> Cost. BudgetAdmissionController(policy, *, estimator=..., pricer=...).
 # RunConfig (toolkit/flow): budget_policy, retain_meter_events, usage_sinks, sink_error_policy,
 #   allow_unmetered_batch (run-level, since batch is gated in ANY active scope).
@@ -259,7 +259,7 @@ always bind a scope; bare `complete()` outside a flow has none (mode 1).
 meter = current_meter()
 if meter is None:
     return await provider.complete(req)              # unmetered (mode 1)
-facts = OperationFacts(kind="llm", mode="complete", parent_span_id=current_span_id(),
+facts = OperationRequest(kind="llm", mode="complete", parent_span_id=current_span_id(),
                        model=req.model, declared_max_output_tokens=req.max_tokens,
                        content_size_hint=text_chars(req), non_text_parts=count_media(req))  # AFTER middleware before
 op = meter.open(facts)            # admit OUTSIDE lock; base+extra reservation applied under short lock | raise AdmissionDenied
@@ -321,7 +321,7 @@ return resp
 - [ ] **Fail-closed at SETTLE (exact):** `settle` ALWAYS records the spend (the call already happened — never raise mid-settle, never invent a worst-case). Under `max_cost`+`FAIL_CLOSED`, a settled/failed **Unknown** cost increments `unknown_cost_count`; `BudgetReport.cost_uncertain` is **derived** from `unknown_cost_count>0 + a cost cap` (not a stored snapshot field); the breach surfaces at the **next admit** (run halts cooperatively) and ends `over_budget`. Closes the unpriced-spend hole without losing the record.
 - [ ] **`unpriced` auto-ALLOW is EXPLICIT-ONLY (F4):** requires `unpriced=ALLOW` or provider `local=True`. **Never inferred from the URL** — a loopback `base_url` can proxy a PAID cloud model, and the live `_is_local_url` even matches `*.localhost`/`0.0.0.0`. Do NOT reuse `_is_local_url` for this. Unknown cost under `max_cost` stays fail-closed with an actionable message.
 - [ ] **Cache-token caps are post-hoc (F2):** there is no `out_cache_*` dimension (cache split is only known at settle), so the **cache component** of `max_input_tokens`/`max_total_tokens` is soft even under `WORST_CASE` — only the non-cache input/output estimate is hard-reservable. Document it; don't present those as fully hard.
-- [ ] **`metadata`/events redacted (F1):** the store runs `OperationFacts.metadata` and any event free-text through `core/_redaction.Redactor` before persist/emit; values are low-cardinality scalars (not `Any`). No raw prompts/tool-args/secrets/PII.
+- [ ] **`metadata`/events redacted (F1):** the store runs `OperationRequest.metadata` and any event free-text through `core/_redaction.Redactor` before persist/emit; values are low-cardinality scalars (not `Any`). No raw prompts/tool-args/secrets/PII.
 - [ ] **Batch guard runs in the async body (F3):** the `NotMeteredOperationError` check reads `current_meter()` **inside** the async `batch_submit` (under the copied context); `batch_submit_sync` inherits the meter via `copy_context` exactly like `complete_sync`. (Add a sync-batch row to the matrix.)
 - [ ] **Idempotency tombstone is BOUNDED (F5):** the per-`op_id` terminal tombstone lives in a bounded LRU (or is tied to span-fold), NOT retained-until-scope-close unbounded — a long/unbounded run must not grow O(attempts).
 - [ ] **Hard concurrency safety = `ResourceLimits` only.** The store re-validates `committed+outstanding+applied` vs `decision.limits` under the lock (hard). A custom controller's free-form admit logic NOT in `ResourceLimits` is advisory under races; the default `BudgetAdmissionController` expresses ALL hard caps as `ResourceLimits`.
