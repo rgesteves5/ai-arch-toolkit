@@ -7,7 +7,29 @@ operation lifecycle. Budget *policy* lives in ``toolkit/budget``. See
 
 from __future__ import annotations
 
+from ai_arch_toolkit.core._metering._admission import (
+    AdmissionController,
+    AdmissionDecision,
+    AdmissionDenied,
+    MeterSnapshot,
+    NotMeteredOperationError,
+    Reservation,
+    ResourceLimits,
+)
 from ai_arch_toolkit.core._metering._cost import Cost, CostKind
 from ai_arch_toolkit.core._metering._money import Money
+from ai_arch_toolkit.core._metering._operation import OperationFacts
 
-__all__ = ["Cost", "CostKind", "Money"]
+__all__ = [
+    "AdmissionController",
+    "AdmissionDecision",
+    "AdmissionDenied",
+    "Cost",
+    "CostKind",
+    "MeterSnapshot",
+    "Money",
+    "NotMeteredOperationError",
+    "OperationFacts",
+    "Reservation",
+    "ResourceLimits",
+]
