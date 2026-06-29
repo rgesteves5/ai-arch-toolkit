@@ -20,6 +20,7 @@ from ai_arch_toolkit.core._metering._cost import Cost, CostKind
 from ai_arch_toolkit.core._metering._events import EventStatus, UsageEvent, UsageSink
 from ai_arch_toolkit.core._metering._money import Money
 from ai_arch_toolkit.core._metering._operation import OperationRequest
+from ai_arch_toolkit.core._metering._scope import Pricer, RunConfig
 
 __all__ = [
     "AdmissionController",
@@ -32,8 +33,10 @@ __all__ = [
     "Money",
     "NotMeteredOperationError",
     "OperationRequest",
+    "Pricer",
     "Reservation",
     "ResourceLimits",
+    "RunConfig",
     "UsageEvent",
     "UsageSink",
 ]
