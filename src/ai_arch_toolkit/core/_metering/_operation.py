@@ -4,9 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
-__all__ = ["OperationRequest"]
+if TYPE_CHECKING:
+    from ai_arch_toolkit.core._metering._cost import Cost
+    from ai_arch_toolkit.core._metering._store import MeterStore
+    from ai_arch_toolkit.core._response import Usage
+
+__all__ = ["MeterOperation", "OperationRequest"]
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -41,3 +46,39 @@ class OperationRequest:
             raise ValueError(f"a custom operation must have count == 0, got {self.count}")
         if self.mode is not None and self.kind != "llm":
             raise ValueError("mode is only valid for kind='llm'")
+
+
+class MeterOperation:
+    """A stateless handle to one in-flight operation; delegates to the store by ``op_id``.
+
+    Lifecycle: :meth:`mark_started` commits the call count, then :meth:`settle`
+    records actuals on success or :meth:`fail` keeps the count on error.
+    :meth:`abort` fully releases an operation that never started.
+    """
+
+    __slots__ = ("_op_id", "_store")
+
+    def __init__(self, store: MeterStore, op_id: str) -> None:
+        self._store = store
+        self._op_id = op_id
+
+    @property
+    def op_id(self) -> str:
+        """This operation's unique id within the run."""
+        return self._op_id
+
+    def mark_started(self) -> None:
+        """Commit the call count — the operation reached the provider/tool."""
+        self._store.mark_started(self._op_id)
+
+    def settle(self, *, usage: Usage, cost: Cost) -> None:
+        """Record the actual usage and cost (idempotent; ``cost`` must not be estimated)."""
+        self._store.settle(self._op_id, usage=usage, cost=cost)
+
+    def fail(self) -> None:
+        """A started operation errored — the count stays, holds are released."""
+        self._store.fail(self._op_id)
+
+    def abort(self) -> None:
+        """A never-started operation is fully released (no count)."""
+        self._store.abort(self._op_id)
