@@ -22,7 +22,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from ai_arch_toolkit.core._metering._admission import (
     AdmissionController,
@@ -454,7 +454,7 @@ class MeterStore:
             provider=op.provider,
             mode=op.mode,
             at_s=self._clock() - self._started_at,
-            metadata=self._redactor.redact(dict(op.metadata)),
+            metadata=op.metadata,  # raw; _dispatch redacts OUTSIDE the lock (redactor is foreign)
         )
 
     def _terminalize(self, op: _LiveOp, status: str, payload: int | None) -> None:
@@ -479,9 +479,10 @@ class MeterStore:
             )
 
     def _dispatch(self, event: UsageEvent | None) -> None:
-        """Emit to sinks OUTSIDE the lock. A faulty sink is logged, never fatal."""
+        """Redact + emit to sinks OUTSIDE the lock. Foreign redactor/sink can't stall the meter."""
         if event is None:
             return
+        event = replace(event, metadata=self._redactor.redact(dict(event.metadata)))
         for sink in self._sinks:
             try:
                 sink.emit(event)

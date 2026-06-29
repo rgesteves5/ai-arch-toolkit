@@ -7,7 +7,7 @@ from ai_arch_toolkit.core._metering._events import UsageEvent
 from ai_arch_toolkit.core._metering._money import Money
 from ai_arch_toolkit.core._metering._operation import OperationRequest
 from ai_arch_toolkit.core._metering._store import MeterStore
-from ai_arch_toolkit.core._redaction import REDACTED
+from ai_arch_toolkit.core._redaction import REDACTED, Redactor
 from ai_arch_toolkit.core._response import Usage
 
 
@@ -113,6 +113,25 @@ def test_a_raising_sink_never_breaks_the_run():
     op.mark_started()
     op.settle(usage=Usage(input_tokens=7), cost=Cost.known(Money.from_usd(0.01)))
     assert store.snapshot().input_tokens == 7  # accounting intact despite the sink blowing up
+
+
+def test_redaction_runs_outside_the_lock():
+    # The redactor comes from RunConfig (foreign). If it ran under the lock, reading the meter
+    # from inside redact() would deadlock the non-reentrant lock.
+    ref: dict[str, MeterStore] = {}
+    seen: dict[str, object] = {}
+
+    class Peeking(Redactor):
+        def redact(self, value: object) -> object:
+            seen["snap"] = ref["store"].snapshot()  # re-acquires the lock
+            return super().redact(value)
+
+    store = MeterStore(sinks=[Recorder()], redactor=Peeking())
+    ref["store"] = store
+    op = store.open(llm(metadata={"k": "v"}), None)
+    op.mark_started()
+    op.settle(usage=Usage(input_tokens=2), cost=Cost.known(Money.zero()))
+    assert seen["snap"].input_tokens == 2  # type: ignore[attr-defined]
 
 
 def test_dispatch_runs_outside_the_lock():
