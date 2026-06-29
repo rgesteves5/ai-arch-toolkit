@@ -17,6 +17,7 @@ from ai_arch_toolkit.core._metering._admission import (
     ResourceLimits,
 )
 from ai_arch_toolkit.core._metering._cost import Cost, CostKind
+from ai_arch_toolkit.core._metering._events import EventStatus, UsageEvent, UsageSink
 from ai_arch_toolkit.core._metering._money import Money
 from ai_arch_toolkit.core._metering._operation import OperationRequest
 
@@ -26,10 +27,13 @@ __all__ = [
     "AdmissionDenied",
     "Cost",
     "CostKind",
+    "EventStatus",
     "MeterSnapshot",
     "Money",
     "NotMeteredOperationError",
     "OperationRequest",
     "Reservation",
     "ResourceLimits",
+    "UsageEvent",
+    "UsageSink",
 ]

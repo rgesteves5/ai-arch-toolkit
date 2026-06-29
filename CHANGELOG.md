@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Anthropic schema-in-prompt structured output.** `structured_output_mode="prompt"` (an `LLM(...)` constructor default or a per-call kwarg) makes the Anthropic adapter inject the JSON schema into the system prompt and parse the reply, instead of the native `output_config`. This handles large analysis/planning-style schemas that exceed Anthropic's native structured-output complexity limit (which otherwise returns a 400 "schema is too complex"). Defaults to `"native"` (unchanged behaviour); the OpenAI, Gemini, and xAI adapters accept and ignore the kwarg.
 - **Local OpenAI-compatible servers.** `LLM("gemma4:e4b", base_url="http://localhost:11434/v1")` routes arbitrary model tags to the OpenAI adapter for Ollama, LM Studio, and vLLM. A `provider=` kwarg on `LLM` / `create_provider()` forces a specific adapter regardless of the model name; an unknown model with `base_url=` set falls back to the OpenAI-compatible adapter automatically.
 - **Optional API key on localhost.** When `base_url` points at a loopback host (`localhost` / `127.x` / `::1`), the API key is optional (a placeholder is used) and a cloud key from the environment is **not** forwarded to the local server. Remote endpoints (gateways, proxies) still require a key and fail fast when it is missing.
 - **Real-time reasoning streaming.** Vendor reasoning deltas (`reasoning_content` / `reasoning`) from OpenAI-compatible servers surface as incremental `thinking` events in `stream_events()` and populate `Response.thinking` in `complete()`, streaming, and batch responses. The reasoning-so-far is preserved even when a stream is abandoned early or errors mid-way.
@@ -32,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `uv lock --upgrade` brought every transitive dependency to its latest compatible version (pydantic 2.13, urllib3 2.7, requests 2.34, websockets 16, xai-sdk 1.12, ruff 0.15.13, …); resolved the four Dependabot alerts.
 
 ### Fixed
+- **Anthropic structured output now validates into the Pydantic model.** When `output_schema` carries a `model_class`, the Anthropic adapter coerces the parsed JSON via `model_validate()` — at parity with the OpenAI, Gemini, and xAI adapters (it previously returned a raw `dict`). It also tolerates Markdown-fenced JSON in the reply.
 - OpenAI-compatible streaming now flushes accumulated tool calls when a server ends the turn with `finish_reason="stop"` instead of `"tool_calls"` (some Ollama / LM Studio / vLLM builds), so tool-using agents no longer silently see zero tool calls.
 - Structured output: parsed JSON is now validated against the Pydantic model before being returned.
 - Lint fixes: ternary form in `toolkit/tools/_datetime.py`; unused `pytest` import in `tests/test_python_eval.py`; misc `ruff format` across toolkit tools.

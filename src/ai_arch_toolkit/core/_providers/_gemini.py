@@ -400,6 +400,7 @@ class GeminiProvider(BaseProvider):
         tool_choice: str | None = kwargs.pop("tool_choice", None)
         json_mode: bool = kwargs.pop("json_mode", False)
         kwargs.pop("logprobs", None)  # Not supported by Gemini
+        kwargs.pop("structured_output_mode", None)  # Anthropic-specific; ignored here
 
         # Translate max_tokens to Gemini's max_output_tokens
         if "max_tokens" in kwargs:

@@ -309,6 +309,7 @@ class XAIProvider(BaseProvider):
         tool_choice: str | None = kwargs.pop("tool_choice", None)
         json_mode: bool = kwargs.pop("json_mode", False)
         kwargs.pop("logprobs", None)  # Not supported by xAI
+        kwargs.pop("structured_output_mode", None)  # Anthropic-specific; ignored here
 
         # Warn about unknown params
         unknown = set(kwargs) - _SDK_PARAMS

@@ -10,7 +10,10 @@ ancestor up to the run root. The run span is the global aggregate, so ``snapshot
 ``for_span(run_span_id)``. ``ResourceLimits`` caps are run-level (re-validated at the root);
 per-span aggregates exist for reporting and the flow's per-step ``Policy.max_cost``.
 
-Deferred to the next increment: the ``UsageEvent`` audit stream + the tombstone LRU bound.
+A terminal transition optionally builds a :class:`UsageEvent` (only when a sink is attached),
+*under* the lock, and emits it to sinks *outside* the lock. ``metadata`` is run through a
+:class:`Redactor` before it ever leaves the store (F1). The idempotency tombstone is LRU-bounded
+(F5) so a long-running meter cannot leak memory.
 """
 
 from __future__ import annotations
@@ -18,7 +21,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from ai_arch_toolkit.core._metering._admission import (
@@ -29,8 +32,10 @@ from ai_arch_toolkit.core._metering._admission import (
     ResourceLimits,
 )
 from ai_arch_toolkit.core._metering._cost import Cost
+from ai_arch_toolkit.core._metering._events import EventStatus, UsageEvent, UsageSink
 from ai_arch_toolkit.core._metering._money import Money
 from ai_arch_toolkit.core._metering._operation import MeterOperation, OperationRequest
+from ai_arch_toolkit.core._redaction import Redactor
 from ai_arch_toolkit.core._response import Usage
 
 __all__ = ["MeterStore"]
@@ -38,6 +43,11 @@ __all__ = ["MeterStore"]
 logger = logging.getLogger(__name__)
 
 _RUN_SPAN = "run"
+_TOMBSTONE_MAX = (
+    50_000  # LRU bound: a long run can terminate millions of ops; keep the recent tail
+)
+_ZERO_COST = Cost.known(Money.zero())
+_NO_USAGE = Usage()
 
 # Terminal record kept for idempotency (settle/fail/abort after an op already ended).
 type _Terminal = tuple[str, int | None]  # (status, settle-payload hash | None)
@@ -73,13 +83,17 @@ class _Span:
 
 @dataclass(slots=True)
 class _LiveOp:
-    """A PENDING or STARTED operation's accounting state (mutable, lock-guarded)."""
+    """A PENDING or STARTED operation's accounting + audit state (mutable, lock-guarded)."""
 
     op_id: str
     kind: str
     count: int
     reservation: Reservation
     parent_span_id: str
+    model: str | None = None
+    provider: str | None = None
+    mode: str | None = None
+    metadata: Mapping[str, str | int | float | bool] = field(default_factory=dict)
     started: bool = False
 
 
@@ -139,6 +153,13 @@ def _abort(c: _Counters, op: _LiveOp) -> None:
         c.o_tool -= op.count
 
 
+def _fail_cost(kind: str) -> Cost:
+    """Cost ascribed to a non-settling op: Unknown for llm/custom (fail-closed), free for tool."""
+    if kind in ("llm", "custom"):
+        return Cost.unknown("operation did not settle")
+    return _ZERO_COST
+
+
 def _payload_hash(usage: Usage, cost: Cost) -> int:
     """A stable hash of a settle payload, for double-settle detection."""
     return hash(
@@ -157,10 +178,19 @@ def _payload_hash(usage: Usage, cost: Cost) -> int:
 class MeterStore:
     """The authoritative meter. Counters are the source of truth; everything else is a view."""
 
-    def __init__(self, *, clock: Callable[[], float] = time.monotonic) -> None:
+    def __init__(
+        self,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        sinks: Sequence[UsageSink] = (),
+        redactor: Redactor | None = None,
+    ) -> None:
         self._lock = threading.Lock()
         self._clock = clock
         self._started_at = clock()
+        self._sinks = tuple(sinks)
+        self._redactor = redactor or Redactor()
+        self._seq = 0
         self._next_op = 0
         self._next_span = 0
         self._ops: dict[str, _LiveOp] = {}
@@ -261,6 +291,10 @@ class MeterStore:
                 count=request.count,
                 reservation=reservation,
                 parent_span_id=request.parent_span_id,
+                model=request.model,
+                provider=request.provider,
+                mode=request.mode,
+                metadata=request.metadata,
             )
             self._ops[op_id] = op
             self._apply(op.parent_span_id, lambda c: _reserve(c, op))
@@ -335,6 +369,7 @@ class MeterStore:
         """STARTED -> SETTLED: release holds, record actual usage + cost. Idempotent on replay."""
         if cost.kind == "estimated":
             raise ValueError("settle() needs an actual cost (known|unknown), not an estimate")
+        event = None
         with self._lock:
             op = self._ops.get(op_id)
             if op is None:
@@ -343,26 +378,33 @@ class MeterStore:
             if not op.started:
                 raise ValueError(f"cannot settle operation {op_id} before mark_started()")
             self._apply(op.parent_span_id, lambda c: _settle(c, op, usage, cost))
+            event = self._make_event(op, "settled", usage, cost)
             self._terminalize(op, "settled", _payload_hash(usage, cost))
+        self._dispatch(event)
 
     def fail(self, op_id: str) -> None:
         """A started op errored: release holds, keep the count, charge cost-on-fail kind-aware.
 
         Never raises — runs in error-cleanup paths. A never-started op is fully released.
         """
+        event = None
         with self._lock:
             op = self._ops.get(op_id)
             if op is None:
                 return  # terminal/unknown -> no-op (cleanup safety)
             if op.started:
                 self._apply(op.parent_span_id, lambda c: _fail_started(c, op))
+                event = self._make_event(op, "failed", _NO_USAGE, _fail_cost(op.kind))
                 self._terminalize(op, "failed", None)
             else:
                 self._apply(op.parent_span_id, lambda c: _abort(c, op))
+                event = self._make_event(op, "aborted", _NO_USAGE, _ZERO_COST)
                 self._terminalize(op, "aborted", None)
+        self._dispatch(event)
 
     def abort(self, op_id: str) -> None:
         """PENDING -> ABORTED: fully release an operation that never started."""
+        event = None
         with self._lock:
             op = self._ops.get(op_id)
             if op is None:
@@ -370,23 +412,57 @@ class MeterStore:
             if op.started:
                 raise ValueError(f"cannot abort started operation {op_id}; use fail()")
             self._apply(op.parent_span_id, lambda c: _abort(c, op))
+            event = self._make_event(op, "aborted", _NO_USAGE, _ZERO_COST)
             self._terminalize(op, "aborted", None)
+        self._dispatch(event)
 
     def close(self) -> None:
         """End the scope: PENDING -> ABORTED, STARTED -> INCOMPLETE (count kept, cost Unknown)."""
+        events: list[UsageEvent] = []
         with self._lock:
             for op in list(self._ops.values()):
                 if op.started:
                     self._apply(op.parent_span_id, lambda c, op=op: _fail_started(c, op))
+                    event = self._make_event(op, "incomplete", _NO_USAGE, _fail_cost(op.kind))
                     self._terminalize(op, "incomplete", None)
                 else:
                     self._apply(op.parent_span_id, lambda c, op=op: _abort(c, op))
+                    event = self._make_event(op, "aborted", _NO_USAGE, _ZERO_COST)
                     self._terminalize(op, "aborted", None)
+                if event is not None:
+                    events.append(event)
+        for event in events:
+            self._dispatch(event)
 
     # ------------------------------------------------------------- helpers (locked)
+    def _make_event(
+        self, op: _LiveOp, status: EventStatus, usage: Usage, cost: Cost
+    ) -> UsageEvent | None:
+        """Build the audit event (only when a sink is attached). Caller holds the lock."""
+        if not self._sinks:
+            return None
+        self._seq += 1
+        return UsageEvent(
+            seq=self._seq,
+            op_id=op.op_id,
+            span_id=op.parent_span_id,
+            kind=op.kind,  # type: ignore[arg-type]  # op.kind is one of the literal kinds
+            status=status,
+            usage=usage,
+            cost=cost,
+            model=op.model,
+            provider=op.provider,
+            mode=op.mode,
+            at_s=self._clock() - self._started_at,
+            metadata=self._redactor.redact(dict(op.metadata)),
+        )
+
     def _terminalize(self, op: _LiveOp, status: str, payload: int | None) -> None:
         self._tombstones[op.op_id] = (status, payload)
         del self._ops[op.op_id]
+        if len(self._tombstones) > _TOMBSTONE_MAX:
+            # dicts preserve insertion order -> evict the oldest tombstone (F5: bounded memory)
+            del self._tombstones[next(iter(self._tombstones))]
 
     def _replay_terminal(self, op_id: str, action: str, payload: int | None) -> None:
         """Handle a transition on an already-terminal (or unknown) op: idempotent no-op or warn."""
@@ -401,3 +477,13 @@ class MeterStore:
                 status,
                 op_id,
             )
+
+    def _dispatch(self, event: UsageEvent | None) -> None:
+        """Emit to sinks OUTSIDE the lock. A faulty sink is logged, never fatal."""
+        if event is None:
+            return
+        for sink in self._sinks:
+            try:
+                sink.emit(event)
+            except Exception:
+                logger.exception("usage sink %r raised emitting %s", sink, event.op_id)

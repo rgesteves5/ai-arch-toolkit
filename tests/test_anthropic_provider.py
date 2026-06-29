@@ -305,6 +305,48 @@ class TestParseSdkResponse:
         r = _parse_sdk_response(msg, "claude-sonnet-4-20250514", output_schema=schema)
         assert r.parsed == {"name": "Alice"}
 
+    def test_structured_output_strips_markdown_fence(self):
+        schema = OutputSchema(name="Person", schema={"type": "object"})
+        msg = _sdk_message(text='```json\n{"name": "Alice"}\n```')
+        r = _parse_sdk_response(msg, "claude-sonnet-4-20250514", output_schema=schema)
+        assert r.parsed == {"name": "Alice"}
+
+    def test_structured_output_invalid_json_returns_none(self):
+        schema = OutputSchema(name="Person", schema={"type": "object"})
+        msg = _sdk_message(text="Sorry, I cannot do that.")
+        r = _parse_sdk_response(msg, "claude-sonnet-4-20250514", output_schema=schema)
+        assert r.parsed is None
+
+    def test_structured_output_coerces_pydantic_model(self):
+        try:
+            from pydantic import BaseModel
+        except ImportError:
+            pytest.skip("pydantic not installed")
+
+        class Person(BaseModel):
+            name: str
+
+        schema = OutputSchema(name="Person", schema=Person.model_json_schema(), model_class=Person)
+        msg = _sdk_message(text='{"name": "Alice"}')
+        r = _parse_sdk_response(msg, "claude-sonnet-4-20250514", output_schema=schema)
+        assert isinstance(r.parsed, Person)
+        assert r.parsed.name == "Alice"
+
+    def test_structured_output_validation_failure_falls_back_to_dict(self):
+        try:
+            from pydantic import BaseModel
+        except ImportError:
+            pytest.skip("pydantic not installed")
+
+        class Person(BaseModel):
+            name: str
+            age: int
+
+        schema = OutputSchema(name="Person", schema=Person.model_json_schema(), model_class=Person)
+        msg = _sdk_message(text='{"name": "Alice"}')  # missing required 'age'
+        r = _parse_sdk_response(msg, "claude-sonnet-4-20250514", output_schema=schema)
+        assert r.parsed == {"name": "Alice"}
+
     def test_raw_is_preserved(self):
         msg = _sdk_message()
         r = _parse_sdk_response(msg, "claude-sonnet-4-20250514")
@@ -461,6 +503,51 @@ class TestAnthropicProviderComplete:
         assert "tools" in call_kwargs
         assert "output_config" in call_kwargs
         assert result.parsed == {"answer": "42"}
+
+    @patch("ai_arch_toolkit.core._providers._anthropic.anthropic")
+    async def test_output_schema_prompt_mode_injects_schema(self, mock_sdk):
+        """``structured_output_mode='prompt'`` drops output_config and injects the
+        schema into the system prompt — for schemas Anthropic's native JSON mode
+        rejects as too complex."""
+        mock_client = AsyncMock()
+        mock_sdk.AsyncAnthropic.return_value = mock_client
+        mock_client.messages.create.return_value = _sdk_message(text='{"name": "Alice"}')
+
+        schema = OutputSchema(
+            name="Person",
+            schema={"type": "object", "properties": {"name": {"type": "string"}}},
+        )
+        provider = AnthropicProvider("claude-sonnet-4-20250514", "test-key")
+        provider._client = mock_client
+        result = await provider.complete(
+            [{"role": "user", "content": "Hi"}],
+            system="You are helpful.",
+            output_schema=schema,
+            structured_output_mode="prompt",
+        )
+        assert result.parsed == {"name": "Alice"}
+
+        call_kwargs = mock_client.messages.create.call_args[1]
+        assert "output_config" not in call_kwargs
+        assert "You are helpful." in call_kwargs["system"]
+        assert "must match this schema" in call_kwargs["system"]
+        assert '"properties"' in call_kwargs["system"]
+
+    @patch("ai_arch_toolkit.core._providers._anthropic.anthropic")
+    async def test_invalid_structured_output_mode_raises(self, mock_sdk):
+        mock_client = AsyncMock()
+        mock_sdk.AsyncAnthropic.return_value = mock_client
+        mock_client.messages.create.return_value = _sdk_message()
+
+        schema = OutputSchema(name="X", schema={"type": "object"})
+        provider = AnthropicProvider("claude-sonnet-4-20250514", "test-key")
+        provider._client = mock_client
+        with pytest.raises(ValueError, match="structured_output_mode"):
+            await provider.complete(
+                [{"role": "user", "content": "Hi"}],
+                output_schema=schema,
+                structured_output_mode="bogus",
+            )
 
     @patch("ai_arch_toolkit.core._providers._anthropic.anthropic")
     async def test_unknown_kwargs_warn(self, mock_sdk):
