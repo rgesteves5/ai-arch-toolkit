@@ -8,8 +8,12 @@ from collections.abc import Callable, Sequence
 from dataclasses import replace
 from typing import Any
 
+from ai_arch_toolkit.core._metering._cost import Cost
+from ai_arch_toolkit.core._metering._money import Money
+from ai_arch_toolkit.core._metering._operation import MeterOperation, OperationRequest
+from ai_arch_toolkit.core._metering._scope import current_meter, current_span_id
 from ai_arch_toolkit.core._redaction import Redactor
-from ai_arch_toolkit.core._response import ToolCall
+from ai_arch_toolkit.core._response import ToolCall, Usage
 from ai_arch_toolkit.core._tools._approval import ApprovalHandler
 from ai_arch_toolkit.core._tools._definition import ToolDefinition, ToolRuntimePolicy
 from ai_arch_toolkit.core._tools._governance import (
@@ -146,6 +150,30 @@ def _max_calls_block(
 
 # --- Pipeline -----------------------------------------------------------------
 
+_NO_USAGE = Usage()  # tools consume no tokens
+_ZERO_COST = Cost.known(Money.zero())
+
+
+def _meter_tool_open(tool_call: ToolCall) -> tuple[MeterOperation | None, Cost]:
+    """Open + start a metered op for a tool that is about to run, or ``(None, …)`` if unmetered.
+
+    Called only after gates + max-calls pass, so a blocked/dry-run tool is never metered.
+    ``AdmissionDenied`` from ``open`` propagates (terminal — a tool executor never converts it
+    to a ``ToolResult``; only the flow executor does).
+    """
+    scope = current_meter()
+    if scope is None:
+        return None, _ZERO_COST
+    request = OperationRequest(
+        kind="tool",
+        parent_span_id=current_span_id() or scope.run_span_id,
+        metadata={"tool": tool_call.name},
+    )
+    op = scope.open(request)
+    op.mark_started()
+    cost = scope.pricer.price(request, _NO_USAGE) if scope.pricer is not None else _ZERO_COST
+    return op, cost
+
 
 def _run_tool_sync(
     definition: ToolDefinition,
@@ -175,11 +203,20 @@ def _run_tool_sync(
             return _max_calls_block(tool_call, max_calls, audit, redactor)
         run_state.executed += 1
 
+    op, tool_cost = _meter_tool_open(tool_call)  # AdmissionDenied here is terminal (propagates)
+    settled = False
     try:
         result_value = _coerce_result(definition.fn(**args))
+        result = _with_audit(result_value, audit, redactor)
+        if op is not None:
+            op.settle(usage=_NO_USAGE, cost=tool_cost)
+            settled = True
+        return result
     except Exception as exc:
         return _result_from_exception(tool_call.name, exc, redactor)
-    return _with_audit(result_value, audit, redactor)
+    finally:
+        if op is not None and not settled:
+            op.fail()  # error / cancellation -> keep the count, release the op
 
 
 async def _arun_tool(
@@ -211,14 +248,23 @@ async def _arun_tool(
                 return _max_calls_block(tool_call, max_calls, audit, redactor)
             run_state.executed += 1
 
+    op, tool_cost = _meter_tool_open(tool_call)  # AdmissionDenied here is terminal (propagates)
+    settled = False
     try:
         if inspect.iscoroutinefunction(definition.fn):
             result_value = _coerce_result(await definition.fn(**args))
         else:
             result_value = _coerce_result(await asyncio.to_thread(definition.fn, **args))
+        result = _with_audit(result_value, audit, redactor)
+        if op is not None:
+            op.settle(usage=_NO_USAGE, cost=tool_cost)
+            settled = True
+        return result
     except Exception as exc:
         return _result_from_exception(tool_call.name, exc, redactor)
-    return _with_audit(result_value, audit, redactor)
+    finally:
+        if op is not None and not settled:
+            op.fail()  # error / cancellation -> keep the count, release the op
 
 
 # --- Public free functions ----------------------------------------------------
