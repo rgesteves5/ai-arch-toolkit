@@ -6,10 +6,12 @@ import dataclasses
 import logging
 import time
 from collections.abc import Awaitable, Callable
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 from ai_arch_toolkit.core._content import user
 from ai_arch_toolkit.core._exceptions import APIError
+from ai_arch_toolkit.core._metering._operation import MeterOperation, OperationRequest
+from ai_arch_toolkit.core._metering._scope import current_meter, current_span_id
 from ai_arch_toolkit.core._middleware import (
     Request,
     _run_aafter,
@@ -17,7 +19,7 @@ from ai_arch_toolkit.core._middleware import (
     _run_after,
     _run_before,
 )
-from ai_arch_toolkit.core._pricing import _estimate_response_cost
+from ai_arch_toolkit.core._pricing import _estimate_response_cost, pricing
 from ai_arch_toolkit.core._providers import _match_provider, create_provider
 from ai_arch_toolkit.core._response import (
     Attempt,
@@ -282,13 +284,23 @@ class LLM:
         model: str,
         retry: RetryConfig | None,
         attempts: list[Attempt],
+        request: OperationRequest | None = None,
     ) -> Response:
-        """Execute *call* with optional retry, recording each attempt."""
+        """Execute *call* with optional retry, recording + metering each physical attempt."""
         retry_number = 0
 
         async def _tracked() -> Response:
             nonlocal retry_number
             t0 = time.time()
+            # One metered op per physical attempt, so retries count against max_llm_calls.
+            # open() may raise AdmissionDenied — terminal by design: with_retry treats it as
+            # non-retryable and it is not a PROVIDER_ERROR, so it never falls back.
+            scope = current_meter()
+            op: MeterOperation | None = (
+                scope.open(request) if scope is not None and request is not None else None
+            )
+            if op is not None:
+                op.mark_started()
             try:
                 response = await call()
                 attempts.append(
@@ -301,6 +313,9 @@ class LLM:
                         retry_number=retry_number,
                     )
                 )
+                if op is not None and scope is not None and request is not None:
+                    pricer = scope.pricer or pricing
+                    op.settle(usage=response.usage, cost=pricer.price(request, response.usage))
                 return response
             except Exception as exc:
                 attempts.append(
@@ -315,6 +330,8 @@ class LLM:
                         retry_number=retry_number,
                     )
                 )
+                if op is not None:
+                    op.fail()
                 raise
             finally:
                 retry_number += 1
@@ -322,6 +339,21 @@ class LLM:
         if retry:
             return await with_retry(_tracked, retry)
         return await _tracked()
+
+    def _meter_request(
+        self, mode: Literal["complete", "stream"], provider_kwargs: dict[str, Any]
+    ) -> OperationRequest | None:
+        """Build the metering facts for an LLM call, or ``None`` when no scope is bound."""
+        scope = current_meter()
+        if scope is None:
+            return None
+        return OperationRequest(
+            kind="llm",
+            parent_span_id=current_span_id() or scope.run_span_id,
+            mode=mode,
+            model=self._model,
+            declared_max_output_tokens=provider_kwargs.get("max_tokens"),
+        )
 
     async def _try_fallbacks(
         self,
@@ -398,10 +430,13 @@ class LLM:
                 normalized, system=system, tools=wire_tools, **provider_kwargs
             )
 
+        meter_request = self._meter_request("complete", provider_kwargs)
         attempts: list[Attempt] = []
 
         try:
-            response = await self._try_with_tracking(_call, self._model, self._retry, attempts)
+            response = await self._try_with_tracking(
+                _call, self._model, self._retry, attempts, meter_request
+            )
         except self._fallback_on as primary_err:
             if not self._fallbacks:
                 raise
