@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import contextvars
+
 import pytest
 
 from ai_arch_toolkit.core._sync import _run_sync, _stream_sync
+
+_probe: contextvars.ContextVar[str | None] = contextvars.ContextVar("probe", default=None)
 
 
 class TestRunSync:
@@ -52,3 +56,37 @@ class TestStreamSync:
 
         with pytest.raises(RuntimeError, match="stream error"):
             list(_stream_sync(lambda: gen()))
+
+
+class TestContextPropagation:
+    """The metering scope rides a ContextVar; sync wrappers that hop threads must carry it."""
+
+    def test_run_sync_direct_path_sees_the_contextvar(self):
+        # No running loop -> asyncio.run in this thread; context is naturally present.
+        _probe.set("direct")
+
+        async def read() -> str | None:
+            return _probe.get()
+
+        assert _run_sync(read()) == "direct"
+
+    async def test_run_sync_thread_path_carries_the_contextvar(self):
+        # Inside a running loop -> _run_sync spawns a fresh thread; without copy_context the
+        # coroutine would see the default (None) instead of the bound value.
+        token = _probe.set("threaded")
+        try:
+
+            async def read() -> str | None:
+                return _probe.get()
+
+            assert _run_sync(read()) == "threaded"
+        finally:
+            _probe.reset(token)
+
+    def test_stream_sync_carries_the_contextvar(self):
+        _probe.set("streamed")
+
+        async def gen():
+            yield _probe.get()
+
+        assert list(_stream_sync(lambda: gen())) == ["streamed"]
