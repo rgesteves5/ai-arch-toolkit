@@ -302,6 +302,7 @@ class LLM:
             )
             if op is not None:
                 op.mark_started()
+            settled = False
             try:
                 response = await call()
                 attempts.append(
@@ -317,6 +318,7 @@ class LLM:
                 if op is not None and scope is not None and request is not None:
                     pricer = scope.pricer or pricing
                     op.settle(usage=response.usage, cost=pricer.price(request, response.usage))
+                    settled = True
                 return response
             except Exception as exc:
                 attempts.append(
@@ -331,10 +333,12 @@ class LLM:
                         retry_number=retry_number,
                     )
                 )
-                if op is not None:
-                    op.fail()
                 raise
             finally:
+                # Fail on ANY non-settled exit (incl. cancellation / BaseException) so a started
+                # op is never leaked until scope close; op.fail() is a no-op once settled.
+                if op is not None and not settled:
+                    op.fail()
                 retry_number += 1
 
         if retry:

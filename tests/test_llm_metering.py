@@ -257,3 +257,18 @@ def test_batch_submit_sync_is_also_blocked_under_enforcement():
     ):
         llm.batch_submit_sync([{"messages": "hi"}])
     assert prov.calls == 0
+
+
+async def test_baseexception_fails_the_op_promptly_not_leaked():
+    # A cancelled/interrupted attempt (BaseException, not Exception) must fail the op right away,
+    # not leak it as STARTED until scope close. Assert INSIDE the scope to distinguish the two.
+    class Boom(BaseException):
+        pass
+
+    llm = make_llm(FakeProvider(error=Boom()))
+    with MeterScope() as scope:
+        with pytest.raises(Boom):
+            await llm.complete("hi")
+        snap = scope.snapshot()  # before close(): op is already failed, not merely started
+        assert snap.llm_calls == 1 and snap.unknown_cost_count == 1
+        assert snap.out_llm_calls == 0 and snap.out_cost == Money.zero()
