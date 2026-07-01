@@ -8,10 +8,12 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from ai_arch_toolkit.core._budget import BudgetExceeded, BudgetState
+from ai_arch_toolkit.core._metering._scope import MeterScope, bind_meter
 from ai_arch_toolkit.core._state import State, StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._step_engine import execute_step
 from ai_arch_toolkit.core._trace import StepTrace, Trace
+from ai_arch_toolkit.toolkit.budget import BudgetReport
 from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowEvent, FlowResult, FlowStep
 from ai_arch_toolkit.toolkit.flow._scope import apply_scope
 
@@ -23,12 +25,14 @@ async def execute_flow(flow: Flow, state: State) -> FlowResult:
     results: dict[str, Result] = {}
     _ensure_budget(flow, state)
     initial_state = state.to_dict()
+    scope = _open_meter_scope(state)
 
     if flow.is_dag:
         await _execute_dag(flow, state, traces, results)
     else:
         await _execute_sequential(flow, state, traces, results)
 
+    scope.close()
     trace = Trace(
         flow_name=flow.name,
         steps=tuple(traces),
@@ -46,6 +50,7 @@ async def iter_flow(flow: Flow, state: State) -> AsyncIterator[FlowEvent]:
     results: dict[str, Result] = {}
     _ensure_budget(flow, state)
     initial_state = state.to_dict()
+    scope = _open_meter_scope(state)
 
     yield FlowEvent(type="flow_start", flow_name=flow.name)
 
@@ -56,6 +61,7 @@ async def iter_flow(flow: Flow, state: State) -> AsyncIterator[FlowEvent]:
         async for event in _iter_sequential(flow, state, traces, results):
             yield event
 
+    scope.close()
     trace = Trace(
         flow_name=flow.name,
         steps=tuple(traces),
@@ -485,7 +491,10 @@ async def _execute_flow_step(
     """Execute a single FlowStep, applying scope and delegating to step engine."""
     snapshot = state.snapshot()
     scoped = _resolve_and_apply_scope(snapshot, fs, flow)
-    return await _run_step_with_scope(fs.step, scoped)
+    # Bind the run's meter around step execution only (never across an event yield), so LLM/tool
+    # calls inside the step are metered under the run scope.
+    with bind_meter(_meter_scope(state)):
+        return await _run_step_with_scope(fs.step, scoped)
 
 
 async def _run_step_with_scope(
@@ -531,6 +540,23 @@ def _should_halt(result: Result, fs: FlowStep) -> bool:
     return policy.on_exhausted == "halt"
 
 
+def _open_meter_scope(state: State) -> MeterScope:
+    """Create the run's meter (measure-only for now) and stash it for the step binder.
+
+    Stored in the ``world`` layer: it is run-global and, crucially, ``world`` is shared by
+    reference across ``State.fork()`` (DAG branches) — the meter holds a ``threading.Lock`` that a
+    deep copy of the ``operational`` layer would choke on.
+    """
+    scope = MeterScope()
+    state.set("_meter_scope", scope, layer="world")
+    return scope
+
+
+def _meter_scope(state: State) -> MeterScope | None:
+    value = state.get("_meter_scope")
+    return value if isinstance(value, MeterScope) else None
+
+
 def _ensure_budget(flow: Flow, state: State) -> None:
     if flow.budget_policy is None or isinstance(state.get("budget_state"), BudgetState):
         return
@@ -543,10 +569,14 @@ def _budget_state(state: State) -> BudgetState | None:
 
 
 def _trace_metadata(state: State) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
     budget = _budget_state(state)
-    if budget is None:
-        return {}
-    return {"budget": budget.to_dict()}
+    if budget is not None:
+        metadata["budget"] = budget.to_dict()
+    scope = _meter_scope(state)
+    if scope is not None:
+        metadata["meter"] = BudgetReport.from_snapshot(scope.snapshot()).to_dict()
+    return metadata
 
 
 def _append_budget_precheck_trace(
