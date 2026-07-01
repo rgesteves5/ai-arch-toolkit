@@ -6,7 +6,14 @@ import logging
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+from ai_arch_toolkit.core._metering._cost import Cost
+from ai_arch_toolkit.core._metering._money import Money
+
+if TYPE_CHECKING:
+    from ai_arch_toolkit.core._metering._operation import OperationRequest
+    from ai_arch_toolkit.core._response import Usage
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +145,32 @@ class PricingRegistry:
             total += p.cache_read * cache_read_tokens / per_m
 
         return total
+
+    def price(self, request: OperationRequest, usage: Usage) -> Cost:
+        """Turn an operation's facts + observed usage into a typed :class:`Cost`.
+
+        The default :class:`~ai_arch_toolkit.core.Pricer`. A missing table entry yields
+        :meth:`Cost.unknown` — never a silent ``$0`` — so an unpriced call fails closed.
+        Provider-hosted server tools make the whole cost ``unknown`` because their charge is
+        not reflected in the token counts.
+        """
+        if request.kind != "llm":
+            return Cost.known(Money.zero())  # non-LLM ops carry no token cost here
+        if request.has_server_tools:
+            return Cost.unknown("provider-hosted server tools have unmetered cost")
+        model = request.model
+        if model is None:
+            return Cost.unknown("operation has no model to price")
+        usd = self.estimate_cost(
+            model,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cache_write_tokens=usage.cache_write_tokens,
+            cache_read_tokens=usage.cache_read_tokens,
+        )
+        if usd is None:
+            return Cost.unknown(f"no pricing for model {model!r}")
+        return Cost.known(Money.from_usd(usd))
 
     # ── Load ──
 
