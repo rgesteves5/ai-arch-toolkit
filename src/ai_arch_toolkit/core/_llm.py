@@ -10,6 +10,7 @@ from typing import Any, ClassVar, Literal
 
 from ai_arch_toolkit.core._content import user
 from ai_arch_toolkit.core._exceptions import APIError
+from ai_arch_toolkit.core._metering._admission import NotMeteredOperationError
 from ai_arch_toolkit.core._metering._operation import MeterOperation, OperationRequest
 from ai_arch_toolkit.core._metering._scope import current_meter, current_span_id
 from ai_arch_toolkit.core._middleware import (
@@ -873,8 +874,22 @@ class LLM:
     # Batch API
     # ------------------------------------------------------------------
 
+    def _reject_batch_under_enforcement(self) -> None:
+        """Batch bypasses per-attempt metering; refuse it inside an enforcing budget (fail-closed).
+
+        Measure-only (``controller=None``) and unmetered runs are unaffected — batch simply is
+        not metered there (a documented gap, reconciled post-hoc from provider records).
+        """
+        scope = current_meter()
+        if scope is not None and scope.controller is not None:
+            raise NotMeteredOperationError(
+                "batch operations bypass per-attempt metering and are not allowed under an "
+                "enforcing budget; use complete()/stream(), or run the batch without a controller"
+            )
+
     async def batch_submit(self, requests: list[dict[str, Any]]) -> str:
         """Submit a batch of requests. Returns a batch ID."""
+        self._reject_batch_under_enforcement()
         return await self._provider.batch_submit(requests)
 
     async def batch_status(self, batch_id: str) -> str:

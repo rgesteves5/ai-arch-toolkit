@@ -9,6 +9,7 @@ from ai_arch_toolkit.core._metering._admission import (
     AdmissionDecision,
     AdmissionDenied,
     MeterSnapshot,
+    NotMeteredOperationError,
     ResourceLimits,
 )
 from ai_arch_toolkit.core._metering._cost import Cost
@@ -37,6 +38,10 @@ class FakeProvider:
             raise self._error
         assert self._response is not None
         return self._response
+
+    async def batch_submit(self, requests) -> str:
+        self.calls += 1
+        return "batch-123"
 
 
 class CapController:
@@ -215,3 +220,40 @@ async def test_stream_events_is_metered_on_drain():
         await _drain(llm.stream_events("hi"))
     snap = scope.snapshot()
     assert snap.llm_calls == 1 and snap.input_tokens == 12 and snap.output_tokens == 3
+
+
+# ── batch fail-closed under an enforcing scope (F3) ──────────────────────────
+
+
+async def test_batch_submit_blocked_under_an_enforcing_scope():
+    prov = FakeProvider()
+    llm = make_llm(prov)
+    with (
+        MeterScope(RunConfig(controller=CapController(max_llm_calls=10))),
+        pytest.raises(NotMeteredOperationError),
+    ):
+        await llm.batch_submit([{"messages": "hi"}])
+    assert prov.calls == 0  # rejected before the provider was touched
+
+
+async def test_batch_submit_allowed_in_measure_only():
+    prov = FakeProvider()
+    llm = make_llm(prov)
+    with MeterScope():  # controller=None -> measure-only, batch simply not metered
+        assert await llm.batch_submit([{"messages": "hi"}]) == "batch-123"
+
+
+async def test_batch_submit_allowed_without_a_scope():
+    llm = make_llm(FakeProvider())
+    assert await llm.batch_submit([{"messages": "hi"}]) == "batch-123"
+
+
+def test_batch_submit_sync_is_also_blocked_under_enforcement():
+    prov = FakeProvider()
+    llm = make_llm(prov)
+    with (
+        MeterScope(RunConfig(controller=CapController(max_llm_calls=10))),
+        pytest.raises(NotMeteredOperationError),
+    ):
+        llm.batch_submit_sync([{"messages": "hi"}])
+    assert prov.calls == 0
