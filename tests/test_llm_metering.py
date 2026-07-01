@@ -15,7 +15,8 @@ from ai_arch_toolkit.core._metering._cost import Cost
 from ai_arch_toolkit.core._metering._money import Money
 from ai_arch_toolkit.core._metering._operation import OperationRequest
 from ai_arch_toolkit.core._metering._scope import MeterScope, RunConfig
-from ai_arch_toolkit.core._response import Response, Usage
+from ai_arch_toolkit.core._providers._base import StreamState
+from ai_arch_toolkit.core._response import Response, StreamEvent, Usage
 
 MODEL = "claude-sonnet-4-6"  # priced in _default_pricing.toml
 
@@ -113,3 +114,104 @@ def test_complete_sync_is_metered_too():
         llm.complete_sync("hi")
     snap = scope.snapshot()
     assert snap.llm_calls == 1 and snap.input_tokens == 20 and snap.output_tokens == 5
+
+
+# ── stream / stream_events charge sites ──────────────────────────────────────
+
+
+class FakeStreamProvider:
+    """Yields canned chunks; fills StreamState.usage for the finalizer to settle from."""
+
+    def __init__(self, *, chunks=(), usage: Usage | None = None, error: Exception | None = None):
+        self._chunks = list(chunks)
+        self._usage = usage or Usage()
+        self._error = error
+
+    def stream(self, messages, *, system=None, tools=None, **kwargs):
+        if self._error is not None:
+            raise self._error
+        state = StreamState()
+        state.usage = self._usage
+        chunks = self._chunks
+
+        async def _aiter():
+            for c in chunks:
+                yield c
+
+        return _aiter(), state
+
+    def stream_events(self, messages, *, system=None, tools=None, **kwargs):
+        if self._error is not None:
+            raise self._error
+        state = StreamState()
+        state.usage = self._usage
+        chunks = self._chunks
+
+        async def _aiter():
+            for c in chunks:
+                yield StreamEvent(kind="text", text=c)
+
+        return _aiter(), state
+
+
+def make_stream_llm(provider: FakeStreamProvider) -> LLM:
+    llm = LLM(MODEL, api_key="test")
+    llm._provider = provider  # type: ignore[assignment]
+    return llm
+
+
+async def _drain(stream) -> None:
+    async for _ in stream:
+        pass
+
+
+async def test_stream_starts_on_build_and_settles_on_drain():
+    prov = FakeStreamProvider(chunks=["a", "b"], usage=Usage(input_tokens=30, output_tokens=10))
+    llm = make_stream_llm(prov)
+    with MeterScope() as scope:
+        stream = llm.stream("hi")
+        assert scope.snapshot().llm_calls == 1  # opened + started at build time
+        assert scope.snapshot().input_tokens == 0  # usage not known until drained
+        await _drain(stream)
+        snap = scope.snapshot()
+    assert snap.llm_calls == 1 and snap.input_tokens == 30 and snap.output_tokens == 10
+    assert snap.cost.pico > 0 and snap.unknown_cost_count == 0
+
+
+async def test_abandoned_stream_is_incomplete_at_scope_close():
+    prov = FakeStreamProvider(chunks=["a"], usage=Usage(input_tokens=5))
+    llm = make_stream_llm(prov)
+    with MeterScope() as scope:
+        llm.stream("hi")  # never drained -> op stays STARTED
+    snap = scope.snapshot()
+    assert snap.llm_calls == 1 and snap.unknown_cost_count == 1  # incomplete llm -> Unknown
+    assert snap.input_tokens == 0  # never settled with usage
+
+
+async def test_stream_enforce_denies_before_the_provider():
+    prov = FakeStreamProvider(chunks=["a"], usage=Usage(input_tokens=5))
+    llm = make_stream_llm(prov)
+    with (
+        MeterScope(RunConfig(controller=CapController(max_llm_calls=0))) as scope,
+        pytest.raises(AdmissionDenied),
+    ):
+        llm.stream("hi")
+    assert scope.snapshot().llm_calls == 0
+
+
+async def test_stream_provider_failure_is_a_failed_attempt():
+    prov = FakeStreamProvider(error=ConnectionError("down"))  # a PROVIDER_ERROR, no fallbacks
+    llm = make_stream_llm(prov)
+    with MeterScope() as scope, pytest.raises(ConnectionError):
+        llm.stream("hi")
+    snap = scope.snapshot()
+    assert snap.llm_calls == 1 and snap.unknown_cost_count == 1
+
+
+async def test_stream_events_is_metered_on_drain():
+    prov = FakeStreamProvider(chunks=["x"], usage=Usage(input_tokens=12, output_tokens=3))
+    llm = make_stream_llm(prov)
+    with MeterScope() as scope:
+        await _drain(llm.stream_events("hi"))
+    snap = scope.snapshot()
+    assert snap.llm_calls == 1 and snap.input_tokens == 12 and snap.output_tokens == 3

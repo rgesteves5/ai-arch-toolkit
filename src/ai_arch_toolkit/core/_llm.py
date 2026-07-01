@@ -355,6 +355,39 @@ class LLM:
             declared_max_output_tokens=provider_kwargs.get("max_tokens"),
         )
 
+    def _open_stream_op(
+        self, provider_kwargs: dict[str, Any]
+    ) -> tuple[MeterOperation, OperationRequest, Any] | None:
+        """Open + start a metered op for one stream attempt; ``None`` when unmetered.
+
+        Returns the handle, its request, and the pricer to settle with. ``AdmissionDenied`` from
+        ``open`` propagates (terminal — the stream never starts). The handle carries the store
+        reference, so the finalizer can settle from any thread without re-binding the scope.
+        """
+        request = self._meter_request("stream", provider_kwargs)
+        scope = current_meter()
+        if scope is None or request is None:
+            return None
+        op = scope.open(request)
+        op.mark_started()
+        return op, request, scope.pricer or pricing
+
+    @staticmethod
+    def _settling_finalizer(
+        inner: Callable[[str], Response],
+        op: MeterOperation,
+        request: OperationRequest,
+        pricer: Any,
+    ) -> Callable[[str], Response]:
+        """Wrap a stream finalizer so it settles the meter op with the streamed usage."""
+
+        def _finalize(text: str) -> Response:
+            resp = inner(text)
+            op.settle(usage=resp.usage, cost=pricer.price(request, resp.usage))
+            return resp
+
+        return _finalize
+
     async def _try_fallbacks(
         self,
         messages: str | list[dict[str, Any]],
@@ -530,6 +563,7 @@ class LLM:
             wire_tools = req.tools
             provider_kwargs = req.kwargs
 
+        meter = self._open_stream_op(provider_kwargs)  # AdmissionDenied here is terminal
         attempts: list[Attempt] = []
         t0 = time.time()
 
@@ -547,6 +581,8 @@ class LLM:
                 )
             )
         except self._fallback_on as exc:
+            if meter is not None:
+                meter[0].fail()  # the attempt failed before streaming could start
             attempts.append(
                 Attempt(
                     model=self._model,
@@ -622,6 +658,8 @@ class LLM:
             return dataclasses.replace(resp, attempts=tuple(parent_attempts))
 
         actual_finalizer = _attempt_finalizer
+        if meter is not None:  # settle the meter op when the stream drains (usage now known)
+            actual_finalizer = self._settling_finalizer(actual_finalizer, *meter)
 
         if self._middleware and req is not None:
             inner_finalizer = actual_finalizer
@@ -682,6 +720,7 @@ class LLM:
             wire_tools = req.tools
             provider_kwargs = req.kwargs
 
+        meter = self._open_stream_op(provider_kwargs)  # AdmissionDenied here is terminal
         attempts: list[Attempt] = []
         t0 = time.time()
 
@@ -699,6 +738,8 @@ class LLM:
                 )
             )
         except self._fallback_on as exc:
+            if meter is not None:
+                meter[0].fail()  # the attempt failed before streaming could start
             attempts.append(
                 Attempt(
                     model=self._model,
@@ -772,6 +813,8 @@ class LLM:
             return dataclasses.replace(resp, attempts=tuple(parent_attempts))
 
         actual_finalizer = _attempt_finalizer
+        if meter is not None:  # settle the meter op when the stream drains (usage now known)
+            actual_finalizer = self._settling_finalizer(actual_finalizer, *meter)
 
         if self._middleware and req is not None:
             inner_finalizer = actual_finalizer
