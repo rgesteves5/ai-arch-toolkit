@@ -182,26 +182,32 @@ class Flow:
     def max_iterations(self) -> int | None:
         return self._max_iterations
 
-    async def run(self, state: State) -> FlowResult:
-        """Execute the flow."""
+    async def run(self, state: State, *, budget_policy: BudgetPolicy | None = None) -> FlowResult:
+        """Execute the flow. A per-run ``budget_policy`` overrides the construction-time one (and
+        is ignored when this flow runs nested under an enclosing scope, sharing its budget).
+        """
         from ai_arch_toolkit.toolkit.flow._executor import execute_flow
 
-        return await execute_flow(self, state)
+        return await execute_flow(self, state, budget_policy=budget_policy)
 
-    def run_sync(self, state: State) -> FlowResult:
+    def run_sync(self, state: State, *, budget_policy: BudgetPolicy | None = None) -> FlowResult:
         """Synchronous wrapper for run()."""
-        return _run_sync(self.run(state))
+        return _run_sync(self.run(state, budget_policy=budget_policy))
 
-    async def iter(self, state: State) -> AsyncIterator[FlowEvent]:
-        """Stream events during flow execution."""
+    async def iter(
+        self, state: State, *, budget_policy: BudgetPolicy | None = None
+    ) -> AsyncIterator[FlowEvent]:
+        """Stream events during a run; ``budget_policy`` overrides per run (see :meth:`run`)."""
         from ai_arch_toolkit.toolkit.flow._executor import iter_flow
 
-        async for event in iter_flow(self, state):
+        async for event in iter_flow(self, state, budget_policy=budget_policy):
             yield event
 
-    def iter_sync(self, state: State) -> Iterator[FlowEvent]:
+    def iter_sync(
+        self, state: State, *, budget_policy: BudgetPolicy | None = None
+    ) -> Iterator[FlowEvent]:
         """Synchronous wrapper for iter()."""
-        return _stream_sync(lambda: self.iter(state))
+        return _stream_sync(lambda: self.iter(state, budget_policy=budget_policy))
 
     def as_step(self) -> Step:
         """Wrap this Flow as a Step for composition."""

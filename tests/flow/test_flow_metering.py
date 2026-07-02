@@ -133,6 +133,43 @@ async def test_iter_flow_abandonment_finalizes_the_scope():
     assert snap.llm_calls == 1 and snap.unknown_cost_count == 1  # close() incompleted the op
 
 
+async def test_per_run_budget_policy_enforces_without_a_construction_budget():
+    # A flow built with no budget can still be capped per run.
+    llm = make_llm()
+
+    async def call_model(snap: StateSnapshot) -> Result:
+        await llm.complete("hi")
+        return Result(value="ok")
+
+    flow = Flow(
+        Step(name="a", fn=call_model),
+        Step(name="b", fn=call_model),
+        name="per-run",
+    )
+    result = await flow.run(State(), budget_policy=BudgetPolicy(max_llm_calls=1))
+    assert "budget_exceeded" in result.results
+    assert result.trace.metadata["meter"]["llm_calls"] == 1
+
+
+async def test_per_run_budget_policy_overrides_the_construction_one():
+    # A stricter construction budget is loosened for a single run by the per-run override.
+    llm = make_llm()
+
+    async def call_model(snap: StateSnapshot) -> Result:
+        await llm.complete("hi")
+        return Result(value="ok")
+
+    flow = Flow(
+        Step(name="a", fn=call_model),
+        Step(name="b", fn=call_model),
+        name="override",
+        budget_policy=BudgetPolicy(max_llm_calls=1),  # would deny the 2nd call
+    )
+    result = await flow.run(State(), budget_policy=BudgetPolicy(max_llm_calls=5))
+    assert "budget_exceeded" not in result.results
+    assert result.trace.metadata["meter"]["llm_calls"] == 2
+
+
 async def test_nested_flow_budget_denial_surfaces_at_the_owner():
     # A nested (inherited-scope) flow re-raises AdmissionDenied so the OWNING flow converts it once
     # at the top — instead of burying budget_exceeded in the nested result and running on.
