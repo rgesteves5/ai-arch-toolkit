@@ -270,11 +270,11 @@ class Flow:
                 if k not in original_keys or v is not snapshot.operational.get(k):
                     new_artifacts[k] = v
 
+            # No usage/cost threading: the nested run is metered under the shared scope (the single
+            # source of truth), so annotating this Result would double-count in the raw trace.
             return Result(
                 value=final.value if final else None,
                 artifacts=new_artifacts,
-                usage=flow_result.trace.total_usage,
-                cost=flow_result.total_cost,
                 confidence=flow_result.trace.confidence,
                 error=final.error if final else None,
                 duration=flow_result.total_duration,

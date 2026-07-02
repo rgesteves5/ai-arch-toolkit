@@ -75,7 +75,7 @@ def reflexion_flow(
         )
 
         state = State(operational=react_initial_state(task))
-        result = await inner.run(state)
+        await inner.run(state)  # metered under the shared scope; no manual cost threading
 
         response = state.get("response")
         answer = response.text if response else ""
@@ -83,8 +83,6 @@ def reflexion_flow(
         return Result(
             value=answer,
             artifacts={"last_answer": answer, "last_response": response},
-            usage=result.trace.total_usage,
-            cost=result.total_cost,
         )
 
     async def evaluate(snap: StateSnapshot) -> Result:
@@ -129,8 +127,6 @@ def reflexion_flow(
         return Result(
             value=response.text,
             artifacts={"reflections": reflections},
-            usage=response.usage,
-            cost=response.cost or 0.0,
         )
 
     def not_passed(snap: StateSnapshot) -> bool:

@@ -158,8 +158,6 @@ def _build_completion(ctx: BuildContext) -> Flow:
         return Result(
             value=response,
             artifacts={"response": response, "answer": response.text},
-            usage=response.usage,
-            cost=response.cost or 0.0,
         )
 
     flow_policy = s.policy

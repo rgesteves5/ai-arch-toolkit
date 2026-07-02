@@ -98,8 +98,6 @@ def tot_flow(
                     "frontier": frontier,
                     "iteration": iteration + 1,
                 },
-                usage=response.usage,
-                cost=response.cost or 0.0,
                 confidence=1.0,
             )
 
@@ -125,13 +123,10 @@ def tot_flow(
                     "frontier": frontier,
                     "iteration": iteration + 1,
                 },
-                usage=gen_response.usage,
-                cost=gen_response.cost or 0.0,
             )
 
         # EVALUATE candidates
         scored: list[tuple[float, str]] = []
-        total_cost = gen_response.cost or 0.0
         for candidate in candidates:
             eval_response = await _complete(
                 evaluator_llm,
@@ -147,7 +142,6 @@ def tot_flow(
             score = float(match.group(1)) if match else 0.5
             score = min(max(score, 0.0), 1.0)
             scored.append((score, candidate))
-            total_cost += eval_response.cost or 0.0
 
         # HIGH CONFIDENCE — solve immediately
         best_score, best_thought = max(scored)
@@ -172,8 +166,6 @@ def tot_flow(
                     "frontier": frontier,
                     "iteration": iteration + 1,
                 },
-                usage=response.usage,
-                cost=total_cost + (response.cost or 0.0),
                 confidence=best_score,
             )
 
@@ -190,7 +182,6 @@ def tot_flow(
                 "search_done": False,
                 "iteration": iteration + 1,
             },
-            cost=total_cost,
         )
 
     def search_not_done(snap: StateSnapshot) -> bool:

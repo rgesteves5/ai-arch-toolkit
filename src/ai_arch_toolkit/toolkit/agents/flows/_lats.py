@@ -138,7 +138,7 @@ def lats_flow(
 
         inner_initial = react_initial_state(leaf.state)
         state = State(operational=inner_initial)
-        result = await inner.run(state)
+        await inner.run(state)  # metered under the shared scope; no manual cost threading
 
         response = state.get("response")
         answer = response.text if response else ""
@@ -196,7 +196,6 @@ def lats_flow(
             return Result(
                 value=sol_response.text,
                 artifacts=artifacts,
-                cost=result.total_cost + (sol_response.cost or 0.0),
                 confidence=score,
             )
 
@@ -227,7 +226,6 @@ def lats_flow(
             return Result(
                 value=sol_response.text,
                 artifacts=artifacts,
-                cost=result.total_cost + (sol_response.cost or 0.0),
                 confidence=best_score,
             )
 
@@ -235,7 +233,6 @@ def lats_flow(
         return Result(
             value=answer,
             artifacts=artifacts,
-            cost=result.total_cost,
             confidence=score,
         )
 

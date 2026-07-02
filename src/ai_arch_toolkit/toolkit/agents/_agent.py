@@ -110,9 +110,7 @@ class Agent:
             errors=errors,
         )
 
-    def run_sync(
-        self, task: Content, *, budget_policy: BudgetPolicy | None = None
-    ) -> AgentResult:
+    def run_sync(self, task: Content, *, budget_policy: BudgetPolicy | None = None) -> AgentResult:
         """Synchronous wrapper for ``run``."""
         return _run_sync(self.run(task, budget_policy=budget_policy))
 

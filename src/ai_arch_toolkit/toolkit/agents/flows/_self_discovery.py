@@ -92,8 +92,6 @@ def self_discovery_flow(
         return Result(
             value=response.text,
             artifacts={"selected_modules": response.text},
-            usage=response.usage,
-            cost=response.cost or 0.0,
         )
 
     async def adapt(snap: StateSnapshot) -> Result:
@@ -108,8 +106,6 @@ def self_discovery_flow(
         return Result(
             value=response.text,
             artifacts={"adapted_modules": response.text},
-            usage=response.usage,
-            cost=response.cost or 0.0,
         )
 
     async def operationalize(snap: StateSnapshot) -> Result:
@@ -124,8 +120,6 @@ def self_discovery_flow(
         return Result(
             value=response.text,
             artifacts={"reasoning_plan": response.text},
-            usage=response.usage,
-            cost=response.cost or 0.0,
         )
 
     async def solve(snap: StateSnapshot) -> Result:
@@ -148,7 +142,7 @@ def self_discovery_flow(
         )
 
         state = State(operational=react_initial_state(task))
-        result = await inner.run(state)
+        await inner.run(state)  # metered under the shared scope; no manual cost threading
 
         response = state.get("response")
         answer = response.text if response else ""
@@ -156,8 +150,6 @@ def self_discovery_flow(
         return Result(
             value=answer,
             artifacts={"answer": answer, "response": response},
-            usage=result.trace.total_usage,
-            cost=result.total_cost,
         )
 
     flow_policy = policy

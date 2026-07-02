@@ -88,7 +88,6 @@ def llm_compiler_flow(
     async def compile(snap: StateSnapshot) -> Result:
         """Plan DAG, execute in parallel, join — with optional replanning."""
         task: str = snap.require("task")
-        total_cost = 0.0
 
         async def _complete(model: LLM, *args: Any, **kwargs: Any):
             return await model.complete(*args, **kwargs)
@@ -96,7 +95,6 @@ def llm_compiler_flow(
         for _replan in range(max_replans + 1):
             # PLAN
             response = await _complete(plan_llm, [user(task)], system=planner_system)
-            total_cost += response.cost or 0.0
 
             dag: list[_DAGTask] = []
             valid_ids: set[int] = set()
@@ -128,7 +126,7 @@ def llm_compiler_flow(
                 async def _run_one(
                     t: _DAGTask,
                     dag_ref: list[_DAGTask] = dag,
-                ) -> float:
+                ) -> None:
                     desc = t.description
                     for other in dag_ref:
                         if other.done:
@@ -159,10 +157,7 @@ def llm_compiler_flow(
                     ):
                         t.failed = True
 
-                    return result.total_cost
-
-                run_results = await asyncio.gather(*[_run_one(t) for t in ready])
-                total_cost += sum(run_results)
+                await asyncio.gather(*[_run_one(t) for t in ready])
 
             # JOIN
             results_block = "\n".join(
@@ -173,7 +168,6 @@ def llm_compiler_flow(
                 [user(f"Task: {task}\n\nResults:\n{results_block}")],
                 system=joiner_system,
             )
-            total_cost += join_response.cost or 0.0
 
             first_line = join_response.text.strip().split("\n")[0]
             if "REPLAN" not in first_line.upper() or _replan >= max_replans:
@@ -183,11 +177,10 @@ def llm_compiler_flow(
                         "answer": join_response.text,
                         "response": join_response,
                     },
-                    cost=total_cost,
                 )
 
         # Should not reach here, but satisfy type checker
-        return Result(error="Max replans exhausted", cost=total_cost)
+        return Result(error="Max replans exhausted")
 
     flow_policy = policy
     if timeout is not None and flow_policy is None:

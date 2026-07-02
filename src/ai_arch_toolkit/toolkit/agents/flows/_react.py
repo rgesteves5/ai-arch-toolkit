@@ -9,7 +9,6 @@ from ai_arch_toolkit.core._content import Content, tool_result, user
 from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._metering._admission import AdmissionDenied
 from ai_arch_toolkit.core._policy import Policy
-from ai_arch_toolkit.core._response import Usage
 from ai_arch_toolkit.core._state import StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
@@ -58,7 +57,6 @@ def react_flow(
     async def llm_call(snap: StateSnapshot) -> Result:
         """Call LLM with current messages and tools."""
         messages: list[dict[str, Any]] = snap.require("messages")
-        total_usage: Usage = snap.get("total_usage", Usage())
         turn: int = snap.get("turn", 0) + 1
         is_final = turn >= max_iterations
 
@@ -90,26 +88,14 @@ def react_flow(
         except Exception as exc:
             return Result(error=str(exc))
 
-        new_usage = Usage(
-            input_tokens=total_usage.input_tokens + response.usage.input_tokens,
-            output_tokens=total_usage.output_tokens + response.usage.output_tokens,
-            cache_write_tokens=(
-                total_usage.cache_write_tokens + response.usage.cache_write_tokens
-            ),
-            cache_read_tokens=(total_usage.cache_read_tokens + response.usage.cache_read_tokens),
-        )
-
         return Result(
             value=response,
             artifacts={
                 "response": response,
                 "has_tool_calls": response.has_tool_calls,
                 "needs_llm_call": False,
-                "total_usage": new_usage,
                 "turn": turn,
             },
-            usage=response.usage,
-            cost=response.cost or 0.0,
         )
 
     async def execute_tools(snap: StateSnapshot) -> Result:
@@ -214,5 +200,4 @@ def react_initial_state(task: Content) -> dict[str, Any]:
     return {
         "messages": [user(task)],
         "has_tool_calls": False,
-        "total_usage": Usage(),
     }

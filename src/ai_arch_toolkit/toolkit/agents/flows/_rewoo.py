@@ -91,15 +91,12 @@ def rewoo_flow(
                 "plan_steps": plan_steps,
                 "evidence": {},
             },
-            usage=response.usage,
-            cost=response.cost or 0.0,
         )
 
     async def execute(snap: StateSnapshot) -> Result:
         """Execute plan steps sequentially, substituting evidence references."""
         plan_steps: list[tuple[str, str, str]] = snap.require("plan_steps")
         evidence: dict[str, str] = dict(snap.get("evidence", {}))
-        total_cost = 0.0
 
         for eid, tool_name, raw_args in plan_steps:
             # Substitute #E{n} references
@@ -136,7 +133,6 @@ def rewoo_flow(
         return Result(
             value=evidence,
             artifacts={"evidence": evidence},
-            cost=total_cost,
         )
 
     async def solve(snap: StateSnapshot) -> Result:
@@ -155,8 +151,6 @@ def rewoo_flow(
         return Result(
             value=response.text,
             artifacts={"answer": response.text, "response": response},
-            usage=response.usage,
-            cost=response.cost or 0.0,
         )
 
     flow_policy = policy
