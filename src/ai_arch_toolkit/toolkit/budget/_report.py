@@ -39,6 +39,7 @@ class BudgetReport:
     total_tokens: int
     cost: float
     unknown_cost_count: int
+    cost_uncertain: bool  # some call(s) couldn't be priced -> `cost` undercounts the real spend
     elapsed_s: float
     over_budget: bool
     breached: tuple[str, ...]
@@ -57,6 +58,7 @@ class BudgetReport:
             total_tokens=snapshot.total_tokens,
             cost=snapshot.cost.to_float(),
             unknown_cost_count=snapshot.unknown_cost_count,
+            cost_uncertain=snapshot.unknown_cost_count > 0,
             elapsed_s=snapshot.elapsed_s,
             over_budget=bool(breached),
             breached=breached,
@@ -72,6 +74,7 @@ class BudgetReport:
             "total_tokens": self.total_tokens,
             "cost": self.cost,
             "unknown_cost_count": self.unknown_cost_count,
+            "cost_uncertain": self.cost_uncertain,
             "elapsed_s": self.elapsed_s,
             "over_budget": self.over_budget,
             "breached": list(self.breached),

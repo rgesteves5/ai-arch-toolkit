@@ -8,11 +8,17 @@ from typing import Literal
 from ai_arch_toolkit.core._metering._admission import ResourceLimits
 from ai_arch_toolkit.core._metering._money import Money
 
-__all__ = ["BudgetPolicy", "Reserve"]
+__all__ = ["BudgetPolicy", "Reserve", "Unpriced"]
 
 type Reserve = Literal["none", "strict"]
 """Reservation mode. ``none``: measure + settle only (soft, the default). ``strict``: reserve a
 worst-case token/cost hold per operation before it runs, failing closed on unpriced models."""
+
+type Unpriced = Literal["fail_closed", "allow"]
+"""What a ``max_cost`` cap does when a call's cost is unknown (an unpriced model or a server tool
+whose charge isn't in the token counts). ``fail_closed`` (default): once such a call is seen, deny
+further operations — an unknown cost can't be bounded. ``allow``: proceed (the cap may undercount).
+"""
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -31,6 +37,7 @@ class BudgetPolicy:
     max_total_tokens: int | None = None
     max_cost: float | None = None
     reserve: Reserve = "none"
+    unpriced: Unpriced = "fail_closed"
 
     def __post_init__(self) -> None:
         for name in (

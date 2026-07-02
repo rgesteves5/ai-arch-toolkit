@@ -85,6 +85,22 @@ class BudgetController:
                 return BudgetExceeded(
                     dimension="cost", limit=p.max_cost, current=current_cost, attempted=add_cost
                 )
+            # Fail closed on an unbounded (unknown) cost under a cost cap: a prior unpriced call
+            # already settled (committed_cost excludes it, so the cap could never trip), or this op
+            # uses provider-hosted server tools whose charge isn't in the token counts.
+            if p.unpriced == "fail_closed":
+                if snap.unknown_cost_count > 0:
+                    return BudgetExceeded(
+                        "a prior call could not be priced — failing closed under a cost cap",
+                        dimension="cost",
+                        limit=p.max_cost,
+                    )
+                if request.has_server_tools:
+                    return BudgetExceeded(
+                        "server tools have unmetered cost — failing closed under a cost cap",
+                        dimension="cost",
+                        limit=p.max_cost,
+                    )
         if p.max_wall_s is not None and snap.elapsed_s > p.max_wall_s:
             return BudgetExceeded(
                 dimension="wall_s", limit=p.max_wall_s, current=snap.elapsed_s, attempted=0.0

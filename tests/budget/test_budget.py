@@ -116,7 +116,61 @@ def test_strict_denies_an_unpriced_model_fail_closed():
     assert not d.admitted and d.denial is not None and d.denial.dimension == "cost"
 
 
+# ── unpriced fail-closed under a cost cap ────────────────────────────────────
+
+
+def test_unpriced_fail_closed_denies_after_an_unknown_cost_settles():
+    # A prior call settled with an unknown cost: it never entered committed_cost, so the cap could
+    # silently overshoot. Default policy fails closed on the next op.
+    d = BudgetController(BudgetPolicy(max_cost=1.0)).admit(
+        MeterSnapshot(unknown_cost_count=1), llm_req(model=MODEL)
+    )
+    assert not d.admitted and d.denial is not None and d.denial.dimension == "cost"
+
+
+def test_unpriced_fail_closed_denies_a_server_tool_op_before_it_runs():
+    # Server tools carry a provider-side charge absent from the token counts -> unbounded.
+    d = BudgetController(BudgetPolicy(max_cost=1.0)).admit(
+        MeterSnapshot(), llm_req(model=MODEL, has_server_tools=True)
+    )
+    assert not d.admitted and d.denial is not None and d.denial.dimension == "cost"
+
+
+def test_unpriced_allow_proceeds_despite_an_unknown_cost():
+    d = BudgetController(BudgetPolicy(max_cost=1.0, unpriced="allow")).admit(
+        MeterSnapshot(unknown_cost_count=1), llm_req(model=MODEL)
+    )
+    assert d.admitted
+
+
+def test_unpriced_allow_proceeds_for_a_server_tool_op():
+    d = BudgetController(BudgetPolicy(max_cost=1.0, unpriced="allow")).admit(
+        MeterSnapshot(), llm_req(model=MODEL, has_server_tools=True)
+    )
+    assert d.admitted
+
+
+def test_unpriced_fail_closed_is_inert_without_a_cost_cap():
+    # No max_cost -> the unknown cost can't threaten a (nonexistent) budget; the op proceeds.
+    d = BudgetController(BudgetPolicy(max_llm_calls=5)).admit(
+        MeterSnapshot(unknown_cost_count=1), llm_req(model=MODEL, has_server_tools=True)
+    )
+    assert d.admitted
+
+
 # ── report ───────────────────────────────────────────────────────────────────
+
+
+def test_report_flags_cost_uncertain_when_a_call_was_unpriced():
+    snap = MeterSnapshot(llm_calls=1, cost=Money.from_usd(0.02), unknown_cost_count=1)
+    r = BudgetReport.from_snapshot(snap)
+    assert r.cost_uncertain and r.unknown_cost_count == 1
+    assert r.to_dict()["cost_uncertain"] is True
+
+
+def test_report_cost_is_certain_when_everything_was_priced():
+    r = BudgetReport.from_snapshot(MeterSnapshot(llm_calls=2, cost=Money.from_usd(0.05)))
+    assert not r.cost_uncertain
 
 
 def test_report_flags_a_reached_cap():
