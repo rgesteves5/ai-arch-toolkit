@@ -6,8 +6,10 @@ import asyncio
 import logging
 import random
 import time
+from contextlib import nullcontext
 
 from ai_arch_toolkit.core._metering._admission import AdmissionDenied
+from ai_arch_toolkit.core._metering._scope import current_meter, open_span
 from ai_arch_toolkit.core._policy import Policy
 from ai_arch_toolkit.core._state import StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
@@ -25,10 +27,48 @@ async def execute_step(step: Step, snapshot: StateSnapshot) -> tuple[Result, Ste
     policy = step.policy or Policy()
     t0 = time.monotonic()
     decisions: list[PolicyDecision] = []
+
+    # A per-step ``max_cost`` cap needs this step's OWN metered spend (its LLM/tool charges), not
+    # the cumulative run total. Run it in a dedicated meter span and project that span — the span
+    # contextvar isolates it across concurrent DAG steps. Only opened when a cap is set, so the
+    # common (uncapped) path keeps its overhead and span tree unchanged.
+    meter = current_meter()
+    track_cost = policy.max_cost is not None and meter is not None
+    span_cm = open_span("step") if track_cost else nullcontext(None)
+    with span_cm as span_id:
+        result, attempts = await _run_attempts(step, snapshot, policy, t0, decisions, span_id)
+
+    elapsed = time.monotonic() - t0
+
+    trace = StepTrace(
+        name=step.name,
+        input_state=snapshot.to_dict(),
+        output_result=result.to_dict(),
+        duration=elapsed,
+        cost=result.cost,
+        confidence=result.confidence,
+        usage=result.usage,
+        attempts=attempts,
+        policy_decisions=tuple(decisions),
+        error=result.error,
+        started_at=t0,
+    )
+
+    return result, trace
+
+
+async def _run_attempts(
+    step: Step,
+    snapshot: StateSnapshot,
+    policy: Policy,
+    t0: float,
+    decisions: list[PolicyDecision],
+    span_id: str | None,
+) -> tuple[Result, int]:
+    """The retry/timeout/confidence/cost loop. ``span_id`` scopes this step's metered cost."""
+    max_attempts = policy.retry.max_retries + 1
     attempts = 0
     result: Result | None = None
-
-    max_attempts = policy.retry.max_retries + 1
 
     for attempt in range(max_attempts):
         attempts = attempt + 1
@@ -74,15 +114,17 @@ async def execute_step(step: Step, snapshot: StateSnapshot) -> tuple[Result, Ste
                 elif policy.on_low_confidence == "escalate":
                     decisions.append("escalate")
                     break
-            # Check cost limit
-            if policy.max_cost is not None and result.cost > policy.max_cost:
-                decisions.append("cost_exceeded")
-                result = Result(
-                    error=f"Cost {result.cost} exceeded limit {policy.max_cost}",
-                    cost=result.cost,
-                    duration=time.monotonic() - t0,
-                )
-                break
+            # Check cost limit — the step's manual annotation plus its metered span spend.
+            if policy.max_cost is not None:
+                effective_cost = result.cost + _span_cost(span_id)
+                if effective_cost > policy.max_cost:
+                    decisions.append("cost_exceeded")
+                    result = Result(
+                        error=f"Cost {effective_cost} exceeded limit {policy.max_cost}",
+                        cost=effective_cost,
+                        duration=time.monotonic() - t0,
+                    )
+                    break
             break
 
         # Error path — retry or exhaust
@@ -108,23 +150,17 @@ async def execute_step(step: Step, snapshot: StateSnapshot) -> tuple[Result, Ste
     if result is None:
         result = Result(error="No result produced", duration=time.monotonic() - t0)
 
-    elapsed = time.monotonic() - t0
+    return result, attempts
 
-    trace = StepTrace(
-        name=step.name,
-        input_state=snapshot.to_dict(),
-        output_result=result.to_dict(),
-        duration=elapsed,
-        cost=result.cost,
-        confidence=result.confidence,
-        usage=result.usage,
-        attempts=attempts,
-        policy_decisions=tuple(decisions),
-        error=result.error,
-        started_at=t0,
-    )
 
-    return result, trace
+def _span_cost(span_id: str | None) -> float:
+    """This step's metered USD cost, projected from its span (0 when unmetered/uncapped)."""
+    if span_id is None:
+        return 0.0
+    meter = current_meter()
+    if meter is None:
+        return 0.0
+    return meter.for_span(span_id).cost.to_float()
 
 
 async def _run_fallback(step: Step, snapshot: StateSnapshot, t0: float) -> Result:

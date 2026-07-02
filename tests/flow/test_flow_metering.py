@@ -5,10 +5,13 @@ from __future__ import annotations
 import asyncio
 
 from ai_arch_toolkit.core._llm import LLM
+from ai_arch_toolkit.core._metering._scope import MeterScope, RunConfig
+from ai_arch_toolkit.core._policy import Policy
 from ai_arch_toolkit.core._providers._base import StreamState
 from ai_arch_toolkit.core._response import Response, Usage
 from ai_arch_toolkit.core._state import State, StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
+from ai_arch_toolkit.core._step_engine import execute_step
 from ai_arch_toolkit.toolkit.budget import BudgetPolicy
 from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowStep
 
@@ -131,6 +134,35 @@ async def test_iter_flow_abandonment_finalizes_the_scope():
 
     snap = state.get("_meter_scope").snapshot()
     assert snap.llm_calls == 1 and snap.unknown_cost_count == 1  # close() incompleted the op
+
+
+async def test_policy_max_cost_trips_on_metered_spend():
+    # fase 6: a per-step Policy.max_cost is enforced against the step's METERED span cost, even
+    # when the Result carries no manual cost annotation.
+    llm = make_llm()
+
+    async def call(snap: StateSnapshot) -> Result:
+        await llm.complete("hi")
+        return Result(value="done")  # no cost= annotation; the meter is the only source
+
+    step = Step(name="s", fn=call, policy=Policy(max_cost=1e-6))  # priced call exceeds this
+    with MeterScope(RunConfig()) as scope:  # measure-only; the step opens its own span
+        result, trace = await execute_step(step, StateSnapshot())
+    assert result.is_error and "cost_exceeded" in trace.policy_decisions
+    assert scope.snapshot().llm_calls == 1
+
+
+async def test_policy_max_cost_does_not_trip_when_unmetered():
+    # Same step with no bound meter and no annotation -> zero cost -> no cost_exceeded.
+    llm = make_llm()
+
+    async def call(snap: StateSnapshot) -> Result:
+        await llm.complete("hi")
+        return Result(value="done")
+
+    step = Step(name="s", fn=call, policy=Policy(max_cost=1e-6))
+    result, trace = await execute_step(step, StateSnapshot())
+    assert result.is_ok and "cost_exceeded" not in trace.policy_decisions
 
 
 async def test_flow_result_accessors_are_meter_derived():
