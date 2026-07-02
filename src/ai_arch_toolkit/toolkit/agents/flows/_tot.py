@@ -6,13 +6,13 @@ import re
 from collections import deque
 from typing import Any, Literal
 
-from ai_arch_toolkit.core._budget import BudgetExceeded, BudgetPolicy, BudgetState
 from ai_arch_toolkit.core._content import Content, user
 from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._policy import Policy
 from ai_arch_toolkit.core._state import StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
+from ai_arch_toolkit.toolkit.budget import BudgetPolicy
 from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowStep
 
 _NUMBERED_RE = re.compile(r"^\d+\.\s+(.+)", re.MULTILINE)
@@ -66,31 +66,9 @@ def tot_flow(
         task: str = snap.require("task")
         frontier: deque[tuple[str, int]] = snap.require("frontier")
         iteration: int = snap.get("iteration", 0)
-        budget_state = _budget_state_from_snapshot(snap)
 
         async def _complete(model: LLM, *args: Any, **kwargs: Any):
-            nonlocal budget_state
-            if budget_state is not None:
-                budget_state.check_llm_calls()
-            response = await model.complete(*args, **kwargs)
-            if budget_state is not None:
-                budget_state = budget_state.record_response(response)
-            return response
-
-        def _budget_artifacts() -> dict[str, Any]:
-            return {"budget_state": budget_state} if budget_state is not None else {}
-
-        def _budget_error(exc: BudgetExceeded) -> Result:
-            if budget_state is None:
-                return Result(error=str(exc), artifacts={"budget_exceeded": exc.to_dict()})
-            exceeded = budget_state.with_exceeded(exc)
-            return Result(
-                error=str(exc),
-                artifacts={
-                    "budget_exceeded": exc.to_dict(),
-                    "budget_state": exceeded,
-                },
-            )
+            return await model.complete(*args, **kwargs)
 
         if not frontier:
             return Result(
@@ -106,19 +84,11 @@ def tot_flow(
 
         # MAX DEPTH — solve directly
         if depth >= max_depth:
-            try:
-                response = await _complete(
-                    solve_llm,
-                    [
-                        user(
-                            f"Task: {task}\n\nReasoning so far:\n{state}\n\n"
-                            "Provide the final answer."
-                        )
-                    ],
-                    system=system or None,
-                )
-            except BudgetExceeded as exc:
-                return _budget_error(exc)
+            response = await _complete(
+                solve_llm,
+                [user(f"Task: {task}\n\nReasoning so far:\n{state}\n\nProvide the final answer.")],
+                system=system or None,
+            )
             return Result(
                 value=response.text,
                 artifacts={
@@ -127,7 +97,6 @@ def tot_flow(
                     "search_done": True,
                     "frontier": frontier,
                     "iteration": iteration + 1,
-                    **_budget_artifacts(),
                 },
                 usage=response.usage,
                 cost=response.cost or 0.0,
@@ -135,20 +104,17 @@ def tot_flow(
             )
 
         # GENERATE candidates
-        try:
-            gen_response = await _complete(
-                generator_llm,
-                [
-                    user(
-                        f"Task: {task}\n\nCurrent reasoning:\n{state}\n\n"
-                        f"Generate {n_candidates} distinct next reasoning steps. "
-                        f"Format: 1. Step\n2. Step\n..."
-                    )
-                ],
-                system=system or None,
-            )
-        except BudgetExceeded as exc:
-            return _budget_error(exc)
+        gen_response = await _complete(
+            generator_llm,
+            [
+                user(
+                    f"Task: {task}\n\nCurrent reasoning:\n{state}\n\n"
+                    f"Generate {n_candidates} distinct next reasoning steps. "
+                    f"Format: 1. Step\n2. Step\n..."
+                )
+            ],
+            system=system or None,
+        )
         candidates = _NUMBERED_RE.findall(gen_response.text)[:n_candidates]
 
         if not candidates:
@@ -158,7 +124,6 @@ def tot_flow(
                     "search_done": not bool(frontier),
                     "frontier": frontier,
                     "iteration": iteration + 1,
-                    **_budget_artifacts(),
                 },
                 usage=gen_response.usage,
                 cost=gen_response.cost or 0.0,
@@ -168,19 +133,16 @@ def tot_flow(
         scored: list[tuple[float, str]] = []
         total_cost = gen_response.cost or 0.0
         for candidate in candidates:
-            try:
-                eval_response = await _complete(
-                    evaluator_llm,
-                    [
-                        user(
-                            f"Task: {task}\n\nReasoning: {state}\n\n"
-                            f"Next step: {candidate}\n\nScore (0.0-1.0):"
-                        )
-                    ],
-                    system=evaluator_system,
-                )
-            except BudgetExceeded as exc:
-                return _budget_error(exc)
+            eval_response = await _complete(
+                evaluator_llm,
+                [
+                    user(
+                        f"Task: {task}\n\nReasoning: {state}\n\n"
+                        f"Next step: {candidate}\n\nScore (0.0-1.0):"
+                    )
+                ],
+                system=evaluator_system,
+            )
             match = _SCORE_RE.search(eval_response.text)
             score = float(match.group(1)) if match else 0.5
             score = min(max(score, 0.0), 1.0)
@@ -191,19 +153,16 @@ def tot_flow(
         best_score, best_thought = max(scored)
         if best_score >= 0.9:
             full_reasoning = f"{state}\n{best_thought}" if state else best_thought
-            try:
-                response = await _complete(
-                    solve_llm,
-                    [
-                        user(
-                            f"Task: {task}\n\nReasoning:\n{full_reasoning}\n\n"
-                            f"Provide the final answer."
-                        )
-                    ],
-                    system=system or None,
-                )
-            except BudgetExceeded as exc:
-                return _budget_error(exc)
+            response = await _complete(
+                solve_llm,
+                [
+                    user(
+                        f"Task: {task}\n\nReasoning:\n{full_reasoning}\n\n"
+                        "Provide the final answer."
+                    )
+                ],
+                system=system or None,
+            )
             return Result(
                 value=response.text,
                 artifacts={
@@ -212,7 +171,6 @@ def tot_flow(
                     "search_done": True,
                     "frontier": frontier,
                     "iteration": iteration + 1,
-                    **_budget_artifacts(),
                 },
                 usage=response.usage,
                 cost=total_cost + (response.cost or 0.0),
@@ -231,7 +189,6 @@ def tot_flow(
                 "frontier": frontier,
                 "search_done": False,
                 "iteration": iteration + 1,
-                **_budget_artifacts(),
             },
             cost=total_cost,
         )
@@ -261,8 +218,3 @@ def tot_initial_state(task: Content) -> dict[str, Any]:
         "search_done": False,
         "iteration": 0,
     }
-
-
-def _budget_state_from_snapshot(snap: StateSnapshot) -> BudgetState | None:
-    value = snap.get("budget_state")
-    return value if isinstance(value, BudgetState) else None

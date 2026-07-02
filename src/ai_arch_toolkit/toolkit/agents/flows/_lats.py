@@ -8,7 +8,6 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from ai_arch_toolkit.core._budget import BudgetExceeded, BudgetPolicy, BudgetState
 from ai_arch_toolkit.core._content import Content, user
 from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._policy import Policy
@@ -16,6 +15,7 @@ from ai_arch_toolkit.core._state import State, StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
 from ai_arch_toolkit.toolkit.agents.flows._react import react_flow, react_initial_state
+from ai_arch_toolkit.toolkit.budget import BudgetPolicy
 from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowStep
 
 _SCORE_RE = re.compile(r"(\d+\.?\d*)")
@@ -116,31 +116,9 @@ def lats_flow(
         task: str = snap.require("task")
         root: _MCTSNode = snap.require("mcts_root")
         rollout_num: int = snap.get("rollout_num", 0)
-        budget_state = _budget_state_from_snapshot(snap)
 
         async def _complete(model: LLM, *args: Any, **kwargs: Any):
-            nonlocal budget_state
-            if budget_state is not None:
-                budget_state.check_llm_calls()
-            response = await model.complete(*args, **kwargs)
-            if budget_state is not None:
-                budget_state = budget_state.record_response(response)
-            return response
-
-        def _budget_artifacts() -> dict[str, Any]:
-            return {"budget_state": budget_state} if budget_state is not None else {}
-
-        def _budget_error(exc: BudgetExceeded) -> Result:
-            if budget_state is None:
-                return Result(error=str(exc), artifacts={"budget_exceeded": exc.to_dict()})
-            exceeded = budget_state.with_exceeded(exc)
-            return Result(
-                error=str(exc),
-                artifacts={
-                    "budget_exceeded": exc.to_dict(),
-                    "budget_state": exceeded,
-                },
-            )
+            return await model.complete(*args, **kwargs)
 
         # SELECT via UCT
         leaf = _select_uct(root, exploration_weight)
@@ -155,19 +133,12 @@ def lats_flow(
             inner_tools,
             system=inner_system,
             max_iterations=max_react_iterations,
-            budget_policy=budget_state.policy if budget_state is not None else None,
+            budget_policy=budget_policy,
         )
 
         inner_initial = react_initial_state(leaf.state)
-        if budget_state is not None:
-            inner_initial["budget_state"] = budget_state
         state = State(operational=inner_initial)
         result = await inner.run(state)
-        next_budget = state.get("budget_state")
-        if isinstance(next_budget, BudgetState):
-            budget_state = next_budget
-            if budget_state.exceeded is not None:
-                return _budget_error(budget_state.exceeded)
 
         response = state.get("response")
         answer = response.text if response else ""
@@ -176,14 +147,11 @@ def lats_flow(
         if evaluator_fn is not None:
             score = evaluator_fn(task, answer)
         else:
-            try:
-                eval_response = await _complete(
-                    evaluator_llm,
-                    [user(f"Task: {task}\n\nAnswer: {answer}\n\nScore (0.0-1.0):")],
-                    system=evaluator_system,
-                )
-            except BudgetExceeded as exc:
-                return _budget_error(exc)
+            eval_response = await _complete(
+                evaluator_llm,
+                [user(f"Task: {task}\n\nAnswer: {answer}\n\nScore (0.0-1.0):")],
+                system=evaluator_system,
+            )
             match = _SCORE_RE.search(eval_response.text)
             score = float(match.group(1)) if match else 0.5
             score = min(max(score, 0.0), 1.0)
@@ -217,18 +185,14 @@ def lats_flow(
 
         # HIGH SCORE — solve
         if score >= 0.9:
-            try:
-                sol_response = await _complete(
-                    solve_llm,
-                    [user(f"Task: {task}\n\nBest answer: {answer}\n\nProvide the final answer.")],
-                    system=system or None,
-                )
-            except BudgetExceeded as exc:
-                return _budget_error(exc)
+            sol_response = await _complete(
+                solve_llm,
+                [user(f"Task: {task}\n\nBest answer: {answer}\n\nProvide the final answer.")],
+                system=system or None,
+            )
             artifacts["answer"] = sol_response.text
             artifacts["response"] = sol_response
             artifacts["search_done"] = True
-            artifacts.update(_budget_artifacts())
             return Result(
                 value=sol_response.text,
                 artifacts=artifacts,
@@ -238,40 +202,28 @@ def lats_flow(
 
         # LOW SCORE — reflect
         if score < 0.5:
-            try:
-                ref_response = await _complete(
-                    reflect_llm,
-                    [
-                        user(
-                            f"Task: {task}\n\nAnswer: {answer}\n\n"
-                            f"Score: {score:.2f}\n\nProvide feedback."
-                        )
-                    ],
-                    system=reflect_system,
-                )
-            except BudgetExceeded as exc:
-                return _budget_error(exc)
+            ref_response = await _complete(
+                reflect_llm,
+                [
+                    user(
+                        f"Task: {task}\n\nAnswer: {answer}\n\n"
+                        f"Score: {score:.2f}\n\nProvide feedback."
+                    )
+                ],
+                system=reflect_system,
+            )
             child.reflection = ref_response.text
 
         # Check if this is the last rollout — if so, solve with best answer
         if rollout_num + 1 >= max_rollouts:
-            try:
-                sol_response = await _complete(
-                    solve_llm,
-                    [
-                        user(
-                            f"Task: {task}\n\nBest answer: {best_answer}\n\n"
-                            "Provide the final answer."
-                        )
-                    ],
-                    system=system or None,
-                )
-            except BudgetExceeded as exc:
-                return _budget_error(exc)
+            sol_response = await _complete(
+                solve_llm,
+                [user(f"Task: {task}\n\nBest answer: {best_answer}\n\nProvide the final answer.")],
+                system=system or None,
+            )
             artifacts["answer"] = sol_response.text
             artifacts["response"] = sol_response
             artifacts["search_done"] = True
-            artifacts.update(_budget_artifacts())
             return Result(
                 value=sol_response.text,
                 artifacts=artifacts,
@@ -280,7 +232,6 @@ def lats_flow(
             )
 
         artifacts["search_done"] = False
-        artifacts.update(_budget_artifacts())
         return Result(
             value=answer,
             artifacts=artifacts,
@@ -313,8 +264,3 @@ def lats_initial_state(task: Content) -> dict[str, Any]:
         "rollout_num": 0,
         "search_done": False,
     }
-
-
-def _budget_state_from_snapshot(snap: StateSnapshot) -> BudgetState | None:
-    value = snap.get("budget_state")
-    return value if isinstance(value, BudgetState) else None

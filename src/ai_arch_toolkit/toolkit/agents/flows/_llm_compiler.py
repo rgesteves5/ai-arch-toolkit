@@ -7,7 +7,6 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from ai_arch_toolkit.core._budget import BudgetExceeded, BudgetPolicy, BudgetState
 from ai_arch_toolkit.core._content import Content, user
 from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._policy import Policy
@@ -15,6 +14,7 @@ from ai_arch_toolkit.core._state import State, StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
 from ai_arch_toolkit.toolkit.agents.flows._react import react_flow, react_initial_state
+from ai_arch_toolkit.toolkit.budget import BudgetPolicy
 from ai_arch_toolkit.toolkit.flow._flow import Flow
 
 _DAG_RE = re.compile(r"\$(\d+)\.\s+(.+?)\s+\[deps:\s*(.*?)\]")
@@ -89,38 +89,13 @@ def llm_compiler_flow(
         """Plan DAG, execute in parallel, join — with optional replanning."""
         task: str = snap.require("task")
         total_cost = 0.0
-        budget_state = _budget_state_from_snapshot(snap)
 
         async def _complete(model: LLM, *args: Any, **kwargs: Any):
-            nonlocal budget_state
-            if budget_state is not None:
-                budget_state.check_llm_calls()
-            response = await model.complete(*args, **kwargs)
-            if budget_state is not None:
-                budget_state = budget_state.record_response(response)
-            return response
-
-        def _budget_artifacts() -> dict[str, Any]:
-            return {"budget_state": budget_state} if budget_state is not None else {}
-
-        def _budget_error(exc: BudgetExceeded) -> Result:
-            if budget_state is None:
-                return Result(error=str(exc), artifacts={"budget_exceeded": exc.to_dict()})
-            exceeded = budget_state.with_exceeded(exc)
-            return Result(
-                error=str(exc),
-                artifacts={
-                    "budget_exceeded": exc.to_dict(),
-                    "budget_state": exceeded,
-                },
-            )
+            return await model.complete(*args, **kwargs)
 
         for _replan in range(max_replans + 1):
             # PLAN
-            try:
-                response = await _complete(plan_llm, [user(task)], system=planner_system)
-            except BudgetExceeded as exc:
-                return _budget_error(exc)
+            response = await _complete(plan_llm, [user(task)], system=planner_system)
             total_cost += response.cost or 0.0
 
             dag: list[_DAGTask] = []
@@ -153,8 +128,7 @@ def llm_compiler_flow(
                 async def _run_one(
                     t: _DAGTask,
                     dag_ref: list[_DAGTask] = dag,
-                    run_budget_state: BudgetState | None = budget_state,
-                ) -> tuple[float, BudgetState | None]:
+                ) -> float:
                     desc = t.description
                     for other in dag_ref:
                         if other.done:
@@ -170,18 +144,11 @@ def llm_compiler_flow(
                         inner_tools,
                         system=inner_system,
                         max_iterations=max_react_iterations,
-                        budget_policy=(
-                            run_budget_state.policy if run_budget_state is not None else None
-                        ),
+                        budget_policy=budget_policy,
                     )
 
-                    initial = react_initial_state(task)
-                    if run_budget_state is not None:
-                        initial["budget_state"] = run_budget_state
-                    state = State(operational=initial)
+                    state = State(operational=react_initial_state(task))
                     result = await inner.run(state)
-                    next_budget = state.get("budget_state")
-                    nonlocal_budget = next_budget if isinstance(next_budget, BudgetState) else None
 
                     inner_resp = state.get("response")
                     t.result = inner_resp.text if inner_resp else ""
@@ -192,28 +159,20 @@ def llm_compiler_flow(
                     ):
                         t.failed = True
 
-                    return result.total_cost, nonlocal_budget
+                    return result.total_cost
 
                 run_results = await asyncio.gather(*[_run_one(t) for t in ready])
-                total_cost += sum(cost for cost, _budget in run_results)
-                for _cost, next_budget in run_results:
-                    if next_budget is not None:
-                        budget_state = next_budget
-                        if budget_state.exceeded is not None:
-                            return _budget_error(budget_state.exceeded)
+                total_cost += sum(run_results)
 
             # JOIN
             results_block = "\n".join(
                 f"${t.id}. {t.description}: {t.result}" for t in dag if t.done
             )
-            try:
-                join_response = await _complete(
-                    join_llm,
-                    [user(f"Task: {task}\n\nResults:\n{results_block}")],
-                    system=joiner_system,
-                )
-            except BudgetExceeded as exc:
-                return _budget_error(exc)
+            join_response = await _complete(
+                join_llm,
+                [user(f"Task: {task}\n\nResults:\n{results_block}")],
+                system=joiner_system,
+            )
             total_cost += join_response.cost or 0.0
 
             first_line = join_response.text.strip().split("\n")[0]
@@ -223,17 +182,12 @@ def llm_compiler_flow(
                     artifacts={
                         "answer": join_response.text,
                         "response": join_response,
-                        **_budget_artifacts(),
                     },
                     cost=total_cost,
                 )
 
         # Should not reach here, but satisfy type checker
-        return Result(
-            error="Max replans exhausted",
-            cost=total_cost,
-            artifacts=_budget_artifacts(),
-        )
+        return Result(error="Max replans exhausted", cost=total_cost)
 
     flow_policy = policy
     if timeout is not None and flow_policy is None:
@@ -251,8 +205,3 @@ def llm_compiler_initial_state(task: Content) -> dict[str, Any]:
     """Create the initial operational state for a llm_compiler_flow."""
     task_str = task if isinstance(task, str) else str(task)
     return {"task": task_str}
-
-
-def _budget_state_from_snapshot(snap: StateSnapshot) -> BudgetState | None:
-    value = snap.get("budget_state")
-    return value if isinstance(value, BudgetState) else None

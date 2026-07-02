@@ -4,12 +4,26 @@ from __future__ import annotations
 
 import pytest
 
-from ai_arch_toolkit.core._budget import BudgetPolicy
+from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._policy import Policy
-from ai_arch_toolkit.core._response import Usage
+from ai_arch_toolkit.core._response import Response, Usage
 from ai_arch_toolkit.core._state import State, StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
+from ai_arch_toolkit.toolkit.budget import BudgetPolicy
 from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowEvent, FlowStep
+
+_MODEL = "claude-sonnet-4-6"  # priced in _default_pricing.toml
+
+
+class _FakeProvider:
+    async def complete(self, messages, *, system=None, tools=None, **kwargs) -> Response:
+        return Response(text="ok", usage=Usage(input_tokens=1000, output_tokens=5), model=_MODEL)
+
+
+def _metered_llm() -> LLM:
+    llm = LLM(_MODEL, api_key="test")
+    llm._provider = _FakeProvider()  # type: ignore[assignment]
+    return llm
 
 
 async def _make_step(name: str, value: str = "ok", artifacts: dict | None = None):
@@ -80,38 +94,42 @@ class TestSequentialExecution:
         assert result.results["after"].value == "reached"
 
     async def test_cumulative_cost_budget_stops_flow(self) -> None:
-        async def expensive(snap: StateSnapshot) -> Result:
-            return Result(value="spent", cost=0.75)
+        # Budget now enforces on REAL metered LLM cost. Step a's call overshoots the tiny cap;
+        # step b's call is then denied at the charge site (soft cost is enforced post-hoc).
+        llm = _metered_llm()
+
+        async def spend(snap: StateSnapshot) -> Result:
+            await llm.complete("hi")
+            return Result(value="spent")
 
         flow = Flow(
-            Step(name="a", fn=expensive),
-            Step(name="b", fn=expensive),
+            Step(name="a", fn=spend),
+            Step(name="b", fn=spend),
             name="budgeted",
-            budget_policy=BudgetPolicy(max_cost=1.0),
+            budget_policy=BudgetPolicy(max_cost=0.0001),
         )
-        state = State()
-
-        result = await flow.run(state)
+        result = await flow.run(State())
 
         assert "budget_exceeded" in result.results
-        assert result.trace.metadata["budget"]["exceeded"]["limit"] == "total_cost"
+        assert result.trace.metadata["meter"]["over_budget"] is True
         assert result.trace.steps[-1].name == "budget_exceeded"
 
     async def test_cumulative_token_budget_stops_flow(self) -> None:
+        llm = _metered_llm()  # each call reports 1005 tokens
+
         async def use_tokens(snap: StateSnapshot) -> Result:
-            return Result(usage=Usage(input_tokens=8, output_tokens=5))
+            await llm.complete("hi")
+            return Result(value="ok")
 
         flow = Flow(
-            Step(name="tokens", fn=use_tokens),
+            Step(name="a", fn=use_tokens),
+            Step(name="b", fn=use_tokens),
             name="token_budgeted",
             budget_policy=BudgetPolicy(max_total_tokens=10),
         )
-        state = State()
-
-        result = await flow.run(state)
+        result = await flow.run(State())
 
         assert "budget_exceeded" in result.results
-        assert result.trace.metadata["budget"]["exceeded"]["limit"] == "total_tokens"
 
 
 class TestCyclicExecution:
