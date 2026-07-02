@@ -272,3 +272,32 @@ async def test_baseexception_fails_the_op_promptly_not_leaked():
         snap = scope.snapshot()  # before close(): op is already failed, not merely started
         assert snap.llm_calls == 1 and snap.unknown_cost_count == 1
         assert snap.out_llm_calls == 0 and snap.out_cost == Money.zero()
+
+
+# ── request facts: content_size_hint + has_server_tools (review #7) ──────────
+
+
+async def test_strict_reserve_denies_an_oversized_prompt():
+    # content_size_hint is now populated, so strict reserve actually holds input tokens up front
+    # (it was always 0 before, admitting prompts that should be denied).
+    from ai_arch_toolkit.toolkit.budget import BudgetController, BudgetExceeded, BudgetPolicy
+
+    llm = make_llm(FakeProvider(response=resp(input_tokens=10)))
+    policy = BudgetPolicy(reserve="strict", max_input_tokens=10)
+    with (
+        MeterScope(RunConfig(controller=BudgetController(policy))),
+        pytest.raises(BudgetExceeded),
+    ):
+        await llm.complete("x" * 4000)  # ~4000 chars -> ~1000 estimated input tokens > 10
+
+
+async def test_server_tool_call_is_costed_unknown():
+    from ai_arch_toolkit.core._server_tools import web_search
+
+    llm = make_llm(FakeProvider(response=resp(input_tokens=100, output_tokens=50)))
+    with MeterScope() as scope:
+        await llm.complete("hi", tools=[web_search()])
+    # has_server_tools -> the pricer returns Cost.unknown (surcharge isn't in the token counts),
+    # so it is counted as unknown, not silently token-priced.
+    assert scope.snapshot().unknown_cost_count == 1
+    assert scope.snapshot().cost == Money.zero()

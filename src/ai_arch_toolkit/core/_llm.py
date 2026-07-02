@@ -127,6 +127,38 @@ def _wrap_rich_stream_with_attempts(
     return stream
 
 
+def _content_chars(
+    normalized: list[dict[str, Any]], system: str | None, wire_tools: list[dict[str, Any]] | None
+) -> int:
+    """Rough char count of the whole request — a fact for the estimator (over-counts a bit)."""
+    total = len(system) if system else 0
+    total += len(str(normalized))
+    if wire_tools:
+        total += len(str(wire_tools))
+    return total
+
+
+def _count_non_text_parts(normalized: list[dict[str, Any]]) -> int:
+    """Number of non-text content parts (images/documents) across all messages."""
+    count = 0
+    for msg in normalized:
+        content = msg.get("content")
+        if isinstance(content, list):
+            count += sum(
+                1
+                for part in content
+                if isinstance(part, dict) and part.get("type") not in (None, "text")
+            )
+    return count
+
+
+def _has_server_tools(wire_tools: list[dict[str, Any]] | None) -> bool:
+    """Whether any provider-hosted server tool (web_search / code_execution) is present."""
+    return bool(wire_tools) and any(
+        isinstance(t, dict) and t.get("_server_tool") for t in wire_tools
+    )
+
+
 class LLM:
     """Lightweight LLM client.
 
@@ -346,7 +378,13 @@ class LLM:
         return await _tracked()
 
     def _meter_request(
-        self, mode: Literal["complete", "stream"], provider_kwargs: dict[str, Any]
+        self,
+        mode: Literal["complete", "stream"],
+        provider_kwargs: dict[str, Any],
+        *,
+        normalized: list[dict[str, Any]],
+        system: str | None,
+        wire_tools: list[dict[str, Any]] | None,
     ) -> OperationRequest | None:
         """Build the metering facts for an LLM call, or ``None`` when no scope is bound."""
         scope = current_meter()
@@ -358,10 +396,18 @@ class LLM:
             mode=mode,
             model=self._model,
             declared_max_output_tokens=provider_kwargs.get("max_tokens"),
+            content_size_hint=_content_chars(normalized, system, wire_tools),
+            non_text_parts=_count_non_text_parts(normalized),
+            has_server_tools=_has_server_tools(wire_tools),
         )
 
     def _open_stream_op(
-        self, provider_kwargs: dict[str, Any]
+        self,
+        provider_kwargs: dict[str, Any],
+        *,
+        normalized: list[dict[str, Any]],
+        system: str | None,
+        wire_tools: list[dict[str, Any]] | None,
     ) -> tuple[MeterOperation, OperationRequest, Any] | None:
         """Open + start a metered op for one stream attempt; ``None`` when unmetered.
 
@@ -369,7 +415,9 @@ class LLM:
         ``open`` propagates (terminal — the stream never starts). The handle carries the store
         reference, so the finalizer can settle from any thread without re-binding the scope.
         """
-        request = self._meter_request("stream", provider_kwargs)
+        request = self._meter_request(
+            "stream", provider_kwargs, normalized=normalized, system=system, wire_tools=wire_tools
+        )
         scope = current_meter()
         if scope is None or request is None:
             return None
@@ -468,7 +516,13 @@ class LLM:
                 normalized, system=system, tools=wire_tools, **provider_kwargs
             )
 
-        meter_request = self._meter_request("complete", provider_kwargs)
+        meter_request = self._meter_request(
+            "complete",
+            provider_kwargs,
+            normalized=normalized,
+            system=system,
+            wire_tools=wire_tools,
+        )
         attempts: list[Attempt] = []
 
         try:
@@ -568,7 +622,9 @@ class LLM:
             wire_tools = req.tools
             provider_kwargs = req.kwargs
 
-        meter = self._open_stream_op(provider_kwargs)  # AdmissionDenied here is terminal
+        meter = self._open_stream_op(  # AdmissionDenied here is terminal
+            provider_kwargs, normalized=normalized, system=system, wire_tools=wire_tools
+        )
         attempts: list[Attempt] = []
         t0 = time.time()
 
@@ -725,7 +781,9 @@ class LLM:
             wire_tools = req.tools
             provider_kwargs = req.kwargs
 
-        meter = self._open_stream_op(provider_kwargs)  # AdmissionDenied here is terminal
+        meter = self._open_stream_op(  # AdmissionDenied here is terminal
+            provider_kwargs, normalized=normalized, system=system, wire_tools=wire_tools
+        )
         attempts: list[Attempt] = []
         t0 = time.time()
 
