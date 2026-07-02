@@ -173,6 +173,10 @@ def _meter_tool_open(tool_call: ToolCall) -> tuple[MeterOperation | None, Cost]:
     op = scope.open(request)
     op.mark_started()
     cost = scope.pricer.price(request, _NO_USAGE) if scope.pricer is not None else _ZERO_COST
+    if cost.kind == "estimated":
+        # settle() rejects an estimate; a misbehaving custom pricer must not flip a successful
+        # tool into an error result. A tool has no token cost, so fall back to free.
+        cost = _ZERO_COST
     return op, cost
 
 

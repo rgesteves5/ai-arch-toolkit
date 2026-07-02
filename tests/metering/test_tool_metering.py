@@ -114,3 +114,19 @@ def test_sync_nested_admission_denied_propagates():
 
     with MeterScope() as _scope, pytest.raises(AdmissionDenied):
         execute_tool(tc("calls_budget"), [calls_budget])
+
+
+async def test_tool_settles_free_when_a_pricer_returns_an_estimate():
+    # A misbehaving custom pricer returning an estimate for a tool must not make settle() raise
+    # (which the tool's except would turn into an error result).
+    from ai_arch_toolkit.core._metering._cost import Cost
+    from ai_arch_toolkit.core._metering._scope import RunConfig
+
+    class EstimatePricer:
+        def price(self, request, usage):
+            return Cost.estimated(Money.from_usd(0.01))
+
+    with MeterScope(RunConfig(pricer=EstimatePricer())) as scope:
+        result = await async_execute_tool(tc("add", a=1, b=2), [add])
+    assert result.ok and result.value == 3  # not flipped to an error
+    assert scope.snapshot().tool_calls == 1

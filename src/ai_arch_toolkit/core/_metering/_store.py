@@ -464,11 +464,25 @@ class MeterStore:
             # dicts preserve insertion order -> evict the oldest tombstone (F5: bounded memory)
             del self._tombstones[next(iter(self._tombstones))]
 
+    def _was_ever_issued(self, op_id: str) -> bool:
+        """True if this op_id was handed out by open() at some point (id counter is monotonic)."""
+        if not op_id.startswith("op-"):
+            return False
+        try:
+            return 1 <= int(op_id[3:]) <= self._next_op
+        except ValueError:
+            return False
+
     def _replay_terminal(self, op_id: str, action: str, payload: int | None) -> None:
         """Handle a transition on an already-terminal (or unknown) op: idempotent no-op or warn."""
         tomb = self._tombstones.get(op_id)
         if tomb is None:
-            raise ValueError(f"unknown operation {op_id}")
+            # Not live, not tombstoned. If it was ever issued, its tombstone was LRU-evicted — a
+            # benign late replay (a finalizer settling after close must not raise). Otherwise the
+            # op_id was never opened, which is a real programming error.
+            if not self._was_ever_issued(op_id):
+                raise ValueError(f"unknown operation {op_id}")
+            return
         status, prev = tomb
         if status != action or prev != payload:
             logger.warning(

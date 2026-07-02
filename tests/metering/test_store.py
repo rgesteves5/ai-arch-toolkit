@@ -289,3 +289,20 @@ def test_concurrent_opens_never_overshoot_the_cap():
 
     assert admitted == cap and denied == n - cap
     assert store.snapshot().out_llm_calls == cap  # exactly cap reservations, no over-admit
+
+
+def test_settle_of_an_lru_evicted_op_is_a_benign_noop():
+    # A tombstone evicted after >50k ops must not turn a late/replayed settle into a hard raise
+    # (settle is called from stream finalizers that may run after close()).
+    store = MeterStore()
+    op = store.open(llm(), controller=None)
+    op.mark_started()
+    op.settle(usage=Usage(input_tokens=1), cost=Cost.known(usd(0.001)))
+    store._tombstones.clear()  # simulate the LRU trim dropping this op's tombstone
+    op.settle(usage=Usage(input_tokens=1), cost=Cost.known(usd(0.001)))  # was issued -> no raise
+
+
+def test_settle_of_a_never_issued_op_still_raises():
+    # Distinguish an evicted tombstone (benign) from a genuinely bogus op_id (a bug).
+    with pytest.raises(ValueError, match="unknown operation"):
+        MeterStore().settle("op-999999", usage=Usage(), cost=Cost.known(usd(0)))
