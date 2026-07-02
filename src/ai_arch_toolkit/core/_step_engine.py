@@ -7,6 +7,7 @@ import logging
 import random
 import time
 
+from ai_arch_toolkit.core._metering._admission import AdmissionDenied
 from ai_arch_toolkit.core._policy import Policy
 from ai_arch_toolkit.core._state import StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
@@ -46,6 +47,8 @@ async def execute_step(step: Step, snapshot: StateSnapshot) -> tuple[Result, Ste
                     break
             result = Result(error="Step timed out", duration=time.monotonic() - t0)
             break
+        except AdmissionDenied:
+            raise  # budget/admission denial is terminal — never retried, never an error Result
         except Exception as exc:
             result = Result(error=str(exc), duration=time.monotonic() - t0)
 
@@ -143,6 +146,8 @@ async def _run_fallback(step: Step, snapshot: StateSnapshot, t0: float) -> Resul
         )
     except TimeoutError:
         return Result(error="Fallback timed out", duration=time.monotonic() - t0)
+    except AdmissionDenied:
+        raise  # terminal, even inside a fallback
     except Exception as exc:
         return Result(error=f"Fallback failed: {exc}", duration=time.monotonic() - t0)
 
