@@ -179,7 +179,7 @@ redact(payload, RedactionPolicy(replacement="***"))         # custom marker
 
 ## Cumulative budgets
 
-A `BudgetPolicy` caps an entire flow run. Attach it to a `Flow` via `budget_policy=`; usage accumulates across every step.
+A `BudgetPolicy` caps an entire flow run. Attach it to a `Flow` via `budget_policy=`; the run's meter accumulates across every step (and every nested agent flow — they share one cumulative budget).
 
 ```python
 from ai_arch_toolkit import Flow, BudgetPolicy
@@ -189,16 +189,31 @@ flow = Flow(
     budget_policy=BudgetPolicy(
         max_llm_calls=20,
         max_total_tokens=100_000,
-        max_cost=0.50,        # USD, using the pricing registry
-        max_wall_time=60.0,   # seconds
+        max_cost=0.50,     # USD, priced via the registry
+        max_wall_s=60.0,   # seconds
     ),
 )
 result = flow.run_sync(state)
 ```
 
-`BudgetPolicy` limits (all optional, `None` = unlimited): `max_wall_time`, `max_llm_calls`, `max_tool_calls`, `max_input_tokens`, `max_output_tokens`, `max_total_tokens`, `max_cost`.
+`BudgetPolicy` caps (all optional, `None` = unlimited): `max_llm_calls`, `max_tool_calls`, `max_input_tokens`, `max_output_tokens`, `max_total_tokens`, `max_cost` (USD), `max_wall_s`. Two knobs shape the cost cap:
 
-Enforcement is **cooperative**: as steps record LLM/tool usage, the running `BudgetState` is checked. When a limit would be crossed, the flow stops scheduling further work and records `policy_decision="budget_exceeded"` in the trace — `flow.run()` returns a normal `FlowResult` rather than raising. The structured detail is a `BudgetExceeded` (`.to_dict()` for logging); `BudgetState` exposes the live counters (`llm_calls`, `tool_calls`, token tallies, `total_cost`).
+- `reserve` (`"none"` default | `"strict"`) — `"strict"` reserves a worst-case token/cost hold *before* each call, failing closed on unpriced models. `"none"` measures and settles only (a soft cost cap can overshoot by at most the one in-flight call).
+- `unpriced` (`"fail_closed"` default | `"allow"`) — under a `max_cost` cap, `"fail_closed"` denies further work once a call's cost can't be known (an unpriced model, or a provider-hosted server tool whose charge isn't in the token counts); `"allow"` proceeds (the cap may undercount).
+
+Enforcement is **hard, at the charge site**: the meter *denies the operation that would exceed a cap before it runs* — the call never happens and nothing is charged. Count and token caps are exact even under concurrency. The denial (`BudgetExceeded`, a neutral `AdmissionDenied`) is terminal; the owning (outermost) flow converts it to `policy_decision="budget_exceeded"` in the trace, so `flow.run()` returns a normal `FlowResult` rather than raising. Wall-time is checked between steps.
+
+The **meter is the single source of truth** for what a run consumed — read it off the result, never by summing anything yourself:
+
+```python
+report = result.meter            # BudgetReport | None (None only if unmetered)
+report.cost                      # known USD spend
+report.cost_uncertain            # True if some call couldn't be priced (cost undercounts)
+report.over_budget, report.breached   # which caps were reached
+result.total_cost, result.usage  # convenience: meter cost / token usage
+```
+
+The same `budget_policy=` works per run — `flow.run_sync(state, budget_policy=...)` overrides the construction-time one (both are ignored when the flow runs nested under an enclosing scope). `Agent.run(task, budget_policy=...)` behaves the same. Outside a Flow, wrap any LLM/tool calls in `budget_scope(BudgetPolicy(...))` (a context manager) and read `scope.snapshot()`.
 
 ---
 

@@ -193,18 +193,22 @@ trace.step("summarize")        # find by name (recursive)
 trace.flow("inner_react")      # find nested flow
 
 # Aggregates
-trace.total_cost               # sum across all steps
 trace.total_duration           # wall clock
 trace.confidence               # min across non-skipped steps
-trace.total_usage              # summed Usage
+trace.total_cost               # raw sum of per-step Result.cost annotations (0 for metered flows)
+trace.total_usage              # raw sum of per-step Result.usage annotations
 
 # Per-step detail
 for st in trace.steps:
-    print(st.name, st.duration, st.cost)
+    print(st.name, st.duration)
     print(st.policy_decisions)  # ("retry", "fallback", ...)
     print(st.error)             # None or error string
     print(st.skipped)           # True if condition not met
 ```
+
+For **spend**, read the run's meter — the single source of truth — not the trace: `result.meter`
+(a `BudgetReport`), or the `result.total_cost` / `result.usage` shortcuts. `trace.total_cost` and
+`st.cost` only reflect costs a custom step annotated manually via `Result(cost=...)`.
 
 ### StepTrace fields
 
@@ -604,8 +608,7 @@ async def research_tech(snap: StateSnapshot) -> Result:
     return Result(
         value=response.text,
         artifacts={"tech_research": response.text},
-        cost=response.cost or 0.0,
-    )
+    )  # no manual cost: the run's meter captures LLM spend automatically
 
 async def research_market(snap: StateSnapshot) -> Result:
     task = snap.require("task")
@@ -613,8 +616,7 @@ async def research_market(snap: StateSnapshot) -> Result:
     return Result(
         value=response.text,
         artifacts={"market_research": response.text},
-        cost=response.cost or 0.0,
-    )
+    )  # no manual cost: the run's meter captures LLM spend automatically
 
 async def synthesize(snap: StateSnapshot) -> Result:
     tech = snap.require("tech_research")
@@ -625,8 +627,7 @@ async def synthesize(snap: StateSnapshot) -> Result:
     return Result(
         value=response.text,
         artifacts={"report": response.text},
-        cost=response.cost or 0.0,
-    )
+    )  # no manual cost: the run's meter captures LLM spend automatically
 
 flow = Flow(
     FlowStep(step=Step(name="research_tech", fn=research_tech)),
@@ -642,12 +643,12 @@ state = State(operational={"task": "Electric vehicle batteries"})
 result = await flow.run(state)
 
 print(state["report"])
-print(f"Total cost: ${result.total_cost:.4f}")
+print(f"Total cost: ${result.total_cost:.4f}")   # from the meter (single source of truth)
 print(f"Duration: {result.total_duration:.1f}s")
 
-# Inspect what happened
+# Per-step timing (per-step cost lives in the meter, not the trace):
 for st in result.trace.steps:
-    print(f"  {st.name}: {st.duration:.1f}s, ${st.cost:.4f}")
+    print(f"  {st.name}: {st.duration:.1f}s")
 ```
 
 This runs `research_tech` and `research_market` concurrently (DAG mode detects they're independent), then `synthesize` after both complete.

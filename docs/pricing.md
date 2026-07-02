@@ -43,16 +43,23 @@ pricing.list_models()
 
 ## Cost tracking across flows
 
-Flow results accumulate cost across all steps:
+Every `Flow`/`Agent` run opens a meter (measure-only unless you attach a budget). The meter is the **single source of truth** for what the run consumed — read it off the result rather than summing anything yourself:
 
 ```python
 result = await flow.run(state)
-print(f"Total cost: ${result.total_cost:.4f}")
 
-# Per-step breakdown
+report = result.meter                # BudgetReport (None only if unmetered)
+print(f"Total cost: ${result.total_cost:.4f}")        # == report.cost
+print(f"{report.llm_calls} LLM calls, {report.total_tokens} tokens")
+if report.cost_uncertain:            # some call couldn't be priced -> cost is a lower bound
+    print("(cost undercounts: an unpriced model or server tool was used)")
+
+# Per-step timing is still on the trace (per-step cost lives in the meter, not the trace):
 for st in result.trace.steps:
-    print(f"  {st.name}: ${st.cost:.4f}, {st.duration:.1f}s")
+    print(f"  {st.name}: {st.duration:.1f}s")
 ```
+
+`Agent` results expose the same via `agent_result.report` / `.cost` / `.usage`.
 
 ## Run-wide budgets
 
