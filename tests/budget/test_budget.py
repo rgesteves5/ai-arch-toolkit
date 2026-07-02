@@ -17,6 +17,7 @@ from ai_arch_toolkit.toolkit.budget import (
     BudgetExceeded,
     BudgetPolicy,
     BudgetReport,
+    budget_scope,
 )
 
 MODEL = "claude-sonnet-4-6"  # priced in _default_pricing.toml
@@ -197,3 +198,27 @@ def test_scope_enforces_the_budget_end_to_end():
         with pytest.raises(BudgetExceeded):
             scope.open(OperationRequest(kind="llm", parent_span_id=scope.run_span_id))
     assert scope.snapshot().llm_calls == 1
+
+
+# ── budget_scope convenience ─────────────────────────────────────────────────
+
+
+def test_budget_scope_enforces_like_a_hand_built_scope():
+    with budget_scope(BudgetPolicy(max_llm_calls=1)) as scope:
+        scope.open(OperationRequest(kind="llm", parent_span_id=scope.run_span_id)).mark_started()
+        with pytest.raises(BudgetExceeded):
+            scope.open(OperationRequest(kind="llm", parent_span_id=scope.run_span_id))
+    assert scope.snapshot().llm_calls == 1
+
+
+def test_budget_scope_empty_policy_is_measure_only():
+    with budget_scope(BudgetPolicy()) as scope:  # empty policy -> no controller, never denies
+        for _ in range(3):
+            op = scope.open(OperationRequest(kind="llm", parent_span_id=scope.run_span_id))
+            op.mark_started()
+    assert scope.controller is None and scope.snapshot().llm_calls == 3
+
+
+def test_budget_scope_none_policy_is_measure_only():
+    with budget_scope() as scope:
+        assert scope.controller is None

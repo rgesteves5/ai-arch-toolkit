@@ -18,6 +18,7 @@ from ai_arch_toolkit.toolkit.budget._estimator import Estimator, HeuristicEstima
 from ai_arch_toolkit.toolkit.budget._exceptions import BudgetExceeded
 from ai_arch_toolkit.toolkit.budget._policy import BudgetPolicy, Reserve, Unpriced
 from ai_arch_toolkit.toolkit.budget._report import BudgetReport
+from ai_arch_toolkit.toolkit.budget._scope import budget_scope
 
 __all__ = [
     "BudgetController",
@@ -28,4 +29,5 @@ __all__ = [
     "HeuristicEstimator",
     "Reserve",
     "Unpriced",
+    "budget_scope",
 ]
