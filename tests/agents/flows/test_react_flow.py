@@ -375,3 +375,30 @@ class TestReactInitialState:
         assert "messages" in init
         assert len(init["messages"]) == 1
         assert init["has_tool_calls"] is False
+
+
+async def test_parallel_tool_budget_surfaces_denial_cleanly():
+    # A mid-batch tool denial under a budget must surface as budget_exceeded (not hang / leak).
+    @tool
+    def t1(x: str) -> str:
+        """t1."""
+        return x
+
+    @tool
+    def t2(x: str) -> str:
+        """t2."""
+        return x
+
+    tc1 = ToolCall(id="a", name="t1", input={"x": "1"})
+    tc2 = ToolCall(id="b", name="t2", input={"x": "2"})
+    llm, _p = _metered_llm(_make_response(tool_calls=(tc1, tc2)))
+    flow = react_flow(
+        llm,
+        ToolGroup(t1, t2),
+        max_iterations=3,
+        parallel_tool_calls=True,
+        budget_policy=BudgetPolicy(max_tool_calls=1),
+    )
+    result = await flow.run(State(operational=react_initial_state("go")))
+    assert "budget_exceeded" in result.results
+    assert _budget_dimension(result) == "tool_calls"

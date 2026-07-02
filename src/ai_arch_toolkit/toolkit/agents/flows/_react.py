@@ -138,8 +138,17 @@ def react_flow(
                     return result
                 return ToolResult.success(result)
 
-            results = await asyncio.gather(*[_safe_execute(tc) for tc in response.tool_calls])
-            for tc, result in zip(response.tool_calls, results, strict=True):
+            # return_exceptions=True so a mid-batch AdmissionDenied lets the siblings FINISH (their
+            # ops settle — no STARTED-op leak) before we re-raise the terminal denial.
+            raw = await asyncio.gather(
+                *[_safe_execute(tc) for tc in response.tool_calls], return_exceptions=True
+            )
+            checked: list[ToolResult] = []
+            for r in raw:
+                if isinstance(r, BaseException):
+                    raise r  # AdmissionDenied surfaces after every sibling has completed
+                checked.append(r)
+            for tc, result in zip(response.tool_calls, checked, strict=True):
                 structured_results.append(result)
                 tool_result_dicts.append(
                     tool_result(result.to_model_text(), tool_use_id=tc.id, name=tc.name)
