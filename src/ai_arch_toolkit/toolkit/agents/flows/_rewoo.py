@@ -13,6 +13,7 @@ from ai_arch_toolkit.core._response import ToolCall
 from ai_arch_toolkit.core._state import StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
+from ai_arch_toolkit.toolkit.budget import BudgetPolicy
 from ai_arch_toolkit.toolkit.flow._flow import Flow
 
 _PLAN_RE = re.compile(r"#E(\d+)\s*=\s*(\w+)\[([^\]]*)\]")
@@ -35,6 +36,7 @@ def rewoo_flow(
     ),
     timeout: float | None = None,
     policy: Policy | None = None,
+    budget_policy: BudgetPolicy | None = None,
     planner_llm: LLM | None = None,
     solver_llm: LLM | None = None,
 ) -> Flow:
@@ -48,6 +50,7 @@ def rewoo_flow(
         solver_system: System prompt for the solver phase.
         timeout: Overall timeout in seconds.
         policy: Optional execution policy.
+        budget_policy: Optional cumulative runtime budget for the flow.
         planner_llm: Override LLM for planning.
         solver_llm: Override LLM for solving.
     """
@@ -166,6 +169,7 @@ def rewoo_flow(
         Step(name="solve", fn=solve),
         name="rewoo",
         policy=flow_policy,
+        budget_policy=budget_policy,
     )
 
 

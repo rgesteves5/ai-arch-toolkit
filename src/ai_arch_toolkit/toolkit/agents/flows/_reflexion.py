@@ -12,6 +12,7 @@ from ai_arch_toolkit.core._state import State, StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
 from ai_arch_toolkit.toolkit.agents.flows._react import react_flow, react_initial_state
+from ai_arch_toolkit.toolkit.budget import BudgetPolicy
 from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowStep
 
 
@@ -30,6 +31,7 @@ def reflexion_flow(
     ),
     timeout: float | None = None,
     policy: Policy | None = None,
+    budget_policy: BudgetPolicy | None = None,
     exec_llm: LLM | None = None,
     exec_tools: ToolGroup | None = None,
     reflect_llm: LLM | None = None,
@@ -47,6 +49,7 @@ def reflexion_flow(
         reflect_system: System prompt for the reflector LLM.
         timeout: Overall timeout in seconds.
         policy: Optional execution policy.
+        budget_policy: Optional cumulative runtime budget for the flow.
         exec_llm: Override LLM for the executor (inner ReAct).
         exec_tools: Override tools for the executor.
         reflect_llm: Override LLM for the reflector.
@@ -143,6 +146,7 @@ def reflexion_flow(
         FlowStep(step=Step(name="reflect", fn=reflect), when=not_passed),
         name="reflexion",
         policy=flow_policy,
+        budget_policy=budget_policy,
         max_iterations=max_retries,
     )
 

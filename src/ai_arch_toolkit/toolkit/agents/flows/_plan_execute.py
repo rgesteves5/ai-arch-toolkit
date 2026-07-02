@@ -12,6 +12,7 @@ from ai_arch_toolkit.core._state import State, StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
 from ai_arch_toolkit.toolkit.agents.flows._react import react_flow, react_initial_state
+from ai_arch_toolkit.toolkit.budget import BudgetPolicy
 from ai_arch_toolkit.toolkit.flow._flow import Flow
 
 _STEP_RE = re.compile(r"^\d+\.\s+(.+)", re.MULTILINE)
@@ -34,6 +35,7 @@ def plan_execute_flow(
     ),
     timeout: float | None = None,
     policy: Policy | None = None,
+    budget_policy: BudgetPolicy | None = None,
     planner_llm: LLM | None = None,
     exec_llm: LLM | None = None,
     exec_tools: ToolGroup | None = None,
@@ -139,6 +141,7 @@ def plan_execute_flow(
         Step(name="solve", fn=solve),
         name="plan_execute",
         policy=flow_policy,
+        budget_policy=budget_policy,
     )
 
 

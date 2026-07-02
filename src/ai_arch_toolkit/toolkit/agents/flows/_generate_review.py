@@ -11,6 +11,7 @@ from ai_arch_toolkit.core._state import State, StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
 from ai_arch_toolkit.toolkit.agents.flows._react import react_flow, react_initial_state
+from ai_arch_toolkit.toolkit.budget import BudgetPolicy
 from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowStep
 
 
@@ -34,6 +35,7 @@ def generate_review_flow(
     max_review_iterations: int = 5,
     timeout: float | None = None,
     policy: Policy | None = None,
+    budget_policy: BudgetPolicy | None = None,
 ) -> Flow:
     """Create a Generate-Review Flow — configurable generate + review loop.
 
@@ -54,6 +56,7 @@ def generate_review_flow(
         max_review_iterations: Max iterations for inner ReAct during review.
         timeout: Overall timeout in seconds.
         policy: Optional execution policy.
+        budget_policy: Optional cumulative runtime budget for the flow.
     """
     gen_extra = gen_kwargs or {}
     review_extra = review_kwargs or {}
@@ -148,6 +151,7 @@ def generate_review_flow(
         FlowStep(step=Step(name="review", fn=review), when=not_accepted),
         name="generate_review",
         policy=flow_policy,
+        budget_policy=budget_policy,
         max_iterations=max_cycles,
     )
 
