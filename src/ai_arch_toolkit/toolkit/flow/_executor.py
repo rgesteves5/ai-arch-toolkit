@@ -102,14 +102,14 @@ async def _execute_sequential(
     if not has_conditions:
         # Pure sequential — single pass
         for fs in flow.steps:
-            if _append_budget_precheck_trace(flow, state, traces, results):
+            if _halt_if_over_budget(state, traces, results):
                 break
             result, step_trace = await _execute_flow_step(fs, flow, state)
             traces.append(step_trace)
             if result is not None:
                 results[fs.step.name] = result
                 state.merge(result)
-                if _record_budget_after_result(state, result, traces, results):
+                if _halt_if_over_budget(state, traces, results):
                     break
                 if result.is_error and _should_halt(result, fs):
                     break
@@ -119,7 +119,7 @@ async def _execute_sequential(
         while max_iter is None or iteration < max_iter:
             any_executed = False
             for fs in flow.steps:
-                if _append_budget_precheck_trace(flow, state, traces, results):
+                if _halt_if_over_budget(state, traces, results):
                     return
                 snapshot = state.snapshot()
                 scoped = _resolve_and_apply_scope(snapshot, fs, flow)
@@ -156,7 +156,7 @@ async def _execute_sequential(
                 if result is not None:
                     results[fs.step.name] = result
                     state.merge(result)
-                    if _record_budget_after_result(state, result, traces, results):
+                    if _halt_if_over_budget(state, traces, results):
                         return
                     if result.is_error and _should_halt(result, fs):
                         return
@@ -177,7 +177,7 @@ async def _iter_sequential(
 
     if not has_conditions:
         for fs in flow.steps:
-            if _append_budget_precheck_trace(flow, state, traces, results):
+            if _halt_if_over_budget(state, traces, results):
                 break
             yield FlowEvent(type="step_start", flow_name=flow.name, step_name=fs.step.name)
             result, step_trace = await _execute_flow_step(fs, flow, state)
@@ -192,7 +192,7 @@ async def _iter_sequential(
                 if result is not None:
                     results[fs.step.name] = result
                     state.merge(result)
-                    if _record_budget_after_result(state, result, traces, results):
+                    if _halt_if_over_budget(state, traces, results):
                         yield FlowEvent(
                             type="policy_decision",
                             flow_name=flow.name,
@@ -212,7 +212,7 @@ async def _iter_sequential(
         while max_iter is None or iteration < max_iter:
             any_executed = False
             for fs in flow.steps:
-                if _append_budget_precheck_trace(flow, state, traces, results):
+                if _halt_if_over_budget(state, traces, results):
                     yield FlowEvent(
                         type="policy_decision",
                         flow_name=flow.name,
@@ -265,7 +265,7 @@ async def _iter_sequential(
                 if result is not None:
                     results[fs.step.name] = result
                     state.merge(result)
-                    if _record_budget_after_result(state, result, traces, results):
+                    if _halt_if_over_budget(state, traces, results):
                         yield FlowEvent(
                             type="policy_decision",
                             flow_name=flow.name,
@@ -345,7 +345,7 @@ async def _execute_dag(
 
         if len(to_execute) == 1:
             # Single step — execute directly on state
-            if _append_budget_precheck_trace(flow, state, traces, results):
+            if _halt_if_over_budget(state, traces, results):
                 break
             name = to_execute[0]
             fs = step_map[name]
@@ -354,7 +354,7 @@ async def _execute_dag(
             if result is not None:
                 results[name] = result
                 state.merge(result)
-                if _record_budget_after_result(state, result, traces, results):
+                if _halt_if_over_budget(state, traces, results):
                     break
                 if result.is_error:
                     failed.add(name)
@@ -409,9 +409,8 @@ async def _execute_dag(
 
             if parallel_results:
                 state.merge(*parallel_results)
-                for result in parallel_results:
-                    if _record_budget_after_result(state, result, traces, results):
-                        return
+                if _halt_if_over_budget(state, traces, results):
+                    return
 
 
 async def _iter_dag(
@@ -470,7 +469,7 @@ async def _iter_dag(
                 continue
 
             yield FlowEvent(type="step_start", flow_name=flow.name, step_name=name)
-            if _append_budget_precheck_trace(flow, state, traces, results):
+            if _halt_if_over_budget(state, traces, results):
                 yield FlowEvent(
                     type="policy_decision",
                     flow_name=flow.name,
@@ -482,7 +481,7 @@ async def _iter_dag(
             if result is not None:
                 results[name] = result
                 state.merge(result)
-                if _record_budget_after_result(state, result, traces, results):
+                if _halt_if_over_budget(state, traces, results):
                     yield FlowEvent(
                         type="policy_decision",
                         flow_name=flow.name,
@@ -615,27 +614,16 @@ def _over_budget(state: State) -> BudgetReport | None:
     return BudgetReport.from_snapshot(snap, policy)
 
 
-def _append_budget_precheck_trace(
-    flow: Flow,
+def _halt_if_over_budget(
     state: State,
     traces: list[StepTrace],
     results: dict[str, Result],
 ) -> bool:
-    """Halt before a step if the meter has already reached a cap (wall-time / soft overshoot)."""
-    report = _over_budget(state)
-    if report is None:
-        return False
-    _append_meter_exceeded(report, traces, results)
-    return True
+    """Append a budget_exceeded trace and return True if the run has exceeded its wall-time cap.
 
-
-def _record_budget_after_result(
-    state: State,
-    result: Result,
-    traces: list[StepTrace],
-    results: dict[str, Result],
-) -> bool:
-    """Halt after a step whose metered calls pushed the run over a cap (soft overshoot)."""
+    Called both before and after each step (the between-steps checkpoint for wall-time, the one cap
+    not enforced at a charge site). Call/token/cost caps surface as AdmissionDenied instead.
+    """
     report = _over_budget(state)
     if report is None:
         return False
