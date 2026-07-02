@@ -131,3 +131,18 @@ async def test_iter_flow_abandonment_finalizes_the_scope():
 
     snap = state.get("_meter_scope").snapshot()
     assert snap.llm_calls == 1 and snap.unknown_cost_count == 1  # close() incompleted the op
+
+
+async def test_nested_flow_budget_denial_surfaces_at_the_owner():
+    # A nested (inherited-scope) flow re-raises AdmissionDenied so the OWNING flow converts it once
+    # at the top — instead of burying budget_exceeded in the nested result and running on.
+    llm = make_llm()
+
+    async def call(snap: StateSnapshot) -> Result:
+        await llm.complete("hi")
+        return Result(value="x")
+
+    inner = Flow(Step(name="inner_call", fn=call), name="inner")
+    parent = Flow(inner, name="parent", budget_policy=BudgetPolicy(max_llm_calls=0))
+    result = await parent.run(State())
+    assert "budget_exceeded" in result.results  # surfaced in the parent's results

@@ -37,6 +37,8 @@ async def execute_flow(flow: Flow, state: State) -> FlowResult:
         else:
             await _execute_sequential(flow, state, traces, results)
     except AdmissionDenied as exc:
+        if not owned:
+            raise  # nested flow: let the owning (outermost) flow convert it, once, at the top
         _append_denial(exc, state, traces, results)  # a hard mid-step budget denial
     finally:
         if owned:  # finalize even on an unexpected error, so STARTED ops don't leak
@@ -69,6 +71,8 @@ async def iter_flow(flow: Flow, state: State) -> AsyncIterator[FlowEvent]:
             async for event in _iter_sequential(flow, state, traces, results):
                 yield event
     except AdmissionDenied as exc:
+        if not owned:
+            raise  # nested flow: the owning (outermost) flow converts it once, at the top
         _append_denial(exc, state, traces, results)
         yield FlowEvent(
             type="policy_decision", flow_name=flow.name, policy_decision="budget_exceeded"
