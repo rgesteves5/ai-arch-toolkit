@@ -1,4 +1,4 @@
-"""``budget_scope`` — a one-liner metered scope that wires a :class:`BudgetPolicy` into the meter."""
+"""``budget_scope`` — a one-liner metered scope wiring a :class:`BudgetPolicy` into the meter."""
 
 from __future__ import annotations
 

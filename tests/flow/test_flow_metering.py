@@ -133,6 +133,22 @@ async def test_iter_flow_abandonment_finalizes_the_scope():
     assert snap.llm_calls == 1 and snap.unknown_cost_count == 1  # close() incompleted the op
 
 
+async def test_flow_result_accessors_are_meter_derived():
+    # meter / usage / total_cost all project from the run's meter scope (single source of truth).
+    llm = make_llm()
+
+    async def call_model(snap: StateSnapshot) -> Result:
+        await llm.complete("hi")
+        return Result(value="done")
+
+    result = await Flow(Step(name="s", fn=call_model), name="m").run(State())
+    report = result.meter
+    assert report is not None
+    assert report.llm_calls == 1 and report.input_tokens == 12 and report.output_tokens == 4
+    assert result.usage.input_tokens == 12 and result.usage.output_tokens == 4
+    assert result.total_cost == report.cost > 0
+
+
 async def test_per_run_budget_policy_enforces_without_a_construction_budget():
     # A flow built with no budget can still be capped per run.
     llm = make_llm()

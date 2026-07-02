@@ -7,15 +7,25 @@ from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from ai_arch_toolkit.core._metering._scope import MeterScope
 from ai_arch_toolkit.core._policy import Policy
+from ai_arch_toolkit.core._response import Usage
 from ai_arch_toolkit.core._state import State, StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._sync import _run_sync, _stream_sync
 from ai_arch_toolkit.core._trace import Trace
-from ai_arch_toolkit.toolkit.budget import BudgetPolicy
+from ai_arch_toolkit.toolkit.budget import BudgetController, BudgetPolicy, BudgetReport
 from ai_arch_toolkit.toolkit.flow._scope import Scope
 
 type ConditionFn = Callable[[StateSnapshot], bool]
+
+
+def _scope_report(scope: object) -> BudgetReport | None:
+    """Project a run's meter scope into a typed report (the single source of truth for spend)."""
+    if not isinstance(scope, MeterScope):
+        return None
+    policy = scope.controller.policy if isinstance(scope.controller, BudgetController) else None
+    return BudgetReport.from_snapshot(scope.snapshot(), policy)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -45,8 +55,34 @@ class FlowResult:
         return None
 
     @property
+    def meter(self) -> BudgetReport | None:
+        """Authoritative metered usage/cost for this run — the single source of truth.
+
+        Projected live from the run's meter scope (``None`` only if the run was unmetered). For a
+        flow run nested under an enclosing scope, this reflects the shared cumulative budget, not
+        this flow alone.
+        """
+        return _scope_report(self.state.get("_meter_scope"))
+
+    @property
     def total_cost(self) -> float:
-        return self.trace.total_cost
+        """Known USD spend, from the meter. ``0.0`` if unmetered; see :attr:`meter` for detail."""
+        report = self.meter
+        return report.cost if report is not None else 0.0
+
+    @property
+    def usage(self) -> Usage:
+        """Token usage from the meter (the single source of truth). Empty if unmetered."""
+        scope = self.state.get("_meter_scope")
+        if not isinstance(scope, MeterScope):
+            return Usage()
+        s = scope.snapshot()
+        return Usage(
+            input_tokens=s.input_tokens,
+            output_tokens=s.output_tokens,
+            cache_read_tokens=s.cache_read_tokens,
+            cache_write_tokens=s.cache_write_tokens,
+        )
 
     @property
     def total_duration(self) -> float:

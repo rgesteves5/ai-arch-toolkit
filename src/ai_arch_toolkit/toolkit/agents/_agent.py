@@ -15,7 +15,7 @@ from ai_arch_toolkit.core._sync import _run_sync
 from ai_arch_toolkit.core._tools._group import ToolGroup
 from ai_arch_toolkit.toolkit.agents._compile import build_flow, extract_text, initial_state
 from ai_arch_toolkit.toolkit.agents._spec import ReasoningSpec
-from ai_arch_toolkit.toolkit.budget import BudgetPolicy
+from ai_arch_toolkit.toolkit.budget import BudgetPolicy, BudgetReport
 from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowEvent, FlowResult
 
 __all__ = ["Agent", "AgentResult"]
@@ -23,13 +23,14 @@ __all__ = ["Agent", "AgentResult"]
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AgentResult:
-    """Outcome of running an Agent on one task."""
+    """Outcome of one Agent run. ``usage``/``cost``/``report`` are meter-derived (the truth)."""
 
     text: str
     response: Response | None
     flow_result: FlowResult
     usage: Usage = field(default_factory=Usage)
     cost: float = 0.0
+    report: BudgetReport | None = None
     errors: tuple[str, ...] = ()
 
 
@@ -103,8 +104,9 @@ class Agent:
             text=extract_text(state, flow_result),
             response=response,
             flow_result=flow_result,
-            usage=flow_result.trace.total_usage,
+            usage=flow_result.usage,  # meter-derived (single source of truth)
             cost=flow_result.total_cost,
+            report=flow_result.meter,
             errors=errors,
         )
 

@@ -93,6 +93,19 @@ async def test_flow_honours_budget_policy(name: str) -> None:
     assert all(p.calls == 0 for p in providers)  # denied before any provider call
 
 
+async def test_agent_result_report_and_usage_are_meter_derived() -> None:
+    llm, provider = _metered_llm()
+    agent = Agent.from_flow(
+        react_flow(llm, ToolGroup(), max_iterations=1),
+        init_state=lambda task: react_initial_state(task),
+    )
+    result = await agent.run("t")
+    assert provider.calls == 1
+    assert result.report is not None and result.report.llm_calls == 1
+    assert result.usage.input_tokens == 10  # from the meter, not manual threading
+    assert result.cost == result.report.cost > 0
+
+
 async def test_agent_per_run_budget_denies_the_first_call() -> None:
     llm, provider = _metered_llm()
     agent = Agent.from_flow(

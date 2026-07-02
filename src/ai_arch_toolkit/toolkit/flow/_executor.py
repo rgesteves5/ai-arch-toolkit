@@ -19,7 +19,7 @@ from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._step_engine import execute_step
 from ai_arch_toolkit.core._trace import StepTrace, Trace
 from ai_arch_toolkit.toolkit.budget import BudgetController, BudgetPolicy, BudgetReport
-from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowEvent, FlowResult, FlowStep
+from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowEvent, FlowResult, FlowStep, _scope_report
 from ai_arch_toolkit.toolkit.flow._scope import apply_scope
 
 
@@ -601,11 +601,8 @@ def _meter_scope(state: State) -> MeterScope | None:
 
 
 def _trace_metadata(state: State) -> dict[str, Any]:
-    scope = _meter_scope(state)
-    if scope is None:
-        return {}
-    policy = scope.controller.policy if isinstance(scope.controller, BudgetController) else None
-    return {"meter": BudgetReport.from_snapshot(scope.snapshot(), policy).to_dict()}
+    report = _scope_report(_meter_scope(state))
+    return {"meter": report.to_dict()} if report is not None else {}
 
 
 def _over_budget(state: State) -> BudgetReport | None:

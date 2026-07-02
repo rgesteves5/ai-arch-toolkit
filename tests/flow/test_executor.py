@@ -338,13 +338,16 @@ class TestFlowResult:
         assert result.final_result.value == "last"
 
     async def test_total_cost(self) -> None:
+        # total_cost is meter-derived (the single source of truth); with no metered LLM/tool spend
+        # it is 0. Raw per-step Result.cost annotations still aggregate on the trace.
         async def fn(snap: StateSnapshot) -> Result:
             return Result(cost=0.5)
 
         flow = Flow(Step(name="a", fn=fn), Step(name="b", fn=fn), name="cost")
         state = State()
         result = await flow.run(state)
-        assert result.total_cost == pytest.approx(1.0)
+        assert result.total_cost == 0.0  # meter: nothing charged
+        assert result.trace.total_cost == pytest.approx(1.0)  # user annotations on the raw trace
 
     async def test_sync_run(self) -> None:
         async def fn(snap: StateSnapshot) -> Result:
