@@ -92,3 +92,25 @@ async def test_gate_blocked_tool_is_not_metered():
         result = await async_execute_tool(tc("risky"), [risky])
     assert not result.ok  # blocked by the approval gate
     assert scope.snapshot().tool_calls == 0  # never metered — the tool did not run
+
+
+async def test_nested_admission_denied_propagates_out_of_the_executor():
+    # A tool whose body hits a budget cap (agent-as-tool). The denial must propagate, not become
+    # a retryable ToolResult — otherwise the outer loop keeps retrying and the cap is defeated.
+    @tool
+    def calls_budget() -> str:
+        """Simulate a nested metered call that gets denied inside the tool body."""
+        raise AdmissionDenied(dimension="cost")
+
+    with MeterScope() as _scope, pytest.raises(AdmissionDenied):
+        await async_execute_tool(tc("calls_budget"), [calls_budget])
+
+
+def test_sync_nested_admission_denied_propagates():
+    @tool
+    def calls_budget() -> str:
+        """Denied inside the tool body (sync path)."""
+        raise AdmissionDenied(dimension="cost")
+
+    with MeterScope() as _scope, pytest.raises(AdmissionDenied):
+        execute_tool(tc("calls_budget"), [calls_budget])

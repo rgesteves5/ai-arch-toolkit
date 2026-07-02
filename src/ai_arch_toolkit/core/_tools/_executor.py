@@ -8,6 +8,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import replace
 from typing import Any
 
+from ai_arch_toolkit.core._metering._admission import AdmissionDenied
 from ai_arch_toolkit.core._metering._cost import Cost
 from ai_arch_toolkit.core._metering._money import Money
 from ai_arch_toolkit.core._metering._operation import MeterOperation, OperationRequest
@@ -212,6 +213,8 @@ def _run_tool_sync(
             op.settle(usage=_NO_USAGE, cost=tool_cost)
             settled = True
         return result
+    except AdmissionDenied:
+        raise  # budget denial is terminal — a tool executor never converts it to a ToolResult
     except Exception as exc:
         return _result_from_exception(tool_call.name, exc, redactor)
     finally:
@@ -260,6 +263,8 @@ async def _arun_tool(
             op.settle(usage=_NO_USAGE, cost=tool_cost)
             settled = True
         return result
+    except AdmissionDenied:
+        raise  # budget denial is terminal — a tool executor never converts it to a ToolResult
     except Exception as exc:
         return _result_from_exception(tool_call.name, exc, redactor)
     finally:

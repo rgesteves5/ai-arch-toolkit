@@ -43,11 +43,7 @@ def deprecated(message: str, *, removed_in: str | None = None) -> Any:
         A decorator. Wrapping the target keeps it callable and preserves
         metadata; type-checkers see it as deprecated.
     """
-    full = (
-        f"{message} Will be removed in v{removed_in.lstrip('v')}."
-        if removed_in
-        else message
-    )
+    full = f"{message} Will be removed in v{removed_in.lstrip('v')}." if removed_in else message
     # ``warnings.deprecated`` requires a LiteralString to keep the warning
     # text auditable at type-check time. Our wrapper builds the final string
     # at runtime from a caller-supplied literal plus an optional version, so

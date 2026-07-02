@@ -7,6 +7,7 @@ from typing import Any
 
 from ai_arch_toolkit.core._content import Content, user
 from ai_arch_toolkit.core._llm import LLM
+from ai_arch_toolkit.core._metering._admission import AdmissionDenied
 from ai_arch_toolkit.core._policy import Policy
 from ai_arch_toolkit.core._response import ToolCall
 from ai_arch_toolkit.core._state import StateSnapshot
@@ -122,6 +123,8 @@ def rewoo_flow(
                     )
                     exec_result = await tools.async_execute(tc)
                     result_str = exec_result.to_model_text()
+            except AdmissionDenied:
+                raise  # budget denial is terminal — the flow executor converts it
             except Exception as exc:
                 result_str = f"Error: {exc}"
 

@@ -38,9 +38,9 @@ async def execute_flow(flow: Flow, state: State) -> FlowResult:
             await _execute_sequential(flow, state, traces, results)
     except AdmissionDenied as exc:
         _append_denial(exc, state, traces, results)  # a hard mid-step budget denial
-
-    if owned:
-        scope.close()
+    finally:
+        if owned:  # finalize even on an unexpected error, so STARTED ops don't leak
+            scope.close()
     trace = Trace(
         flow_name=flow.name,
         steps=tuple(traces),
@@ -73,9 +73,10 @@ async def iter_flow(flow: Flow, state: State) -> AsyncIterator[FlowEvent]:
         yield FlowEvent(
             type="policy_decision", flow_name=flow.name, policy_decision="budget_exceeded"
         )
-
-    if owned:
-        scope.close()
+    finally:
+        # Runs on GeneratorExit too — if the consumer abandons the stream, still finalize.
+        if owned:
+            scope.close()
     trace = Trace(
         flow_name=flow.name,
         steps=tuple(traces),
@@ -384,10 +385,14 @@ async def _execute_dag(
 
             parallel_results: list[Result] = []
             for item in gathered:
+                if isinstance(item, AdmissionDenied):
+                    # A budget denial is terminal — surface it to execute_flow's handler
+                    # (swallowing it would leave the node un-marked and loop forever).
+                    raise item
                 if isinstance(item, BaseException):
-                    # Should not happen since execute_step catches exceptions,
-                    # but handle gracefully
-                    continue
+                    # A step never raises anything else — execute_step converts errors to
+                    # Result(error=...) — but stay defensive rather than mask a real bug.
+                    raise item
                 name, result, step_trace = item
                 traces.append(step_trace)
                 if result is not None:

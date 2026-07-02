@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from ai_arch_toolkit.core._llm import LLM
+from ai_arch_toolkit.core._providers._base import StreamState
 from ai_arch_toolkit.core._response import Response, Usage
 from ai_arch_toolkit.core._state import State, StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
-from ai_arch_toolkit.toolkit.flow._flow import Flow
+from ai_arch_toolkit.toolkit.budget import BudgetPolicy
+from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowStep
 
 MODEL = "claude-sonnet-4-6"
 
@@ -14,6 +18,15 @@ MODEL = "claude-sonnet-4-6"
 class FakeProvider:
     async def complete(self, messages, *, system=None, tools=None, **kwargs) -> Response:
         return Response(text="ok", usage=Usage(input_tokens=12, output_tokens=4), model=MODEL)
+
+    def stream(self, messages, *, system=None, tools=None, **kwargs):
+        state = StreamState()
+        state.usage = Usage(input_tokens=12, output_tokens=4)
+
+        async def _aiter():
+            yield "ok"
+
+        return _aiter(), state
 
 
 def make_llm() -> LLM:
@@ -59,3 +72,62 @@ async def test_flow_without_an_llm_reports_zero_metering():
     result = await Flow(Step(name="s", fn=noop), name="plain").run(State())
     meter = result.trace.metadata["meter"]
     assert meter["llm_calls"] == 0 and meter["cost"] == 0.0 and not meter["over_budget"]
+
+
+async def test_parallel_dag_budget_denial_surfaces_and_does_not_hang():
+    # Regression: the parallel DAG path used to swallow AdmissionDenied, leaving the denied node
+    # un-marked -> infinite loop. wait_for guards against a re-introduced hang.
+    llm = make_llm()
+
+    async def call_model(snap: StateSnapshot) -> Result:
+        await llm.complete("hi")
+        return Result(value="ok")
+
+    flow = Flow(
+        FlowStep(step=Step(name="a", fn=call_model)),
+        FlowStep(step=Step(name="b", fn=call_model)),
+        FlowStep(step=Step(name="c", fn=call_model), after=("a", "b")),  # makes it a DAG
+        name="par",
+        budget_policy=BudgetPolicy(max_llm_calls=1),
+    )
+    result = await asyncio.wait_for(flow.run(State()), timeout=10)
+    assert "budget_exceeded" in result.results
+
+
+async def test_nested_flow_as_step_meters_without_crashing():
+    # Regression: the outer flow writes _meter_scope into the world layer, which as_step used to
+    # share read-only (MappingProxyType) -> TypeError swallowed -> inner flow silently failed.
+    llm = make_llm()
+
+    async def call_model(snap: StateSnapshot) -> Result:
+        await llm.complete("hi")
+        return Result(value="inner-done")
+
+    inner = Flow(Step(name="inner_call", fn=call_model), name="inner")
+    result = await Flow(inner, name="parent").run(State())
+    # The nested call ran and metered under the parent scope (0 if the nested run had crashed).
+    assert result.trace.metadata["meter"]["llm_calls"] == 1
+
+
+async def test_iter_flow_abandonment_finalizes_the_scope():
+    # Regression: scope.close() sat AFTER the try, so a GeneratorExit (consumer abandons the
+    # stream) skipped it entirely — the STARTED op was never finalized. Now it's in a finally, so
+    # aclose() runs it. (Driven through iter_flow directly so aclose hits the finally sync; via the
+    # public flow.iter wrapper it runs at async-gen finalization instead of never.)
+    from ai_arch_toolkit.toolkit.flow._executor import iter_flow
+
+    llm = make_llm()
+
+    async def start_stream(snap: StateSnapshot) -> Result:
+        llm.stream("hi")  # opens+starts a stream op, never drained
+        return Result(value="started")
+
+    state = State()
+    gen = iter_flow(Flow(Step(name="s", fn=start_stream), name="f"), state)
+    async for ev in gen:
+        if ev.type == "step_end":
+            break  # abandon before flow_end
+    await gen.aclose()  # runs the finally -> scope.close()
+
+    snap = state.get("_meter_scope").snapshot()
+    assert snap.llm_calls == 1 and snap.unknown_cost_count == 1  # close() incompleted the op
