@@ -48,11 +48,16 @@ A **`ToolError`** is structured so an agent (or your retry logic) can reason abo
 
 | Field | Meaning |
 |-------|---------|
-| `type` | error code, e.g. `"dangerous_tool_blocked"`, `"approval_denied"` |
+| `type` | error code — one of a closed set (see below), so retry/branch logic can switch on it |
 | `message` | human-readable message (already redacted) |
 | `retryable` | whether retrying might succeed |
 | `safe_to_show` | if `False`, `to_model_text()` hides the message from the model |
 | `details` | structured extra context |
+
+The `type` is drawn from a fixed set:
+
+- **Governance blocks** — `"dangerous_tool_blocked"`, `"approval_denied"`, `"max_calls_exceeded"`, `"budget_exceeded"`.
+- **Resolution / execution** — `"unknown_tool"` (no matching function), `"validation_error"` (argument mismatch — a `TypeError` raised by the call), `"runtime_error"` (any other exception, `retryable=True`).
 
 Construct results directly when writing custom executors:
 
@@ -75,6 +80,8 @@ A gate runs *before* a tool executes and can **pass** (return `None`), **block**
 - `approval_handler=...` — the group manages an `ApprovalGate` for you and **always runs it last**.
 
 > Don't pass your own `ApprovalGate` in `gates=`; use `approval_handler=`. The group appends its own approval gate, so a hand-placed one would be double-gated and denied.
+
+Beyond gates, `ToolGroup(max_calls=N)` caps how many tools the group runs in one pass — the call past the cap is blocked with `max_calls_exceeded`. The counter is enforced atomically at the pipeline's commit step (not as a gate), so it holds exactly even under concurrent execution; call `group.reset()` to reuse the group for a fresh run.
 
 ### Dangerous tools
 
@@ -117,7 +124,9 @@ ApprovalDecision.approve(*, modified_args=None, reviewer=None, reason="", metada
 ApprovalDecision.deny(*, reviewer=None, reason="", metadata=None)
 ```
 
-Returning `modified_args` from `approve(...)` runs the tool with **substituted arguments** — useful for narrowing a request (e.g. forcing a safe target) before letting it through. The full request/decision is recorded under `result.metadata["audit"]["approval"]`. The handler may be sync or async.
+Returning `modified_args` from `approve(...)` runs the tool with **substituted arguments** — useful for narrowing a request (e.g. forcing a safe target) before letting it through. The full request/decision is recorded under `result.metadata["audit"]["approval"]`.
+
+The handler may be sync or async — with one caveat: on the **synchronous** execution path (`group.execute()`, `execute_tool()`) an async handler cannot be awaited, so it is **auto-denied** with reason `"Synchronous execution cannot await approval handler"`. Use the async path (`async_execute()` / `async_execute_tool()`) whenever your handler is a coroutine.
 
 ### Dry run
 
@@ -127,6 +136,8 @@ Returning `modified_args` from `approve(...)` runs the tool with **substituted a
 from ai_arch_toolkit import DryRunGate
 group = ToolGroup(run_command, gates=[DryRunGate(dry_run=True)])
 ```
+
+A dry-run result is `ok=True` with `value="[dry-run] would call <tool>"`, carries `metadata["governance"] == {"outcome": "dry_run", "executed": False}`, and records the arguments that *would* have run under `metadata["audit"]["arguments"]`.
 
 ### Executing a single tool call
 
@@ -143,7 +154,10 @@ result = await async_execute_tool(tool_call, [get_weather], approval_handler=Non
 
 ## Trace redaction
 
-Traces and tool results can carry secrets (API keys, tokens, connection strings). The redactor strips them by **key name** (`api_key`, `password`, `token`, `secret`, `authorization`, `bearer`, …) and by **value pattern** (Bearer tokens, PEM blocks, `sk-…` keys, database URLs).
+Traces and tool results can carry secrets. The redactor walks a payload recursively — through dicts, lists, tuples, and dataclasses — masking them by **key name** and by **value pattern**:
+
+- **Sensitive key fragments** (case-insensitive, `-`/`_` normalized — any key *containing* one is masked wholesale): `api_key`/`apikey`, `authorization`, `bearer`, `client_secret`, `connection_string`, `database_url`, `password`, `private_key`, `secret`, `token`.
+- **Value patterns**: PEM private-key blocks, `Bearer <token>`, `sk-…` keys, database URLs (`postgres`/`postgresql`/`mysql`/`mongodb`/`redis://…`), uppercase env-style assignments (`…API_KEY=`, `…TOKEN=`, `…SECRET=`, `…PASSWORD=`, `…PRIVATE_KEY=`), and inline `key: value` / `key=value` pairs for api-key/token/secret/password/private-key.
 
 ```python
 from ai_arch_toolkit import redact, redact_text, RedactionPolicy
@@ -173,7 +187,9 @@ redact(payload, RedactionPolicy(replacement="***"))         # custom marker
 | `redacted` | **default** — keep payloads but mask secrets |
 | `full_debug` | no redaction (local debugging only) |
 
-`Redactor(policy)` is the reusable object behind `redact()`; `redact()` / `redact_text()` are the one-shot helpers (a `None` policy uses the safe default).
+`trace_mode` accepts the string literals above or the equivalent `RedactionMode` enum (`RedactionMode.REDACTED`, `.METADATA_ONLY`, `.FULL_DEBUG`). `Redactor(policy)` is the reusable object behind `redact()`; `redact()` / `redact_text()` are the one-shot helpers (a `None` policy uses the safe default).
+
+Type handling to know about: `bytes` values are replaced wholesale; dataclasses are converted (`asdict`) then redacted; nested containers are walked element-by-element. One caveat — plain non-string scalars (`int`, `float`, `bool`, `None`) pass through **unredacted**, so a numeric secret is only caught when it sits under a sensitive *key* (e.g. `{"token": 12345}` is masked; a bare `12345` is not).
 
 ---
 

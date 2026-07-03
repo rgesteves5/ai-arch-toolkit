@@ -60,37 +60,55 @@ def _budget_dimension(result) -> str:
 ZERO = BudgetPolicy(max_llm_calls=0)
 
 
-def _build(name: str):
+def _build(name: str, budget: BudgetPolicy | None):
     """Return (flow, state, providers) for each newly budget-enabled flow."""
     llm, prov = _metered_llm()
     if name == "plan_execute":
-        flow = plan_execute_flow(llm, ToolGroup(), budget_policy=ZERO)
+        flow = plan_execute_flow(llm, ToolGroup(), budget_policy=budget)
         return flow, State(operational=plan_execute_initial_state("t")), [prov]
     if name == "reflexion":
-        flow = reflexion_flow(llm, ToolGroup(), evaluator=lambda t, r: 1.0, budget_policy=ZERO)
+        flow = reflexion_flow(llm, ToolGroup(), evaluator=lambda t, r: 1.0, budget_policy=budget)
         return flow, State(operational=reflexion_initial_state("t")), [prov]
     if name == "rewoo":
-        flow = rewoo_flow(llm, ToolGroup(), budget_policy=ZERO)
+        flow = rewoo_flow(llm, ToolGroup(), budget_policy=budget)
         return flow, State(operational=rewoo_initial_state("t")), [prov]
     if name == "self_discovery":
-        flow = self_discovery_flow(llm, ToolGroup(), budget_policy=ZERO)
+        flow = self_discovery_flow(llm, ToolGroup(), budget_policy=budget)
         return flow, State(operational=self_discovery_initial_state("t")), [prov]
     if name == "generate_review":
         llm2, prov2 = _metered_llm()
-        flow = generate_review_flow(llm, llm2, budget_policy=ZERO)
+        flow = generate_review_flow(llm, llm2, budget_policy=budget)
         return flow, State(operational=generate_review_initial_state("t")), [prov, prov2]
     raise AssertionError(name)
 
 
-@pytest.mark.parametrize(
-    "name", ["plan_execute", "reflexion", "rewoo", "self_discovery", "generate_review"]
-)
+FLOW_NAMES = ["plan_execute", "reflexion", "rewoo", "self_discovery", "generate_review"]
+
+
+@pytest.mark.parametrize("name", FLOW_NAMES)
 async def test_flow_honours_budget_policy(name: str) -> None:
-    flow, state, providers = _build(name)
+    flow, state, providers = _build(name, ZERO)
     result = await flow.run(state)
     assert "budget_exceeded" in result.results
     assert _budget_dimension(result) == "llm_calls"
     assert all(p.calls == 0 for p in providers)  # denied before any provider call
+
+
+@pytest.mark.parametrize("name", FLOW_NAMES)
+async def test_flow_meters_every_call_end_to_end(name: str) -> None:
+    # The invariant the rewrite guarantees: with the manual per-strategy accounting gone, the meter
+    # counts EXACTLY the calls the provider served — no drift, no double-count — and cost/usage
+    # derive from it. Runs to completion under no budget (measure-only).
+    flow, state, providers = _build(name, None)
+    result = await flow.run(state)
+    assert "budget_exceeded" not in result.results  # ran to completion
+    calls = sum(p.calls for p in providers)
+    assert calls >= 1
+    report = result.meter
+    assert report is not None
+    assert report.llm_calls == calls  # meter == actual provider calls
+    assert result.total_cost == report.cost > 0
+    assert result.usage.input_tokens == 10 * calls  # meter-summed, not manually threaded
 
 
 async def test_agent_result_report_and_usage_are_meter_derived() -> None:

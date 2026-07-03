@@ -38,6 +38,14 @@ def make_llm() -> LLM:
     return llm
 
 
+def make_unpriced_llm() -> LLM:
+    # A claude-prefixed model (so the provider constructs) that is absent from the pricing table,
+    # so the charge site prices it as Cost.unknown.
+    llm = LLM("claude-does-not-exist-9999", api_key="test")
+    llm._provider = FakeProvider()  # type: ignore[assignment]
+    return llm
+
+
 async def test_flow_meters_an_llm_call_inside_a_step():
     llm = make_llm()
 
@@ -150,6 +158,93 @@ async def test_policy_max_cost_trips_on_metered_spend():
         result, trace = await execute_step(step, StateSnapshot())
     assert result.is_error and "cost_exceeded" in trace.policy_decisions
     assert scope.snapshot().llm_calls == 1
+
+
+async def test_policy_max_cost_isolates_to_the_step_span():
+    # A per-step max_cost counts only THAT step's metered span, not sibling/prior steps sharing the
+    # run — the reason it projects a span instead of a run-cumulative delta.
+    llm = make_llm()
+
+    async def call(snap: StateSnapshot) -> Result:
+        await llm.complete("hi")
+        return Result(value="ok")
+
+    one = (await Flow(Step(name="p", fn=call), name="probe").run(State())).total_cost
+    assert one > 0
+
+    # Step "a" (uncapped) settles its cost into the shared run first; step "b"'s cap admits its own
+    # single call (~one) but the run cumulative (a+b ≈ 2·one) would trip it if the span leaked.
+    flow = Flow(
+        Step(name="a", fn=call),
+        Step(name="b", fn=call, policy=Policy(max_cost=one * 1.5)),
+        name="iso",
+    )
+    result = await flow.run(State())
+    b = result.trace.step("b")
+    assert b is not None and "cost_exceeded" not in b.policy_decisions  # counted only b's own call
+    assert result.meter.llm_calls == 2  # both ran
+
+
+async def test_policy_max_cost_sums_annotation_and_metered_span():
+    # Policy.max_cost checks result.cost (manual annotation) PLUS the step's metered span cost —
+    # neither alone exceeds the cap here, their sum does.
+    llm = make_llm()
+
+    async def probe_call(snap: StateSnapshot) -> Result:
+        await llm.complete("hi")
+        return Result(value="ok")
+
+    one = (await Flow(Step(name="p", fn=probe_call), name="probe").run(State())).total_cost
+    assert one > 0
+
+    async def call_and_annotate(snap: StateSnapshot) -> Result:
+        await llm.complete("hi")  # metered span ≈ one
+        return Result(value="ok", cost=one)  # manual annotation ≈ one
+
+    step = Step(name="s", fn=call_and_annotate, policy=Policy(max_cost=one * 1.5))
+    with MeterScope(RunConfig()) as scope:  # noqa: F841 — binds the ambient meter
+        result, trace = await execute_step(step, StateSnapshot())
+    assert result.is_error and "cost_exceeded" in trace.policy_decisions  # one + one > 1.5·one
+
+
+async def test_unpriced_model_fails_closed_under_a_cost_cap_end_to_end():
+    # Phase A, end-to-end: once a call settles with an unknown cost under a max_cost cap, the next
+    # op is denied (fail_closed default) — the unbounded spend can't be admitted.
+    llm = make_unpriced_llm()
+
+    async def call(snap: StateSnapshot) -> Result:
+        await llm.complete("hi")
+        return Result(value="ok")
+
+    flow = Flow(
+        Step(name="a", fn=call),
+        Step(name="b", fn=call),
+        name="unpriced",
+        budget_policy=BudgetPolicy(max_cost=1.0),
+    )
+    result = await flow.run(State())
+    assert "budget_exceeded" in result.results  # 2nd call denied: a prior cost was unknown
+    meter = result.trace.metadata["meter"]
+    assert meter["llm_calls"] == 1 and meter["cost_uncertain"] is True
+
+
+async def test_unpriced_model_allowed_when_unpriced_is_allow():
+    # The opt-out: unpriced="allow" lets both calls run even though cost can't be bounded.
+    llm = make_unpriced_llm()
+
+    async def call(snap: StateSnapshot) -> Result:
+        await llm.complete("hi")
+        return Result(value="ok")
+
+    flow = Flow(
+        Step(name="a", fn=call),
+        Step(name="b", fn=call),
+        name="unpriced-allow",
+        budget_policy=BudgetPolicy(max_cost=1.0, unpriced="allow"),
+    )
+    result = await flow.run(State())
+    assert "budget_exceeded" not in result.results
+    assert result.trace.metadata["meter"]["llm_calls"] == 2
 
 
 async def test_policy_max_cost_does_not_trip_when_unmetered():
