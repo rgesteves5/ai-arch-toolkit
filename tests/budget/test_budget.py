@@ -35,7 +35,20 @@ def test_to_limits_maps_cost_to_money():
     assert lim.max_llm_calls == 3 and lim.max_cost == Money.from_usd(0.5)
 
 
-@pytest.mark.parametrize("kwargs", [{"max_llm_calls": -1}, {"max_cost": -0.1}, {"max_wall_s": 0}])
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"max_llm_calls": -1},
+        {"max_cost": -0.1},
+        {"max_wall_s": 0},
+        # non-finite caps must fail loud at construction, never silently disable enforcement
+        {"max_cost": float("nan")},
+        {"max_cost": float("inf")},
+        {"max_wall_s": float("nan")},
+        {"max_wall_s": float("inf")},
+        {"max_llm_calls": float("nan")},
+    ],
+)
 def test_policy_validation(kwargs):
     with pytest.raises(ValueError):
         BudgetPolicy(**kwargs)

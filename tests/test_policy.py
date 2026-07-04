@@ -45,6 +45,21 @@ class TestPolicy:
         with pytest.raises(ValueError, match="max_cost must be positive"):
             Policy(max_cost=-5)
 
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"max_cost": float("nan")},
+            {"max_cost": float("inf")},
+            {"timeout": float("nan")},
+            {"timeout": float("inf")},
+        ],
+    )
+    def test_non_finite_caps_rejected(self, kwargs) -> None:
+        # NaN/inf must fail loud: `x <= 0` is False for NaN, so a NaN cap would silently disable
+        # the per-step check (`cost > NaN` is always False).
+        with pytest.raises(ValueError):
+            Policy(**kwargs)
+
     def test_valid_full_policy(self) -> None:
         p = Policy(
             retry=RetryConfig(max_retries=2),

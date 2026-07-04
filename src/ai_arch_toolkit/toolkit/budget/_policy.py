@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Literal
 
@@ -40,6 +41,8 @@ class BudgetPolicy:
     unpriced: Unpriced = "fail_closed"
 
     def __post_init__(self) -> None:
+        # Reject non-finite caps (NaN/inf) as well as negatives: a NaN cap passes a bare `< 0`
+        # check but then silently disables enforcement — every `total > NaN` is False (fail-open).
         for name in (
             "max_llm_calls",
             "max_tool_calls",
@@ -48,12 +51,14 @@ class BudgetPolicy:
             "max_total_tokens",
         ):
             value = getattr(self, name)
-            if value is not None and value < 0:
-                raise ValueError(f"{name} must be >= 0, got {value}")
-        if self.max_cost is not None and self.max_cost < 0:
-            raise ValueError(f"max_cost must be >= 0, got {self.max_cost}")
-        if self.max_wall_s is not None and self.max_wall_s <= 0:
-            raise ValueError(f"max_wall_s must be > 0, got {self.max_wall_s}")
+            if value is not None and (not math.isfinite(value) or value < 0):
+                raise ValueError(f"{name} must be a finite number >= 0, got {value}")
+        if self.max_cost is not None and (not math.isfinite(self.max_cost) or self.max_cost < 0):
+            raise ValueError(f"max_cost must be a finite number >= 0, got {self.max_cost}")
+        if self.max_wall_s is not None and (
+            not math.isfinite(self.max_wall_s) or self.max_wall_s <= 0
+        ):
+            raise ValueError(f"max_wall_s must be a finite positive number, got {self.max_wall_s}")
 
     @property
     def is_empty(self) -> bool:
