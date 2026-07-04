@@ -230,6 +230,28 @@ class MeterStore:
                 raise ValueError(f"unknown span {span_id}")
             return self._snapshot_of(span)
 
+    def close_span(self, span_id: str) -> None:
+        """Reclaim a finished span node so ``_spans`` can't grow O(iterations) in cyclic/LATS runs.
+
+        Its counters already live in every ancestor (``_apply`` walks to the root on each op
+        transition), so removing the node loses no accounting. Refuses to drop the run root, an
+        unknown span, or any span with a LIVE op still in its subtree — otherwise that op's later
+        settle/fail would ``_apply`` through a missing ancestor.
+        """
+        if span_id == _RUN_SPAN:
+            return
+        with self._lock:
+            if span_id not in self._spans:
+                return
+            for op in self._ops.values():
+                sid: str | None = op.parent_span_id
+                while sid is not None:
+                    if sid == span_id:
+                        return  # a live op sits under this span — keep it reachable
+                    parent = self._spans.get(sid)
+                    sid = parent.parent if parent is not None else None
+            del self._spans[span_id]
+
     def _snapshot_of(self, span: _Span) -> MeterSnapshot:
         c = span.counters
         return MeterSnapshot(

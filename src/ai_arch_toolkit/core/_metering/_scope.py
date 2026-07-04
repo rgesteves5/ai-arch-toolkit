@@ -102,6 +102,9 @@ class MeterScope:
     def for_span(self, span_id: str) -> MeterSnapshot:
         return self._store.for_span(span_id)
 
+    def close_span(self, span_id: str) -> None:
+        return self._store.close_span(span_id)
+
     def close(self) -> None:
         self._store.close()
 
@@ -165,3 +168,4 @@ def open_span(scope_type: str) -> Iterator[str | None]:
         yield span_id
     finally:
         _span_var.reset(token)
+        scope.close_span(span_id)  # reclaim the node (safe: its totals live in every ancestor)

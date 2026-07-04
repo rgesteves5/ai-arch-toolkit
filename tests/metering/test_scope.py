@@ -86,9 +86,11 @@ def test_open_span_nests_through_the_contextvar():
             with open_span("tool") as tool:
                 assert current_span_id() == tool
             assert current_span_id() == step  # inner restored
+            assert scope.for_span(step).input_tokens == 5  # queryable while the span is live
         assert current_span_id() == run  # outer restored
-        assert scope.for_span(step).input_tokens == 5
-        assert scope.for_span(run).input_tokens == 5  # rolls up to the run
+        # the step span is reclaimed on context-manager exit (bounded memory); its totals survive
+        # rolled up into the run root.
+        assert scope.for_span(run).input_tokens == 5
 
 
 def test_open_span_is_a_noop_when_unmetered():

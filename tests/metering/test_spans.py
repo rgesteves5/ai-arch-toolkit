@@ -30,6 +30,55 @@ def test_for_span_root_equals_snapshot():
     assert s.for_span(s.run_span_id) == s.snapshot()
 
 
+# ── close_span: bounded span memory (N4), without corrupting accounting ───────
+
+
+def test_close_span_reclaims_a_finished_span_keeping_its_totals_in_the_root():
+    s = store()
+    child = s.open_span("step", s.run_span_id)
+    settle(s.open(llm_in(child), None))  # op terminal under the child span
+    root_before = s.snapshot().input_tokens
+    s.close_span(child)
+    with pytest.raises(ValueError):
+        s.for_span(child)  # node reclaimed
+    assert s.snapshot().input_tokens == root_before  # totals survive in the ancestor
+
+
+def test_close_span_refuses_while_a_live_op_is_under_it():
+    s = store()
+    child = s.open_span("step", s.run_span_id)
+    op = s.open(llm_in(child), None)
+    op.mark_started()  # live: started, not settled
+    s.close_span(child)  # must NOT drop — a later settle would _apply through this span
+    assert s.for_span(child).llm_calls == 1  # still reachable
+    op.settle(usage=Usage(input_tokens=3), cost=Cost.known(Money.zero()))  # no KeyError
+    s.close_span(child)  # now terminal -> safe to reclaim
+    with pytest.raises(ValueError):
+        s.for_span(child)
+
+
+def test_close_span_refuses_across_a_nested_span_chain():
+    # A live op two levels down must still protect an ancestor span (exercises the multi-hop walk).
+    s = store()
+    mid = s.open_span("mid", s.run_span_id)
+    leaf = s.open_span("leaf", mid)
+    op = s.open(llm_in(leaf), None)
+    op.mark_started()  # live, under leaf, which is under mid
+    s.close_span(mid)  # must refuse — the walk leaf -> mid finds it
+    assert s.for_span(mid).llm_calls == 1
+    op.settle(usage=Usage(input_tokens=1), cost=Cost.known(Money.zero()))
+    s.close_span(mid)  # now safe to reclaim
+    with pytest.raises(ValueError):
+        s.for_span(mid)
+
+
+def test_close_span_ignores_the_run_root_and_unknown_ids():
+    s = store()
+    s.close_span(s.run_span_id)  # no-op: never drop the global aggregate
+    s.close_span("nonexistent")  # no-op
+    assert s.for_span(s.run_span_id) == s.snapshot()
+
+
 def test_op_rolls_into_its_span_and_every_ancestor():
     s = store()
     step = s.open_span("step")

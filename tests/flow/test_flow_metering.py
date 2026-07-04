@@ -247,6 +247,23 @@ async def test_unpriced_model_allowed_when_unpriced_is_allow():
     assert result.trace.metadata["meter"]["llm_calls"] == 2
 
 
+async def test_step_spans_are_reclaimed_not_leaked():
+    # N4: each per-step cost-cap span is dropped when its context manager exits, so a cyclic run
+    # can't accumulate one _Span per step per iteration. Accounting survives the reclamation.
+    llm = make_llm()
+
+    async def call(snap: StateSnapshot) -> Result:
+        await llm.complete("hi")
+        return Result(value="ok")
+
+    step = Step(name="s", fn=call, policy=Policy(max_cost=1000.0))  # opens a step span each run
+    with MeterScope(RunConfig()) as scope:
+        for _ in range(20):
+            await execute_step(step, StateSnapshot())
+    assert len(scope._store._spans) == 1  # only the run root remains
+    assert scope.snapshot().llm_calls == 20  # accounting intact through the drops
+
+
 async def test_policy_max_cost_fails_closed_on_unknown_cost():
     # decision #4: a per-step max_cost must fail CLOSED when the step's call can't be priced
     # (unpriced model / server tool) — even under a huge cap, unbounded spend must not pass.
