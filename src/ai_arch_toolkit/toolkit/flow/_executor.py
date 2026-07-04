@@ -24,14 +24,18 @@ from ai_arch_toolkit.toolkit.flow._scope import apply_scope
 
 
 async def execute_flow(
-    flow: Flow, state: State, *, budget_policy: BudgetPolicy | None = None
+    flow: Flow,
+    state: State,
+    *,
+    budget_policy: BudgetPolicy | None = None,
+    config: RunConfig | None = None,
 ) -> FlowResult:
     """Execute a Flow, choosing DAG or sequential mode."""
     t0 = time.monotonic()
     traces: list[StepTrace] = []
     results: dict[str, Result] = {}
     initial_state = state.to_dict()
-    scope, owned = _open_meter_scope(flow, state, budget_policy)
+    scope, owned = _open_meter_scope(flow, state, budget_policy, config)
 
     try:
         if flow.is_dag:
@@ -56,14 +60,18 @@ async def execute_flow(
 
 
 async def iter_flow(
-    flow: Flow, state: State, *, budget_policy: BudgetPolicy | None = None
+    flow: Flow,
+    state: State,
+    *,
+    budget_policy: BudgetPolicy | None = None,
+    config: RunConfig | None = None,
 ) -> AsyncIterator[FlowEvent]:
     """Stream events during flow execution."""
     t0 = time.monotonic()
     traces: list[StepTrace] = []
     results: dict[str, Result] = {}
     initial_state = state.to_dict()
-    scope, owned = _open_meter_scope(flow, state, budget_policy)
+    scope, owned = _open_meter_scope(flow, state, budget_policy, config)
 
     yield FlowEvent(type="flow_start", flow_name=flow.name)
 
@@ -573,24 +581,31 @@ def _should_halt(result: Result, fs: FlowStep) -> bool:
 
 
 def _open_meter_scope(
-    flow: Flow, state: State, override: BudgetPolicy | None = None
+    flow: Flow,
+    state: State,
+    override: BudgetPolicy | None = None,
+    config: RunConfig | None = None,
 ) -> tuple[MeterScope, bool]:
     """Bind the run's meter, inheriting an enclosing scope so nested flows share one budget.
 
     Returns ``(scope, owned)``; only the outermost flow that created the scope closes it. The
     scope enforces when a budget is set (via its controller), else it is measure-only. A per-run
-    ``override`` takes precedence over the flow's construction-time ``budget_policy``; both are
-    ignored when a scope is inherited (a nested flow shares its owner's one cumulative budget).
-    Stored in the ``world`` layer — shared by reference across ``State.fork()`` (DAG branches),
-    since the meter holds a ``threading.Lock`` a deep copy would choke on.
+    ``config`` (full :class:`RunConfig`, for sinks/pricer/etc.) takes precedence over a per-run
+    ``override`` budget, which takes precedence over the construction-time ``budget_policy``; all
+    are ignored when a scope is inherited (a nested flow shares its owner's one cumulative
+    budget). Stored in the ``world`` layer — shared by reference across ``State.fork()`` (DAG
+    branches), since the meter holds a ``threading.Lock`` a deep copy would choke on.
     """
     inherited = current_meter()
     if inherited is not None:
         state.set("_meter_scope", inherited, layer="world")
         return inherited, False
-    policy = override if override is not None else flow.budget_policy
-    controller = BudgetController(policy) if policy is not None and not policy.is_empty else None
-    scope = MeterScope(RunConfig(controller=controller))
+    if config is not None:
+        scope = MeterScope(config)
+    else:
+        policy = override if override is not None else flow.budget_policy
+        ctl = BudgetController(policy) if policy is not None and not policy.is_empty else None
+        scope = MeterScope(RunConfig(controller=ctl))
     state.set("_meter_scope", scope, layer="world")
     return scope, True
 

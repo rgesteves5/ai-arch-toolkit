@@ -19,17 +19,19 @@ from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 from ai_arch_toolkit.core._metering._store import MeterStore
 
 if TYPE_CHECKING:
     from ai_arch_toolkit.core._metering._admission import AdmissionController, MeterSnapshot
     from ai_arch_toolkit.core._metering._cost import Cost
-    from ai_arch_toolkit.core._metering._events import UsageSink
+    from ai_arch_toolkit.core._metering._events import UsageEvent, UsageSink
     from ai_arch_toolkit.core._metering._operation import MeterOperation, OperationRequest
     from ai_arch_toolkit.core._redaction import Redactor
     from ai_arch_toolkit.core._response import Usage
+
+type SinkErrorPolicy = Literal["log", "raise"]
 
 __all__ = [
     "MeterScope",
@@ -60,6 +62,19 @@ class RunConfig:
     redactor: Redactor | None = None
     pricer: Pricer | None = None
     clock: Callable[[], float] | None = None
+    sink_error_policy: SinkErrorPolicy = "log"  # "raise" propagates a raising sink's error
+    allow_unmetered_batch: bool = False  # permit batch_* under an enforcing scope (unmetered)
+    retain_meter_events: bool = False  # keep emitted events in-memory; read via scope.events()
+
+
+class _RetainingSink:
+    """An internal sink that keeps every event in memory (RunConfig.retain_meter_events)."""
+
+    def __init__(self) -> None:
+        self.events: list[UsageEvent] = []
+
+    def emit(self, event: UsageEvent) -> None:
+        self.events.append(event)
 
 
 class MeterScope:
@@ -67,15 +82,26 @@ class MeterScope:
 
     def __init__(self, config: RunConfig | None = None) -> None:
         cfg = config or RunConfig()
+        sinks = list(cfg.sinks)
+        self._retained: _RetainingSink | None = None
+        if cfg.retain_meter_events:
+            self._retained = _RetainingSink()
+            sinks.append(self._retained)  # composed as a sink -> no hot-path change in the store
         self._store = MeterStore(
             clock=cfg.clock or time.monotonic,
-            sinks=cfg.sinks,
+            sinks=sinks,
             redactor=cfg.redactor,
+            sink_error_policy=cfg.sink_error_policy,
         )
         self._controller = cfg.controller
         self.pricer = cfg.pricer
+        self.allow_unmetered_batch = cfg.allow_unmetered_batch
         self._scope_token: object | None = None
         self._span_token: object | None = None
+
+    def events(self) -> tuple[UsageEvent, ...]:
+        """Events retained this run — empty unless ``RunConfig.retain_meter_events`` is set."""
+        return tuple(self._retained.events) if self._retained is not None else ()
 
     @property
     def store(self) -> MeterStore:

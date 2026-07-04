@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from ai_arch_toolkit.core._metering._scope import MeterScope
+from ai_arch_toolkit.core._metering._scope import MeterScope, RunConfig
 from ai_arch_toolkit.core._policy import Policy
 from ai_arch_toolkit.core._response import Usage
 from ai_arch_toolkit.core._state import State, StateSnapshot
@@ -218,32 +218,53 @@ class Flow:
     def max_iterations(self) -> int | None:
         return self._max_iterations
 
-    async def run(self, state: State, *, budget_policy: BudgetPolicy | None = None) -> FlowResult:
-        """Execute the flow. A per-run ``budget_policy`` overrides the construction-time one (and
-        is ignored when this flow runs nested under an enclosing scope, sharing its budget).
+    async def run(
+        self,
+        state: State,
+        *,
+        budget_policy: BudgetPolicy | None = None,
+        config: RunConfig | None = None,
+    ) -> FlowResult:
+        """Execute the flow. A per-run ``budget_policy`` overrides the construction-time one; a
+        per-run ``config`` (full :class:`RunConfig` — sinks, custom pricer, retained events) takes
+        precedence over both. All are ignored when this flow runs nested under an enclosing scope.
         """
         from ai_arch_toolkit.toolkit.flow._executor import execute_flow
 
-        return await execute_flow(self, state, budget_policy=budget_policy)
+        return await execute_flow(self, state, budget_policy=budget_policy, config=config)
 
-    def run_sync(self, state: State, *, budget_policy: BudgetPolicy | None = None) -> FlowResult:
+    def run_sync(
+        self,
+        state: State,
+        *,
+        budget_policy: BudgetPolicy | None = None,
+        config: RunConfig | None = None,
+    ) -> FlowResult:
         """Synchronous wrapper for run()."""
-        return _run_sync(self.run(state, budget_policy=budget_policy))
+        return _run_sync(self.run(state, budget_policy=budget_policy, config=config))
 
     async def iter(
-        self, state: State, *, budget_policy: BudgetPolicy | None = None
+        self,
+        state: State,
+        *,
+        budget_policy: BudgetPolicy | None = None,
+        config: RunConfig | None = None,
     ) -> AsyncIterator[FlowEvent]:
-        """Stream events during a run; ``budget_policy`` overrides per run (see :meth:`run`)."""
+        """Stream a run; ``budget_policy``/``config`` override per run (see :meth:`run`)."""
         from ai_arch_toolkit.toolkit.flow._executor import iter_flow
 
-        async for event in iter_flow(self, state, budget_policy=budget_policy):
+        async for event in iter_flow(self, state, budget_policy=budget_policy, config=config):
             yield event
 
     def iter_sync(
-        self, state: State, *, budget_policy: BudgetPolicy | None = None
+        self,
+        state: State,
+        *,
+        budget_policy: BudgetPolicy | None = None,
+        config: RunConfig | None = None,
     ) -> Iterator[FlowEvent]:
         """Synchronous wrapper for iter()."""
-        return _stream_sync(lambda: self.iter(state, budget_policy=budget_policy))
+        return _stream_sync(lambda: self.iter(state, budget_policy=budget_policy, config=config))
 
     def as_step(self) -> Step:
         """Wrap this Flow as a Step for composition."""

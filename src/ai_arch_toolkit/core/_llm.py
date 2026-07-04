@@ -985,10 +985,15 @@ class LLM:
         not metered there (a documented gap, reconciled post-hoc from provider records).
         """
         scope = current_meter()
-        if scope is not None and scope.controller is not None:
+        if (
+            scope is not None
+            and scope.controller is not None
+            and not scope.allow_unmetered_batch
+        ):
             raise NotMeteredOperationError(
                 "batch operations bypass per-attempt metering and are not allowed under an "
-                "enforcing budget; use complete()/stream(), or run the batch without a controller"
+                "enforcing budget; use complete()/stream(), set RunConfig.allow_unmetered_batch, "
+                "or run the batch without a controller"
             )
 
     async def batch_submit(self, requests: list[dict[str, Any]]) -> str:

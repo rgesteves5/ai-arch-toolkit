@@ -184,12 +184,14 @@ class MeterStore:
         clock: Callable[[], float] = time.monotonic,
         sinks: Sequence[UsageSink] = (),
         redactor: Redactor | None = None,
+        sink_error_policy: str = "log",
     ) -> None:
         self._lock = threading.Lock()
         self._clock = clock
         self._started_at = clock()
         self._sinks = tuple(sinks)
         self._redactor = redactor or Redactor()
+        self._sink_error_policy = sink_error_policy
         self._seq = 0
         self._next_op = 0
         self._next_span = 0
@@ -529,4 +531,6 @@ class MeterStore:
             try:
                 sink.emit(event)
             except Exception:
+                if self._sink_error_policy == "raise":
+                    raise
                 logger.exception("usage sink %r raised emitting %s", sink, event.op_id)
