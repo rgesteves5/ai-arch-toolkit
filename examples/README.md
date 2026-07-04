@@ -115,6 +115,14 @@ Prompt-injectable reference data.
 | 34 | [`34_knowledge_registry.py`](34_knowledge_registry.py) | `KnowledgeRegistry`, categories, `as_context()` | None |
 | 35 | [`35_knowledge_loaders.py`](35_knowledge_loaders.py) | File and directory loaders (text, json, toml, yaml, markdown) | None |
 
+### 💰 Budgets & metering
+
+Measure what a run costs, and cap it.
+
+| # | File | What it shows | Key |
+|---|------|---------------|-----|
+| 37 | [`37_budgets_and_metering.py`](37_budgets_and_metering.py) | `result.meter`, `BudgetPolicy` (construction + per-run), `budget_scope`, event audit | OpenAI |
+
 ## Suggested reading order
 
 For a guided tour of the framework, walk the examples in this order rather
@@ -128,5 +136,6 @@ than strict numerical order:
 5. **Memory** — 28 → 29 → 30.
 6. **Compose your own flows** — 31, 32, 33.
 7. **Knowledge + reliability** — 34, 35, 22, 23, 36.
+8. **Budgets & cost** — 37 (measure a run, then cap it).
 
 For deep notes on examples 28–36, see [`EXAMPLES_REPORT.md`](EXAMPLES_REPORT.md).
