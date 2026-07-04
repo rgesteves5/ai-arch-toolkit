@@ -8,6 +8,7 @@ nav:
   - Getting Started: getting-started.md
   - Framework Overview: framework-overview.md
   - Agents & Capabilities: agents-and-capabilities.md
+  - Agent & ReasoningSpec: agents.md
   - Flow Architecture: flow-architecture.md
   - LLM Facade: llm.md
   - Content & Messages: content.md
