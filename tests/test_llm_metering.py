@@ -301,3 +301,25 @@ async def test_server_tool_call_is_costed_unknown():
     # so it is counted as unknown, not silently token-priced.
     assert scope.snapshot().unknown_cost_count == 1
     assert scope.snapshot().cost == Money.zero()
+
+
+def test_content_hint_skipped_unless_a_strict_reserve_wants_it():
+    # Perf (review): _content_chars stringifies the whole request (every message + base64 image);
+    # only a strict-reserve estimator reads content_size_hint, so measure-only and soft-budget runs
+    # must skip computing it.
+    from ai_arch_toolkit.toolkit.budget import BudgetController, BudgetPolicy
+
+    llm = LLM(MODEL, api_key="test")
+    msgs = [{"role": "user", "content": "hello world"}]
+
+    def hint_under(config: RunConfig):
+        with MeterScope(config):
+            req = llm._meter_request("complete", {}, normalized=msgs, system=None, wire_tools=None)
+        assert req is not None
+        return req.content_size_hint
+
+    assert hint_under(RunConfig()) is None  # measure-only
+    soft = RunConfig(controller=BudgetController(BudgetPolicy(max_cost=1.0)))
+    assert hint_under(soft) is None  # soft budget (reserve="none")
+    strict = RunConfig(controller=BudgetController(BudgetPolicy(max_cost=1.0, reserve="strict")))
+    assert (hint_under(strict) or 0) > 0  # strict reserve computes it

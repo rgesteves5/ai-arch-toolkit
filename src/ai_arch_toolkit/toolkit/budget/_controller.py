@@ -30,6 +30,11 @@ class BudgetController:
     policy: BudgetPolicy
     estimator: Estimator = field(default_factory=HeuristicEstimator)
 
+    def wants_request_size(self) -> bool:
+        """Only a strict reserve consumes ``content_size_hint``/``non_text_parts`` — so the charge
+        site can skip stringifying the whole request for measure-only and soft-budget runs."""
+        return self.policy.reserve == "strict"
+
     def admit(self, snapshot: MeterSnapshot, request: OperationRequest) -> AdmissionDecision:
         reservation = Reservation()
         if self.policy.reserve == "strict":

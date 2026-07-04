@@ -17,6 +17,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_MISS = object()  # sentinel: distinguishes "not cached" from a cached None (known-unpriced)
+
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ModelPricing:
@@ -52,6 +54,9 @@ class PricingRegistry:
 
     def __init__(self) -> None:
         self._models: dict[str, ModelPricing] = {}
+        # Memoize longest-prefix lookups: get() is on the settle hot path (once per LLM attempt),
+        # and a run reuses the same model string thousands of times. Cleared on any mutation.
+        self._cache: dict[str, ModelPricing | None] = {}
         self._load_defaults()
 
     def _load_defaults(self) -> None:
@@ -68,21 +73,27 @@ class PricingRegistry:
     def register(self, model_prefix: str, pricing: ModelPricing) -> None:
         """Register or override pricing for a model prefix."""
         self._models[model_prefix] = pricing
+        self._cache.clear()
 
     def unregister(self, model_prefix: str) -> None:
         """Remove pricing for a model prefix."""
         self._models.pop(model_prefix, None)
+        self._cache.clear()
 
     # ── Query ──
 
     def get(self, model: str) -> ModelPricing | None:
-        """Find pricing by longest prefix match. Returns None if unknown."""
+        """Find pricing by longest prefix match (memoized). Returns None if unknown."""
+        cached = self._cache.get(model, _MISS)
+        if cached is not _MISS:
+            return cached  # type: ignore[return-value]  # _MISS excluded above
         best: ModelPricing | None = None
         best_len = 0
         for prefix, p in self._models.items():
             if model.startswith(prefix) and len(prefix) > best_len:
                 best = p
                 best_len = len(prefix)
+        self._cache[model] = best
         return best
 
     def has(self, model: str) -> bool:
@@ -198,10 +209,12 @@ class PricingRegistry:
                     fast_input=values.get("fast_input"),
                     fast_output=values.get("fast_output"),
                 )
+        self._cache.clear()
 
     def reset(self) -> None:
         """Reset to shipped defaults, discarding all custom registrations."""
         self._models.clear()
+        self._cache.clear()
         self._load_defaults()
 
 

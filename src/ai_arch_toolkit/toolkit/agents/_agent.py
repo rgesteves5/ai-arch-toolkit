@@ -100,13 +100,14 @@ class Agent:
         if not isinstance(response, Response):
             response = None
         errors = tuple(r.error for r in flow_result.results.values() if r.error)
+        report = flow_result.meter  # meter-derived (single source of truth); snapshot once, reuse
         return AgentResult(
             text=extract_text(state, flow_result),
             response=response,
             flow_result=flow_result,
-            usage=flow_result.usage,  # meter-derived (single source of truth)
-            cost=flow_result.total_cost,
-            report=flow_result.meter,
+            usage=flow_result.usage,
+            cost=report.cost if report is not None else 0.0,
+            report=report,
             errors=errors,
         )
 

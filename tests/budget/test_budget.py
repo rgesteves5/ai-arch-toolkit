@@ -143,6 +143,12 @@ def test_strict_reserves_for_a_priced_model():
     assert d.reservation.cost.pico > 0
 
 
+def test_controller_wants_request_size_only_for_strict():
+    # The charge site consults this to skip stringifying the request when the estimate is unused.
+    assert not BudgetController(BudgetPolicy(max_cost=1.0)).wants_request_size()
+    assert BudgetController(BudgetPolicy(max_cost=1.0, reserve="strict")).wants_request_size()
+
+
 def test_strict_denies_an_unpriced_model_fail_closed():
     d = BudgetController(BudgetPolicy(reserve="strict")).admit(
         MeterSnapshot(), llm_req(model="totally-made-up-model")
