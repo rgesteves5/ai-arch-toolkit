@@ -6,6 +6,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, Literal
 
+from ai_arch_toolkit.core._metering._admission import AdmissionDenied
 from ai_arch_toolkit.core._moderation import ModerationResult
 from ai_arch_toolkit.core._sync import _run_sync
 
@@ -73,6 +74,8 @@ class LLMModerator:
         except (json.JSONDecodeError, KeyError, TypeError) as exc:
             logger.warning("LLMModerator: failed to parse classifier response: %s", exc)
             return self._fail_result()
+        except AdmissionDenied:
+            raise  # a budget/admission denial is terminal — don't mask it as a moderation failure
         except Exception as exc:
             logger.warning("LLMModerator: classifier LLM error: %s", exc)
             return self._fail_result()

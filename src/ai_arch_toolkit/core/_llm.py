@@ -10,7 +10,7 @@ from typing import Any, ClassVar, Literal
 
 from ai_arch_toolkit.core._content import user
 from ai_arch_toolkit.core._exceptions import APIError
-from ai_arch_toolkit.core._metering._admission import NotMeteredOperationError
+from ai_arch_toolkit.core._metering._admission import AdmissionDenied, NotMeteredOperationError
 from ai_arch_toolkit.core._metering._operation import MeterOperation, OperationRequest
 from ai_arch_toolkit.core._metering._scope import current_meter, current_span_id
 from ai_arch_toolkit.core._middleware import (
@@ -459,6 +459,8 @@ class LLM:
                 attempts.extend(response.attempts)
                 return response
             except self._fallback_on as exc:
+                if isinstance(exc, AdmissionDenied):
+                    raise  # budget/admission denial is terminal — never masked by a later fallback
                 last_exc = exc
         raise last_exc
 
@@ -530,6 +532,8 @@ class LLM:
                 _call, self._model, self._retry, attempts, meter_request
             )
         except self._fallback_on as primary_err:
+            if isinstance(primary_err, AdmissionDenied):
+                raise  # terminal: never fall back after a budget/admission denial
             if not self._fallbacks:
                 raise
             response = await self._try_fallbacks(
@@ -644,6 +648,8 @@ class LLM:
         except self._fallback_on as exc:
             if meter is not None:
                 meter[0].fail()  # the attempt failed before streaming could start
+            if isinstance(exc, AdmissionDenied):
+                raise  # terminal: never fall back after a budget/admission denial
             attempts.append(
                 Attempt(
                     model=self._model,
@@ -698,6 +704,8 @@ class LLM:
                         wrapped._finalizer = _mw_fb_finalize
                     return wrapped
                 except self._fallback_on as fb_exc:
+                    if isinstance(fb_exc, AdmissionDenied):
+                        raise  # terminal: never fall back after a budget/admission denial
                     attempts.append(
                         Attempt(
                             model=fb._model,
@@ -803,6 +811,8 @@ class LLM:
         except self._fallback_on as exc:
             if meter is not None:
                 meter[0].fail()  # the attempt failed before streaming could start
+            if isinstance(exc, AdmissionDenied):
+                raise  # terminal: never fall back after a budget/admission denial
             attempts.append(
                 Attempt(
                     model=self._model,
@@ -855,6 +865,8 @@ class LLM:
                         wrapped._finalizer = _mw_fb_finalize
                     return wrapped
                 except self._fallback_on as fb_exc:
+                    if isinstance(fb_exc, AdmissionDenied):
+                        raise  # terminal: never fall back after a budget/admission denial
                     attempts.append(
                         Attempt(
                             model=fb._model,
