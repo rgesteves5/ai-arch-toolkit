@@ -14,6 +14,7 @@ from ai_arch_toolkit.core._metering._admission import (
     MeterSnapshot,
     Reservation,
 )
+from ai_arch_toolkit.core._metering._money import Money
 from ai_arch_toolkit.core._metering._operation import OperationRequest
 from ai_arch_toolkit.toolkit.budget._estimator import Estimator, HeuristicEstimator
 from ai_arch_toolkit.toolkit.budget._exceptions import BudgetExceeded
@@ -79,11 +80,16 @@ class BudgetController:
             if cap is not None and current + add > cap:
                 return BudgetExceeded(dimension=dim, limit=cap, current=current, attempted=add)
         if p.max_cost is not None:
-            current_cost = snap.cost.to_float() + snap.out_cost.to_float()
-            add_cost = reservation.cost.to_float()
-            if current_cost + add_cost > p.max_cost:
+            # Compare in exact Money, mirroring the store's re-validation — a float sum can round
+            # just above an on-cap total and spuriously deny an op the store would admit.
+            cap = Money.from_usd(p.max_cost)
+            committed = snap.cost + snap.out_cost
+            if committed + reservation.cost > cap:
                 return BudgetExceeded(
-                    dimension="cost", limit=p.max_cost, current=current_cost, attempted=add_cost
+                    dimension="cost",
+                    limit=p.max_cost,
+                    current=committed.to_float(),
+                    attempted=reservation.cost.to_float(),
                 )
             # Fail closed on an unbounded (unknown) cost under a cost cap: a prior unpriced call
             # already settled (committed_cost excludes it, so the cap could never trip), or this op

@@ -104,6 +104,16 @@ def test_admit_at_cost_cap_still_allows_a_soft_op():
     assert d.admitted
 
 
+def test_admit_at_exact_cost_boundary_is_not_a_float_rounding_denial():
+    # Regression (N11): committed 0.01 + outstanding 0.05 == 0.06 exactly in Money, but the float
+    # sum 0.01 + 0.05 is 0.060000000000000005 > 0.06. The controller must compare in Money (mirror
+    # the store) and ADMIT — a float compare would spuriously deny at the exact boundary.
+    d = BudgetController(BudgetPolicy(max_cost=0.06)).admit(
+        MeterSnapshot(cost=Money.from_usd(0.01), out_cost=Money.from_usd(0.05)), llm_req()
+    )
+    assert d.admitted
+
+
 def test_soft_default_reserves_nothing():
     d = BudgetController(BudgetPolicy(max_llm_calls=5)).admit(
         MeterSnapshot(), llm_req(model=MODEL)
