@@ -247,6 +247,24 @@ async def test_unpriced_model_allowed_when_unpriced_is_allow():
     assert result.trace.metadata["meter"]["llm_calls"] == 2
 
 
+async def test_policy_max_cost_fails_closed_on_unknown_cost():
+    # decision #4: a per-step max_cost must fail CLOSED when the step's call can't be priced
+    # (unpriced model / server tool) — even under a huge cap, unbounded spend must not pass.
+    llm = make_unpriced_llm()
+
+    async def call(snap: StateSnapshot) -> Result:
+        await llm.complete("hi")
+        return Result(value="ok")
+
+    step = Step(
+        name="s", fn=call, policy=Policy(max_cost=1000.0)
+    )  # generous cap, but cost unknown
+    with MeterScope(RunConfig()) as scope:
+        result, trace = await execute_step(step, StateSnapshot())
+    assert result.is_error and "cost_exceeded" in trace.policy_decisions
+    assert scope.snapshot().unknown_cost_count == 1
+
+
 async def test_policy_max_cost_does_not_trip_when_unmetered():
     # Same step with no bound meter and no annotation -> zero cost -> no cost_exceeded.
     llm = make_llm()

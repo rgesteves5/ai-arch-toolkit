@@ -114,13 +114,21 @@ async def _run_attempts(
                 elif policy.on_low_confidence == "escalate":
                     decisions.append("escalate")
                     break
-            # Check cost limit — the step's manual annotation plus its metered span spend.
+            # Check cost limit — the step's manual annotation plus its metered span spend. Fail
+            # CLOSED if that span incurred an unbounded (unknown) cost: an unpriced model or a
+            # server tool can't be bounded, so a max_cost step must not pass (decision #4).
             if policy.max_cost is not None:
-                effective_cost = result.cost + _span_cost(span_id)
-                if effective_cost > policy.max_cost:
+                span_cost, cost_unknown = _span_spend(span_id)
+                effective_cost = result.cost + span_cost
+                if cost_unknown or effective_cost > policy.max_cost:
                     decisions.append("cost_exceeded")
+                    detail = (
+                        "a call could not be priced (fail-closed)"
+                        if cost_unknown
+                        else f"cost {effective_cost}"
+                    )
                     result = Result(
-                        error=f"Cost {effective_cost} exceeded limit {policy.max_cost}",
+                        error=f"Cost exceeded limit {policy.max_cost}: {detail}",
                         cost=effective_cost,
                         duration=time.monotonic() - t0,
                     )
@@ -153,14 +161,19 @@ async def _run_attempts(
     return result, attempts
 
 
-def _span_cost(span_id: str | None) -> float:
-    """This step's metered USD cost, projected from its span (0 when unmetered/uncapped)."""
+def _span_spend(span_id: str | None) -> tuple[float, bool]:
+    """This step's metered spend, projected from its span: ``(known_usd_cost, has_unknown_cost)``.
+
+    ``(0.0, False)`` when unmetered/uncapped. ``has_unknown_cost`` flags an unpriced call so the
+    caller can fail closed rather than treat unbounded spend as $0.
+    """
     if span_id is None:
-        return 0.0
+        return 0.0, False
     meter = current_meter()
     if meter is None:
-        return 0.0
-    return meter.for_span(span_id).cost.to_float()
+        return 0.0, False
+    snap = meter.for_span(span_id)
+    return snap.cost.to_float(), snap.unknown_cost_count > 0
 
 
 async def _run_fallback(step: Step, snapshot: StateSnapshot, t0: float) -> Result:
