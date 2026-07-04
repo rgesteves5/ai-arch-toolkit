@@ -355,7 +355,7 @@ async for event in flow.iter(state):
         case "step_start":  print(f"  Running {event.step_name}")
         case "step_end":    print(f"  Done: {event.result.value}")
         case "step_skipped": print(f"  Skipped: {event.step_name}")
-        case "flow_end":    print(f"Finished. Cost: ${event.trace.total_cost:.4f}")
+        case "flow_end":    print(f"Cost: ${event.trace.metadata['meter']['cost']:.4f}")  # meter
 
 # Or synchronously:
 for event in flow.iter_sync(state):

@@ -110,12 +110,11 @@ async def research_topic(topic_key: str):
         task = snap.require("task")
         inner = react_flow(llm, tools, system=f"Research: {task}", max_iterations=5)
         state = State(operational=react_initial_state(task))
-        result = await inner.run(state)
+        await inner.run(state)  # metered under the shared run scope; no manual cost threading
         response = state.get("response")
         return Result(
             value=response.text if response else "",
             artifacts={topic_key: response.text if response else ""},
-            cost=result.total_cost,
         )
     return Step(name=topic_key, fn=_research)
 
