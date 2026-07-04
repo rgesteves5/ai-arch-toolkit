@@ -4,7 +4,7 @@ Tools let an LLM call your Python functions. The toolkit gives you three things:
 
 1. The **`@tool`** decorator — turn any typed function into a tool (JSON Schema is generated for you).
 2. **`ToolGroup`** — a governed collection that validates, executes, and structures results.
-3. A library of **~120 pre-built tools** across 25 domains, ready to drop into a group.
+3. A library of **132 pre-built tools** across 25 domains, ready to drop into a group.
 
 Provider-hosted **server tools** (code execution, web search) are covered at the end. Safety controls — risk levels, approval gates, dangerous-tool blocking, trace redaction, and budgets — live on their own page: see [Tool Governance & Safety](safety.md).
 
@@ -134,7 +134,7 @@ response = llm.complete_sync(
 
 ## Pre-built tools catalog
 
-~120 tools across 25 domains, all built on the `@tool` decorator and the standard library only (zero extra pip dependencies). Each returns an error string rather than raising, so agents degrade gracefully.
+132 tools across 25 domains, all built on the `@tool` decorator and the standard library only (zero extra pip dependencies). Each returns an error string rather than raising, so agents degrade gracefully.
 
 ```python
 from ai_arch_toolkit.toolkit.tools import get_weather, arxiv_search, pubmed_search
