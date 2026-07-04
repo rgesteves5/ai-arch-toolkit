@@ -9,6 +9,7 @@ from ai_arch_toolkit.core._metering._admission import (
     MeterSnapshot,
     Reservation,
 )
+from ai_arch_toolkit.core._metering._cost import Cost
 from ai_arch_toolkit.core._metering._money import Money
 from ai_arch_toolkit.core._metering._operation import OperationRequest
 from ai_arch_toolkit.core._metering._scope import MeterScope, RunConfig
@@ -138,6 +139,38 @@ def test_strict_denies_an_unpriced_model_fail_closed():
         MeterSnapshot(), llm_req(model="totally-made-up-model")
     )
     assert not d.admitted and d.denial is not None and d.denial.dimension == "cost"
+
+
+def test_strict_reserve_rounds_input_tokens_up():
+    # A reservation is a worst-case hold: ceil(401/4) = 101, not floor 100.
+    d = BudgetController(BudgetPolicy(reserve="strict")).admit(
+        MeterSnapshot(), llm_req(model=MODEL, content_size_hint=401, declared_max_output_tokens=0)
+    )
+    assert d.admitted and d.reservation.input_tokens == 101
+
+
+def test_strict_reserve_adds_a_non_text_allowance():
+    # Multimodal parts carry far more tokens than their char-hint placeholder — reserve for them.
+    d = BudgetController(BudgetPolicy(reserve="strict")).admit(
+        MeterSnapshot(),
+        llm_req(
+            model=MODEL, content_size_hint=400, non_text_parts=2, declared_max_output_tokens=50
+        ),
+    )
+    assert d.admitted and d.reservation.input_tokens == 100 + 2 * 4000
+
+
+def test_budget_scope_wires_the_pricer_into_the_default_estimator():
+    # #5: estimate (strict reserve) and settle must use the SAME pricer, or they diverge.
+    class _Pricer:
+        def price(self, request, usage) -> Cost:
+            return Cost.known(Money.zero())
+
+    p = _Pricer()
+    scope = budget_scope(BudgetPolicy(reserve="strict", max_cost=1.0), pricer=p)
+    ctrl = scope.controller
+    assert isinstance(ctrl, BudgetController)
+    assert ctrl.estimator.pricer is p
 
 
 # ── unpriced fail-closed under a cost cap ────────────────────────────────────

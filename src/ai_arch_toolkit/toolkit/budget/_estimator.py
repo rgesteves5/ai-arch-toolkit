@@ -6,6 +6,7 @@ lives here in ``toolkit``, never in the neutral core meter.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -18,6 +19,7 @@ from ai_arch_toolkit.core._response import Usage
 __all__ = ["Estimator", "HeuristicEstimator"]
 
 _CHARS_PER_TOKEN = 4  # rough English-text ratio; deliberately conservative
+_NON_TEXT_TOKEN_ALLOWANCE = 4000  # worst-case tokens to reserve per image/document part
 
 
 class Estimator(Protocol):
@@ -39,7 +41,10 @@ class HeuristicEstimator:
     def estimate(self, request: OperationRequest) -> Reservation | None:
         if request.kind != "llm":
             return Reservation()
-        input_tokens = (request.content_size_hint or 0) // _CHARS_PER_TOKEN
+        # Round UP (a reservation is a worst-case hold) and add a per-image/document allowance —
+        # multimodal parts carry far more tokens than their textual placeholder in the char hint.
+        input_tokens = math.ceil((request.content_size_hint or 0) / _CHARS_PER_TOKEN)
+        input_tokens += request.non_text_parts * _NON_TEXT_TOKEN_ALLOWANCE
         output_tokens = request.declared_max_output_tokens or 0
         usage = Usage(input_tokens=input_tokens, output_tokens=output_tokens)
         cost = (self.pricer or pricing).price(request, usage)

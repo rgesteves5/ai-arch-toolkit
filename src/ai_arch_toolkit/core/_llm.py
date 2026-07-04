@@ -146,13 +146,22 @@ def _wrap_rich_stream_with_attempts(
 
 
 def _content_chars(
-    normalized: list[dict[str, Any]], system: str | None, wire_tools: list[dict[str, Any]] | None
+    normalized: list[dict[str, Any]],
+    system: str | None,
+    wire_tools: list[dict[str, Any]] | None,
+    output_schema: Any = None,
 ) -> int:
-    """Rough char count of the whole request — a fact for the estimator (over-counts a bit)."""
+    """Rough char count of the whole request — a fact for the estimator (over-counts a bit).
+
+    Includes the output schema: it is sent to the model as input, so a large planning/analysis
+    schema meaningfully raises the input-token estimate for a strict reservation.
+    """
     total = len(system) if system else 0
     total += len(str(normalized))
     if wire_tools:
         total += len(str(wire_tools))
+    if output_schema is not None:
+        total += len(str(output_schema))
     return total
 
 
@@ -415,7 +424,9 @@ class LLM:
             mode=mode,
             model=self._model,
             declared_max_output_tokens=provider_kwargs.get("max_tokens"),
-            content_size_hint=_content_chars(normalized, system, wire_tools),
+            content_size_hint=_content_chars(
+                normalized, system, wire_tools, provider_kwargs.get("output_schema")
+            ),
             non_text_parts=_count_non_text_parts(normalized),
             has_server_tools=_has_server_tools(wire_tools),
         )

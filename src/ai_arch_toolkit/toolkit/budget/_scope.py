@@ -34,5 +34,8 @@ def budget_scope(
     """
     controller = None
     if policy is not None and not policy.is_empty:
-        controller = BudgetController(policy, estimator=estimator or HeuristicEstimator())
+        # The default estimator must price with the SAME pricer as the settle (RunConfig.pricer),
+        # or a strict reservation and the actual charge would diverge under a custom pricer.
+        est = estimator or HeuristicEstimator(pricer=pricer)
+        controller = BudgetController(policy, estimator=est)
     return MeterScope(RunConfig(controller=controller, sinks=tuple(sinks), pricer=pricer))
