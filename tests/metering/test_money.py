@@ -21,6 +21,13 @@ def test_from_usd_roundtrip():
     assert Money.from_usd(Decimal("0.0021")).to_float() == pytest.approx(0.0021)
 
 
+def test_from_pico_rounds_a_float_instead_of_truncating():
+    # N12: a custom pricer's fractional rate*tokens must round to nearest pico, not truncate to 0.
+    assert Money.from_pico(1.9).pico == 2
+    assert Money.from_pico(2.4).pico == 2
+    assert Money.from_pico(5).pico == 5  # ints pass through unchanged
+
+
 def test_from_usd_is_decimal_exact():
     # 0.10 USD is EXACTLY ten cents, not the nearest binary float.
     assert Money.from_usd(0.10).pico == 100_000_000_000

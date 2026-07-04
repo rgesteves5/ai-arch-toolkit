@@ -50,7 +50,7 @@ _ZERO_COST = Cost.known(Money.zero())
 _NO_USAGE = Usage()
 
 # Terminal record kept for idempotency (settle/fail/abort after an op already ended).
-type _Terminal = tuple[str, int | None]  # (status, settle-payload hash | None)
+type _Terminal = tuple[str, tuple[object, ...] | None]  # (status, settle-payload key | None)
 
 
 @dataclass(slots=True)
@@ -160,18 +160,20 @@ def _fail_cost(kind: str) -> Cost:
     return _ZERO_COST
 
 
-def _payload_hash(usage: Usage, cost: Cost) -> int:
-    """A stable hash of a settle payload, for double-settle detection."""
-    return hash(
-        (
-            usage.input_tokens,
-            usage.output_tokens,
-            usage.cache_read_tokens,
-            usage.cache_write_tokens,
-            cost.kind,
-            cost.amount.pico if cost.amount is not None else None,
-            cost.reason,
-        )
+def _payload_key(usage: Usage, cost: Cost) -> tuple[object, ...]:
+    """The identifying tuple of a settle payload, for double-settle detection.
+
+    Stored (not hashed) so re-settle comparison is EXACT — a hash collision can't suppress the
+    ``keeping the first outcome`` warning. Bounded by the tombstone LRU.
+    """
+    return (
+        usage.input_tokens,
+        usage.output_tokens,
+        usage.cache_read_tokens,
+        usage.cache_write_tokens,
+        cost.kind,
+        cost.amount.pico if cost.amount is not None else None,
+        cost.reason,
     )
 
 
@@ -397,13 +399,13 @@ class MeterStore:
         with self._lock:
             op = self._ops.get(op_id)
             if op is None:
-                self._replay_terminal(op_id, "settled", _payload_hash(usage, cost))
+                self._replay_terminal(op_id, "settled", _payload_key(usage, cost))
                 return
             if not op.started:
                 raise ValueError(f"cannot settle operation {op_id} before mark_started()")
             self._apply(op.parent_span_id, lambda c: _settle(c, op, usage, cost))
             event = self._make_event(op, "settled", usage, cost)
-            self._terminalize(op, "settled", _payload_hash(usage, cost))
+            self._terminalize(op, "settled", _payload_key(usage, cost))
         self._dispatch(event)
 
     def fail(self, op_id: str) -> None:
@@ -481,7 +483,7 @@ class MeterStore:
             metadata=op.metadata,  # raw; _dispatch redacts OUTSIDE the lock (redactor is foreign)
         )
 
-    def _terminalize(self, op: _LiveOp, status: str, payload: int | None) -> None:
+    def _terminalize(self, op: _LiveOp, status: str, payload: tuple[object, ...] | None) -> None:
         self._tombstones[op.op_id] = (status, payload)
         del self._ops[op.op_id]
         if len(self._tombstones) > _TOMBSTONE_MAX:
@@ -497,7 +499,9 @@ class MeterStore:
         except ValueError:
             return False
 
-    def _replay_terminal(self, op_id: str, action: str, payload: int | None) -> None:
+    def _replay_terminal(
+        self, op_id: str, action: str, payload: tuple[object, ...] | None
+    ) -> None:
         """Handle a transition on an already-terminal (or unknown) op: idempotent no-op or warn."""
         tomb = self._tombstones.get(op_id)
         if tomb is None:

@@ -217,7 +217,13 @@ result = flow.run_sync(state)
 - `reserve` (`"none"` default | `"strict"`) — `"strict"` reserves a worst-case token/cost hold *before* each call, failing closed on unpriced models. `"none"` measures and settles only (a soft cost cap can overshoot by at most the one in-flight call).
 - `unpriced` (`"fail_closed"` default | `"allow"`) — under a `max_cost` cap, `"fail_closed"` denies further work once a call's cost can't be known (an unpriced model, or a provider-hosted server tool whose charge isn't in the token counts); `"allow"` proceeds (the cap may undercount).
 
-Enforcement is **hard, at the charge site**: the meter *denies the operation that would exceed a cap before it runs* — the call never happens and nothing is charged. Count and token caps are exact even under concurrency. The denial (`BudgetExceeded`, a neutral `AdmissionDenied`) is terminal; the owning (outermost) flow converts it to `policy_decision="budget_exceeded"` in the trace, so `flow.run()` returns a normal `FlowResult` rather than raising. Wall-time is checked between steps.
+Enforcement happens **at the charge site**: the meter denies the operation that would breach a cap, the call never happens, and nothing is charged. The denial (`BudgetExceeded`, a neutral `AdmissionDenied`) is terminal; the owning (outermost) flow converts it to `policy_decision="budget_exceeded"` in the trace, so `flow.run()` returns a normal `FlowResult` rather than raising.
+
+How *tight* the cap is depends on the dimension:
+
+- **Call and token caps are hard** — checked against committed + outstanding under the meter's lock, so they are exact even under concurrent (parallel-DAG) execution: a run can never overshoot `max_llm_calls` / `max_total_tokens`.
+- **The cost cap under `reserve="none"` (the default) is soft** — a call is admitted while it is still uncosted and only denied *after* it settles, so the total can overshoot `max_cost` by at most the single in-flight call. Use `reserve="strict"` to hold a worst-case cost up front and make it hard (it fails closed on unpriced models). An unbounded (unknown) cost fails closed regardless — see `unpriced` above.
+- **Wall-time is checked between steps**, so a single long-running step is not interrupted mid-flight (use `Policy(timeout=...)` for that).
 
 The **meter is the single source of truth** for what a run consumed — read it off the result, never by summing anything yourself:
 

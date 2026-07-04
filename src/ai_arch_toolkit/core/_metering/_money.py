@@ -40,9 +40,13 @@ class Money:
         return cls(int(pico))
 
     @classmethod
-    def from_pico(cls, pico: int) -> Money:
-        """Build directly from an integer pico-USD count (the pricer's ``rate * tokens`` path)."""
-        return cls(int(pico))
+    def from_pico(cls, pico: int | float) -> Money:
+        """Build from a pico-USD count (the pricer's ``rate * tokens`` path).
+
+        A float (e.g. a fractional ``rate * tokens``) is ROUNDED to the nearest pico rather than
+        truncated toward zero, so a custom pricer can't silently under-charge by up to a pico.
+        """
+        return cls(round(pico))
 
     def to_float(self) -> float:
         """USD as a float — for display/serialization only, never further accumulation."""
