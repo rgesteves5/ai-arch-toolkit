@@ -41,7 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Lint fixes: ternary form in `toolkit/tools/_datetime.py`; unused `pytest` import in `tests/test_python_eval.py`; misc `ruff format` across toolkit tools.
 
 ### Removed
-- **The legacy `core._budget` module** (`BudgetState`, its cooperative `BudgetPolicy`, `BudgetExceeded.to_dict()`). Budgets now live in `toolkit.budget` and enforce hard at the charge site rather than by cooperative counter-checking as steps record usage. `BudgetPolicy.max_wall_time` is now `max_wall_s`; the `strict_cost` / `allow_unpriced` flags are now the `reserve` / `unpriced` knobs.
+- **The legacy `core._budget` module** (`BudgetState`, its cooperative `BudgetPolicy`). Budgets now live in `toolkit.budget` and enforce hard at the charge site rather than by cooperative counter-checking as steps record usage. `BudgetPolicy.max_wall_time` is now `max_wall_s`; the `strict_cost` / `allow_unpriced` flags are now the `reserve` / `unpriced` knobs. `BudgetExceeded` keeps its `.limit` / `.maximum` / `.to_dict()` surface.
 
 ## Historical log
 

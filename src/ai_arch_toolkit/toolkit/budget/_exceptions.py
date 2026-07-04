@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from ai_arch_toolkit.core._metering._admission import AdmissionDenied
 
 __all__ = ["BudgetExceeded"]
@@ -15,3 +17,20 @@ class BudgetExceeded(AdmissionDenied):
     neutral base under a race) is handled by the same ``except``. Carries the structured
     ``dimension``/``limit``/``current``/``attempted`` fields inherited from the base.
     """
+
+    @property
+    def maximum(self) -> float | None:
+        """The cap that was exceeded — an alias for :attr:`limit`."""
+        return self.limit
+
+    def to_dict(self) -> dict[str, Any]:
+        """A JSON-serializable view for logging and trace metadata."""
+        return {
+            "error": "budget_exceeded",
+            "dimension": self.dimension,
+            "limit": self.limit,
+            "maximum": self.limit,
+            "current": self.current,
+            "attempted": self.attempted,
+            "message": str(self),
+        }

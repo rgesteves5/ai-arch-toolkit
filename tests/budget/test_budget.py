@@ -64,6 +64,15 @@ def test_budget_exceeded_is_an_admission_denied():
     assert issubclass(BudgetExceeded, AdmissionDenied)
 
 
+def test_budget_exceeded_preserves_maximum_and_to_dict():
+    e = BudgetExceeded(dimension="cost", limit=0.5, current=0.4, attempted=0.2)
+    assert e.maximum == 0.5  # back-compat alias for .limit
+    d = e.to_dict()
+    assert d["error"] == "budget_exceeded" and d["dimension"] == "cost"
+    assert d["limit"] == 0.5 and d["maximum"] == 0.5
+    assert d["current"] == 0.4 and d["attempted"] == 0.2
+
+
 # ── controller admit ─────────────────────────────────────────────────────────
 
 
