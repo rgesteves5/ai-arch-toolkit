@@ -11,6 +11,7 @@ from typing import Any, ClassVar, Literal
 from ai_arch_toolkit.core._content import user
 from ai_arch_toolkit.core._exceptions import APIError
 from ai_arch_toolkit.core._metering._admission import AdmissionDenied, NotMeteredOperationError
+from ai_arch_toolkit.core._metering._cost import Cost
 from ai_arch_toolkit.core._metering._operation import MeterOperation, OperationRequest
 from ai_arch_toolkit.core._metering._scope import current_meter, current_span_id
 from ai_arch_toolkit.core._middleware import (
@@ -39,6 +40,23 @@ from ai_arch_toolkit.core._tools import prepare_tools
 from ai_arch_toolkit.core._tools._group import ToolGroup
 
 logger = logging.getLogger(__name__)
+
+
+def _price_or_unknown(pricer: Any, request: OperationRequest, usage: Usage) -> Cost:
+    """Price a settled call defensively. A raising or estimate-returning (foreign) pricer must not
+    turn a successful, already-served response into a failure — fall back to an unknown cost so the
+    op still settles (the store rejects estimates and would otherwise raise out of a success path).
+    """
+    try:
+        cost = pricer.price(request, usage)
+    except Exception:
+        logger.exception("pricer %r raised while pricing a settled call; using unknown", pricer)
+        return Cost.unknown("pricer raised")
+    if cost.kind == "estimated":
+        logger.warning("pricer %r returned an estimate at settle; recording unknown", pricer)
+        return Cost.unknown("pricer returned an estimate at settle")
+    return cost
+
 
 PROVIDER_ERRORS: tuple[type[Exception], ...] = (
     APIError,
@@ -349,7 +367,8 @@ class LLM:
                 )
                 if op is not None and scope is not None and request is not None:
                     pricer = scope.pricer or pricing
-                    op.settle(usage=response.usage, cost=pricer.price(request, response.usage))
+                    cost = _price_or_unknown(pricer, request, response.usage)
+                    op.settle(usage=response.usage, cost=cost)
                     settled = True
                 return response
             except Exception as exc:
@@ -436,7 +455,7 @@ class LLM:
 
         def _finalize(text: str) -> Response:
             resp = inner(text)
-            op.settle(usage=resp.usage, cost=pricer.price(request, resp.usage))
+            op.settle(usage=resp.usage, cost=_price_or_unknown(pricer, request, resp.usage))
             return resp
 
         return _finalize

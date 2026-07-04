@@ -493,10 +493,16 @@ class MeterStore:
             )
 
     def _dispatch(self, event: UsageEvent | None) -> None:
-        """Redact + emit to sinks OUTSIDE the lock. Foreign redactor/sink can't stall the meter."""
+        """Redact + emit to sinks OUTSIDE the lock. A foreign redactor/sink can't stall the meter
+        OR break the (already-settled, already-paid) call that triggered the event."""
         if event is None:
             return
-        event = replace(event, metadata=self._redactor.redact(dict(event.metadata)))
+        try:
+            metadata = self._redactor.redact(dict(event.metadata))
+        except Exception:
+            logger.exception("usage redactor %r raised; dropping event metadata", self._redactor)
+            metadata = {}
+        event = replace(event, metadata=metadata)
         for sink in self._sinks:
             try:
                 sink.emit(event)
