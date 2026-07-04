@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._metering._scope import MeterScope, RunConfig
 from ai_arch_toolkit.core._policy import Policy
@@ -245,6 +247,19 @@ async def test_unpriced_model_allowed_when_unpriced_is_allow():
     result = await flow.run(State())
     assert "budget_exceeded" not in result.results
     assert result.trace.metadata["meter"]["llm_calls"] == 2
+
+
+async def test_stream_context_manager_error_does_not_settle_as_success():
+    # N5: an exception mid-`async for` must leave the stream op INCOMPLETE (unknown cost) at scope
+    # close, not settle it as a clean (under-recorded) success.
+    llm = make_llm()
+    scope = MeterScope(RunConfig())
+    with scope, pytest.raises(ValueError):
+        async with llm.stream("hi") as s:
+            async for _chunk in s:
+                raise ValueError("mid-stream boom")
+    snap = scope.snapshot()
+    assert snap.llm_calls == 1 and snap.unknown_cost_count == 1
 
 
 async def test_step_spans_are_reclaimed_not_leaked():

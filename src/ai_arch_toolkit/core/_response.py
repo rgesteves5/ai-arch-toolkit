@@ -230,7 +230,12 @@ class StreamResponse:
         return self
 
     async def __aexit__(self, *args: Any) -> None:
-        # Don't drain — just finalize with what we have so far.
+        # Unwinding on an exception means the stream was interrupted mid-way — do NOT finalize it
+        # as a clean success (the metered finalizer would settle it, under-recording spend and
+        # mislabelling a failed call). Leave the op STARTED so scope.close() marks it INCOMPLETE.
+        if args and args[0] is not None:
+            return
+        # Normal exit without full drain — finalize with what we have so far.
         if self._response is None:
             self._response = self._finalizer("".join(self._chunks))
 
@@ -273,6 +278,9 @@ class SyncStreamResponse:
         return self
 
     def __exit__(self, *args: Any) -> None:
+        # See StreamResponse.__aexit__: don't settle an exception-interrupted stream as a success.
+        if args and args[0] is not None:
+            return
         if self._response is None:
             self._response = self._finalizer("".join(self._chunks))
 
