@@ -133,8 +133,7 @@ def lats_flow(
             inner_tools,
             system=inner_system,
             max_iterations=max_react_iterations,
-            budget_policy=budget_policy,
-        )
+        )  # no budget_policy: a nested flow inherits the enclosing scope (one cumulative budget)
 
         inner_initial = react_initial_state(leaf.state)
         state = State(operational=inner_initial)

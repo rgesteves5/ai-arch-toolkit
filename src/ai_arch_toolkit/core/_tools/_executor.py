@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from typing import Any
@@ -28,6 +29,8 @@ from ai_arch_toolkit.core._tools._governance import (
 )
 from ai_arch_toolkit.core._tools._result import ToolResult, _format_value
 from ai_arch_toolkit.core._tools._schema import tool_schema
+
+logger = logging.getLogger(__name__)
 
 # --- Resolution ---------------------------------------------------------------
 
@@ -172,11 +175,18 @@ def _meter_tool_open(tool_call: ToolCall) -> tuple[MeterOperation | None, Cost]:
     )
     op = scope.open(request)
     op.mark_started()
-    cost = scope.pricer.price(request, _NO_USAGE) if scope.pricer is not None else _ZERO_COST
-    if cost.kind == "estimated":
-        # settle() rejects an estimate; a misbehaving custom pricer must not flip a successful
-        # tool into an error result. A tool has no token cost, so fall back to free.
-        cost = _ZERO_COST
+    # A tool has no token cost, so it's free unless a custom pricer says otherwise. A pricer that
+    # RAISES or returns an estimate (settle rejects estimates) must not flip a successful tool into
+    # an error OR leak this started op — fall back to free and keep going.
+    cost = _ZERO_COST
+    if scope.pricer is not None:
+        try:
+            priced = scope.pricer.price(request, _NO_USAGE)
+        except Exception:
+            logger.exception("pricer %r raised pricing a tool; recording it free", scope.pricer)
+            priced = _ZERO_COST
+        if priced.kind != "estimated":
+            cost = priced
     return op, cost
 
 

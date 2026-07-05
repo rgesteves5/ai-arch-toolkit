@@ -130,3 +130,18 @@ async def test_tool_settles_free_when_a_pricer_returns_an_estimate():
         result = await async_execute_tool(tc("add", a=1, b=2), [add])
     assert result.ok and result.value == 3  # not flipped to an error
     assert scope.snapshot().tool_calls == 1
+
+
+class _RaisingPricer:
+    def price(self, request, usage):
+        raise RuntimeError("pricer boom")
+
+
+async def test_raising_pricer_at_the_tool_site_does_not_break_the_tool():
+    # A custom pricer that raises while pricing a tool must not turn a successful tool into an
+    # error or leak the started op — it falls back to free (tools have no token cost).
+    with MeterScope(RunConfig(pricer=_RaisingPricer())) as scope:
+        result = await async_execute_tool(tc("add", a=1, b=2), [add])
+    assert result.ok and result.value == 3  # the tool ran
+    snap = scope.snapshot()
+    assert snap.tool_calls == 1 and snap.unknown_cost_count == 0  # settled free, not leaked

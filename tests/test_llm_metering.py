@@ -323,3 +323,19 @@ def test_content_hint_skipped_unless_a_strict_reserve_wants_it():
     assert hint_under(soft) is None  # soft budget (reserve="none")
     strict = RunConfig(controller=BudgetController(BudgetPolicy(max_cost=1.0, reserve="strict")))
     assert (hint_under(strict) or 0) > 0  # strict reserve computes it
+
+
+async def test_meter_request_tolerates_a_non_callable_wants_request_size():
+    # A custom controller exposing wants_request_size as a NON-callable attribute must not crash
+    # the charge site — it falls back to computing the hint (safe default).
+    class _WeirdController:
+        wants_request_size = True  # an attribute, not a method
+
+        def admit(self, snapshot, request) -> AdmissionDecision:
+            return AdmissionDecision.allow()
+
+    llm = make_llm(FakeProvider(response=resp(input_tokens=1)))
+    msgs = [{"role": "user", "content": "hi"}]
+    with MeterScope(RunConfig(controller=_WeirdController())):  # type: ignore[arg-type]
+        req = llm._meter_request("complete", {}, normalized=msgs, system=None, wire_tools=None)
+    assert req is not None and req.content_size_hint is not None  # no crash; hint computed

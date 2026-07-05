@@ -228,6 +228,10 @@ class Flow:
         """Execute the flow. A per-run ``budget_policy`` overrides the construction-time one; a
         per-run ``config`` (full :class:`RunConfig` — sinks, custom pricer, retained events) takes
         precedence over both. All are ignored when this flow runs nested under an enclosing scope.
+
+        Note: ``config`` FULLY specifies the run's meter — it does not merge with a
+        ``budget_policy``. A config with no controller is measure-only, so to add sinks to a
+        *budgeted* run put the controller in it: ``RunConfig(controller=BudgetController(p), …)``.
         """
         from ai_arch_toolkit.toolkit.flow._executor import execute_flow
 

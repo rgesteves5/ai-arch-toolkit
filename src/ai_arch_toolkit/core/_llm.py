@@ -186,11 +186,6 @@ def _has_server_tools(wire_tools: list[dict[str, Any]] | None) -> bool:
     )
 
 
-def _wants_request_size_default() -> bool:
-    """Fallback for a controller that doesn't declare ``wants_request_size`` — compute the hint."""
-    return True
-
-
 class LLM:
     """Lightweight LLM client.
 
@@ -426,10 +421,13 @@ class LLM:
         # The content-size hint is consumed ONLY by a strict-reserve estimator. Computing it
         # stringifies the whole request (every message, every base64 image) — so skip it unless the
         # bound controller says it wants it. Measure-only and soft-budget runs (the common case)
-        # never read it. A controller without wants_request_size() gets the hint (safe default).
-        wants_size = scope.controller is not None and getattr(
-            scope.controller, "wants_request_size", _wants_request_size_default
-        )()
+        # never read it. A controller without a callable wants_request_size gets the hint (safe).
+        controller = scope.controller
+        if controller is None:
+            wants_size = False
+        else:
+            wants = getattr(controller, "wants_request_size", None)
+            wants_size = wants() if callable(wants) else True
         schema = provider_kwargs.get("output_schema")
         return OperationRequest(
             kind="llm",

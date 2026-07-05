@@ -142,8 +142,7 @@ def llm_compiler_flow(
                         inner_tools,
                         system=inner_system,
                         max_iterations=max_react_iterations,
-                        budget_policy=budget_policy,
-                    )
+                    )  # nested flow inherits the enclosing scope; its own budget_policy is ignored
 
                     state = State(operational=react_initial_state(task))
                     result = await inner.run(state)
