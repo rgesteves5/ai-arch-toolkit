@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import pytest
 
@@ -284,6 +285,49 @@ async def test_stream_events_context_manager_error_does_not_settle_as_success():
     assert snap.llm_calls == 1 and snap.unknown_cost_count == 1
 
 
+async def test_stream_clean_early_break_stays_incomplete_not_settled(caplog):
+    # 1(a): a CLEAN early break out of a metered stream (partial consume, no exception) must leave
+    # the op INCOMPLETE (unknown cost) — a partial stream's usage is unreliable (some providers
+    # report it only in the final chunk), so it must NOT settle as a clean success. The partial
+    # `.response` stays available (settle is decoupled from response-building), and the store logs
+    # no double-terminal warning: the op is latched abandoned before it fails, so its settling
+    # finalizer skips the settle instead of replaying over the failed op.
+    llm = make_llm()
+    scope = MeterScope(RunConfig())
+    with caplog.at_level(logging.WARNING), scope:
+        async with llm.stream("hi") as s:
+            async for _chunk in s:
+                break  # abandon after the first chunk, before the stream drains
+    snap = scope.snapshot()
+    assert snap.llm_calls == 1 and snap.unknown_cost_count == 1
+    assert s.response is not None and s.response.text == "ok"  # partial kept, not discarded
+    assert "keeping the first outcome" not in caplog.text  # no spurious re-terminal warning
+
+
+async def test_stream_events_clean_early_break_stays_incomplete_not_settled():
+    # Same 1(a) invariant for the RICH stream_events() variant (RichStreamResponse.__aexit__).
+    llm = make_llm()
+    scope = MeterScope(RunConfig())
+    with scope:
+        async with llm.stream_events("hi") as s:
+            async for _ev in s:
+                break
+    snap = scope.snapshot()
+    assert snap.llm_calls == 1 and snap.unknown_cost_count == 1
+
+
+def test_sync_stream_clean_early_break_stays_incomplete_not_settled():
+    # The sync wrapper reuses the async finalizer, so it carries the same `_meter_op` — a clean
+    # early break out of `stream_sync()` must fail the op closed too, not settle a partial.
+    llm = make_llm()
+    scope = MeterScope(RunConfig())
+    with scope, llm.stream_sync("hi") as s:
+        for _chunk in s:
+            break
+    snap = scope.snapshot()
+    assert snap.llm_calls == 1 and snap.unknown_cost_count == 1
+
+
 async def test_step_spans_are_reclaimed_not_leaked():
     # N4: each per-step cost-cap span is dropped when its context manager exits, so a cyclic run
     # can't accumulate one _Span per step per iteration. Accounting survives the reclamation.
@@ -317,6 +361,30 @@ async def test_policy_max_cost_fails_closed_on_unknown_cost():
         result, trace = await execute_step(step, StateSnapshot())
     assert result.is_error and "cost_exceeded" in trace.policy_decisions
     assert scope.snapshot().unknown_cost_count == 1
+
+
+async def test_policy_max_cost_fails_closed_on_undrained_stream():
+    # finding 3: a step that opens a metered stream and returns WITHOUT draining it leaves the op
+    # IN FLIGHT — its cost is not committed to the step span, so the committed span total reads $0.
+    # A per-step max_cost must fail CLOSED on that indeterminate spend (the span has a live op),
+    # not wave the step through under a generous cap.
+    llm = make_llm()
+
+    async def call(snap: StateSnapshot) -> Result:
+        llm.stream("hi")  # opened + started eagerly, never drained/closed -> stays in flight
+        return Result(value="leaked")
+
+    step = Step(
+        name="s", fn=call, policy=Policy(max_cost=1000.0)
+    )  # generous cap, but op in flight
+    scope = MeterScope(RunConfig())
+    with scope:
+        result, trace = await execute_step(step, StateSnapshot())
+        assert scope.has_live_ops(
+            scope.run_span_id
+        )  # the leaked op is live -> span read as unbounded
+    assert result.is_error and "cost_exceeded" in trace.policy_decisions
+    assert scope.snapshot().unknown_cost_count == 1  # close() incompleted the leaked op
 
 
 async def test_policy_max_cost_does_not_trip_when_unmetered():

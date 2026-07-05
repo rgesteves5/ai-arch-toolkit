@@ -49,23 +49,37 @@ class OperationRequest:
 
 
 class MeterOperation:
-    """A stateless handle to one in-flight operation; delegates to the store by ``op_id``.
+    """A thin handle to one in-flight operation; delegates to the store by ``op_id``.
 
     Lifecycle: :meth:`mark_started` commits the call count, then :meth:`settle`
     records actuals on success or :meth:`fail` keeps the count on error.
-    :meth:`abort` fully releases an operation that never started.
+    :meth:`abort` fully releases an operation that never started. The only local
+    state is the :attr:`abandoned` latch (a stream that quit before draining).
     """
 
-    __slots__ = ("_op_id", "_store")
+    __slots__ = ("_abandoned", "_op_id", "_store")
 
     def __init__(self, store: MeterStore, op_id: str) -> None:
         self._store = store
         self._op_id = op_id
+        self._abandoned = False
 
     @property
     def op_id(self) -> str:
         """This operation's unique id within the run."""
         return self._op_id
+
+    @property
+    def abandoned(self) -> bool:
+        """True once :meth:`mark_abandoned` ran — the stream quit before it fully drained."""
+        return self._abandoned
+
+    def mark_abandoned(self) -> None:
+        """Latch that a stream was abandoned before full drain, so its settling finalizer skips
+        :meth:`settle`. The consumer's early exit :meth:`fail`\\ s the op (unknown cost — a partial
+        stream's usage is unreliable); without this latch the finalizer would then replay a settle
+        over the failed op and the store would log a spurious ``keeping the first outcome``."""
+        self._abandoned = True
 
     def mark_started(self) -> None:
         """Commit the call count — the operation reached the provider/tool."""

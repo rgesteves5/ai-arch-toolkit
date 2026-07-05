@@ -221,8 +221,8 @@ Enforcement happens **at the charge site**: the meter denies the operation that 
 
 How *tight* the cap is depends on the dimension:
 
-- **Call and token caps are hard** — checked against committed + outstanding under the meter's lock, so they are exact even under concurrent (parallel-DAG) execution: a run can never overshoot `max_llm_calls` / `max_total_tokens`.
-- **The cost cap under `reserve="none"` (the default) is soft** — a call is admitted while it is still uncosted and only denied *after* it settles, so the total can overshoot `max_cost` by at most the single in-flight call. Use `reserve="strict"` to hold a worst-case cost up front and make it hard (it fails closed on unpriced models). An unbounded (unknown) cost fails closed regardless — see `unpriced` above.
+- **Call caps are hard** — `max_llm_calls` / `max_tool_calls` are checked against committed + outstanding *counts* under the meter's lock, so they are exact even under concurrent (parallel-DAG) execution: a run can never overshoot them.
+- **Token and cost caps under `reserve="none"` (the default) are soft** — a call is admitted while its token usage / cost is still unknown and only denied *after* it settles, so the total can overshoot `max_input_tokens` / `max_output_tokens` / `max_total_tokens` / `max_cost` by at most the single in-flight call. Use `reserve="strict"` to reserve a worst-case token/cost hold up front and make them hard (it fails closed on unpriced models). An unbounded (unknown) cost fails closed regardless — see `unpriced` above.
 - **Wall-time is checked between steps**, so a single long-running step is not interrupted mid-flight (use `Policy(timeout=...)` for that).
 
 The **meter is the single source of truth** for what a run consumed — read it off the result, never by summing anything yourself:

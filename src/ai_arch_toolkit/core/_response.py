@@ -9,6 +9,21 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 
+def _fail_meter_op(finalizer: Callable[[str], Any]) -> None:
+    """Fail a partially-consumed stream's metered op (unknown cost) before finalizing the partial.
+
+    A stream that wasn't fully drained has partial, provider-dependent usage (some providers report
+    usage only in the final chunk), so its op must not be settled as a clean success. We latch it
+    abandoned (so the settling finalizer skips its ``settle``) and fail it — holds released, call
+    count kept, unknown cost charged. No-op when the stream is unmetered — the charge site attaches
+    the op as ``_meter_op`` on the finalizer; a plain finalizer has none.
+    """
+    op = getattr(finalizer, "_meter_op", None)
+    if op is not None:
+        op.mark_abandoned()
+        op.fail()
+
+
 @dataclass(frozen=True, slots=True)
 class ToolCall:
     """A single tool invocation returned by the model."""
@@ -237,6 +252,7 @@ class StreamResponse:
             return
         # Normal exit without full drain — finalize with what we have so far.
         if self._response is None:
+            _fail_meter_op(self._finalizer)  # clean early exit -> INCOMPLETE, not a partial settle
             self._response = self._finalizer("".join(self._chunks))
 
 
@@ -282,6 +298,7 @@ class SyncStreamResponse:
         if args and args[0] is not None:
             return
         if self._response is None:
+            _fail_meter_op(self._finalizer)  # clean early exit -> INCOMPLETE, not a partial settle
             self._response = self._finalizer("".join(self._chunks))
 
 
@@ -360,6 +377,7 @@ class RichStreamResponse:
         if args and args[0] is not None:
             return
         if self._response is None:
+            _fail_meter_op(self._finalizer)  # clean early exit -> INCOMPLETE, not a partial settle
             self._response = self._finalizer("".join(self._text_chunks))
 
 
@@ -398,4 +416,5 @@ class SyncRichStreamResponse:
         if args and args[0] is not None:
             return
         if self._response is None:
+            _fail_meter_op(self._finalizer)  # clean early exit -> INCOMPLETE, not a partial settle
             self._response = self._finalizer("".join(self._text_chunks))

@@ -477,7 +477,10 @@ class LLM:
 
         def _finalize(text: str) -> Response:
             resp = inner(text)
-            op.settle(usage=resp.usage, cost=_price_or_unknown(pricer, request, resp.usage))
+            # A stream abandoned before full drain was already failed (unknown cost) by its early
+            # exit — a settle here would replay over the terminal op and warn. Return the partial.
+            if not op.abandoned:
+                op.settle(usage=resp.usage, cost=_price_or_unknown(pricer, request, resp.usage))
             return resp
 
         return _finalize
@@ -782,6 +785,10 @@ class LLM:
 
             actual_finalizer = _mw_finalize
 
+        if meter is not None:
+            # Attach the op so the stream can fail it closed if abandoned before it fully drains
+            # (a partial usage must not be settled as a clean success).
+            actual_finalizer._meter_op = meter[0]  # type: ignore[attr-defined]
         return StreamResponse(aiter, actual_finalizer)
 
     def stream_events(
@@ -943,6 +950,10 @@ class LLM:
 
             actual_finalizer = _mw_finalize
 
+        if meter is not None:
+            # Attach the op so the stream can fail it closed if abandoned before it fully drains
+            # (a partial usage must not be settled as a clean success).
+            actual_finalizer._meter_op = meter[0]  # type: ignore[attr-defined]
         return RichStreamResponse(aiter, actual_finalizer)
 
     def stream_events_sync(
@@ -996,11 +1007,7 @@ class LLM:
         not metered there (a documented gap, reconciled post-hoc from provider records).
         """
         scope = current_meter()
-        if (
-            scope is not None
-            and scope.controller is not None
-            and not scope.allow_unmetered_batch
-        ):
+        if scope is not None and scope.controller is not None and not scope.allow_unmetered_batch:
             raise NotMeteredOperationError(
                 "batch operations bypass per-attempt metering and are not allowed under an "
                 "enforcing budget; use complete()/stream(), set RunConfig.allow_unmetered_batch, "

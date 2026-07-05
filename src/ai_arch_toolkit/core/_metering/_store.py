@@ -234,6 +234,30 @@ class MeterStore:
                 raise ValueError(f"unknown span {span_id}")
             return self._snapshot_of(span)
 
+    def has_live_ops(self, span_id: str) -> bool:
+        """True if a PENDING or STARTED op sits in this span's subtree — its cost isn't known yet.
+
+        A per-step cost cap uses this to fail closed when a step returns while a metered op it
+        opened is still in flight (e.g. a stream opened but never drained): the committed span cost
+        misses that op, so the cap must treat the span's spend as indeterminate rather than as $0.
+        """
+        with self._lock:
+            return self._has_live_op_under(span_id)
+
+    def _has_live_op_under(self, span_id: str) -> bool:
+        """Walk every live op to the root; True if one is anchored in ``span_id``'s subtree.
+
+        Caller holds ``self._lock``. O(live ops * span depth) — both tiny in practice.
+        """
+        for op in self._ops.values():
+            sid: str | None = op.parent_span_id
+            while sid is not None:
+                if sid == span_id:
+                    return True
+                parent = self._spans.get(sid)
+                sid = parent.parent if parent is not None else None
+        return False
+
     def close_span(self, span_id: str) -> None:
         """Reclaim a finished span node so ``_spans`` can't grow O(iterations) in cyclic/LATS runs.
 
@@ -247,13 +271,8 @@ class MeterStore:
         with self._lock:
             if span_id not in self._spans:
                 return
-            for op in self._ops.values():
-                sid: str | None = op.parent_span_id
-                while sid is not None:
-                    if sid == span_id:
-                        return  # a live op sits under this span — keep it reachable
-                    parent = self._spans.get(sid)
-                    sid = parent.parent if parent is not None else None
+            if self._has_live_op_under(span_id):
+                return  # a live op sits under this span — keep it reachable
             # Keep it while any child span references it as parent: dropping it would orphan the
             # child, and the child's next op would _apply through the vanished parent. (The
             # open_span CM closes children first, so this only guards non-LIFO/public-API use.)

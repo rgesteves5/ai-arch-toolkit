@@ -128,6 +128,9 @@ class MeterScope:
     def for_span(self, span_id: str) -> MeterSnapshot:
         return self._store.for_span(span_id)
 
+    def has_live_ops(self, span_id: str) -> bool:
+        return self._store.has_live_ops(span_id)
+
     def close_span(self, span_id: str) -> None:
         return self._store.close_span(span_id)
 
