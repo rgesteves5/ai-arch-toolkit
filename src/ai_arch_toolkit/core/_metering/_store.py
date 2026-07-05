@@ -239,8 +239,8 @@ class MeterStore:
 
         Its counters already live in every ancestor (``_apply`` walks to the root on each op
         transition), so removing the node loses no accounting. Refuses to drop the run root, an
-        unknown span, or any span with a LIVE op still in its subtree — otherwise that op's later
-        settle/fail would ``_apply`` through a missing ancestor.
+        unknown span, any span with a LIVE op still in its subtree, or any span that still has a
+        CHILD span — otherwise a later ``_apply`` would climb through the missing node (KeyError).
         """
         if span_id == _RUN_SPAN:
             return
@@ -254,6 +254,11 @@ class MeterStore:
                         return  # a live op sits under this span — keep it reachable
                     parent = self._spans.get(sid)
                     sid = parent.parent if parent is not None else None
+            # Keep it while any child span references it as parent: dropping it would orphan the
+            # child, and the child's next op would _apply through the vanished parent. (The
+            # open_span CM closes children first, so this only guards non-LIFO/public-API use.)
+            if any(span.parent == span_id for span in self._spans.values()):
+                return
             del self._spans[span_id]
 
     def _snapshot_of(self, span: _Span) -> MeterSnapshot:

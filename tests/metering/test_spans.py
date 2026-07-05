@@ -64,12 +64,31 @@ def test_close_span_refuses_across_a_nested_span_chain():
     leaf = s.open_span("leaf", mid)
     op = s.open(llm_in(leaf), None)
     op.mark_started()  # live, under leaf, which is under mid
-    s.close_span(mid)  # must refuse — the walk leaf -> mid finds it
+    s.close_span(mid)  # must refuse — the walk leaf -> mid finds the live op
     assert s.for_span(mid).llm_calls == 1
     op.settle(usage=Usage(input_tokens=1), cost=Cost.known(Money.zero()))
-    s.close_span(mid)  # now safe to reclaim
+    s.close_span(mid)  # still refused — leaf (a child span) is under mid
+    assert s.for_span(mid).llm_calls == 1
+    s.close_span(leaf)  # close the child first (LIFO)
+    s.close_span(mid)  # now childless + op-less -> reclaimed
     with pytest.raises(ValueError):
         s.for_span(mid)
+
+
+def test_close_span_refuses_to_orphan_a_child_span():
+    # A parent span closed before its (op-less) child must NOT be dropped — else the child is
+    # orphaned and its next op _applys through the vanished parent (KeyError). Non-LIFO close.
+    s = store()
+    a = s.open_span("a", s.run_span_id)
+    b = s.open_span("b", a)  # child of a, no op yet
+    s.close_span(a)  # must refuse — a has a live child span
+    assert s.for_span(a).llm_calls == 0  # a is still reachable
+    settle(s.open(llm_in(b), None))  # an op under the child works — no KeyError in _apply
+    assert s.for_span(a).llm_calls == 1  # rolled up child -> a -> root
+    s.close_span(b)  # child now childless + op-less -> reclaimed
+    s.close_span(a)  # now safe
+    with pytest.raises(ValueError):
+        s.for_span(a)
 
 
 def test_close_span_ignores_the_run_root_and_unknown_ids():
