@@ -355,6 +355,10 @@ class RichStreamResponse:
         return self
 
     async def __aexit__(self, *args: Any) -> None:
+        # See StreamResponse.__aexit__: an exception-interrupted stream must NOT be settled as a
+        # clean success — leave the op STARTED so scope.close() marks it INCOMPLETE.
+        if args and args[0] is not None:
+            return
         if self._response is None:
             self._response = self._finalizer("".join(self._text_chunks))
 
@@ -390,5 +394,8 @@ class SyncRichStreamResponse:
         return self
 
     def __exit__(self, *args: Any) -> None:
+        # See StreamResponse.__aexit__: don't settle an exception-interrupted stream as a success.
+        if args and args[0] is not None:
+            return
         if self._response is None:
             self._response = self._finalizer("".join(self._text_chunks))

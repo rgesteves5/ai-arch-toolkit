@@ -10,7 +10,7 @@ from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._metering._scope import MeterScope, RunConfig
 from ai_arch_toolkit.core._policy import Policy
 from ai_arch_toolkit.core._providers._base import StreamState
-from ai_arch_toolkit.core._response import Response, Usage
+from ai_arch_toolkit.core._response import Response, StreamEvent, Usage
 from ai_arch_toolkit.core._state import State, StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._step_engine import execute_step
@@ -30,6 +30,15 @@ class FakeProvider:
 
         async def _aiter():
             yield "ok"
+
+        return _aiter(), state
+
+    def stream_events(self, messages, *, system=None, tools=None, **kwargs):
+        state = StreamState()
+        state.usage = Usage(input_tokens=12, output_tokens=4)
+
+        async def _aiter():
+            yield StreamEvent(kind="text", text="ok")
 
         return _aiter(), state
 
@@ -257,6 +266,19 @@ async def test_stream_context_manager_error_does_not_settle_as_success():
     with scope, pytest.raises(ValueError):
         async with llm.stream("hi") as s:
             async for _chunk in s:
+                raise ValueError("mid-stream boom")
+    snap = scope.snapshot()
+    assert snap.llm_calls == 1 and snap.unknown_cost_count == 1
+
+
+async def test_stream_events_context_manager_error_does_not_settle_as_success():
+    # Same invariant as the stream() N5 regression, for the RICH stream_events() variant — the
+    # original N5 fix missed RichStreamResponse/SyncRichStreamResponse.
+    llm = make_llm()
+    scope = MeterScope(RunConfig())
+    with scope, pytest.raises(ValueError):
+        async with llm.stream_events("hi") as s:
+            async for _ev in s:
                 raise ValueError("mid-stream boom")
     snap = scope.snapshot()
     assert snap.llm_calls == 1 and snap.unknown_cost_count == 1
