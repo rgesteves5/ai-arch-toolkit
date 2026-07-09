@@ -388,10 +388,27 @@ async def _execute_dag(
                 forked = state.fork()
                 tasks.append((name, fs, forked))
 
+            # Per-flow fan-out cap: bound how many of THIS flow's ready steps run at once.
+            # Per-flow (not global), so a nested flow has its own limit and this cannot
+            # deadlock. A no-op unless max_parallelism is set. Bound as a default arg so the
+            # closure captures this fan-out's own semaphore, not a later loop iteration's.
+            sem = (
+                asyncio.Semaphore(flow.max_parallelism)
+                if flow.max_parallelism is not None
+                else None
+            )
+
             async def _run_parallel(
-                name: str, fs: FlowStep, forked_state: State
+                name: str,
+                fs: FlowStep,
+                forked_state: State,
+                _sem: asyncio.Semaphore | None = sem,
             ) -> tuple[str, Result | None, StepTrace]:
-                r, st = await _execute_flow_step(fs, flow, forked_state)
+                if _sem is not None:
+                    async with _sem:
+                        r, st = await _execute_flow_step(fs, flow, forked_state)
+                else:
+                    r, st = await _execute_flow_step(fs, flow, forked_state)
                 return name, r, st
 
             gathered = await asyncio.gather(

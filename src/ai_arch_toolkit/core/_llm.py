@@ -8,6 +8,7 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any, ClassVar, Literal
 
+from ai_arch_toolkit.core._concurrency import inference_slot
 from ai_arch_toolkit.core._content import user
 from ai_arch_toolkit.core._exceptions import APIError
 from ai_arch_toolkit.core._metering._admission import AdmissionDenied, NotMeteredOperationError
@@ -363,7 +364,10 @@ class LLM:
                 op.mark_started()
             settled = False
             try:
-                response = await call()
+                # Leaf-level inference-concurrency slot (no-op unless inference_limit is
+                # active). Held only around the provider call — never across orchestration.
+                async with inference_slot():
+                    response = await call()
                 attempts.append(
                     Attempt(
                         model=model,

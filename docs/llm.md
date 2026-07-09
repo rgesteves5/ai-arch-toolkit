@@ -115,6 +115,25 @@ llm = LLM(
 
 ---
 
+## Limiting concurrent inference
+
+To cap how many `complete()` calls hit the model at once across a whole run
+(protecting a local GPU or staying under a provider's concurrency limit), wrap
+the run in `inference_limit(n)`:
+
+```python
+from ai_arch_toolkit import inference_limit
+
+with inference_limit(2):            # ≤ 2 concurrent inferences, across all nested agents
+    result = agent.run_sync(task)
+```
+
+It is a global, run-scoped, opt-in cap (default: unlimited). See
+[Concurrency & Throttling](concurrency.md) for the full model and how it differs
+from `Flow(max_parallelism=...)`.
+
+---
+
 ## Token counting
 
 Provider-accurate counts (may call the provider's token-counting endpoint):
