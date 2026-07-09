@@ -321,6 +321,14 @@ fetch_news   ──┘
 
 `fetch_weather` and `fetch_news` have no deps — they run **concurrently** via `asyncio.gather`. `summarize` waits for both.
 
+#### Bounding the fan-out width
+
+By default all ready steps run at once. Pass `Flow(..., max_parallelism=n)` to cap how many of *this flow's* steps run concurrently — useful to bound forked-state memory or to throttle parallel non-LLM work (tool/HTTP calls). It is **per-flow** (a nested flow has its own limit, so it never deadlocks), which is a different axis from the global, run-wide `inference_limit(n)` that caps concurrent LLM calls. See [Concurrency & Throttling](concurrency.md).
+
+```python
+flow = Flow(*many_steps, summarize, max_parallelism=5)  # ≤ 5 steps live at once
+```
+
 #### How parallel state works
 
 1. Independent steps get **forked** State (deep copy of current/operational/persistent, world shared)

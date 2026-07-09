@@ -119,6 +119,7 @@ class Flow:
         "_budget_policy",
         "_is_dag",
         "_max_iterations",
+        "_max_parallelism",
         "_name",
         "_policy",
         "_scope",
@@ -133,12 +134,16 @@ class Flow:
         budget_policy: BudgetPolicy | None = None,
         scope: Scope | None = None,
         max_iterations: int | None = None,
+        max_parallelism: int | None = None,
     ) -> None:
         self._name = name
         self._policy = policy
         self._budget_policy = budget_policy
         self._scope = scope
         self._max_iterations = max_iterations
+        if max_parallelism is not None and max_parallelism < 1:
+            raise ValueError(f"max_parallelism must be >= 1, got {max_parallelism}")
+        self._max_parallelism = max_parallelism
 
         # Normalize inputs to FlowSteps
         flow_steps: list[FlowStep] = []
@@ -217,6 +222,11 @@ class Flow:
     @property
     def max_iterations(self) -> int | None:
         return self._max_iterations
+
+    @property
+    def max_parallelism(self) -> int | None:
+        """Max steps of THIS flow that run concurrently in one fan-out (`None` = unbounded)."""
+        return self._max_parallelism
 
     async def run(
         self,

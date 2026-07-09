@@ -30,6 +30,20 @@ class _RaisingProvider:
         raise self._exc
 
 
+class _RaisingStreamProvider:
+    """Provider whose stream openers raise — to drive a denial *inside* the try block,
+    so the `except self._fallback_on` guard (not the pre-try `_open_stream_op`) is exercised."""
+
+    def __init__(self, exc: BaseException) -> None:
+        self._exc = exc
+
+    def stream(self, *a, **k):
+        raise self._exc
+
+    def stream_events(self, *a, **k):
+        raise self._exc
+
+
 class _OkProvider:
     async def complete(self, *a, **k) -> Response:
         return Response(
@@ -55,6 +69,14 @@ class _FakeFallback:
             raise self._raises
         assert self._response is not None
         return self._response
+
+    def stream(self, messages, **kwargs):
+        self.called = True
+        raise AssertionError("fallback stream must not be reached after a denial")
+
+    def stream_events(self, messages, **kwargs):
+        self.called = True
+        raise AssertionError("fallback stream_events must not be reached after a denial")
 
 
 def _real_llm(provider) -> LLM:
@@ -103,3 +125,28 @@ async def test_llm_moderator_reraises_a_budget_denial():
     scope = MeterScope(RunConfig(controller=BudgetController(BudgetPolicy(max_llm_calls=0))))
     with scope, pytest.raises(AdmissionDenied):
         await mod.moderate("some text")
+
+
+async def test_stream_fallback_does_not_mask_a_denial():
+    # A denial surfacing from the primary stream opener must escape the `except self._fallback_on`
+    # guard under a broad fallback_on — never masked by a healthy later fallback.
+    primary = _real_llm(_RaisingStreamProvider(_denial()))
+    healthy = _FakeFallback("fb", response=Response(text="MASKED", usage=Usage()))
+    primary._fallbacks = [healthy]  # type: ignore[assignment]
+    primary._fallback_on = (Exception,)  # type: ignore[assignment]
+
+    with pytest.raises(AdmissionDenied):
+        primary.stream("hi")
+    assert healthy.called is False  # short-circuited on the denial; no fallback stream tried
+
+
+async def test_stream_events_fallback_does_not_mask_a_denial():
+    # Same terminality contract for the stream_events path.
+    primary = _real_llm(_RaisingStreamProvider(_denial()))
+    healthy = _FakeFallback("fb", response=Response(text="MASKED", usage=Usage()))
+    primary._fallbacks = [healthy]  # type: ignore[assignment]
+    primary._fallback_on = (Exception,)  # type: ignore[assignment]
+
+    with pytest.raises(AdmissionDenied):
+        primary.stream_events("hi")
+    assert healthy.called is False

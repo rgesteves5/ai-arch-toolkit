@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from ai_arch_toolkit.core._batch import BatchRequest, BatchResult
+from ai_arch_toolkit.core._concurrency import inference_limit
 from ai_arch_toolkit.core._content import (
     CachePart,
     Content,
@@ -227,6 +228,7 @@ __all__ = [
     "execute_tool",
     "image",
     "infer_schema",
+    "inference_limit",
     "prepare_tools",
     "pricing",
     "redact",
