@@ -6,8 +6,8 @@
 
 A lightweight, unified LLM client for Anthropic, OpenAI, Gemini, and xAI — plus
 Flow orchestration, nine built-in agent architectures, a typed graph layer with
-agent memory, knowledge loading, and moderation. Zero core dependencies; bring
-your own provider SDK.
+agent memory, knowledge loading, moderation, budgets, and metering. Zero core
+dependencies; bring your own provider SDK.
 
 ## Why
 
@@ -19,7 +19,7 @@ your own provider SDK.
 
 ## Install
 
-The package is not on PyPI yet. Install directly from this repository:
+Install directly from this repository:
 
 ```bash
 uv add "git+https://github.com/rgesteves5/ai-arch-toolkit.git#egg=ai-arch-toolkit[openai]"
@@ -28,16 +28,22 @@ uv add "git+https://github.com/rgesteves5/ai-arch-toolkit.git#egg=ai-arch-toolki
 
 Pip works the same way. Extras:
 
-| Extra      | Pulls in                                              |
-| ---------- | ----------------------------------------------------- |
-| `anthropic`| `anthropic>=0.40`                                     |
-| `openai`   | `openai>=1.50`                                        |
-| `gemini`   | `google-genai>=1.0`                                   |
-| `xai`      | `xai-sdk>=1.7.0`                                      |
-| `graph`    | `networkx>=3.0` (required by graph + memory)          |
-| `tokens`   | `tiktoken>=0.7` (local token counting)                |
-| `yaml`     | `pyyaml>=6.0` (yaml knowledge loader)                 |
-| `all`      | Every provider plus every optional feature            |
+| Extra       | Pulls in                                              |
+| ----------- | ----------------------------------------------------- |
+| `anthropic` | `anthropic>=0.40`                                     |
+| `openai`    | `openai>=1.50`                                        |
+| `gemini`    | `google-genai>=1.0`                                   |
+| `xai`       | `xai-sdk>=1.7.0`                                      |
+| `graph`     | `networkx>=3.0` (required by graph + memory backends) |
+| `tokens`    | `tiktoken>=0.7` (local token counting)                |
+| `yaml`      | `pyyaml>=6.0` (YAML knowledge/config loaders)         |
+| `youtube`   | `youtube-transcript-api>=1.2.4`                       |
+| `all`       | Every provider plus every optional feature            |
+| `app`       | Reflex app support plus `graph,yaml`                  |
+| `bench`     | Inspect AI benchmark tooling                          |
+| `docs`      | MkDocs and pdoc                                       |
+| `telemetry` | OpenTelemetry API                                     |
+| `dev`       | Local test, lint, type-check, and provider deps       |
 
 API keys are read from `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`
 (or `GEMINI_API_KEY`), or `XAI_API_KEY` — copy `.env.example` to `.env` and
@@ -161,14 +167,15 @@ Each factory returns a `Flow` and has a matching `*_initial_state(task)` helper.
 ```
 ai_arch_toolkit/
 ├── core/        Stateless async-first foundation — LLM, providers, tools,
-│                graph, retry, middleware, pricing
-└── toolkit/     Convenience layer — Flow orchestration, 9 agent factories,
+│                graph, retry, middleware, pricing, metering, moderation
+└── toolkit/     Convenience layer — Flow orchestration, 9 agent factories
+                 under toolkit.agents, budget helpers,
                  pre-built tools, graph-backed memory, knowledge registry,
                  moderation
 ```
 
 For a deeper read, see [`docs/framework-overview.md`](docs/framework-overview.md)
-and the 36 runnable scripts under [`examples/`](examples/).
+and the 37 runnable scripts under [`examples/`](examples/).
 
 ## Documentation
 
