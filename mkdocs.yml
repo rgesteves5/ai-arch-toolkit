@@ -7,6 +7,7 @@ nav:
   - Home: index.md
   - Getting Started: getting-started.md
   - Framework Overview: framework-overview.md
+  - Code Style: code-style.md
   - Agents & Capabilities: agents-and-capabilities.md
   - Agent & ReasoningSpec: agents.md
   - Flow Architecture: flow-architecture.md

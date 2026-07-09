@@ -36,14 +36,17 @@ and behavior constraints.
 
 ### Reasoning Strategy
 
-The agent should support configurable reasoning modes using existing toolkit flows:
+The agent supports configurable reasoning modes using existing toolkit flows:
 
 - `react`
 - `plan_execute`
 - `reflexion`
 - `self_discovery`
 - `generate_review`
-- maybe later `llm_compiler`, `tot`, `lats`
+- `rewoo`
+- `llm_compiler`
+- `tot`
+- `lats`
 
 ### Tools
 
@@ -198,10 +201,13 @@ not be changed.
 
 - plain text input
 - multimodal input using existing `Content`
-- streaming events
-- structured output
+- structured output for supported strategies (`react` currently)
+- final `AgentRunResult`
+
+Planned but not wired yet:
+
+- streaming run events
 - artifact output
-- final response object
 
 ### Observability
 
@@ -260,13 +266,12 @@ override_policy:
 - Attach different tools depending on the role.
 - Give each agent private memory.
 - Run sync or async.
-- Stream progress/events.
 - Track cost and token usage.
-- Save/load agent state.
-- Export run history.
-- Support structured outputs.
+- Save/load private memory and terminal chat sessions.
+- Inspect the last run, trace, tool set, prompt, profiles, and cost in terminal chat.
+- Support structured outputs for `react`.
 - Support model fallback.
-- Support middleware/hooks before and after LLM calls.
+- Govern dangerous tools with explicit allow, dry-run behavior, and max tool-call limits.
 - Support evaluator/reviewer loops for higher quality answers.
 
 The clean boundary is:
@@ -330,6 +335,10 @@ Built-in capability profiles:
 Not implemented yet:
 
 - swarm/grid orchestration
+- generic agent-state persistence beyond private memory and chat sessions
+- exported run-history files beyond last-run terminal inspection
+- streamed `ConfigurableAgent.run()` progress events
+- config-driven middleware/hooks
 
 Example:
 
