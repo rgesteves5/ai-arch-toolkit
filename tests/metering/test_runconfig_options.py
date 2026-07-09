@@ -63,8 +63,9 @@ async def test_sink_error_policy_log_is_the_default():
 
 
 async def test_sink_error_policy_raise_propagates():
-    with MeterScope(RunConfig(sinks=[_BadSink()], sink_error_policy="raise")), pytest.raises(
-        RuntimeError
+    with (
+        MeterScope(RunConfig(sinks=[_BadSink()], sink_error_policy="raise")),
+        pytest.raises(RuntimeError),
     ):
         await _llm().complete("hi")
 
