@@ -1,8 +1,8 @@
 # Examples
 
-Thirty-six runnable scripts that walk through every public surface in the
-toolkit, from a one-line completion to a Tree-of-Thoughts agent with custom
-middleware. Each file is self-contained — pick a number, copy-paste, run.
+Thirty-seven runnable scripts that walk through the main public surfaces in the
+toolkit, from a one-line completion to budgets and metering. Each file is
+self-contained — pick a number, copy-paste, run.
 
 ## Run an example
 
@@ -12,9 +12,9 @@ set -a && source .env && set +a                  # load API keys (see .env.examp
 uv run python examples/01_hello_world.py
 ```
 
-Examples default to inexpensive models (`gpt-4.1-nano`, `claude-haiku-4-5`,
-etc.) — total cost to run the entire suite is well under $1 with current
-pricing.
+Many examples default to inexpensive models (`gpt-4.1-nano`,
+`claude-haiku-4-5`, etc.), but provider prices and model availability change.
+Check provider pricing before running the full set.
 
 API keys: each example states which provider it expects. Set the matching env
 var (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, or
@@ -45,7 +45,7 @@ The shortest path from zero to a working call, plus the basic building blocks.
 
 ### 🔧 Tools
 
-From hand-written tool dicts to the `@tool` decorator and the 25 pre-built
+From hand-written tool dicts to the `@tool` decorator and the 100+ pre-built
 toolkit tools.
 
 | # | File | What it shows | Key |
@@ -65,8 +65,8 @@ toolkit tools.
 
 ### 🤖 Agent flows
 
-All nine built-in agent architectures, plus tool / multimodal / structured
-output / middleware variants of ReAct.
+Eight numbered built-in agent architecture examples, plus tool / multimodal /
+structured output / middleware variants of ReAct.
 
 | # | File | Pattern | Key |
 |---|------|---------|-----|
@@ -83,8 +83,10 @@ output / middleware variants of ReAct.
 | 26 | [`26_self_discovery_agent.py`](26_self_discovery_agent.py) | Self-Discovery: select reasoning modules → adapt → solve | OpenAI |
 | 27 | [`27_llm_compiler_agent.py`](27_llm_compiler_agent.py) | LLMCompiler: plan DAG → parallel execute → join | OpenAI |
 
-> **Generate-Review flow** (`generate_review_flow`) isn't in the numbered
-> examples yet — see `tests/agents/flows/test_generate_review.py` for usage.
+> **Generate-Review flow** (`generate_review_flow`) is the ninth built-in agent
+> architecture. It isn't in the numbered examples yet — see
+> `tests/agents/flows/test_generate_review.py` and `docs/flow-architecture.md`
+> for usage.
 
 ### 🧠 Memory
 
@@ -115,6 +117,14 @@ Prompt-injectable reference data.
 | 34 | [`34_knowledge_registry.py`](34_knowledge_registry.py) | `KnowledgeRegistry`, categories, `as_context()` | None |
 | 35 | [`35_knowledge_loaders.py`](35_knowledge_loaders.py) | File and directory loaders (text, json, toml, yaml, markdown) | None |
 
+### 💰 Budgets & metering
+
+Measure what a run costs, and cap it.
+
+| # | File | What it shows | Key |
+|---|------|---------------|-----|
+| 37 | [`37_budgets_and_metering.py`](37_budgets_and_metering.py) | `result.meter`, `BudgetPolicy` (construction + per-run), `budget_scope`, event audit | OpenAI |
+
 ## Suggested reading order
 
 For a guided tour of the framework, walk the examples in this order rather
@@ -128,5 +138,6 @@ than strict numerical order:
 5. **Memory** — 28 → 29 → 30.
 6. **Compose your own flows** — 31, 32, 33.
 7. **Knowledge + reliability** — 34, 35, 22, 23, 36.
+8. **Budgets & cost** — 37 (measure a run, then cap it).
 
 For deep notes on examples 28–36, see [`EXAMPLES_REPORT.md`](EXAMPLES_REPORT.md).

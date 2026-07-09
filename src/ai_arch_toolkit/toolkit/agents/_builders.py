@@ -15,6 +15,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from ai_arch_toolkit.core._content import Content, user
 from ai_arch_toolkit.core._llm import LLM
+from ai_arch_toolkit.core._metering._admission import AdmissionDenied
 from ai_arch_toolkit.core._policy import Policy
 from ai_arch_toolkit.core._state import StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
@@ -153,13 +154,13 @@ def _build_completion(ctx: BuildContext) -> Flow:
         messages = snap.require("messages")
         try:
             response = await llm.complete(messages, system=system, **llm_kwargs)
+        except AdmissionDenied:
+            raise  # budget denial is terminal — the flow executor converts it to budget_exceeded
         except Exception as exc:
             return Result(error=str(exc))
         return Result(
             value=response,
             artifacts={"response": response, "answer": response.text},
-            usage=response.usage,
-            cost=response.cost or 0.0,
         )
 
     flow_policy = s.policy

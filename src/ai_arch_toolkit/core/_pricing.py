@@ -6,9 +6,18 @@ import logging
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+from ai_arch_toolkit.core._metering._cost import Cost
+from ai_arch_toolkit.core._metering._money import Money
+
+if TYPE_CHECKING:
+    from ai_arch_toolkit.core._metering._operation import OperationRequest
+    from ai_arch_toolkit.core._response import Usage
 
 logger = logging.getLogger(__name__)
+
+_MISS = object()  # sentinel: distinguishes "not cached" from a cached None (known-unpriced)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -45,6 +54,9 @@ class PricingRegistry:
 
     def __init__(self) -> None:
         self._models: dict[str, ModelPricing] = {}
+        # Memoize longest-prefix lookups: get() is on the settle hot path (once per LLM attempt),
+        # and a run reuses the same model string thousands of times. Cleared on any mutation.
+        self._cache: dict[str, ModelPricing | None] = {}
         self._load_defaults()
 
     def _load_defaults(self) -> None:
@@ -61,21 +73,27 @@ class PricingRegistry:
     def register(self, model_prefix: str, pricing: ModelPricing) -> None:
         """Register or override pricing for a model prefix."""
         self._models[model_prefix] = pricing
+        self._cache.clear()
 
     def unregister(self, model_prefix: str) -> None:
         """Remove pricing for a model prefix."""
         self._models.pop(model_prefix, None)
+        self._cache.clear()
 
     # ── Query ──
 
     def get(self, model: str) -> ModelPricing | None:
-        """Find pricing by longest prefix match. Returns None if unknown."""
+        """Find pricing by longest prefix match (memoized). Returns None if unknown."""
+        cached = self._cache.get(model, _MISS)
+        if cached is not _MISS:
+            return cached  # type: ignore[return-value]  # _MISS excluded above
         best: ModelPricing | None = None
         best_len = 0
         for prefix, p in self._models.items():
             if model.startswith(prefix) and len(prefix) > best_len:
                 best = p
                 best_len = len(prefix)
+        self._cache[model] = best
         return best
 
     def has(self, model: str) -> bool:
@@ -139,6 +157,32 @@ class PricingRegistry:
 
         return total
 
+    def price(self, request: OperationRequest, usage: Usage) -> Cost:
+        """Turn an operation's facts + observed usage into a typed :class:`Cost`.
+
+        The default :class:`~ai_arch_toolkit.core.Pricer`. A missing table entry yields
+        :meth:`Cost.unknown` — never a silent ``$0`` — so an unpriced call fails closed.
+        Provider-hosted server tools make the whole cost ``unknown`` because their charge is
+        not reflected in the token counts.
+        """
+        if request.kind != "llm":
+            return Cost.known(Money.zero())  # non-LLM ops carry no token cost here
+        if request.has_server_tools:
+            return Cost.unknown("provider-hosted server tools have unmetered cost")
+        model = request.model
+        if model is None:
+            return Cost.unknown("operation has no model to price")
+        usd = self.estimate_cost(
+            model,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cache_write_tokens=usage.cache_write_tokens,
+            cache_read_tokens=usage.cache_read_tokens,
+        )
+        if usd is None:
+            return Cost.unknown(f"no pricing for model {model!r}")
+        return Cost.known(Money.from_usd(usd))
+
     # ── Load ──
 
     def load(self, path: str | Path) -> None:
@@ -165,10 +209,12 @@ class PricingRegistry:
                     fast_input=values.get("fast_input"),
                     fast_output=values.get("fast_output"),
                 )
+        self._cache.clear()
 
     def reset(self) -> None:
         """Reset to shipped defaults, discarding all custom registrations."""
         self._models.clear()
+        self._cache.clear()
         self._load_defaults()
 
 

@@ -27,9 +27,7 @@ async def research(snap):
     return Result(
         value=response.text,
         artifacts={"key_points": response.text},
-        usage=response.usage,
-        cost=response.cost,
-    )
+    )  # no manual usage/cost — the run's meter captures it automatically
 
 
 async def draft(snap):
@@ -43,9 +41,7 @@ async def draft(snap):
     return Result(
         value=response.text,
         artifacts={"draft_text": response.text},
-        usage=response.usage,
-        cost=response.cost,
-    )
+    )  # no manual usage/cost — the run's meter captures it automatically
 
 
 async def review(snap):
@@ -59,9 +55,7 @@ async def review(snap):
     return Result(
         value=response.text,
         artifacts={"review": response.text},
-        usage=response.usage,
-        cost=response.cost,
-    )
+    )  # no manual usage/cost — the run's meter captures it automatically
 
 
 async def main():
@@ -82,12 +76,12 @@ async def main():
     print()
 
     async for event in flow.iter(state):
-        if event.type == "step_end" and event.result:
-            r = event.result
-            tokens = r.usage.input_tokens + r.usage.output_tokens if r.usage else 0
-            print(f"  [{event.step_name}] {tokens} tokens, ${r.cost:.4f}")
+        if event.type == "step_end":
+            print(f"  [{event.step_name}] done")
         elif event.type == "flow_end":
-            print(f"\n  Total cost: ${event.trace.total_cost:.4f}")
+            # The meter is the single source of truth for spend — read it off the trace metadata.
+            meter = event.trace.metadata["meter"]
+            print(f"\n  Total cost: ${meter['cost']:.4f}  ({meter['total_tokens']} tokens)")
             print(f"  Total duration: {event.trace.total_duration:.2f}s")
 
     # Final summary

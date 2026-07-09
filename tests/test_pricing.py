@@ -470,3 +470,27 @@ class TestModelPricingNone:
         assert p is not None
         assert p.cache_write is not None
         assert p.cache_read is not None
+
+
+class TestPricingCache:
+    """get() memoizes longest-prefix lookups and invalidates on every mutation (perf review #4)."""
+
+    def test_cache_returns_consistent_results(self):
+        reg = PricingRegistry()
+        assert reg.get("claude-sonnet-4-6-20260101") is reg.get("claude-sonnet-4-6-20260101")
+
+    def test_cache_invalidates_on_register_and_unregister(self):
+        reg = PricingRegistry()
+        model = "brand-new-model-xyz"
+        assert reg.get(model) is None  # caches the None (known-unpriced)
+        reg.register(model, ModelPricing(input=1.0, output=2.0))
+        assert reg.get(model) is not None  # cache cleared -> reflects the registration
+        reg.unregister(model)
+        assert reg.get(model) is None  # cleared again
+
+    def test_cache_invalidates_on_reset(self):
+        reg = PricingRegistry()
+        reg.register("temp-model-abc", ModelPricing(input=1.0, output=2.0))
+        assert reg.get("temp-model-abc") is not None
+        reg.reset()
+        assert reg.get("temp-model-abc") is None  # reset discarded it and cleared the cache

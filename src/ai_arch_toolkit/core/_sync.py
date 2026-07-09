@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import os
 import threading
@@ -62,14 +63,17 @@ def _run_sync[T](coro: Coroutine[Any, Any, T]) -> T:
         # No loop running — safe to use asyncio.run().
         return asyncio.run(coro)
 
-    # Loop already running — run in a separate thread.
+    # Loop already running — run in a separate thread. A fresh thread starts with an empty
+    # context, so copy the caller's and run inside it: ambient state (e.g. the metering scope's
+    # ContextVar) must reach the coroutine.
     result: T | None = None
     exc: BaseException | None = None
+    ctx = contextvars.copy_context()
 
     def _target() -> None:
         nonlocal result, exc
         try:
-            result = asyncio.run(coro)  # type: ignore[arg-type]
+            result = ctx.run(asyncio.run, coro)  # type: ignore[arg-type]
         except BaseException as e:
             exc = e
 
@@ -97,9 +101,13 @@ def _stream_sync[T](async_iterator_factory: Callable[[], AsyncIterator[T]]) -> I
             q.put(item)
         q.put(_SENTINEL)
 
+    # The drain always runs in a background thread; carry the caller's context (metering scope,
+    # etc.) into it so the streamed coroutine sees the same ambient state.
+    ctx = contextvars.copy_context()
+
     def _target() -> None:
         try:
-            asyncio.run(_drain())
+            ctx.run(asyncio.run, _drain())
         except BaseException as e:
             q.put(e)
             q.put(_SENTINEL)

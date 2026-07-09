@@ -222,3 +222,51 @@ class TestRoundtrip:
         # Verify tool result
         assert wire[2]["role"] == "tool"
         assert wire[2]["tool_call_id"] == "tc_1"
+
+
+# ---------------------------------------------------------------------------
+# Governance + metering (run_tools now routes through the gated/metered executor)
+# ---------------------------------------------------------------------------
+
+
+@tool(requires_approval=True)
+def deploy(target: str) -> str:
+    """Deploy to a target (requires approval)."""
+    return f"deployed to {target}"
+
+
+class TestRunToolsGovernance:
+    async def test_approval_gate_blocks_without_a_handler(self):
+        # The old run_tools ran this ungated — the bypass. Now the gate applies.
+        r = _make_response(ToolCall(id="tc_1", name="deploy", input={"target": "prod"}))
+        results = await run_tools(r, [deploy])
+        assert "deployed to prod" not in results[0]["content"]  # blocked, not executed
+
+    async def test_approval_handler_lets_it_run(self):
+        from ai_arch_toolkit.core._tools._approval import ApprovalDecision
+
+        def approve(_request):
+            return ApprovalDecision.approve(reviewer="human")
+
+        r = _make_response(ToolCall(id="tc_1", name="deploy", input={"target": "prod"}))
+        results = await run_tools(r, [deploy], approval_handler=approve)
+        assert results[0]["content"] == "deployed to prod"
+
+    async def test_run_tools_is_metered_under_a_scope(self):
+        from ai_arch_toolkit.core._metering._scope import MeterScope
+
+        r = _make_response(
+            ToolCall(id="tc_1", name="get_weather", input={"city": "NYC"}),
+            ToolCall(id="tc_2", name="get_time", input={"tz": "UTC"}),
+        )
+        with MeterScope() as scope:
+            await run_tools(r, [get_weather, get_time])
+        assert scope.snapshot().tool_calls == 2
+
+    def test_run_tools_sync_is_metered_under_a_scope(self):
+        from ai_arch_toolkit.core._metering._scope import MeterScope
+
+        r = _make_response(ToolCall(id="tc_1", name="get_weather", input={"city": "NYC"}))
+        with MeterScope() as scope:
+            run_tools_sync(r, [get_weather])
+        assert scope.snapshot().tool_calls == 1

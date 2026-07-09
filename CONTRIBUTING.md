@@ -57,6 +57,10 @@ error count is driven down), and `test` across Ubuntu and macOS on Python
 - Toolkit tools return error strings (never raise) so agents can recover
   gracefully.
 
+For the practical writing style — how code should look, how to structure
+docstrings/comments, and when to use classes vs functions — see
+[`docs/code-style.md`](docs/code-style.md).
+
 ## Adding a provider
 
 1. Add a class extending `BaseProvider` in `src/ai_arch_toolkit/core/_providers/_<name>.py`.

@@ -11,6 +11,7 @@ from ai_arch_toolkit.core._state import State, StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
 from ai_arch_toolkit.toolkit.agents.flows._react import react_flow, react_initial_state
+from ai_arch_toolkit.toolkit.budget import BudgetPolicy
 from ai_arch_toolkit.toolkit.flow._flow import Flow
 
 _DEFAULT_MODULES = (
@@ -50,6 +51,7 @@ def self_discovery_flow(
     ),
     timeout: float | None = None,
     policy: Policy | None = None,
+    budget_policy: BudgetPolicy | None = None,
     reasoning_llm: LLM | None = None,
     solver_llm: LLM | None = None,
     solver_tools: ToolGroup | None = None,
@@ -68,6 +70,7 @@ def self_discovery_flow(
         solve_system: System prompt for the solve phase.
         timeout: Overall timeout in seconds.
         policy: Optional execution policy.
+        budget_policy: Optional cumulative runtime budget for the flow.
         reasoning_llm: Override LLM for select/adapt/plan phases.
         solver_llm: Override LLM for the solve phase.
         solver_tools: Override tools for the solve phase.
@@ -89,8 +92,6 @@ def self_discovery_flow(
         return Result(
             value=response.text,
             artifacts={"selected_modules": response.text},
-            usage=response.usage,
-            cost=response.cost or 0.0,
         )
 
     async def adapt(snap: StateSnapshot) -> Result:
@@ -105,8 +106,6 @@ def self_discovery_flow(
         return Result(
             value=response.text,
             artifacts={"adapted_modules": response.text},
-            usage=response.usage,
-            cost=response.cost or 0.0,
         )
 
     async def operationalize(snap: StateSnapshot) -> Result:
@@ -121,8 +120,6 @@ def self_discovery_flow(
         return Result(
             value=response.text,
             artifacts={"reasoning_plan": response.text},
-            usage=response.usage,
-            cost=response.cost or 0.0,
         )
 
     async def solve(snap: StateSnapshot) -> Result:
@@ -145,7 +142,7 @@ def self_discovery_flow(
         )
 
         state = State(operational=react_initial_state(task))
-        result = await inner.run(state)
+        await inner.run(state)  # metered under the shared scope; no manual cost threading
 
         response = state.get("response")
         answer = response.text if response else ""
@@ -153,8 +150,6 @@ def self_discovery_flow(
         return Result(
             value=answer,
             artifacts={"answer": answer, "response": response},
-            usage=result.trace.total_usage,
-            cost=result.total_cost,
         )
 
     flow_policy = policy
@@ -168,6 +163,7 @@ def self_discovery_flow(
         Step(name="solve", fn=solve),
         name="self_discovery",
         policy=flow_policy,
+        budget_policy=budget_policy,
     )
 
 

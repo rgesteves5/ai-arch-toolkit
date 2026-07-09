@@ -189,7 +189,7 @@ class ConfigurableAgent:
             resolved_config_fingerprint=config.fingerprint,
             prompt_fingerprint=prompt.fingerprint,
             flow_result=flow_result,
-            usage=flow_result.trace.total_usage,
+            usage=flow_result.usage,  # meter-derived (single source of truth)
             cost=flow_result.total_cost,
             override_report=resolved.override_report,
             enabled_tools=tools.names,

@@ -6,10 +6,15 @@ import dataclasses
 import logging
 import time
 from collections.abc import Awaitable, Callable
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
+from ai_arch_toolkit.core._concurrency import inference_slot
 from ai_arch_toolkit.core._content import user
 from ai_arch_toolkit.core._exceptions import APIError
+from ai_arch_toolkit.core._metering._admission import AdmissionDenied, NotMeteredOperationError
+from ai_arch_toolkit.core._metering._cost import Cost
+from ai_arch_toolkit.core._metering._operation import MeterOperation, OperationRequest
+from ai_arch_toolkit.core._metering._scope import current_meter, current_span_id
 from ai_arch_toolkit.core._middleware import (
     Request,
     _run_aafter,
@@ -17,7 +22,7 @@ from ai_arch_toolkit.core._middleware import (
     _run_after,
     _run_before,
 )
-from ai_arch_toolkit.core._pricing import _estimate_response_cost
+from ai_arch_toolkit.core._pricing import _estimate_response_cost, pricing
 from ai_arch_toolkit.core._providers import _match_provider, create_provider
 from ai_arch_toolkit.core._response import (
     Attempt,
@@ -36,6 +41,23 @@ from ai_arch_toolkit.core._tools import prepare_tools
 from ai_arch_toolkit.core._tools._group import ToolGroup
 
 logger = logging.getLogger(__name__)
+
+
+def _price_or_unknown(pricer: Any, request: OperationRequest, usage: Usage) -> Cost:
+    """Price a settled call defensively. A raising or estimate-returning (foreign) pricer must not
+    turn a successful, already-served response into a failure — fall back to an unknown cost so the
+    op still settles (the store rejects estimates and would otherwise raise out of a success path).
+    """
+    try:
+        cost = pricer.price(request, usage)
+    except Exception:
+        logger.exception("pricer %r raised while pricing a settled call; using unknown", pricer)
+        return Cost.unknown("pricer raised")
+    if cost.kind == "estimated":
+        logger.warning("pricer %r returned an estimate at settle; recording unknown", pricer)
+        return Cost.unknown("pricer returned an estimate at settle")
+    return cost
+
 
 PROVIDER_ERRORS: tuple[type[Exception], ...] = (
     APIError,
@@ -122,6 +144,47 @@ def _wrap_rich_stream_with_attempts(
 
     stream._finalizer = _new_finalizer
     return stream
+
+
+def _content_chars(
+    normalized: list[dict[str, Any]],
+    system: str | None,
+    wire_tools: list[dict[str, Any]] | None,
+    output_schema: Any = None,
+) -> int:
+    """Rough char count of the whole request — a fact for the estimator (over-counts a bit).
+
+    Includes the output schema: it is sent to the model as input, so a large planning/analysis
+    schema meaningfully raises the input-token estimate for a strict reservation.
+    """
+    total = len(system) if system else 0
+    total += len(str(normalized))
+    if wire_tools:
+        total += len(str(wire_tools))
+    if output_schema is not None:
+        total += len(str(output_schema))
+    return total
+
+
+def _count_non_text_parts(normalized: list[dict[str, Any]]) -> int:
+    """Number of non-text content parts (images/documents) across all messages."""
+    count = 0
+    for msg in normalized:
+        content = msg.get("content")
+        if isinstance(content, list):
+            count += sum(
+                1
+                for part in content
+                if isinstance(part, dict) and part.get("type") not in (None, "text")
+            )
+    return count
+
+
+def _has_server_tools(wire_tools: list[dict[str, Any]] | None) -> bool:
+    """Whether any provider-hosted server tool (web_search / code_execution) is present."""
+    return bool(wire_tools) and any(
+        isinstance(t, dict) and t.get("_server_tool") for t in wire_tools
+    )
 
 
 class LLM:
@@ -282,15 +345,29 @@ class LLM:
         model: str,
         retry: RetryConfig | None,
         attempts: list[Attempt],
+        request: OperationRequest | None = None,
     ) -> Response:
-        """Execute *call* with optional retry, recording each attempt."""
+        """Execute *call* with optional retry, recording + metering each physical attempt."""
         retry_number = 0
 
         async def _tracked() -> Response:
             nonlocal retry_number
             t0 = time.time()
+            # One metered op per physical attempt, so retries count against max_llm_calls.
+            # open() may raise AdmissionDenied — terminal by design: with_retry treats it as
+            # non-retryable and it is not a PROVIDER_ERROR, so it never falls back.
+            scope = current_meter()
+            op: MeterOperation | None = (
+                scope.open(request) if scope is not None and request is not None else None
+            )
+            if op is not None:
+                op.mark_started()
+            settled = False
             try:
-                response = await call()
+                # Leaf-level inference-concurrency slot (no-op unless inference_limit is
+                # active). Held only around the provider call — never across orchestration.
+                async with inference_slot():
+                    response = await call()
                 attempts.append(
                     Attempt(
                         model=model,
@@ -301,6 +378,11 @@ class LLM:
                         retry_number=retry_number,
                     )
                 )
+                if op is not None and scope is not None and request is not None:
+                    pricer = scope.pricer or pricing
+                    cost = _price_or_unknown(pricer, request, response.usage)
+                    op.settle(usage=response.usage, cost=cost)
+                    settled = True
                 return response
             except Exception as exc:
                 attempts.append(
@@ -317,11 +399,95 @@ class LLM:
                 )
                 raise
             finally:
+                # Fail on ANY non-settled exit (incl. cancellation / BaseException) so a started
+                # op is never leaked until scope close; op.fail() is a no-op once settled.
+                if op is not None and not settled:
+                    op.fail()
                 retry_number += 1
 
         if retry:
             return await with_retry(_tracked, retry)
         return await _tracked()
+
+    def _meter_request(
+        self,
+        mode: Literal["complete", "stream"],
+        provider_kwargs: dict[str, Any],
+        *,
+        normalized: list[dict[str, Any]],
+        system: str | None,
+        wire_tools: list[dict[str, Any]] | None,
+    ) -> OperationRequest | None:
+        """Build the metering facts for an LLM call, or ``None`` when no scope is bound."""
+        scope = current_meter()
+        if scope is None:
+            return None
+        # The content-size hint is consumed ONLY by a strict-reserve estimator. Computing it
+        # stringifies the whole request (every message, every base64 image) — so skip it unless the
+        # bound controller says it wants it. Measure-only and soft-budget runs (the common case)
+        # never read it. A controller without a callable wants_request_size gets the hint (safe).
+        controller = scope.controller
+        if controller is None:
+            wants_size = False
+        else:
+            wants = getattr(controller, "wants_request_size", None)
+            wants_size = wants() if callable(wants) else True
+        schema = provider_kwargs.get("output_schema")
+        return OperationRequest(
+            kind="llm",
+            parent_span_id=current_span_id() or scope.run_span_id,
+            mode=mode,
+            model=self._model,
+            declared_max_output_tokens=provider_kwargs.get("max_tokens"),
+            content_size_hint=(
+                _content_chars(normalized, system, wire_tools, schema) if wants_size else None
+            ),
+            non_text_parts=_count_non_text_parts(normalized) if wants_size else 0,
+            has_server_tools=_has_server_tools(wire_tools),
+        )
+
+    def _open_stream_op(
+        self,
+        provider_kwargs: dict[str, Any],
+        *,
+        normalized: list[dict[str, Any]],
+        system: str | None,
+        wire_tools: list[dict[str, Any]] | None,
+    ) -> tuple[MeterOperation, OperationRequest, Any] | None:
+        """Open + start a metered op for one stream attempt; ``None`` when unmetered.
+
+        Returns the handle, its request, and the pricer to settle with. ``AdmissionDenied`` from
+        ``open`` propagates (terminal — the stream never starts). The handle carries the store
+        reference, so the finalizer can settle from any thread without re-binding the scope.
+        """
+        request = self._meter_request(
+            "stream", provider_kwargs, normalized=normalized, system=system, wire_tools=wire_tools
+        )
+        scope = current_meter()
+        if scope is None or request is None:
+            return None
+        op = scope.open(request)
+        op.mark_started()
+        return op, request, scope.pricer or pricing
+
+    @staticmethod
+    def _settling_finalizer(
+        inner: Callable[[str], Response],
+        op: MeterOperation,
+        request: OperationRequest,
+        pricer: Any,
+    ) -> Callable[[str], Response]:
+        """Wrap a stream finalizer so it settles the meter op with the streamed usage."""
+
+        def _finalize(text: str) -> Response:
+            resp = inner(text)
+            # A stream abandoned before full drain was already failed (unknown cost) by its early
+            # exit — a settle here would replay over the terminal op and warn. Return the partial.
+            if not op.abandoned:
+                op.settle(usage=resp.usage, cost=_price_or_unknown(pricer, request, resp.usage))
+            return resp
+
+        return _finalize
 
     async def _try_fallbacks(
         self,
@@ -341,6 +507,8 @@ class LLM:
                 attempts.extend(response.attempts)
                 return response
             except self._fallback_on as exc:
+                if isinstance(exc, AdmissionDenied):
+                    raise  # budget/admission denial is terminal — never masked by a later fallback
                 last_exc = exc
         raise last_exc
 
@@ -398,11 +566,22 @@ class LLM:
                 normalized, system=system, tools=wire_tools, **provider_kwargs
             )
 
+        meter_request = self._meter_request(
+            "complete",
+            provider_kwargs,
+            normalized=normalized,
+            system=system,
+            wire_tools=wire_tools,
+        )
         attempts: list[Attempt] = []
 
         try:
-            response = await self._try_with_tracking(_call, self._model, self._retry, attempts)
+            response = await self._try_with_tracking(
+                _call, self._model, self._retry, attempts, meter_request
+            )
         except self._fallback_on as primary_err:
+            if isinstance(primary_err, AdmissionDenied):
+                raise  # terminal: never fall back after a budget/admission denial
             if not self._fallbacks:
                 raise
             response = await self._try_fallbacks(
@@ -495,6 +674,9 @@ class LLM:
             wire_tools = req.tools
             provider_kwargs = req.kwargs
 
+        meter = self._open_stream_op(  # AdmissionDenied here is terminal
+            provider_kwargs, normalized=normalized, system=system, wire_tools=wire_tools
+        )
         attempts: list[Attempt] = []
         t0 = time.time()
 
@@ -512,6 +694,10 @@ class LLM:
                 )
             )
         except self._fallback_on as exc:
+            if meter is not None:
+                meter[0].fail()  # the attempt failed before streaming could start
+            if isinstance(exc, AdmissionDenied):
+                raise  # terminal: never fall back after a budget/admission denial
             attempts.append(
                 Attempt(
                     model=self._model,
@@ -566,6 +752,8 @@ class LLM:
                         wrapped._finalizer = _mw_fb_finalize
                     return wrapped
                 except self._fallback_on as fb_exc:
+                    if isinstance(fb_exc, AdmissionDenied):
+                        raise  # terminal: never fall back after a budget/admission denial
                     attempts.append(
                         Attempt(
                             model=fb._model,
@@ -587,6 +775,8 @@ class LLM:
             return dataclasses.replace(resp, attempts=tuple(parent_attempts))
 
         actual_finalizer = _attempt_finalizer
+        if meter is not None:  # settle the meter op when the stream drains (usage now known)
+            actual_finalizer = self._settling_finalizer(actual_finalizer, *meter)
 
         if self._middleware and req is not None:
             inner_finalizer = actual_finalizer
@@ -599,6 +789,10 @@ class LLM:
 
             actual_finalizer = _mw_finalize
 
+        if meter is not None:
+            # Attach the op so the stream can fail it closed if abandoned before it fully drains
+            # (a partial usage must not be settled as a clean success).
+            actual_finalizer._meter_op = meter[0]  # type: ignore[attr-defined]
         return StreamResponse(aiter, actual_finalizer)
 
     def stream_events(
@@ -647,6 +841,9 @@ class LLM:
             wire_tools = req.tools
             provider_kwargs = req.kwargs
 
+        meter = self._open_stream_op(  # AdmissionDenied here is terminal
+            provider_kwargs, normalized=normalized, system=system, wire_tools=wire_tools
+        )
         attempts: list[Attempt] = []
         t0 = time.time()
 
@@ -664,6 +861,10 @@ class LLM:
                 )
             )
         except self._fallback_on as exc:
+            if meter is not None:
+                meter[0].fail()  # the attempt failed before streaming could start
+            if isinstance(exc, AdmissionDenied):
+                raise  # terminal: never fall back after a budget/admission denial
             attempts.append(
                 Attempt(
                     model=self._model,
@@ -716,6 +917,8 @@ class LLM:
                         wrapped._finalizer = _mw_fb_finalize
                     return wrapped
                 except self._fallback_on as fb_exc:
+                    if isinstance(fb_exc, AdmissionDenied):
+                        raise  # terminal: never fall back after a budget/admission denial
                     attempts.append(
                         Attempt(
                             model=fb._model,
@@ -737,6 +940,8 @@ class LLM:
             return dataclasses.replace(resp, attempts=tuple(parent_attempts))
 
         actual_finalizer = _attempt_finalizer
+        if meter is not None:  # settle the meter op when the stream drains (usage now known)
+            actual_finalizer = self._settling_finalizer(actual_finalizer, *meter)
 
         if self._middleware and req is not None:
             inner_finalizer = actual_finalizer
@@ -749,6 +954,10 @@ class LLM:
 
             actual_finalizer = _mw_finalize
 
+        if meter is not None:
+            # Attach the op so the stream can fail it closed if abandoned before it fully drains
+            # (a partial usage must not be settled as a clean success).
+            actual_finalizer._meter_op = meter[0]  # type: ignore[attr-defined]
         return RichStreamResponse(aiter, actual_finalizer)
 
     def stream_events_sync(
@@ -795,8 +1004,23 @@ class LLM:
     # Batch API
     # ------------------------------------------------------------------
 
+    def _reject_batch_under_enforcement(self) -> None:
+        """Batch bypasses per-attempt metering; refuse it inside an enforcing budget (fail-closed).
+
+        Measure-only (``controller=None``) and unmetered runs are unaffected — batch simply is
+        not metered there (a documented gap, reconciled post-hoc from provider records).
+        """
+        scope = current_meter()
+        if scope is not None and scope.controller is not None and not scope.allow_unmetered_batch:
+            raise NotMeteredOperationError(
+                "batch operations bypass per-attempt metering and are not allowed under an "
+                "enforcing budget; use complete()/stream(), set RunConfig.allow_unmetered_batch, "
+                "or run the batch without a controller"
+            )
+
     async def batch_submit(self, requests: list[dict[str, Any]]) -> str:
         """Submit a batch of requests. Returns a batch ID."""
+        self._reject_batch_under_enforcement()
         return await self._provider.batch_submit(requests)
 
     async def batch_status(self, batch_id: str) -> str:

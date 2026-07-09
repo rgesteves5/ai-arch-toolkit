@@ -5,15 +5,15 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from ai_arch_toolkit.core._budget import BudgetExceeded, BudgetPolicy, BudgetState
 from ai_arch_toolkit.core._content import Content, tool_result, user
 from ai_arch_toolkit.core._llm import LLM
+from ai_arch_toolkit.core._metering._admission import AdmissionDenied
 from ai_arch_toolkit.core._policy import Policy
-from ai_arch_toolkit.core._response import Usage
 from ai_arch_toolkit.core._state import StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
 from ai_arch_toolkit.core._tools._result import ToolResult
+from ai_arch_toolkit.toolkit.budget import BudgetPolicy
 from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowStep
 
 
@@ -57,15 +57,8 @@ def react_flow(
     async def llm_call(snap: StateSnapshot) -> Result:
         """Call LLM with current messages and tools."""
         messages: list[dict[str, Any]] = snap.require("messages")
-        total_usage: Usage = snap.get("total_usage", Usage())
         turn: int = snap.get("turn", 0) + 1
         is_final = turn >= max_iterations
-        budget_state = _budget_state_from_snapshot(snap)
-        if budget_state is not None:
-            try:
-                budget_state.check_llm_calls()
-            except BudgetExceeded as exc:
-                return _budget_exceeded_result(exc, budget_state)
 
         call_messages = list(messages)
 
@@ -90,17 +83,10 @@ def react_flow(
                 tools=call_tools,
                 **extra_kwargs,
             )
+        except AdmissionDenied:
+            raise  # budget denial is terminal — the flow executor converts it
         except Exception as exc:
             return Result(error=str(exc))
-
-        new_usage = Usage(
-            input_tokens=total_usage.input_tokens + response.usage.input_tokens,
-            output_tokens=total_usage.output_tokens + response.usage.output_tokens,
-            cache_write_tokens=(
-                total_usage.cache_write_tokens + response.usage.cache_write_tokens
-            ),
-            cache_read_tokens=(total_usage.cache_read_tokens + response.usage.cache_read_tokens),
-        )
 
         return Result(
             value=response,
@@ -108,24 +94,14 @@ def react_flow(
                 "response": response,
                 "has_tool_calls": response.has_tool_calls,
                 "needs_llm_call": False,
-                "total_usage": new_usage,
                 "turn": turn,
-                "budget_llm_calls": 1,
             },
-            usage=response.usage,
-            cost=response.cost or 0.0,
         )
 
     async def execute_tools(snap: StateSnapshot) -> Result:
         """Execute tool calls from the LLM response."""
         response = snap.require("response")
         messages: list[dict[str, Any]] = snap.require("messages")
-        budget_state = _budget_state_from_snapshot(snap)
-        if budget_state is not None:
-            try:
-                budget_state.check_tool_calls(len(response.tool_calls))
-            except BudgetExceeded as exc:
-                return _budget_exceeded_result(exc, budget_state)
 
         tool_result_dicts: list[dict[str, Any]] = []
         structured_results: list[ToolResult] = []
@@ -135,6 +111,8 @@ def react_flow(
             async def _safe_execute(tc: Any) -> ToolResult:
                 try:
                     result = await tools.async_execute(tc)
+                except AdmissionDenied:
+                    raise
                 except Exception as exc:
                     return ToolResult.failure(
                         "runtime_error",
@@ -146,8 +124,17 @@ def react_flow(
                     return result
                 return ToolResult.success(result)
 
-            results = await asyncio.gather(*[_safe_execute(tc) for tc in response.tool_calls])
-            for tc, result in zip(response.tool_calls, results, strict=True):
+            # return_exceptions=True so a mid-batch AdmissionDenied lets the siblings FINISH (their
+            # ops settle — no STARTED-op leak) before we re-raise the terminal denial.
+            raw = await asyncio.gather(
+                *[_safe_execute(tc) for tc in response.tool_calls], return_exceptions=True
+            )
+            checked: list[ToolResult] = []
+            for r in raw:
+                if isinstance(r, BaseException):
+                    raise r  # AdmissionDenied surfaces after every sibling has completed
+                checked.append(r)
+            for tc, result in zip(response.tool_calls, checked, strict=True):
                 structured_results.append(result)
                 tool_result_dicts.append(
                     tool_result(result.to_model_text(), tool_use_id=tc.id, name=tc.name)
@@ -156,6 +143,8 @@ def react_flow(
             for tc in response.tool_calls:
                 try:
                     result = await tools.async_execute(tc)
+                except AdmissionDenied:
+                    raise
                 except Exception as exc:
                     result = ToolResult.failure(
                         "runtime_error",
@@ -179,7 +168,6 @@ def react_flow(
                 "has_tool_calls": False,
                 "needs_llm_call": True,
                 "tool_results": structured_results,
-                "budget_tool_calls": len(response.tool_calls),
             },
         )
 
@@ -212,21 +200,4 @@ def react_initial_state(task: Content) -> dict[str, Any]:
     return {
         "messages": [user(task)],
         "has_tool_calls": False,
-        "total_usage": Usage(),
     }
-
-
-def _budget_state_from_snapshot(snap: StateSnapshot) -> BudgetState | None:
-    value = snap.get("budget_state")
-    return value if isinstance(value, BudgetState) else None
-
-
-def _budget_exceeded_result(exc: BudgetExceeded, budget_state: BudgetState) -> Result:
-    exceeded = budget_state.with_exceeded(exc)
-    return Result(
-        error=str(exc),
-        artifacts={
-            "budget_exceeded": exc.to_dict(),
-            "budget_state": exceeded,
-        },
-    )

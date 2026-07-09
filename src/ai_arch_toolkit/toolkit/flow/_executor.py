@@ -7,28 +7,48 @@ import time
 from collections.abc import AsyncIterator
 from typing import Any
 
-from ai_arch_toolkit.core._budget import BudgetExceeded, BudgetState
+from ai_arch_toolkit.core._metering._admission import AdmissionDenied
+from ai_arch_toolkit.core._metering._scope import (
+    MeterScope,
+    RunConfig,
+    bind_meter,
+    current_meter,
+)
 from ai_arch_toolkit.core._state import State, StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._step_engine import execute_step
 from ai_arch_toolkit.core._trace import StepTrace, Trace
-from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowEvent, FlowResult, FlowStep
+from ai_arch_toolkit.toolkit.budget import BudgetController, BudgetPolicy, BudgetReport
+from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowEvent, FlowResult, FlowStep, _scope_report
 from ai_arch_toolkit.toolkit.flow._scope import apply_scope
 
 
-async def execute_flow(flow: Flow, state: State) -> FlowResult:
+async def execute_flow(
+    flow: Flow,
+    state: State,
+    *,
+    budget_policy: BudgetPolicy | None = None,
+    config: RunConfig | None = None,
+) -> FlowResult:
     """Execute a Flow, choosing DAG or sequential mode."""
     t0 = time.monotonic()
     traces: list[StepTrace] = []
     results: dict[str, Result] = {}
-    _ensure_budget(flow, state)
     initial_state = state.to_dict()
+    scope, owned = _open_meter_scope(flow, state, budget_policy, config)
 
-    if flow.is_dag:
-        await _execute_dag(flow, state, traces, results)
-    else:
-        await _execute_sequential(flow, state, traces, results)
-
+    try:
+        if flow.is_dag:
+            await _execute_dag(flow, state, traces, results)
+        else:
+            await _execute_sequential(flow, state, traces, results)
+    except AdmissionDenied as exc:
+        if not owned:
+            raise  # nested flow: let the owning (outermost) flow convert it, once, at the top
+        _append_denial(exc, state, traces, results)  # a hard mid-step budget denial
+    finally:
+        if owned:  # finalize even on an unexpected error, so STARTED ops don't leak
+            scope.close()
     trace = Trace(
         flow_name=flow.name,
         steps=tuple(traces),
@@ -39,23 +59,40 @@ async def execute_flow(flow: Flow, state: State) -> FlowResult:
     return FlowResult(state=state, trace=trace, results=results)
 
 
-async def iter_flow(flow: Flow, state: State) -> AsyncIterator[FlowEvent]:
+async def iter_flow(
+    flow: Flow,
+    state: State,
+    *,
+    budget_policy: BudgetPolicy | None = None,
+    config: RunConfig | None = None,
+) -> AsyncIterator[FlowEvent]:
     """Stream events during flow execution."""
     t0 = time.monotonic()
     traces: list[StepTrace] = []
     results: dict[str, Result] = {}
-    _ensure_budget(flow, state)
     initial_state = state.to_dict()
+    scope, owned = _open_meter_scope(flow, state, budget_policy, config)
 
     yield FlowEvent(type="flow_start", flow_name=flow.name)
 
-    if flow.is_dag:
-        async for event in _iter_dag(flow, state, traces, results):
-            yield event
-    else:
-        async for event in _iter_sequential(flow, state, traces, results):
-            yield event
-
+    try:
+        if flow.is_dag:
+            async for event in _iter_dag(flow, state, traces, results):
+                yield event
+        else:
+            async for event in _iter_sequential(flow, state, traces, results):
+                yield event
+    except AdmissionDenied as exc:
+        if not owned:
+            raise  # nested flow: the owning (outermost) flow converts it once, at the top
+        _append_denial(exc, state, traces, results)
+        yield FlowEvent(
+            type="policy_decision", flow_name=flow.name, policy_decision="budget_exceeded"
+        )
+    finally:
+        # Runs on GeneratorExit too — if the consumer abandons the stream, still finalize.
+        if owned:
+            scope.close()
     trace = Trace(
         flow_name=flow.name,
         steps=tuple(traces),
@@ -81,14 +118,14 @@ async def _execute_sequential(
     if not has_conditions:
         # Pure sequential — single pass
         for fs in flow.steps:
-            if _append_budget_precheck_trace(flow, state, traces, results):
+            if _halt_if_over_budget(state, traces, results):
                 break
             result, step_trace = await _execute_flow_step(fs, flow, state)
             traces.append(step_trace)
             if result is not None:
                 results[fs.step.name] = result
                 state.merge(result)
-                if _record_budget_after_result(state, result, traces, results):
+                if _halt_if_over_budget(state, traces, results):
                     break
                 if result.is_error and _should_halt(result, fs):
                     break
@@ -98,7 +135,7 @@ async def _execute_sequential(
         while max_iter is None or iteration < max_iter:
             any_executed = False
             for fs in flow.steps:
-                if _append_budget_precheck_trace(flow, state, traces, results):
+                if _halt_if_over_budget(state, traces, results):
                     return
                 snapshot = state.snapshot()
                 scoped = _resolve_and_apply_scope(snapshot, fs, flow)
@@ -127,13 +164,15 @@ async def _execute_sequential(
                         )
                         continue
 
-                result, step_trace = await _run_step_with_scope(fs.step, scoped)
+                result, step_trace = await _run_step_with_scope(
+                    fs.step, scoped, _meter_scope(state)
+                )
                 traces.append(step_trace)
                 any_executed = True
                 if result is not None:
                     results[fs.step.name] = result
                     state.merge(result)
-                    if _record_budget_after_result(state, result, traces, results):
+                    if _halt_if_over_budget(state, traces, results):
                         return
                     if result.is_error and _should_halt(result, fs):
                         return
@@ -154,7 +193,7 @@ async def _iter_sequential(
 
     if not has_conditions:
         for fs in flow.steps:
-            if _append_budget_precheck_trace(flow, state, traces, results):
+            if _halt_if_over_budget(state, traces, results):
                 break
             yield FlowEvent(type="step_start", flow_name=flow.name, step_name=fs.step.name)
             result, step_trace = await _execute_flow_step(fs, flow, state)
@@ -169,7 +208,7 @@ async def _iter_sequential(
                 if result is not None:
                     results[fs.step.name] = result
                     state.merge(result)
-                    if _record_budget_after_result(state, result, traces, results):
+                    if _halt_if_over_budget(state, traces, results):
                         yield FlowEvent(
                             type="policy_decision",
                             flow_name=flow.name,
@@ -189,7 +228,7 @@ async def _iter_sequential(
         while max_iter is None or iteration < max_iter:
             any_executed = False
             for fs in flow.steps:
-                if _append_budget_precheck_trace(flow, state, traces, results):
+                if _halt_if_over_budget(state, traces, results):
                     yield FlowEvent(
                         type="policy_decision",
                         flow_name=flow.name,
@@ -234,13 +273,15 @@ async def _iter_sequential(
                         continue
 
                 yield FlowEvent(type="step_start", flow_name=flow.name, step_name=fs.step.name)
-                result, step_trace = await _run_step_with_scope(fs.step, scoped)
+                result, step_trace = await _run_step_with_scope(
+                    fs.step, scoped, _meter_scope(state)
+                )
                 traces.append(step_trace)
                 any_executed = True
                 if result is not None:
                     results[fs.step.name] = result
                     state.merge(result)
-                    if _record_budget_after_result(state, result, traces, results):
+                    if _halt_if_over_budget(state, traces, results):
                         yield FlowEvent(
                             type="policy_decision",
                             flow_name=flow.name,
@@ -320,7 +361,7 @@ async def _execute_dag(
 
         if len(to_execute) == 1:
             # Single step — execute directly on state
-            if _append_budget_precheck_trace(flow, state, traces, results):
+            if _halt_if_over_budget(state, traces, results):
                 break
             name = to_execute[0]
             fs = step_map[name]
@@ -329,7 +370,7 @@ async def _execute_dag(
             if result is not None:
                 results[name] = result
                 state.merge(result)
-                if _record_budget_after_result(state, result, traces, results):
+                if _halt_if_over_budget(state, traces, results):
                     break
                 if result.is_error:
                     failed.add(name)
@@ -347,10 +388,27 @@ async def _execute_dag(
                 forked = state.fork()
                 tasks.append((name, fs, forked))
 
+            # Per-flow fan-out cap: bound how many of THIS flow's ready steps run at once.
+            # Per-flow (not global), so a nested flow has its own limit and this cannot
+            # deadlock. A no-op unless max_parallelism is set. Bound as a default arg so the
+            # closure captures this fan-out's own semaphore, not a later loop iteration's.
+            sem = (
+                asyncio.Semaphore(flow.max_parallelism)
+                if flow.max_parallelism is not None
+                else None
+            )
+
             async def _run_parallel(
-                name: str, fs: FlowStep, forked_state: State
+                name: str,
+                fs: FlowStep,
+                forked_state: State,
+                _sem: asyncio.Semaphore | None = sem,
             ) -> tuple[str, Result | None, StepTrace]:
-                r, st = await _execute_flow_step(fs, flow, forked_state)
+                if _sem is not None:
+                    async with _sem:
+                        r, st = await _execute_flow_step(fs, flow, forked_state)
+                else:
+                    r, st = await _execute_flow_step(fs, flow, forked_state)
                 return name, r, st
 
             gathered = await asyncio.gather(
@@ -360,10 +418,14 @@ async def _execute_dag(
 
             parallel_results: list[Result] = []
             for item in gathered:
+                if isinstance(item, AdmissionDenied):
+                    # A budget denial is terminal — surface it to execute_flow's handler
+                    # (swallowing it would leave the node un-marked and loop forever).
+                    raise item
                 if isinstance(item, BaseException):
-                    # Should not happen since execute_step catches exceptions,
-                    # but handle gracefully
-                    continue
+                    # A step never raises anything else — execute_step converts errors to
+                    # Result(error=...) — but stay defensive rather than mask a real bug.
+                    raise item
                 name, result, step_trace = item
                 traces.append(step_trace)
                 if result is not None:
@@ -380,9 +442,8 @@ async def _execute_dag(
 
             if parallel_results:
                 state.merge(*parallel_results)
-                for result in parallel_results:
-                    if _record_budget_after_result(state, result, traces, results):
-                        return
+                if _halt_if_over_budget(state, traces, results):
+                    return
 
 
 async def _iter_dag(
@@ -441,7 +502,7 @@ async def _iter_dag(
                 continue
 
             yield FlowEvent(type="step_start", flow_name=flow.name, step_name=name)
-            if _append_budget_precheck_trace(flow, state, traces, results):
+            if _halt_if_over_budget(state, traces, results):
                 yield FlowEvent(
                     type="policy_decision",
                     flow_name=flow.name,
@@ -453,7 +514,7 @@ async def _iter_dag(
             if result is not None:
                 results[name] = result
                 state.merge(result)
-                if _record_budget_after_result(state, result, traces, results):
+                if _halt_if_over_budget(state, traces, results):
                     yield FlowEvent(
                         type="policy_decision",
                         flow_name=flow.name,
@@ -485,14 +546,19 @@ async def _execute_flow_step(
     """Execute a single FlowStep, applying scope and delegating to step engine."""
     snapshot = state.snapshot()
     scoped = _resolve_and_apply_scope(snapshot, fs, flow)
-    return await _run_step_with_scope(fs.step, scoped)
+    return await _run_step_with_scope(fs.step, scoped, _meter_scope(state))
 
 
 async def _run_step_with_scope(
-    step: Step, scoped_snapshot: StateSnapshot
+    step: Step, scoped_snapshot: StateSnapshot, scope: MeterScope | None
 ) -> tuple[Result, StepTrace]:
-    """Run step engine with an already-scoped snapshot."""
-    return await execute_step(step, scoped_snapshot)
+    """Run the step engine, binding the run's meter around it (every path funnels through here).
+
+    Bound only around the step's execution — never across an ``iter_flow`` event yield — so a
+    step's LLM/tool calls are metered under the run scope, without a cross-context token reset.
+    """
+    with bind_meter(scope):
+        return await execute_step(step, scoped_snapshot)
 
 
 def _resolve_and_apply_scope(snapshot: Any, fs: FlowStep, flow: Flow) -> Any:
@@ -531,91 +597,113 @@ def _should_halt(result: Result, fs: FlowStep) -> bool:
     return policy.on_exhausted == "halt"
 
 
-def _ensure_budget(flow: Flow, state: State) -> None:
-    if flow.budget_policy is None or isinstance(state.get("budget_state"), BudgetState):
-        return
-    state.set("budget_state", BudgetState.start(flow.budget_policy))
+def _open_meter_scope(
+    flow: Flow,
+    state: State,
+    override: BudgetPolicy | None = None,
+    config: RunConfig | None = None,
+) -> tuple[MeterScope, bool]:
+    """Bind the run's meter, inheriting an enclosing scope so nested flows share one budget.
+
+    Returns ``(scope, owned)``; only the outermost flow that created the scope closes it. The
+    scope enforces when a budget is set (via its controller), else it is measure-only. A per-run
+    ``config`` (full :class:`RunConfig`, for sinks/pricer/etc.) takes precedence over a per-run
+    ``override`` budget, which takes precedence over the construction-time ``budget_policy``; all
+    are ignored when a scope is inherited (a nested flow shares its owner's one cumulative
+    budget). Stored in the ``world`` layer — shared by reference across ``State.fork()`` (DAG
+    branches), since the meter holds a ``threading.Lock`` a deep copy would choke on.
+    """
+    inherited = current_meter()
+    if inherited is not None:
+        state.set("_meter_scope", inherited, layer="world")
+        return inherited, False
+    if config is not None:
+        scope = MeterScope(config)
+    else:
+        policy = override if override is not None else flow.budget_policy
+        ctl = BudgetController(policy) if policy is not None and not policy.is_empty else None
+        scope = MeterScope(RunConfig(controller=ctl))
+    state.set("_meter_scope", scope, layer="world")
+    return scope, True
 
 
-def _budget_state(state: State) -> BudgetState | None:
-    value = state.get("budget_state")
-    return value if isinstance(value, BudgetState) else None
+def _meter_scope(state: State) -> MeterScope | None:
+    value = state.get("_meter_scope")
+    return value if isinstance(value, MeterScope) else None
 
 
 def _trace_metadata(state: State) -> dict[str, Any]:
-    budget = _budget_state(state)
-    if budget is None:
-        return {}
-    return {"budget": budget.to_dict()}
+    report = _scope_report(_meter_scope(state))
+    return {"meter": report.to_dict()} if report is not None else {}
 
 
-def _append_budget_precheck_trace(
-    flow: Flow,
+def _over_budget(state: State) -> BudgetReport | None:
+    """Report if the run exceeded WALL-TIME — the one cap not enforced at a charge site.
+
+    Call/token/cost caps are enforced precisely at the charge site: the controller denies the
+    operation that would exceed and it surfaces as an :class:`AdmissionDenied` caught at the top.
+    """
+    scope = _meter_scope(state)
+    if scope is None or not isinstance(scope.controller, BudgetController):
+        return None
+    policy = scope.controller.policy
+    if policy.max_wall_s is None:
+        return None
+    snap = scope.snapshot()
+    if snap.elapsed_s <= policy.max_wall_s:
+        return None
+    return BudgetReport.from_snapshot(snap, policy)
+
+
+def _halt_if_over_budget(
     state: State,
     traces: list[StepTrace],
     results: dict[str, Result],
 ) -> bool:
-    if flow.budget_policy is None:
+    """Append a budget_exceeded trace and return True if the run has exceeded its wall-time cap.
+
+    Called both before and after each step (the between-steps checkpoint for wall-time, the one cap
+    not enforced at a charge site). Call/token/cost caps surface as AdmissionDenied instead.
+    """
+    report = _over_budget(state)
+    if report is None:
         return False
-    budget = _budget_state(state)
-    if budget is None:
-        return False
-    try:
-        budget.check_wall_time()
-    except BudgetExceeded as exc:
-        _append_budget_exceeded(exc, budget, state, traces, results)
-        return True
-    return False
+    _append_meter_exceeded(report, traces, results)
+    return True
 
 
-def _record_budget_after_result(
-    state: State,
-    result: Result,
-    traces: list[StepTrace],
-    results: dict[str, Result],
-) -> bool:
-    budget = _budget_state(state)
-    if budget is None:
-        return False
-
-    authoritative = result.artifacts.get("budget_state")
-    if isinstance(authoritative, BudgetState):
-        state.set("budget_state", authoritative)
-        if authoritative.exceeded is not None:
-            _append_budget_exceeded(authoritative.exceeded, authoritative, state, traces, results)
-            return True
-        return False
-
-    try:
-        state.set("budget_state", budget.record_result(result))
-    except BudgetExceeded as exc:
-        _append_budget_exceeded(exc, budget.with_exceeded(exc), state, traces, results)
-        return True
-    return False
-
-
-def _append_budget_exceeded(
-    exc: BudgetExceeded,
-    budget: BudgetState,
-    state: State,
-    traces: list[StepTrace],
-    results: dict[str, Result],
+def _append_meter_exceeded(
+    report: BudgetReport, traces: list[StepTrace], results: dict[str, Result]
 ) -> None:
-    exceeded_budget = budget.with_exceeded(exc)
-    state.set("budget_state", exceeded_budget)
-    result = Result(
-        error=str(exc),
-        artifacts={
-            "budget_exceeded": exc.to_dict(),
-            "budget_state": exceeded_budget,
-        },
+    dimension = report.breached[0] if report.breached else "budget"
+    _append_budget_exceeded_trace(
+        f"Budget exceeded: {dimension}", report.to_dict(), traces, results
     )
+
+
+def _append_denial(
+    exc: AdmissionDenied, state: State, traces: list[StepTrace], results: dict[str, Result]
+) -> None:
+    """Record a hard mid-step admission denial (raised at a charge site) as budget_exceeded."""
+    info = {
+        "dimension": exc.dimension,
+        "limit": exc.limit,
+        "current": exc.current,
+        "attempted": exc.attempted,
+    }
+    _append_budget_exceeded_trace(str(exc), info, traces, results)
+
+
+def _append_budget_exceeded_trace(
+    message: str, info: dict[str, Any], traces: list[StepTrace], results: dict[str, Result]
+) -> None:
+    result = Result(error=message, artifacts={"budget_exceeded": info})
     results["budget_exceeded"] = result
     traces.append(
         StepTrace(
             name="budget_exceeded",
             output_result=result.to_dict(),
-            error=str(exc),
+            error=message,
             policy_decisions=("budget_exceeded",),
             started_at=time.monotonic(),
         )

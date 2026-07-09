@@ -19,6 +19,11 @@ uv sync --extra bench
 | `baseline` | Raw LLM call, no tools or orchestration |
 | `self_discovery` | Select → Adapt → Operationalize → Solve reasoning flow |
 | `react_tools` | ReAct loop with `think` (scratchpad) + `math_eval` tools |
+| `react_ts_only` | ReAct loop with thinking-system strategy selection |
+| `react_pyeval_only` | ReAct loop with Python evaluation for exact computation |
+| `react_ts_pyeval` | ReAct loop combining thinking systems and Python evaluation |
+| `react_full` | ReAct loop with the full benchmark tool set |
+| `generate_review` | Generate-review retry loop with reviewer feedback |
 
 ### Running
 
@@ -46,25 +51,47 @@ Each solver stores `cost` in `TaskState.metadata["cost"]` from the framework's c
 total_cost = sum(s.metadata.get("cost", 0) for s in log.samples)
 ```
 
+## Agent Swarm (`agent_swarm/`)
+
+Experimental MVP for coordinating multiple `toolkit.agents.Agent` instances as
+one swarm run. It lives entirely under `nanope/` and composes existing
+core/toolkit APIs.
+
+Implemented surface:
+
+- `AgentNode`, `Grid`, `Message`, `SharedNote`, `SwarmEvent`, `SwarmRunResult`
+- `Swarm.run()`, `Swarm.run_sync()`, `Swarm.iter()`, `Swarm.iter_sync()`
+- `parallel` fan-out/fan-in and `sequential` execution modes
+- optional finalizer agent
+- in-memory `SwarmBus` with direct messages, broadcast messages, inboxes, and shared notes
+- optional `swarm_tool_group()` so agents can use swarm communication as normal tools
+
+Current limits: no durable persistence, no continuous tick loop, and no manager-directed routing yet.
+
 ## Research Center (`research_center/`)
 
-Multi-agent research pipeline with shared wiki memory. Four agents — all built as `generate_review_flow` configurations — collaborate through a shared `GraphStore` wiki.
+Multi-agent research pipeline with shared wiki memory. Five agent roles — all
+built as `generate_review_flow` configurations — collaborate through a shared
+`GraphStore` wiki.
 
 ### Architecture
 
-The **Owner** (the user) dictates what to research, report format, focus areas, audience, etc. The **Manager** translates the owner's brief into plans for each agent.
+The **Owner** (the user) dictates what to research, report format, focus areas,
+audience, etc. The **Manager** translates the owner's brief into plans for each
+agent.
 
 ```
-Owner (brief) → Manager → [Researcher → Linker → Manager]* → Writer
-                   ↕            ↕           ↕                    ↕
-                [=============== Shared Wiki Memory ===============]
+Owner (brief) → Manager → [Researcher → Linker → Reviewer → Writer → Manager]*
+                   ↕            ↕          ↕           ↕          ↕
+                [================== Shared Wiki Memory ==================]
 ```
 
 | Agent | Model | Role | Tools |
 |---|---|---|---|
 | Researcher | grok-4-1-fast-reasoning | Gather knowledge from wikipedia/dictionary | wikipedia, dictionary, wiki write+read |
 | Linker | grok-4-1-fast-reasoning | Discover and create connections between nodes | wiki read+write |
-| Manager | grok-4-1-fast-reasoning | Translate owner's brief into plans for each agent | wiki read, web, reasoning strategies |
+| Reviewer | grok-4-1-fast-reasoning | Audit graph quality, orphans, duplicates, and coverage | wiki read+analysis |
+| Manager | grok-4-1-fast-reasoning | Translate owner's brief into plans for each agent and reassess after each cycle | wiki read, web, reasoning strategies, optional notes |
 | Writer | gemini-3-flash | Synthesize wiki into a structured report | wiki read, reasoning strategies |
 
 ### Running

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import warnings
 from collections.abc import AsyncIterator
 from typing import Any, cast
@@ -198,6 +199,53 @@ def _build_output_config(output_schema: OutputSchema) -> dict[str, Any]:
     }
 
 
+_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*\n?(.*?)\n?\s*```", re.DOTALL)
+
+
+def _extract_json_text(text: str) -> str:
+    """Return *text* with a wrapping Markdown code fence removed, if present."""
+    stripped = text.strip()
+    match = _JSON_FENCE_RE.search(stripped)
+    return match.group(1).strip() if match else stripped
+
+
+def _schema_prompt_instruction(output_schema: OutputSchema) -> str:
+    """Build the system-prompt instruction for the ``"prompt"`` strategy.
+
+    Asks the model for a raw JSON object matching the schema. Used for schemas
+    that exceed Anthropic's native ``output_config`` complexity limit, where
+    ``output_config`` would otherwise return a 400 "schema is too complex" error.
+    """
+    schema_text = json.dumps(output_schema.schema, indent=2)
+    return (
+        "IMPORTANT: Respond with ONLY a raw JSON object (no markdown code "
+        "fences, no explanation, no text before or after). The JSON must match "
+        "this schema:\n" + schema_text
+    )
+
+
+def _parse_structured_output(text: str, output_schema: OutputSchema) -> Any:
+    """Parse structured-output *text*, coercing to the schema's Pydantic model.
+
+    Tolerates Markdown-fenced JSON (the ``"prompt"`` strategy can produce it).
+    When the schema carries a ``model_class``, the parsed data is validated into
+    that model — at parity with the OpenAI, Gemini, and xAI adapters. Returns
+    ``None`` if the text is not valid JSON, or the raw dict if validation fails.
+    """
+    try:
+        data = json.loads(_extract_json_text(text))
+    except (json.JSONDecodeError, TypeError):
+        logger.warning("Failed to parse structured output as JSON")
+        return None
+    if output_schema.model_class is None:
+        return data
+    try:
+        return output_schema.model_class.model_validate(data)
+    except Exception:
+        logger.warning("Failed to validate structured output against schema")
+        return data
+
+
 def _uses_deprecated_temperature(model: str) -> bool:
     """Return True for Anthropic models that reject ``temperature``."""
     return model in _TEMPERATURE_DEPRECATED_MODELS
@@ -249,10 +297,7 @@ def _parse_sdk_response(
     text = "".join(text_parts).strip()
 
     if output_schema and text:
-        try:
-            parsed = json.loads(text)
-        except (json.JSONDecodeError, TypeError):
-            logger.warning("Failed to parse structured output as JSON")
+        parsed = _parse_structured_output(text, output_schema)
 
     usage = _extract_usage(message.usage)
     cost = _estimate_response_cost(model, usage)
@@ -342,7 +387,14 @@ class AnthropicProvider(BaseProvider):
         output_schema: OutputSchema | None = kwargs.pop("output_schema", None)
         tool_choice: str | None = kwargs.pop("tool_choice", None)
         json_mode: bool = kwargs.pop("json_mode", False)
+        structured_output_mode: str = kwargs.pop("structured_output_mode", "native")
         kwargs.pop("logprobs", None)  # Not supported by Anthropic
+
+        if structured_output_mode not in ("native", "prompt"):
+            raise ValueError(
+                "structured_output_mode must be 'native' or 'prompt', "
+                f"got {structured_output_mode!r}"
+            )
 
         # Warn about unknown params
         unknown = set(kwargs) - _SDK_PARAMS
@@ -372,9 +424,17 @@ class AnthropicProvider(BaseProvider):
             # Anthropic requires temperature=1 when thinking is enabled
             sdk_kwargs.pop("temperature", None)
 
-        # Structured output via native JSON mode
+        # Structured output: native ``output_config`` by default, or schema-in-
+        # prompt for schemas that exceed Anthropic's native complexity limit.
         if output_schema:
-            sdk_kwargs["output_config"] = _build_output_config(output_schema)
+            if structured_output_mode == "prompt":
+                instruction = _schema_prompt_instruction(output_schema)
+                base_system = sdk_kwargs.get("system", "") or ""
+                sdk_kwargs["system"] = (
+                    f"{base_system}\n\n{instruction}" if base_system else instruction
+                )
+            else:
+                sdk_kwargs["output_config"] = _build_output_config(output_schema)
 
         if tools:
             fn_tools = [_tool_to_sdk(t) for t in tools if not t.get("_server_tool")]

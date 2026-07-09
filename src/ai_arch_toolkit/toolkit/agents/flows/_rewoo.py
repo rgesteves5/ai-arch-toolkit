@@ -7,11 +7,13 @@ from typing import Any
 
 from ai_arch_toolkit.core._content import Content, user
 from ai_arch_toolkit.core._llm import LLM
+from ai_arch_toolkit.core._metering._admission import AdmissionDenied
 from ai_arch_toolkit.core._policy import Policy
 from ai_arch_toolkit.core._response import ToolCall
 from ai_arch_toolkit.core._state import StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
+from ai_arch_toolkit.toolkit.budget import BudgetPolicy
 from ai_arch_toolkit.toolkit.flow._flow import Flow
 
 _PLAN_RE = re.compile(r"#E(\d+)\s*=\s*(\w+)\[([^\]]*)\]")
@@ -34,6 +36,7 @@ def rewoo_flow(
     ),
     timeout: float | None = None,
     policy: Policy | None = None,
+    budget_policy: BudgetPolicy | None = None,
     planner_llm: LLM | None = None,
     solver_llm: LLM | None = None,
 ) -> Flow:
@@ -47,6 +50,7 @@ def rewoo_flow(
         solver_system: System prompt for the solver phase.
         timeout: Overall timeout in seconds.
         policy: Optional execution policy.
+        budget_policy: Optional cumulative runtime budget for the flow.
         planner_llm: Override LLM for planning.
         solver_llm: Override LLM for solving.
     """
@@ -87,15 +91,12 @@ def rewoo_flow(
                 "plan_steps": plan_steps,
                 "evidence": {},
             },
-            usage=response.usage,
-            cost=response.cost or 0.0,
         )
 
     async def execute(snap: StateSnapshot) -> Result:
         """Execute plan steps sequentially, substituting evidence references."""
         plan_steps: list[tuple[str, str, str]] = snap.require("plan_steps")
         evidence: dict[str, str] = dict(snap.get("evidence", {}))
-        total_cost = 0.0
 
         for eid, tool_name, raw_args in plan_steps:
             # Substitute #E{n} references
@@ -122,6 +123,8 @@ def rewoo_flow(
                     )
                     exec_result = await tools.async_execute(tc)
                     result_str = exec_result.to_model_text()
+            except AdmissionDenied:
+                raise  # budget denial is terminal — the flow executor converts it
             except Exception as exc:
                 result_str = f"Error: {exc}"
 
@@ -130,7 +133,6 @@ def rewoo_flow(
         return Result(
             value=evidence,
             artifacts={"evidence": evidence},
-            cost=total_cost,
         )
 
     async def solve(snap: StateSnapshot) -> Result:
@@ -149,8 +151,6 @@ def rewoo_flow(
         return Result(
             value=response.text,
             artifacts={"answer": response.text, "response": response},
-            usage=response.usage,
-            cost=response.cost or 0.0,
         )
 
     flow_policy = policy
@@ -163,6 +163,7 @@ def rewoo_flow(
         Step(name="solve", fn=solve),
         name="rewoo",
         policy=flow_policy,
+        budget_policy=budget_policy,
     )
 
 

@@ -11,6 +11,7 @@ from ai_arch_toolkit.core._state import State, StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
 from ai_arch_toolkit.toolkit.agents.flows._react import react_flow, react_initial_state
+from ai_arch_toolkit.toolkit.budget import BudgetPolicy
 from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowStep
 
 
@@ -34,6 +35,7 @@ def generate_review_flow(
     max_review_iterations: int = 5,
     timeout: float | None = None,
     policy: Policy | None = None,
+    budget_policy: BudgetPolicy | None = None,
 ) -> Flow:
     """Create a Generate-Review Flow — configurable generate + review loop.
 
@@ -54,6 +56,7 @@ def generate_review_flow(
         max_review_iterations: Max iterations for inner ReAct during review.
         timeout: Overall timeout in seconds.
         policy: Optional execution policy.
+        budget_policy: Optional cumulative runtime budget for the flow.
     """
     gen_extra = gen_kwargs or {}
     review_extra = review_kwargs or {}
@@ -76,21 +79,18 @@ def generate_review_flow(
                 llm_kwargs=gen_extra or None,
             )
             state = State(operational=react_initial_state(task))
-            result = await inner.run(state)
+            await inner.run(state)  # metered under the shared scope; no manual cost threading
             response = state.get("response")
             answer = response.text if response else ""
             return Result(
                 value=answer,
                 artifacts={"last_answer": answer, "last_response": response},
-                cost=result.total_cost,
             )
 
         response = await gen_llm.complete([user(task)], system=system or None, **gen_extra)
         return Result(
             value=response.text,
             artifacts={"last_answer": response.text, "last_response": response},
-            usage=response.usage,
-            cost=response.cost or 0.0,
         )
 
     async def review(snap: StateSnapshot) -> Result:
@@ -110,16 +110,14 @@ def generate_review_flow(
                 llm_kwargs=review_extra or None,
             )
             state = State(operational=react_initial_state(review_prompt))
-            result = await inner.run(state)
+            await inner.run(state)  # metered under the shared scope; no manual cost threading
             response = state.get("response")
             verdict_text = response.text if response else ""
-            cost = result.total_cost
         else:
             response = await review_llm.complete(
                 [user(review_prompt)], system=review_system, **review_extra
             )
             verdict_text = response.text
-            cost = response.cost or 0.0
 
         first_line = verdict_text.strip().split("\n")[0].lower()
         accepted = "accept" in first_line and "unacceptable" not in first_line
@@ -134,7 +132,7 @@ def generate_review_flow(
             # Keep last_answer accessible as fallback if max_cycles exhausted
             artifacts["answer"] = answer
 
-        return Result(value=verdict_text, artifacts=artifacts, cost=cost)
+        return Result(value=verdict_text, artifacts=artifacts)
 
     def not_accepted(snap: StateSnapshot) -> bool:
         return not snap.get("accepted", False)
@@ -148,6 +146,7 @@ def generate_review_flow(
         FlowStep(step=Step(name="review", fn=review), when=not_accepted),
         name="generate_review",
         policy=flow_policy,
+        budget_policy=budget_policy,
         max_iterations=max_cycles,
     )
 

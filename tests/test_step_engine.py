@@ -172,3 +172,46 @@ class TestExecuteStep:
         assert result.value == 42
         assert trace.attempts == 1
         assert trace.policy_decisions == ()
+
+
+class TestAdmissionDeniedIsTerminal:
+    """A budget/admission denial must propagate out of the step engine, never a retried error."""
+
+    async def test_admission_denied_propagates(self) -> None:
+        import pytest
+
+        from ai_arch_toolkit.core._metering._admission import AdmissionDenied
+        from ai_arch_toolkit.core._state import State
+
+        async def fn(snap: StateSnapshot) -> Result:
+            raise AdmissionDenied(dimension="cost")
+
+        with pytest.raises(AdmissionDenied):
+            await execute_step(Step(name="denied", fn=fn), State().snapshot())
+
+    async def test_admission_denied_is_not_retried(self) -> None:
+        import pytest
+
+        from ai_arch_toolkit.core._metering._admission import AdmissionDenied
+        from ai_arch_toolkit.core._state import State
+
+        calls = 0
+
+        async def fn(snap: StateSnapshot) -> Result:
+            nonlocal calls
+            calls += 1
+            raise AdmissionDenied(dimension="cost")
+
+        step = Step(name="denied", fn=fn, policy=Policy(retry=RetryConfig(max_retries=3)))
+        with pytest.raises(AdmissionDenied):
+            await execute_step(step, State().snapshot())
+        assert calls == 1  # terminal — the retry policy did not apply
+
+    async def test_a_normal_exception_still_becomes_an_error_result(self) -> None:
+        from ai_arch_toolkit.core._state import State
+
+        async def fn(snap: StateSnapshot) -> Result:
+            raise ValueError("boom")
+
+        result, _ = await execute_step(Step(name="err", fn=fn), State().snapshot())
+        assert result.is_error and result.error is not None and "boom" in result.error

@@ -12,6 +12,7 @@ from ai_arch_toolkit.core._state import State, StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
 from ai_arch_toolkit.toolkit.agents.flows._react import react_flow, react_initial_state
+from ai_arch_toolkit.toolkit.budget import BudgetPolicy
 from ai_arch_toolkit.toolkit.flow._flow import Flow
 
 _STEP_RE = re.compile(r"^\d+\.\s+(.+)", re.MULTILINE)
@@ -34,6 +35,7 @@ def plan_execute_flow(
     ),
     timeout: float | None = None,
     policy: Policy | None = None,
+    budget_policy: BudgetPolicy | None = None,
     planner_llm: LLM | None = None,
     exec_llm: LLM | None = None,
     exec_tools: ToolGroup | None = None,
@@ -52,7 +54,6 @@ def plan_execute_flow(
     async def plan_and_execute(snap: StateSnapshot) -> Result:
         """Plan, execute each step, and optionally replan."""
         task: str = snap.require("task")
-        total_cost = 0.0
         plan_text = ""
         step_results: list[str] = []
 
@@ -60,7 +61,6 @@ def plan_execute_flow(
             # PLAN
             response = await plan_llm.complete([user(task)], system=planner_system)
             plan_text = response.text
-            total_cost += response.cost or 0.0
             planned_steps = _STEP_RE.findall(plan_text)
 
             # EXECUTE each step
@@ -90,7 +90,6 @@ def plan_execute_flow(
                 inner_response = state.get("response")
                 answer = inner_response.text if inner_response else ""
                 step_results.append(answer)
-                total_cost += result.total_cost
 
                 if result.trace.steps and any(
                     st.error is not None for st in result.trace.steps if not st.skipped
@@ -107,7 +106,6 @@ def plan_execute_flow(
                 "plan_text": plan_text,
                 "step_results": step_results,
             },
-            cost=total_cost,
         )
 
     async def solve(snap: StateSnapshot) -> Result:
@@ -126,8 +124,6 @@ def plan_execute_flow(
         return Result(
             value=response.text,
             artifacts={"answer": response.text, "response": response},
-            usage=response.usage,
-            cost=response.cost or 0.0,
         )
 
     flow_policy = policy
@@ -139,6 +135,7 @@ def plan_execute_flow(
         Step(name="solve", fn=solve),
         name="plan_execute",
         policy=flow_policy,
+        budget_policy=budget_policy,
     )
 
 

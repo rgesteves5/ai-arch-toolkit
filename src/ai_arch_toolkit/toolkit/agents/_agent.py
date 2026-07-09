@@ -15,6 +15,7 @@ from ai_arch_toolkit.core._sync import _run_sync
 from ai_arch_toolkit.core._tools._group import ToolGroup
 from ai_arch_toolkit.toolkit.agents._compile import build_flow, extract_text, initial_state
 from ai_arch_toolkit.toolkit.agents._spec import ReasoningSpec
+from ai_arch_toolkit.toolkit.budget import BudgetPolicy, BudgetReport
 from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowEvent, FlowResult
 
 __all__ = ["Agent", "AgentResult"]
@@ -22,13 +23,14 @@ __all__ = ["Agent", "AgentResult"]
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AgentResult:
-    """Outcome of running an Agent on one task."""
+    """Outcome of one Agent run. ``usage``/``cost``/``report`` are meter-derived (the truth)."""
 
     text: str
     response: Response | None
     flow_result: FlowResult
     usage: Usage = field(default_factory=Usage)
     cost: float = 0.0
+    report: BudgetReport | None = None
     errors: tuple[str, ...] = ()
 
 
@@ -83,31 +85,42 @@ class Agent:
         """The compiled Flow backing this agent."""
         return self._flow
 
-    async def run(self, task: Content) -> AgentResult:
-        """Run the agent on one task and return a structured result."""
+    async def run(
+        self, task: Content, *, budget_policy: BudgetPolicy | None = None
+    ) -> AgentResult:
+        """Run the agent on one task and return a structured result.
+
+        A per-run ``budget_policy`` caps this run (overriding any budget baked into
+        the backing flow); it is ignored when the agent runs nested under an
+        enclosing metered scope, which shares one cumulative budget.
+        """
         state = State(operational=self._make_state(task))
-        flow_result = await self._flow.run(state)
+        flow_result = await self._flow.run(state, budget_policy=budget_policy)
         response = state.get("response") or state.get("last_response")
         if not isinstance(response, Response):
             response = None
         errors = tuple(r.error for r in flow_result.results.values() if r.error)
+        report = flow_result.meter  # meter-derived (single source of truth); snapshot once, reuse
         return AgentResult(
             text=extract_text(state, flow_result),
             response=response,
             flow_result=flow_result,
-            usage=flow_result.trace.total_usage,
-            cost=flow_result.total_cost,
+            usage=flow_result.usage,
+            cost=report.cost if report is not None else 0.0,
+            report=report,
             errors=errors,
         )
 
-    def run_sync(self, task: Content) -> AgentResult:
+    def run_sync(self, task: Content, *, budget_policy: BudgetPolicy | None = None) -> AgentResult:
         """Synchronous wrapper for ``run``."""
-        return _run_sync(self.run(task))
+        return _run_sync(self.run(task, budget_policy=budget_policy))
 
-    async def iter(self, task: Content) -> AsyncIterator[FlowEvent]:
-        """Stream flow events while running the agent on one task."""
+    async def iter(
+        self, task: Content, *, budget_policy: BudgetPolicy | None = None
+    ) -> AsyncIterator[FlowEvent]:
+        """Stream flow events while running on one task (``budget_policy`` as in ``run``)."""
         state = State(operational=self._make_state(task))
-        async for event in self._flow.iter(state):
+        async for event in self._flow.iter(state, budget_policy=budget_policy):
             yield event
 
     def as_step(self) -> Step:

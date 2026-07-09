@@ -686,13 +686,14 @@ def _print_last_trace(session: ChatSession, print_fn: Callable[..., Any]) -> Non
         print_fn("no run yet")
         return
     trace = session.last_result.flow_result.trace
+    usage = session.last_result.flow_result.usage  # meter-derived (single source of truth)
     print_fn(
         {
             "step_count": len(trace.steps),
             "total_cost": session.last_result.flow_result.total_cost,
             "total_usage": {
-                "input_tokens": trace.total_usage.input_tokens,
-                "output_tokens": trace.total_usage.output_tokens,
+                "input_tokens": usage.input_tokens,
+                "output_tokens": usage.output_tokens,
             },
         }
     )

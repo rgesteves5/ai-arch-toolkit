@@ -32,11 +32,13 @@ ai_arch_toolkit/
 │   ├── _llm.py        # LLM facade
 │   ├── _providers/    # Anthropic, OpenAI, xAI, Gemini
 │   ├── _tools/        # @tool decorator, ToolGroup
+│   ├── _metering/     # Neutral cost/usage mechanism (Money, Cost, MeterStore, MeterScope)
 │   └── graph/         # General-purpose graph: Node[T], Edge, Graph, protocols
 ├── toolkit/           # Convenience utilities built on core/
 │   ├── agents/        # 8 agent architectures as Flow factories
 │   │   └── flows/     # react_flow, reflexion_flow, rewoo_flow, etc.
 │   ├── flow/          # Flow orchestration (Flow, FlowStep, FlowResult, FlowEvent)
+│   ├── budget/        # Budget policy over the meter (BudgetPolicy, BudgetController, BudgetReport)
 │   ├── tools/         # ~120 pre-built tools across 25 domains (+ opt-in dangerous/)
 │   ├── memory/        # Graph-backed memory for agents (GraphStore, views, search)
 │   ├── knowledge/     # Sync registry for prompt-injectable reference data
@@ -53,8 +55,8 @@ The stateless, async-first foundation. All new code should build on this.
 - **`_response.py`**: `Response`, `Usage`, `ToolCall`, `ThinkingBlock`, `Citation`, `OutputSchema`, `StreamResponse`, `SyncStreamResponse`, `StreamEvent`, `RichStreamResponse`, `SyncRichStreamResponse`.
 - **`_providers/`**: `BaseProvider` ABC → `AnthropicProvider`, `OpenAIProvider`, `XAIProvider`, `GeminiProvider`. Factory: `create_provider()` routes by model prefix (`claude-` → Anthropic, `gpt-`/`o1-`/`o3-`/`o4-` → OpenAI, `grok-` → xAI, `gemini-` → Gemini). `provider=` forces an adapter (bypasses prefix detection); an unknown model with `base_url=` set falls back to the OpenAI-compatible adapter (Ollama, LM Studio, vLLM). The API key is required unless `base_url` points at a loopback host (localhost/`127.x`/`::1`), where local servers ignore it and a cloud env key is not forwarded; remote endpoints still fail fast on a missing key. `_normalize_fallbacks` routes string fallbacks by their own name — a recognizable model fails over to its own provider, a bare tag inherits the parent's connection.
 - **`_tools/`**: `@tool` decorator (auto-generates JSON Schema from type hints + Google-style docstrings; also carries governance metadata — `capability`, `risk_level`, `requires_approval`). `ToolGroup` (collection with execute/async_execute returning a structured `ToolResult`). Governance pipeline: `ToolDefinition`/`ToolSchema`/`ToolRuntimePolicy`/`RiskLevel` (`_definition`), gates `DangerousToolGate`/`ApprovalGate`/`DryRunGate` (`_governance`), `ApprovalRequest`/`ApprovalDecision`/`ApprovalHandler` (`_approval`), `execute_tool`/`async_execute_tool` (`_executor`), `ToolResult`/`ToolError` (`_result`).
-- **`_pricing.py`**: `PricingRegistry` with `_default_pricing.toml`. Access via `pricing` singleton.
-- **`_budget.py`**: `BudgetPolicy` (run-level caps: wall-time, LLM/tool calls, tokens, cost), `BudgetState`, `BudgetExceeded`. Attached to a `Flow` via `budget_policy=`.
+- **`_pricing.py`**: `PricingRegistry` with `_default_pricing.toml`. Access via `pricing` singleton; `pricing.price(request, usage) -> Cost` is the default `Pricer` for the meter.
+- **`_metering/`**: the neutral cost/usage **mechanism** (0% opinion). `Money` (opaque exact pico-USD int), `Cost` (one class, `kind` known/estimated/unknown — `unknown` ≠ `known($0)`), `OperationRequest` (pure facts), `MeterStore` (single-writer, `threading.Lock`, reserve→settle escrow, per-span accounting, TOCTOU-re-validated admission run OUTSIDE the lock), `MeterScope`/`RunConfig` + `current_meter`/`bind_meter` (ContextVar ambient binding), `UsageEvent`/`UsageSink` (audit, redacted, built-under-lock/emitted-outside), `AdmissionController` Protocol + `AdmissionDenied` (neutral, terminal). Three modes: no scope = unmetered; scope + `controller=None` = measure-only (Flow/Agent default); scope + controller = measure+enforce. Charge sites: `LLM.complete/stream/stream_events` (per provider attempt) + the common tool executor. See `docs/internal/metering-plan.md`.
 - **`_policy.py`**: `Policy` (per-step retry/timeout/confidence/cost) with declarative callbacks `on_timeout`/`on_low_confidence`/`on_exhausted`.
 - **`_redaction.py`**: `RedactionPolicy`/`RedactionMode`/`Redactor` + `redact()`/`redact_text()` — strips secrets from traces and tool results by key name and value pattern.
 - **`_moderation.py`**: `Moderator` Protocol, `ModerationResult`, `ModerationError` (toolkit moderators build on these).
@@ -104,16 +106,21 @@ Sync in-memory registry for prompt-injectable reference data. `KnowledgeRegistry
 
 Content moderation built on the `core/_moderation.py` `Moderator` protocol. `OpenAIModerator` (free `omni-moderation-latest` endpoint), `LLMModerator` (any `LLM` as a classifier), and `ModerationMiddleware` (wires a moderator into the LLM middleware chain for input/output checks; `on_flagged` is `raise` or `warn`).
 
+#### Budget (`toolkit/budget/`)
+
+The **opinion** layer over the neutral `core/_metering` mechanism. `BudgetPolicy` (user-facing caps: calls/tokens/cost-USD/wall + `reserve` mode) → `to_limits()` compiles to core `ResourceLimits`. `BudgetController` implements the core `AdmissionController` (pure/sync `admit`); `BudgetExceeded(AdmissionDenied)`; `HeuristicEstimator` (strict-reserve, fails closed on unpriced models); `BudgetReport.from_snapshot()` (projection). Wire in via `RunConfig(controller=BudgetController(policy))` — a `Flow` builds this from its `budget_policy=` and enforces at the charge site; nested agent flows inherit the enclosing scope (one cumulative budget).
+
 #### Runner
 
-`_runner.py`: `run_tools()` / `run_tools_sync()` convenience wrappers.
+`_runner.py`: `run_tools()` / `run_tools_sync()` convenience wrappers — route through the common governed + metered tool executor (approval gate + metering), never the raw function.
 
 **Import convention**: New code should import from `ai_arch_toolkit.core` or `ai_arch_toolkit.toolkit.agents`.
 
 ## Testing Patterns
 
 - **Config**: pytest-asyncio with `asyncio_mode = "auto"` — no `@pytest.mark.asyncio` needed.
-- **Test layout**: `tests/` (core tests), `tests/agents/flows/` (agent flow tests), `tests/toolkit/` (toolkit tool tests), `tests/graph/` (core graph tests), `tests/memory/` (memory tests), `tests/flow/` (flow tests), `tests/knowledge/` (knowledge tests).
+- **Test layout**: `tests/` (core tests), `tests/agents/flows/` (agent flow tests), `tests/toolkit/` (toolkit tool tests), `tests/graph/` (core graph tests), `tests/memory/` (memory tests), `tests/flow/` (flow tests), `tests/knowledge/` (knowledge tests), `tests/metering/` (core metering primitives + store + scope), `tests/budget/` (toolkit budget policy/controller).
+- **Metering tests**: for a metered LLM/tool, use a REAL `LLM` with a fake `_provider` (so the charge site runs) — a mocked `llm.complete` bypasses metering. Bind a scope with `MeterScope(RunConfig(controller=BudgetController(policy)))`.
 - **Core test fixtures** (`tests/conftest.py`): `MockResponse` class (mimics `requests.Response`), `mock_post` fixture, `weather_tool` fixture.
 - **Agent test fixtures** (`tests/agents/conftest.py`): `make_response()`, `make_tool_call()` factories. Mock `LLM` with `AsyncMock`, set `llm.complete.side_effect` with pre-built `Response` objects.
 - **Toolkit tests**: Mock `urllib.request.urlopen` for API tools. Use `tmp_path` for filesystem tools.

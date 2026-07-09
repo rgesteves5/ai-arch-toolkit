@@ -5,17 +5,27 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass, field
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
-from ai_arch_toolkit.core._budget import BudgetPolicy
+from ai_arch_toolkit.core._metering._scope import MeterScope, RunConfig
 from ai_arch_toolkit.core._policy import Policy
+from ai_arch_toolkit.core._response import Usage
 from ai_arch_toolkit.core._state import State, StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._sync import _run_sync, _stream_sync
 from ai_arch_toolkit.core._trace import Trace
+from ai_arch_toolkit.toolkit.budget import BudgetController, BudgetPolicy, BudgetReport
 from ai_arch_toolkit.toolkit.flow._scope import Scope
 
 type ConditionFn = Callable[[StateSnapshot], bool]
+
+
+def _scope_report(scope: object) -> BudgetReport | None:
+    """Project a run's meter scope into a typed report (the single source of truth for spend)."""
+    if not isinstance(scope, MeterScope):
+        return None
+    policy = scope.controller.policy if isinstance(scope.controller, BudgetController) else None
+    return BudgetReport.from_snapshot(scope.snapshot(), policy)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -45,8 +55,34 @@ class FlowResult:
         return None
 
     @property
+    def meter(self) -> BudgetReport | None:
+        """Authoritative metered usage/cost for this run — the single source of truth.
+
+        Projected live from the run's meter scope (``None`` only if the run was unmetered). For a
+        flow run nested under an enclosing scope, this reflects the shared cumulative budget, not
+        this flow alone.
+        """
+        return _scope_report(self.state.get("_meter_scope"))
+
+    @property
     def total_cost(self) -> float:
-        return self.trace.total_cost
+        """Known USD spend, from the meter. ``0.0`` if unmetered; see :attr:`meter` for detail."""
+        report = self.meter
+        return report.cost if report is not None else 0.0
+
+    @property
+    def usage(self) -> Usage:
+        """Token usage from the meter (the single source of truth). Empty if unmetered."""
+        scope = self.state.get("_meter_scope")
+        if not isinstance(scope, MeterScope):
+            return Usage()
+        s = scope.snapshot()
+        return Usage(
+            input_tokens=s.input_tokens,
+            output_tokens=s.output_tokens,
+            cache_read_tokens=s.cache_read_tokens,
+            cache_write_tokens=s.cache_write_tokens,
+        )
 
     @property
     def total_duration(self) -> float:
@@ -83,6 +119,7 @@ class Flow:
         "_budget_policy",
         "_is_dag",
         "_max_iterations",
+        "_max_parallelism",
         "_name",
         "_policy",
         "_scope",
@@ -97,12 +134,16 @@ class Flow:
         budget_policy: BudgetPolicy | None = None,
         scope: Scope | None = None,
         max_iterations: int | None = None,
+        max_parallelism: int | None = None,
     ) -> None:
         self._name = name
         self._policy = policy
         self._budget_policy = budget_policy
         self._scope = scope
         self._max_iterations = max_iterations
+        if max_parallelism is not None and max_parallelism < 1:
+            raise ValueError(f"max_parallelism must be >= 1, got {max_parallelism}")
+        self._max_parallelism = max_parallelism
 
         # Normalize inputs to FlowSteps
         flow_steps: list[FlowStep] = []
@@ -182,26 +223,62 @@ class Flow:
     def max_iterations(self) -> int | None:
         return self._max_iterations
 
-    async def run(self, state: State) -> FlowResult:
-        """Execute the flow."""
+    @property
+    def max_parallelism(self) -> int | None:
+        """Max steps of THIS flow that run concurrently in one fan-out (`None` = unbounded)."""
+        return self._max_parallelism
+
+    async def run(
+        self,
+        state: State,
+        *,
+        budget_policy: BudgetPolicy | None = None,
+        config: RunConfig | None = None,
+    ) -> FlowResult:
+        """Execute the flow. A per-run ``budget_policy`` overrides the construction-time one; a
+        per-run ``config`` (full :class:`RunConfig` — sinks, custom pricer, retained events) takes
+        precedence over both. All are ignored when this flow runs nested under an enclosing scope.
+
+        Note: ``config`` FULLY specifies the run's meter — it does not merge with a
+        ``budget_policy``. A config with no controller is measure-only, so to add sinks to a
+        *budgeted* run put the controller in it: ``RunConfig(controller=BudgetController(p), …)``.
+        """
         from ai_arch_toolkit.toolkit.flow._executor import execute_flow
 
-        return await execute_flow(self, state)
+        return await execute_flow(self, state, budget_policy=budget_policy, config=config)
 
-    def run_sync(self, state: State) -> FlowResult:
+    def run_sync(
+        self,
+        state: State,
+        *,
+        budget_policy: BudgetPolicy | None = None,
+        config: RunConfig | None = None,
+    ) -> FlowResult:
         """Synchronous wrapper for run()."""
-        return _run_sync(self.run(state))
+        return _run_sync(self.run(state, budget_policy=budget_policy, config=config))
 
-    async def iter(self, state: State) -> AsyncIterator[FlowEvent]:
-        """Stream events during flow execution."""
+    async def iter(
+        self,
+        state: State,
+        *,
+        budget_policy: BudgetPolicy | None = None,
+        config: RunConfig | None = None,
+    ) -> AsyncIterator[FlowEvent]:
+        """Stream a run; ``budget_policy``/``config`` override per run (see :meth:`run`)."""
         from ai_arch_toolkit.toolkit.flow._executor import iter_flow
 
-        async for event in iter_flow(self, state):
+        async for event in iter_flow(self, state, budget_policy=budget_policy, config=config):
             yield event
 
-    def iter_sync(self, state: State) -> Iterator[FlowEvent]:
+    def iter_sync(
+        self,
+        state: State,
+        *,
+        budget_policy: BudgetPolicy | None = None,
+        config: RunConfig | None = None,
+    ) -> Iterator[FlowEvent]:
         """Synchronous wrapper for iter()."""
-        return _stream_sync(lambda: self.iter(state))
+        return _stream_sync(lambda: self.iter(state, budget_policy=budget_policy, config=config))
 
     def as_step(self) -> Step:
         """Wrap this Flow as a Step for composition."""
@@ -214,9 +291,10 @@ class Flow:
                 current=dict(snapshot.current),
                 operational=dict(snapshot.operational),
                 persistent=dict(snapshot.persistent),
-                # Share by reference. State stores world as ``dict[str, Any]``
-                # but only reads from it, so a MappingProxyType is safe in practice.
-                world=cast(dict[str, Any], snapshot.world),
+                # A mutable copy: the nested run's meter stashes its scope in the world layer,
+                # so a read-only MappingProxyType would raise on write. Shallow-copied, so shared
+                # world objects (e.g. the inherited meter scope) stay shared by reference.
+                world=dict(snapshot.world),
             )
             flow_result = await flow.run(state)
             final = flow_result.final_result
@@ -227,11 +305,11 @@ class Flow:
                 if k not in original_keys or v is not snapshot.operational.get(k):
                     new_artifacts[k] = v
 
+            # No usage/cost threading: the nested run is metered under the shared scope (the single
+            # source of truth), so annotating this Result would double-count in the raw trace.
             return Result(
                 value=final.value if final else None,
                 artifacts=new_artifacts,
-                usage=flow_result.trace.total_usage,
-                cost=flow_result.total_cost,
                 confidence=flow_result.trace.confidence,
                 error=final.error if final else None,
                 duration=flow_result.total_duration,

@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._response import OutputSchema, Response, ToolCall, Usage
 from ai_arch_toolkit.core._tools._group import ToolGroup
 from ai_arch_toolkit.toolkit.agents import (
@@ -43,6 +44,24 @@ def _make_response(
         usage=Usage(input_tokens=10, output_tokens=5),
         cost=cost,
     )
+
+
+class _FakeProvider:
+    """A real LLM's provider stand-in, so LLM.complete runs its metering charge site."""
+
+    def __init__(self, *responses: Response) -> None:
+        self._responses = list(responses)
+        self.calls = 0
+
+    async def complete(self, messages, *, system=None, tools=None, **kwargs) -> Response:
+        self.calls += 1
+        return self._responses[min(self.calls - 1, len(self._responses) - 1)]
+
+
+def _metered_llm(*responses: Response) -> LLM:
+    llm = LLM("claude-sonnet-4-6", api_key="test")
+    llm._provider = _FakeProvider(*responses)  # type: ignore[assignment]
+    return llm
 
 
 class TestReasoningSpec:
@@ -123,8 +142,8 @@ class TestBuildFlow:
 
 class TestAgentRun:
     async def test_completion_agent_runs(self) -> None:
-        llm = AsyncMock()
-        llm.complete = AsyncMock(return_value=_make_response(text="Hello!"))
+        # Real LLM + fake provider so the metering charge site runs (usage is meter-derived).
+        llm = _metered_llm(_make_response(text="Hello!"))
         agent = Agent(ReasoningSpec(strategy="completion"), llm)
 
         result = await agent.run("Hi")

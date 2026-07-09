@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
@@ -29,11 +30,13 @@ class Policy:
     on_timeout: OnTimeout = "halt"
 
     def __post_init__(self) -> None:
-        if self.timeout is not None and self.timeout <= 0:
-            raise ValueError(f"timeout must be positive, got {self.timeout}")
+        # Reject non-finite caps (NaN/inf): `x <= 0` is False for NaN, so a NaN cap would silently
+        # disable enforcement — `anything > NaN` is always False (a money/time fail-open).
+        if self.timeout is not None and (not math.isfinite(self.timeout) or self.timeout <= 0):
+            raise ValueError(f"timeout must be positive and finite, got {self.timeout}")
         if self.confidence_threshold is not None and not 0 <= self.confidence_threshold <= 1:
             raise ValueError(
                 f"confidence_threshold must be in [0, 1], got {self.confidence_threshold}"
             )
-        if self.max_cost is not None and self.max_cost <= 0:
-            raise ValueError(f"max_cost must be positive, got {self.max_cost}")
+        if self.max_cost is not None and (not math.isfinite(self.max_cost) or self.max_cost <= 0):
+            raise ValueError(f"max_cost must be positive and finite, got {self.max_cost}")

@@ -122,6 +122,8 @@ Sync in-memory registry for prompt-injectable reference data. `KnowledgeRegistry
 - Internal modules prefixed with `_`; public API via `__init__.py` re-exports only.
 - Google-style docstrings — no type info repeated (type hints suffice).
 - Toolkit tools return error strings (never raise) for graceful agent handling.
+- Practical code-writing guidance lives in `docs/code-style.md`: linting shape,
+  docstring/comment style, and class vs function decisions.
 
 ## Provider-Specific Gotchas
 

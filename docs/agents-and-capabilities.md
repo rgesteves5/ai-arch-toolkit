@@ -7,9 +7,10 @@ This page is the capabilities index — each subsystem now has its own focused p
 | Capability | Page |
 |---|---|
 | Agent flows (ReAct, Reflexion, ReWOO, Plan-Execute, ToT, LATS, Self-Discovery, LLM Compiler, Generate-Review) and the Flow engine | [Flow Architecture](flow-architecture.md) |
+| High-level agent facade — `Agent` + `ReasoningSpec`, named strategies, config-driven specs, `AgentResult` | [Agent & ReasoningSpec](agents.md) |
 | LLM facade — completion, streaming, structured output, extended thinking, fallback, retry, token counting | [LLM Facade](llm.md) |
 | Defining tools, `ToolGroup`, server tools, `run_tools` | [Tools](tools.md) |
-| The ~120 pre-built tools | [Tools Catalog](tools-catalog.md) |
+| The 132 pre-built tools | [Tools Catalog](tools-catalog.md) |
 | Risk levels, approval gates, dangerous-tool blocking, trace redaction, budgets | [Tool Governance & Safety](safety.md) |
 | Middleware (before/after hooks, async, execution order) | [Middleware](middleware.md) |
 | Graph-backed agent memory | [Memory](memory.md) |
@@ -109,12 +110,11 @@ async def research_topic(topic_key: str):
         task = snap.require("task")
         inner = react_flow(llm, tools, system=f"Research: {task}", max_iterations=5)
         state = State(operational=react_initial_state(task))
-        result = await inner.run(state)
+        await inner.run(state)  # metered under the shared run scope; no manual cost threading
         response = state.get("response")
         return Result(
             value=response.text if response else "",
             artifacts={topic_key: response.text if response else ""},
-            cost=result.total_cost,
         )
     return Step(name=topic_key, fn=_research)
 
@@ -138,12 +138,13 @@ result = await flow.run(state)
 
 | Capability | How it connects | Example |
 |---|---|---|
+| **Agent facade** | Declarative wrapper over the factories | `Agent(ReasoningSpec(strategy="react"), llm, tools).run_sync(task)` |
 | **Fallback chains** | LLM-level, transparent to flows | `LLM("opus", fallback="sonnet")` |
 | **Retry** | LLM-level, exponential backoff | `LLM("opus", retry=RetryConfig(max_retries=3))` |
 | **Middleware** | Hooks into every LLM call | Cost tracking, logging, memory injection |
 | **Memory** | `MemoryMiddleware` + `memory_tools()` | Agents remember across conversations |
 | **Knowledge** | Injected into system prompts | Domain context, style guides |
-| **Pre-built tools** | ~120 ready-to-use tools | Weather, Wikipedia, math, papers, public data |
+| **Pre-built tools** | 132 ready-to-use tools | Weather, Wikipedia, math, papers, public data |
 | **Server tools** | Provider-hosted web search, code execution | `tools=[web_search()]` |
 | **Tool governance** | Risk levels, approval, blocking | `@tool(requires_approval=True)` |
 | **Structured output** | `output_schema` on LLM call | Pydantic models as output |
