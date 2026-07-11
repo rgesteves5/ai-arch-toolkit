@@ -14,9 +14,11 @@ from ai_arch_toolkit.nanope.advanced_multi_purpose_configurable_agent import (
     CapabilityProfile,
     ChatSession,
     ConfigurableAgent,
+    OverridePolicy,
     ToolGovernance,
     ToolRegistry,
     agent_config_from_mapping,
+    apply_overrides,
     build_chat_agent,
     create_private_memory,
     load_agent_config,
@@ -121,6 +123,42 @@ def test_agent_config_resolution_preserves_api_key_for_runtime_use() -> None:
     resolved = resolve_agent_config(config)
 
     assert resolved.config.model.api_key == "runtime-secret"
+
+
+@pytest.mark.parametrize("layer_name", ["session_overrides", "run_overrides", "step_overrides"])
+def test_sensitive_override_values_are_redacted_from_reports(layer_name: str) -> None:
+    resolved = resolve_agent_config(
+        _base_config(),
+        **{layer_name: {"model": {"api_key": "runtime-secret"}}},
+    )
+
+    assert resolved.config.model.api_key == "runtime-secret"
+    assert resolved.override_report.accepted == {"model.api_key": "[REDACTED]"}
+    assert "runtime-secret" not in repr(resolved.override_report)
+
+
+def test_override_report_redacts_conventional_secret_names() -> None:
+    _, report = apply_overrides(
+        {},
+        {
+            "auth": {
+                "api-key": "api-key-value",
+                "access_token": "token-value",
+                "client_secret": "secret-value",
+                "database_password": "password-value",
+                "display_name": "visible-value",
+            }
+        },
+        OverridePolicy(),
+    )
+
+    assert report.accepted == {
+        "auth.api-key": "[REDACTED]",
+        "auth.access_token": "[REDACTED]",
+        "auth.client_secret": "[REDACTED]",
+        "auth.database_password": "[REDACTED]",
+        "auth.display_name": "visible-value",
+    }
 
 
 def test_unknown_reasoning_strategy_is_rejected() -> None:

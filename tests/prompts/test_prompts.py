@@ -107,6 +107,19 @@ def test_non_string_separator_is_rejected() -> None:
         Prompt(separator=123)  # type: ignore[arg-type]
 
 
+def test_non_prompt_section_elements_are_rejected_at_construction() -> None:
+    with pytest.raises(
+        TypeError,
+        match=r"Prompt\.sections\[1\] must be a PromptSection, got str",
+    ):
+        Prompt(
+            sections=(
+                PromptSection(name="valid", content="VALID"),
+                "invalid",
+            )
+        )  # type: ignore[arg-type]
+
+
 def test_duplicate_names_are_rejected() -> None:
     prompt = Prompt(
         sections=(
@@ -261,6 +274,12 @@ def test_metadata_rejects_non_string_keys_and_cycles() -> None:
     cyclic_list.append(cyclic_list)
     with pytest.raises(ValueError, match="metadata cannot contain cycles"):
         PromptSection(name="meta", content="value", metadata={"items": cyclic_list})
+
+
+@pytest.mark.parametrize("metadata", ["invalid", 42, [], ()])
+def test_metadata_rejects_non_mapping_values(metadata: object) -> None:
+    with pytest.raises(TypeError, match=r"PromptSection\.metadata must be a mapping"):
+        PromptSection(name="meta", content="value", metadata=metadata)  # type: ignore[arg-type]
 
 
 def test_prompt_sections_and_prompts_are_hashable_without_ignoring_metadata_equality() -> None:

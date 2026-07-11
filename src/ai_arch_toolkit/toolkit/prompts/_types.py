@@ -54,7 +54,11 @@ class PromptSection:
         object.__setattr__(self, "content", content)
         object.__setattr__(self, "order", resolved_order)
         object.__setattr__(self, "stability", stability)
-        object.__setattr__(self, "metadata", _freeze_metadata(metadata or {}))
+        if metadata is not None and not isinstance(metadata, Mapping):
+            raise TypeError("PromptSection.metadata must be a mapping")
+        object.__setattr__(
+            self, "metadata", _freeze_metadata(metadata if metadata is not None else {})
+        )
 
     @property
     def position(self) -> int:
@@ -70,7 +74,14 @@ class Prompt:
     separator: str = "\n\n"
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "sections", tuple(self.sections))
+        sections = tuple(self.sections)
+        for index, section in enumerate(sections):
+            if not isinstance(section, PromptSection):
+                raise TypeError(
+                    f"Prompt.sections[{index}] must be a PromptSection, "
+                    f"got {type(section).__name__}"
+                )
+        object.__setattr__(self, "sections", sections)
         if not isinstance(self.separator, str):
             raise TypeError("Prompt.separator must be a string")
 
