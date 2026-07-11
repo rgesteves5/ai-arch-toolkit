@@ -35,7 +35,7 @@ all = [
     "ai-arch-toolkit[yaml]",
 ]
 # Downstream consumers / tooling.
-app = ["reflex>=0.7", "ai-arch-toolkit[graph,yaml]"]
+app = ["reflex>=0.9.6.post1", "ai-arch-toolkit[graph,yaml]"]
 bench = ["inspect-ai", "inspect-evals"]
 docs = ["mkdocs>=1.6", "pdoc>=15.0"]
 telemetry = ["opentelemetry-api>=1.27"]

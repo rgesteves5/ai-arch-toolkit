@@ -1,6 +1,7 @@
 __pycache__/
 assets/external/
 .web
+reflex.lock/node_modules/
 .states
 *.py[cod]
 *.db

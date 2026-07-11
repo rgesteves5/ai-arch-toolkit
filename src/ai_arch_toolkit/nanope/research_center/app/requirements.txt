@@ -1,2 +1,2 @@
 
-reflex==0.8.27
+reflex==0.9.6.post1

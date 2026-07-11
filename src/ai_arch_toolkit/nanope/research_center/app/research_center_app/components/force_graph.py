@@ -5,14 +5,14 @@ from __future__ import annotations
 import reflex as rx
 
 
-class ForceGraph3D(rx.Component):
+class ForceGraph3D(rx.NoSSRComponent):
     """3D force-directed graph visualization."""
 
-    library = "react-force-graph-3d@1.25"
+    library = "react-force-graph-3d@1.29.1"
     tag = "ForceGraph3D"
     is_default = True
 
-    graph_data: rx.Var[dict] = {}  # type: ignore[assignment]
+    graph_data: rx.Var[dict] = {}  # type: ignore[assignment]  # noqa: RUF012
     width: rx.Var[int] = 800  # type: ignore[assignment]
     height: rx.Var[int] = 500  # type: ignore[assignment]
     background_color: rx.Var[str] = "#111118"  # type: ignore[assignment]
