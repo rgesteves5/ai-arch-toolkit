@@ -136,6 +136,7 @@ Each factory has a companion `*_initial_state(task)` helper that creates the ini
 | `Prompt` | Immutable section collection with a configurable separator |
 | `RenderedPrompt` | Exact text, ordered sections, SHA-256 fingerprint, and stable-prefix diagnostics |
 | `render_prompt()` | Validate and render a structured prompt |
+| `validate_cache_layout()` | Opt-in validation of a cache-optimized stability layout |
 | `prompt_from_sections()` | Freeze a sequence of sections into a `Prompt` |
 
 ### Toolkit — Moderation

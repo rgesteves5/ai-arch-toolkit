@@ -13,13 +13,11 @@ def render_prompt(prompt: Prompt) -> RenderedPrompt:
     """Validate and render a structured prompt.
 
     Sections are ordered by ``order`` and retain insertion order when values
-    tie. Names must be unique. Stability must progress from static to session
-    to request content so volatile content cannot silently split a reusable
-    prefix.
+    tie. Names must be unique. ``order`` is the only semantic ordering key;
+    stability describes cache layout without changing or rejecting the prompt.
     """
     ordered = _ordered_sections(prompt.sections)
     _validate_unique_names(ordered)
-    _validate_stability_order(ordered)
 
     text = prompt.separator.join(section.content for section in ordered)
     fingerprint = "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -30,6 +28,15 @@ def render_prompt(prompt: Prompt) -> RenderedPrompt:
         fingerprint=fingerprint,
         stable_prefix_end=stable_prefix_end,
     )
+
+
+def validate_cache_layout(prompt: Prompt) -> None:
+    """Raise when ordered sections do not form a cache-optimized stability layout.
+
+    This validation is opt-in because cache layout must never change or reject
+    an otherwise valid prompt during normal rendering.
+    """
+    _validate_stability_order(_ordered_sections(prompt.sections))
 
 
 def _ordered_sections(sections: tuple[PromptSection, ...]) -> tuple[PromptSection, ...]:
@@ -74,4 +81,4 @@ def _stable_prefix_end(sections: tuple[PromptSection, ...], separator: str) -> i
     return len(separator.join(static_contents))
 
 
-__all__ = ["render_prompt"]
+__all__ = ["render_prompt", "validate_cache_layout"]

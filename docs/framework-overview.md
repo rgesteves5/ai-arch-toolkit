@@ -151,8 +151,9 @@ Each factory has a companion `*_initial_state(task)` helper that creates the ini
 - **`PromptSection`** — named prompt content with deterministic `order` and
   `static`/`session`/`request` stability.
 - **`Prompt`** — immutable collection of sections and a separator.
-- **`render_prompt()`** — validates unique names and cache-friendly stability order, then
-  produces a `RenderedPrompt`.
+- **`render_prompt()`** — validates unique names and renders strictly by section order.
+- **`validate_cache_layout()`** — optional strict validation for a cache-optimized
+  `static → session → request` layout.
 - **`RenderedPrompt`** — exact text, ordered sections, SHA-256 fingerprint, and static-prefix
   diagnostics.
 

@@ -216,7 +216,7 @@ def run_terminal_chat(
 
     loaded_config: AgentConfig | None = load_agent_config(config_path) if config_path else None
     if loaded_config is not None:
-        loaded_data = loaded_config.to_dict()
+        loaded_data = loaded_config.to_dict(include_secrets=True)
         loaded_data = _apply_config_cli_updates(
             loaded_data,
             model=model,

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Literal
 
@@ -24,7 +24,7 @@ class PromptSection:
     content: str
     order: int
     stability: PromptStability
-    metadata: Mapping[str, Any]
+    metadata: Mapping[str, Any] = field(hash=False)
 
     def __init__(
         self,
@@ -54,7 +54,7 @@ class PromptSection:
         object.__setattr__(self, "content", content)
         object.__setattr__(self, "order", resolved_order)
         object.__setattr__(self, "stability", stability)
-        object.__setattr__(self, "metadata", MappingProxyType(dict(metadata or {})))
+        object.__setattr__(self, "metadata", _freeze_metadata(metadata or {}))
 
     @property
     def position(self) -> int:
@@ -109,6 +109,40 @@ def prompt_from_sections(
 ) -> Prompt:
     """Build a prompt from any finite sequence of sections."""
     return Prompt(sections=tuple(sections), separator=separator)
+
+
+def _freeze_metadata(metadata: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Recursively freeze built-in metadata containers."""
+    return _freeze_value(metadata, seen=set())
+
+
+def _freeze_value(value: Any, *, seen: set[int]) -> Any:
+    if isinstance(value, Mapping):
+        identity = id(value)
+        if identity in seen:
+            raise ValueError("PromptSection.metadata cannot contain cycles")
+        seen.add(identity)
+        try:
+            frozen: dict[str, Any] = {}
+            for key, item in value.items():
+                if not isinstance(key, str):
+                    raise TypeError("PromptSection.metadata keys must be strings")
+                frozen[key] = _freeze_value(item, seen=seen)
+            return MappingProxyType(frozen)
+        finally:
+            seen.remove(identity)
+    if isinstance(value, list | tuple):
+        identity = id(value)
+        if identity in seen:
+            raise ValueError("PromptSection.metadata cannot contain cycles")
+        seen.add(identity)
+        try:
+            return tuple(_freeze_value(item, seen=seen) for item in value)
+        finally:
+            seen.remove(identity)
+    if isinstance(value, set | frozenset):
+        return frozenset(_freeze_value(item, seen=seen) for item in value)
+    return value
 
 
 __all__ = [

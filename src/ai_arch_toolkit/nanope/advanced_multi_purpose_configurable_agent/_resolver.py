@@ -72,7 +72,9 @@ def resolve_agent_config(
     step_overrides: Mapping[str, Any] | None = None,
 ) -> ResolvedAgentConfig:
     """Resolve defaults, profiles, config, and runtime overrides into one config."""
-    config_dict = config.to_dict() if isinstance(config, AgentConfig) else _plain(config)
+    config_dict = (
+        config.to_dict(include_secrets=True) if isinstance(config, AgentConfig) else _plain(config)
+    )
     profile_registry = profiles or {}
 
     merged = _merge_static_layers(

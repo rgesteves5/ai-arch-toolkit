@@ -13,6 +13,7 @@ from ai_arch_toolkit.toolkit.prompts import (
     PromptSection,
     prompt_from_sections,
     render_prompt,
+    validate_cache_layout,
 )
 
 
@@ -125,7 +126,22 @@ def test_empty_and_non_string_names_are_rejected() -> None:
         PromptSection(name=123, content="value")  # type: ignore[arg-type]
 
 
-def test_stability_must_form_a_reusable_prefix() -> None:
+def test_render_preserves_order_when_static_content_follows_request_content() -> None:
+    prompt = Prompt(
+        sections=(
+            PromptSection(name="request", content="dynamic", order=100, stability="request"),
+            PromptSection(name="rules", content="stable", order=200, stability="static"),
+        )
+    )
+
+    rendered = render_prompt(prompt)
+
+    assert rendered.section_names == ("request", "rules")
+    assert rendered.text == "dynamic\n\nstable"
+    assert rendered.stable_prefix_end is None
+
+
+def test_cache_layout_validation_is_strict_and_opt_in() -> None:
     prompt = Prompt(
         sections=(
             PromptSection(name="request", content="dynamic", order=100, stability="request"),
@@ -134,7 +150,19 @@ def test_stability_must_form_a_reusable_prefix() -> None:
     )
 
     with pytest.raises(ValueError, match=r"static.*follows.*request"):
-        render_prompt(prompt)
+        validate_cache_layout(prompt)
+
+
+def test_cache_layout_validation_accepts_static_session_request_order() -> None:
+    prompt = Prompt(
+        sections=(
+            PromptSection(name="rules", content="stable", order=100),
+            PromptSection(name="session", content="session", order=200, stability="session"),
+            PromptSection(name="request", content="request", order=300, stability="request"),
+        )
+    )
+
+    assert validate_cache_layout(prompt) is None
 
 
 def test_stable_prefix_excludes_session_and_request_sections() -> None:
@@ -202,13 +230,46 @@ def test_invalid_content_and_order_types_are_rejected() -> None:
 
 
 def test_metadata_is_copied_and_read_only() -> None:
-    original = {"source": "test"}
+    original = {
+        "source": "test",
+        "nested": {"values": ["a"]},
+        "tags": {"one", "two"},
+    }
     section = PromptSection(name="meta", content="value", metadata=original)
     original["source"] = "changed"
+    original["nested"]["values"].append("changed")
 
     assert section.metadata["source"] == "test"
+    assert section.metadata["nested"] == {"values": ("a",)}
+    assert section.metadata["tags"] == frozenset({"one", "two"})
     with pytest.raises(TypeError):
         section.metadata["source"] = "blocked"  # type: ignore[index]
+    with pytest.raises(TypeError):
+        section.metadata["nested"]["values"] = ()  # type: ignore[index]
+
+
+def test_metadata_rejects_non_string_keys_and_cycles() -> None:
+    with pytest.raises(TypeError, match="metadata keys must be strings"):
+        PromptSection(name="meta", content="value", metadata={1: "value"})  # type: ignore[dict-item]
+
+    cyclic: dict[str, object] = {}
+    cyclic["self"] = cyclic
+    with pytest.raises(ValueError, match="metadata cannot contain cycles"):
+        PromptSection(name="meta", content="value", metadata=cyclic)
+
+    cyclic_list: list[object] = []
+    cyclic_list.append(cyclic_list)
+    with pytest.raises(ValueError, match="metadata cannot contain cycles"):
+        PromptSection(name="meta", content="value", metadata={"items": cyclic_list})
+
+
+def test_prompt_sections_and_prompts_are_hashable_without_ignoring_metadata_equality() -> None:
+    first = PromptSection(name="rules", content="RULES", metadata={"version": 1})
+    second = PromptSection(name="rules", content="RULES", metadata={"version": 2})
+
+    assert first != second
+    assert hash(first) == hash(second)
+    assert hash(Prompt(sections=(first,))) == hash(Prompt(sections=(second,)))
 
 
 def test_prompt_from_sections_freezes_a_sequence() -> None:
@@ -254,3 +315,4 @@ def test_toolkit_package_reexports_prompt_api() -> None:
     assert toolkit_api.Prompt is Prompt
     assert toolkit_api.PromptSection is PromptSection
     assert toolkit_api.render_prompt is render_prompt
+    assert toolkit_api.validate_cache_layout is validate_cache_layout

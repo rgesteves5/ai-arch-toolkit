@@ -35,6 +35,10 @@ Sections are sorted by `order`. Sections with the same order retain insertion or
 Names must be unique; duplicate names raise `ValueError` instead of silently overriding
 or duplicating instructions. The configured separator defaults to two newlines.
 
+Metadata is recursively frozen for built-in containers. It participates in object equality
+but is excluded from hashing and from the rendered-text fingerprint, so prompts and sections
+remain hashable without conflating metadata with model-visible content.
+
 The fingerprint is SHA-256 over the exact UTF-8 bytes of `RenderedPrompt.text`, including
 whitespace. It identifies the rendered prompt, not the entire generation: model, tools,
 messages, parameters, and output schema must be tracked separately for complete replay.
@@ -76,10 +80,19 @@ prompt = Prompt(
 )
 ```
 
-Stability must progress `static → session → request`. Rendering fails if volatile content
-appears before a more stable section because that layout silently breaks reusable prompt
-prefixes. `RenderedPrompt.stable_prefix` and `stable_prefix_end` expose the initial static
-text for diagnostics.
+`order` is always the only semantic ordering key. Stability never reorders or rejects a
+prompt: a static section after session/request content is valid, but it cannot be part of the
+initial reusable prefix. `RenderedPrompt.stable_prefix` and `stable_prefix_end` expose that
+initial static text for diagnostics.
+
+Applications that require a cache-optimized `static → session → request` layout can validate
+it explicitly:
+
+```python
+from ai_arch_toolkit.toolkit.prompts import validate_cache_layout
+
+validate_cache_layout(prompt)  # raises ValueError for a non-monotonic layout
+```
 
 This is a layout diagnostic, not provider cache activation. Provider caching still depends
 on each API and the current core content contract. Use `cache()` for the Anthropic content
@@ -114,6 +127,13 @@ prompt = Prompt(
 rendered = render_prompt(prompt)
 ```
 
+## Template scope
+
+The first public API intentionally treats every section as literal text. It does not perform
+variable substitution, so JSON, shell, code, Mermaid, and other brace- or dollar-heavy
+content needs no escaping. A template contract will only be added after its syntax is
+validated against real prompts from multiple projects.
+
 ## API
 
 ```python
@@ -133,8 +153,11 @@ PromptSection(
 )
 
 render_prompt(prompt: Prompt) -> RenderedPrompt
+validate_cache_layout(prompt: Prompt) -> None
 prompt_from_sections(sections, *, separator="\n\n") -> Prompt
 ```
 
 `position=` remains a temporary compatibility alias for Nanope's experimental configurable
-agent. New toolkit code should use `order=`.
+agent. New toolkit code should use `order=`. Nanope config mappings still place an extra
+section without either field at order `1000`; direct `PromptSection` construction uses the
+toolkit default `0`. Duplicate names, including collisions with Nanope built-ins, are rejected.

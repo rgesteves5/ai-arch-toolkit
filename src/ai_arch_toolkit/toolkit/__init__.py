@@ -58,6 +58,7 @@ from ai_arch_toolkit.toolkit.prompts import (
     RenderedPrompt,
     prompt_from_sections,
     render_prompt,
+    validate_cache_layout,
 )
 
 __all__ = [
@@ -113,4 +114,5 @@ __all__ = [
     "self_discovery_initial_state",
     "tot_flow",
     "tot_initial_state",
+    "validate_cache_layout",
 ]

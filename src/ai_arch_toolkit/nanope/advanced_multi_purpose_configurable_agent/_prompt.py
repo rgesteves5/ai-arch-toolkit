@@ -10,7 +10,6 @@ from ai_arch_toolkit.nanope.advanced_multi_purpose_configurable_agent._config im
 )
 from ai_arch_toolkit.toolkit.prompts import (
     Prompt,
-    PromptSection as ToolkitPromptSection,
     RenderedPrompt,
     render_prompt,
 )
@@ -26,7 +25,7 @@ _POSITION_CONSTRAINTS = 600
 _POSITION_MEMORY = 700
 
 
-type SectionProvider = Callable[[AgentConfig], ToolkitPromptSection | None]
+type SectionProvider = Callable[[AgentConfig], PromptSection | None]
 """Callable that produces a prompt section from runtime config, or None to skip."""
 
 
@@ -44,10 +43,10 @@ def render_system_prompt(
             Combined with ``config.context.extra_sections`` and sorted by
             ``PromptSection.order`` (ascending, insertion-stable on ties).
     """
-    sections: list[ToolkitPromptSection] = [
+    sections: list[PromptSection] = [
         PromptSection(
             name="identity",
-            position=_POSITION_IDENTITY,
+            order=_POSITION_IDENTITY,
             content=(
                 f"Agent name: {config.identity.name}\n"
                 f"Agent description: {config.identity.description}"
@@ -59,7 +58,7 @@ def render_system_prompt(
         sections.append(
             PromptSection(
                 name="role",
-                position=_POSITION_ROLE,
+                order=_POSITION_ROLE,
                 content=f"Role: {config.context.role}",
             )
         )
@@ -67,7 +66,7 @@ def render_system_prompt(
         sections.append(
             PromptSection(
                 name="goals",
-                position=_POSITION_GOALS,
+                order=_POSITION_GOALS,
                 content=_bullet_section("Goals", config.context.goals),
             )
         )
@@ -75,7 +74,7 @@ def render_system_prompt(
         sections.append(
             PromptSection(
                 name="tasks",
-                position=_POSITION_TASKS,
+                order=_POSITION_TASKS,
                 content=_bullet_section("Tasks", config.context.tasks),
             )
         )
@@ -83,7 +82,7 @@ def render_system_prompt(
         sections.append(
             PromptSection(
                 name="style",
-                position=_POSITION_STYLE,
+                order=_POSITION_STYLE,
                 content=f"Style: {config.context.style}",
             )
         )
@@ -91,7 +90,7 @@ def render_system_prompt(
         sections.append(
             PromptSection(
                 name="constraints",
-                position=_POSITION_CONSTRAINTS,
+                order=_POSITION_CONSTRAINTS,
                 content=_bullet_section("Behavior constraints", config.context.constraints),
             )
         )
@@ -115,7 +114,7 @@ def render_system_prompt(
         sections.append(
             PromptSection(
                 name="memory",
-                position=_POSITION_MEMORY,
+                order=_POSITION_MEMORY,
                 content="\n".join(memory_lines),
             )
         )

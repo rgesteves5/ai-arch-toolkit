@@ -34,6 +34,10 @@ and behavior constraints.
 - structured output schema
 - streaming on/off
 
+`AgentConfig.to_dict()` omits `api_key` by default, and configuration fingerprints never
+include it. Internal runtime resolution preserves explicitly configured keys without exposing
+them through normal serialization.
+
 ### Reasoning Strategy
 
 The agent supports configurable reasoning modes using existing toolkit flows:

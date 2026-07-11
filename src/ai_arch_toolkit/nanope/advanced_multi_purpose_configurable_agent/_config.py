@@ -11,12 +11,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Literal
 
-from ai_arch_toolkit.toolkit.prompts import (
-    PromptSection as ToolkitPromptSection,
-)
-from ai_arch_toolkit.toolkit.prompts import (
-    PromptStability,
-)
+from ai_arch_toolkit.toolkit.prompts import PromptSection
 
 type ReasoningStrategy = Literal[
     "react",
@@ -75,43 +70,17 @@ def _fingerprint(data: Mapping[str, Any]) -> str:
 
 
 DEFAULT_SECTION_POSITION = 1000
-"""Default position for prompt sections without an explicit one.
+"""Default order for Nanope section mappings without an explicit value.
 
 Built-in sections occupy 100-700; this default places custom sections after
 all built-ins. Use values between (e.g. 350 to land between goals and tasks)
-or negatives to land before identity.
+or negatives to land before identity. Direct ``PromptSection`` construction
+uses the toolkit default order of zero.
 """
 
 
-class PromptSection(ToolkitPromptSection):
-    """Nanope-compatible prompt section defaulting after built-in sections."""
-
-    __slots__ = ()
-
-    def __init__(
-        self,
-        *,
-        name: str,
-        content: str,
-        position: int | None = None,
-        order: int | None = None,
-        stability: PromptStability = "static",
-        metadata: Mapping[str, Any] | None = None,
-    ) -> None:
-        if position is None and order is None:
-            position = DEFAULT_SECTION_POSITION
-        super().__init__(
-            name=name,
-            content=content,
-            position=position,
-            order=order,
-            stability=stability,
-            metadata=metadata,
-        )
-
-
-def _coerce_prompt_section(value: Any) -> ToolkitPromptSection:
-    if isinstance(value, ToolkitPromptSection):
+def _coerce_prompt_section(value: Any) -> PromptSection:
+    if isinstance(value, PromptSection):
         return value
     if isinstance(value, Mapping):
         raw_order = value.get("order", value.get("position", DEFAULT_SECTION_POSITION))
@@ -147,8 +116,8 @@ class AgentContext:
 
     ``extra_sections`` carries domain-specific prompt sections that don't fit
     the built-in role/goals/tasks/style/constraints shape. Each section has an
-    optional ``position`` that controls render order (see
-    ``_prompt.PromptSection``); by default they land after the built-ins.
+    optional ``order`` (or legacy ``position``) that controls render order.
+    Mapping entries without either value land after the built-ins.
     """
 
     role: str = ""
@@ -156,7 +125,7 @@ class AgentContext:
     tasks: tuple[str, ...] = ()
     style: str = ""
     constraints: tuple[str, ...] = ()
-    extra_sections: tuple[ToolkitPromptSection, ...] = ()
+    extra_sections: tuple[PromptSection, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "goals", tuple(str(v) for v in self.goals))
@@ -302,12 +271,12 @@ class AgentConfig:
 
     @property
     def fingerprint(self) -> str:
-        """Stable fingerprint of the resolved config."""
+        """Stable fingerprint of the resolved config, excluding secrets."""
         return _fingerprint(self.to_dict())
 
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to plain serializable data."""
-        return {
+    def to_dict(self, *, include_secrets: bool = False) -> dict[str, Any]:
+        """Convert to plain serializable data, omitting secrets by default."""
+        data = {
             "identity": {
                 "name": self.identity.name,
                 "description": self.identity.description,
@@ -335,7 +304,6 @@ class AgentConfig:
                 "max_tokens": self.model.max_tokens,
                 "timeout": self.model.timeout,
                 "fallback": list(self.model.fallback),
-                "api_key": self.model.api_key,
                 "base_url": self.model.base_url,
             },
             "reasoning": {
@@ -381,6 +349,9 @@ class AgentConfig:
                 "deny": list(self.override_policy.deny),
             },
         }
+        if include_secrets:
+            data["model"]["api_key"] = self.model.api_key
+        return data
 
 
 @dataclass(frozen=True, slots=True)
