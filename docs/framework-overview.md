@@ -15,7 +15,8 @@ This document summarizes the **ai-arch-toolkit** package: its structure, feature
 7. A **general-purpose graph layer** (`Graph`, `Node[T]`, `Edge`, algorithms)
 8. **Graph-backed memory** for agents (search, views, middleware, presets)
 9. **Knowledge registry** for prompt-injectable reference data
-10. **Moderation helpers** for classifier-style guardrails and middleware
+10. **Structured prompts** with deterministic section ordering and exact fingerprints
+11. **Moderation helpers** for classifier-style guardrails and middleware
 
 The public API is re-exported from the top level:
 
@@ -144,6 +145,20 @@ Built-in agent flow factories implemented on top of `Flow`. See [Agents and Capa
 | `generate_review_flow()` | Generate → Review → Retry loop | generate, review |
 
 Each factory has a companion `*_initial_state(task)` helper that creates the initial operational dict.
+
+### Structured Prompts (`toolkit/prompts/`)
+
+- **`PromptSection`** — named prompt content with deterministic `order` and
+  `static`/`session`/`request` stability.
+- **`Prompt`** — immutable collection of sections and a separator.
+- **`render_prompt()`** — validates unique names and renders strictly by section order.
+- **`validate_cache_layout()`** — optional strict validation for a cache-optimized
+  `static → session → request` layout.
+- **`RenderedPrompt`** — exact text, ordered sections, SHA-256 fingerprint, and static-prefix
+  diagnostics.
+
+Knowledge and prompt composition remain separate: `KnowledgeRegistry` selects reusable
+content, while `Prompt` controls its placement and provenance.
 
 ### Pre-built Tools (`toolkit/tools/`)
 

@@ -2,6 +2,10 @@
 
 A sync, in-memory registry for prompt-injectable reference data. Use it for domain knowledge, style guides, few-shot examples, or any structured context you want to weave into a system prompt.
 
+`KnowledgeRegistry` owns reusable content; [Structured Prompts](prompts.md) owns section
+order, stability, rendering, and fingerprints. Use `as_context()` as the content of a
+`PromptSection` when both are needed.
+
 ```python
 from ai_arch_toolkit import KnowledgeRegistry
 

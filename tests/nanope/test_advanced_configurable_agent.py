@@ -14,9 +14,11 @@ from ai_arch_toolkit.nanope.advanced_multi_purpose_configurable_agent import (
     CapabilityProfile,
     ChatSession,
     ConfigurableAgent,
+    OverridePolicy,
     ToolGovernance,
     ToolRegistry,
     agent_config_from_mapping,
+    apply_overrides,
     build_chat_agent,
     create_private_memory,
     load_agent_config,
@@ -100,6 +102,65 @@ def test_config_requires_identity_and_model() -> None:
         agent_config_from_mapping({"name": "a", "description": "b"})
 
 
+def test_agent_config_omits_api_key_from_serialization_and_fingerprint() -> None:
+    first = agent_config_from_mapping(
+        {**_base_config(), "model": {"name": "test-model", "api_key": "secret-one"}}
+    )
+    second = agent_config_from_mapping(
+        {**_base_config(), "model": {"name": "test-model", "api_key": "secret-two"}}
+    )
+
+    assert "api_key" not in first.to_dict()["model"]
+    assert first.to_dict(include_secrets=True)["model"]["api_key"] == "secret-one"
+    assert first.fingerprint == second.fingerprint
+
+
+def test_agent_config_resolution_preserves_api_key_for_runtime_use() -> None:
+    config = agent_config_from_mapping(
+        {**_base_config(), "model": {"name": "test-model", "api_key": "runtime-secret"}}
+    )
+
+    resolved = resolve_agent_config(config)
+
+    assert resolved.config.model.api_key == "runtime-secret"
+
+
+@pytest.mark.parametrize("layer_name", ["session_overrides", "run_overrides", "step_overrides"])
+def test_sensitive_override_values_are_redacted_from_reports(layer_name: str) -> None:
+    resolved = resolve_agent_config(
+        _base_config(),
+        **{layer_name: {"model": {"api_key": "runtime-secret"}}},
+    )
+
+    assert resolved.config.model.api_key == "runtime-secret"
+    assert resolved.override_report.accepted == {"model.api_key": "[REDACTED]"}
+    assert "runtime-secret" not in repr(resolved.override_report)
+
+
+def test_override_report_redacts_conventional_secret_names() -> None:
+    _, report = apply_overrides(
+        {},
+        {
+            "auth": {
+                "api-key": "api-key-value",
+                "access_token": "token-value",
+                "client_secret": "secret-value",
+                "database_password": "password-value",
+                "display_name": "visible-value",
+            }
+        },
+        OverridePolicy(),
+    )
+
+    assert report.accepted == {
+        "auth.api-key": "[REDACTED]",
+        "auth.access_token": "[REDACTED]",
+        "auth.client_secret": "[REDACTED]",
+        "auth.database_password": "[REDACTED]",
+        "auth.display_name": "visible-value",
+    }
+
+
 def test_unknown_reasoning_strategy_is_rejected() -> None:
     with pytest.raises(ValueError, match="supported strategies"):
         agent_config_from_mapping(
@@ -176,6 +237,59 @@ def test_extra_section_position_can_interleave_with_built_ins() -> None:
     assert prompt.section_names == ("identity", "role", "goals", "menus", "tasks")
 
 
+def test_dynamic_extra_section_can_interleave_with_later_static_built_ins() -> None:
+    config = agent_config_from_mapping(
+        {
+            **_base_config(),
+            "context": {
+                "goals": ["produce a categorization"],
+                "tasks": ["pick by stable key"],
+                "extra_sections": [
+                    {
+                        "name": "menus",
+                        "content": "DYNAMIC MENUS",
+                        "position": 350,
+                        "stability": "session",
+                    },
+                ],
+            },
+        }
+    )
+
+    prompt = render_system_prompt(config)
+
+    assert prompt.section_names == ("identity", "goals", "menus", "tasks")
+    assert prompt.stable_prefix.endswith("Goals:\n- produce a categorization")
+    assert "DYNAMIC MENUS" not in prompt.stable_prefix
+    assert "Tasks:" not in prompt.stable_prefix
+
+
+def test_request_extra_section_can_precede_static_constraints() -> None:
+    config = agent_config_from_mapping(
+        {
+            **_base_config(),
+            "context": {
+                "constraints": ["Return valid JSON"],
+                "extra_sections": [
+                    {
+                        "name": "request_context",
+                        "content": "CURRENT REQUEST",
+                        "position": 550,
+                        "stability": "request",
+                    },
+                ],
+            },
+        }
+    )
+
+    prompt = render_system_prompt(config)
+
+    assert prompt.section_names == ("identity", "request_context", "constraints")
+    assert "CURRENT REQUEST" in prompt.text
+    assert "Behavior constraints:\n- Return valid JSON" in prompt.text
+    assert "CURRENT REQUEST" not in prompt.stable_prefix
+
+
 def test_extra_section_negative_position_goes_before_identity() -> None:
     config = agent_config_from_mapping(
         {
@@ -210,6 +324,52 @@ def test_extra_sections_round_trip_through_to_dict() -> None:
     assert rehydrated.context.extra_sections == config.context.extra_sections
 
 
+def test_nanope_mapping_default_order_remains_after_built_ins() -> None:
+    config = agent_config_from_mapping(
+        {
+            **_base_config(),
+            "context": {"extra_sections": [{"name": "extra", "content": "EXTRA"}]},
+        }
+    )
+
+    assert config.context.extra_sections[0].order == 1000
+    assert render_system_prompt(config).section_names == ("identity", "extra")
+
+
+def test_extra_section_stability_and_metadata_round_trip() -> None:
+    config = agent_config_from_mapping(
+        {
+            **_base_config(),
+            "context": {
+                "extra_sections": [
+                    {
+                        "name": "request_context",
+                        "content": "CURRENT REQUEST",
+                        "position": 800,
+                        "stability": "request",
+                        "metadata": {"source": "runtime"},
+                    },
+                ],
+            },
+        }
+    )
+
+    rehydrated = agent_config_from_mapping(config.to_dict())
+    section = rehydrated.context.extra_sections[0]
+
+    assert section.stability == "request"
+    assert section.metadata == {"source": "runtime"}
+
+
+def test_nanope_prompt_fingerprint_uses_toolkit_format() -> None:
+    config = agent_config_from_mapping(_base_config())
+
+    prompt = render_system_prompt(config)
+
+    assert prompt.fingerprint.startswith("sha256:")
+    assert prompt.text == prompt.system
+
+
 def test_section_providers_add_runtime_sections() -> None:
     from ai_arch_toolkit.nanope.advanced_multi_purpose_configurable_agent import (
         PromptSection,
@@ -229,6 +389,35 @@ def test_section_providers_add_runtime_sections() -> None:
     assert "MENUS" in prompt.system
 
 
+def test_duplicate_extra_section_name_is_rejected_during_render() -> None:
+    config = agent_config_from_mapping(
+        {
+            **_base_config(),
+            "context": {
+                "role": "Analyst",
+                "extra_sections": [{"name": "role", "content": "SECOND ROLE"}],
+            },
+        }
+    )
+
+    with pytest.raises(ValueError, match="duplicates: 'role'"):
+        render_system_prompt(config)
+
+
+def test_duplicate_provider_section_name_is_rejected_during_render() -> None:
+    from ai_arch_toolkit.nanope.advanced_multi_purpose_configurable_agent import (
+        PromptSection,
+    )
+
+    config = agent_config_from_mapping({**_base_config(), "context": {"role": "Analyst"}})
+
+    def duplicate_role(_config) -> PromptSection:
+        return PromptSection(name="role", content="SECOND ROLE", order=900)
+
+    with pytest.raises(ValueError, match="duplicates: 'role'"):
+        render_system_prompt(config, providers=[duplicate_role])
+
+
 def test_promptsection_requires_name() -> None:
     from ai_arch_toolkit.nanope.advanced_multi_purpose_configurable_agent import (
         PromptSection,
@@ -236,6 +425,18 @@ def test_promptsection_requires_name() -> None:
 
     with pytest.raises(ValueError, match=r"PromptSection\.name"):
         PromptSection(name="", content="x")
+
+
+def test_nanope_reexports_toolkit_promptsection_without_subclassing() -> None:
+    from ai_arch_toolkit.nanope.advanced_multi_purpose_configurable_agent import (
+        PromptSection as NanopePromptSection,
+    )
+    from ai_arch_toolkit.toolkit.prompts import PromptSection as ToolkitPromptSection
+
+    assert NanopePromptSection is ToolkitPromptSection
+    nanope_section = NanopePromptSection(name="same", content="SAME")
+    assert nanope_section.order == 0
+    assert nanope_section == ToolkitPromptSection(name="same", content="SAME")
 
 
 def test_extra_sections_append_across_profile_and_config_layers() -> None:

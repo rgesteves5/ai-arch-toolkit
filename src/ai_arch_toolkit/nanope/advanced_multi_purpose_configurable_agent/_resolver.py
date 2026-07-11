@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from ai_arch_toolkit.core import redact
 from ai_arch_toolkit.nanope.advanced_multi_purpose_configurable_agent._config import (
     AgentConfig,
     CapabilityProfile,
@@ -72,7 +73,9 @@ def resolve_agent_config(
     step_overrides: Mapping[str, Any] | None = None,
 ) -> ResolvedAgentConfig:
     """Resolve defaults, profiles, config, and runtime overrides into one config."""
-    config_dict = config.to_dict() if isinstance(config, AgentConfig) else _plain(config)
+    config_dict = (
+        config.to_dict(include_secrets=True) if isinstance(config, AgentConfig) else _plain(config)
+    )
     profile_registry = profiles or {}
 
     merged = _merge_static_layers(
@@ -155,9 +158,13 @@ def apply_overrides(
         if path in _LIST_APPEND_KEYS:
             value = _append_unique(_get_path(result, path), value)
         _set_path(result, path, value)
-        accepted[path] = value
+        accepted[path] = _override_report_value(path, value)
 
     return result, OverrideReport(accepted=accepted, rejected=rejected)
+
+
+def _override_report_value(path: str, value: Any) -> Any:
+    return redact({path: value})[path]
 
 
 def _profile_names(config: AgentConfig | Mapping[str, Any]) -> tuple[str, ...]:
