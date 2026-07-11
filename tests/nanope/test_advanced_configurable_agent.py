@@ -210,6 +210,40 @@ def test_extra_sections_round_trip_through_to_dict() -> None:
     assert rehydrated.context.extra_sections == config.context.extra_sections
 
 
+def test_extra_section_stability_and_metadata_round_trip() -> None:
+    config = agent_config_from_mapping(
+        {
+            **_base_config(),
+            "context": {
+                "extra_sections": [
+                    {
+                        "name": "request_context",
+                        "content": "CURRENT REQUEST",
+                        "position": 800,
+                        "stability": "request",
+                        "metadata": {"source": "runtime"},
+                    },
+                ],
+            },
+        }
+    )
+
+    rehydrated = agent_config_from_mapping(config.to_dict())
+    section = rehydrated.context.extra_sections[0]
+
+    assert section.stability == "request"
+    assert section.metadata == {"source": "runtime"}
+
+
+def test_nanope_prompt_fingerprint_uses_toolkit_format() -> None:
+    config = agent_config_from_mapping(_base_config())
+
+    prompt = render_system_prompt(config)
+
+    assert prompt.fingerprint.startswith("sha256:")
+    assert prompt.text == prompt.system
+
+
 def test_section_providers_add_runtime_sections() -> None:
     from ai_arch_toolkit.nanope.advanced_multi_purpose_configurable_agent import (
         PromptSection,

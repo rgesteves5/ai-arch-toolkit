@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
 
 from ai_arch_toolkit.nanope.advanced_multi_purpose_configurable_agent._config import (
     AgentConfig,
     PromptSection,
+)
+from ai_arch_toolkit.toolkit.prompts import (
+    Prompt,
+    PromptSection as ToolkitPromptSection,
+    RenderedPrompt,
+    render_prompt,
 )
 
 # Built-in section positions. Multiples of 100 leave room for custom sections
@@ -22,22 +26,8 @@ _POSITION_CONSTRAINTS = 600
 _POSITION_MEMORY = 700
 
 
-type SectionProvider = Callable[[AgentConfig], PromptSection | None]
+type SectionProvider = Callable[[AgentConfig], ToolkitPromptSection | None]
 """Callable that produces a prompt section from runtime config, or None to skip."""
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class RenderedPrompt:
-    """Rendered system prompt with metadata for debugging."""
-
-    system: str
-    sections: tuple[PromptSection, ...]
-    fingerprint: str
-
-    @property
-    def section_names(self) -> tuple[str, ...]:
-        """Names of included prompt sections, in render order."""
-        return tuple(section.name for section in self.sections)
 
 
 def render_system_prompt(
@@ -52,9 +42,9 @@ def render_system_prompt(
         providers: Optional callables that produce additional sections from
             runtime data. Each returns a ``PromptSection`` or ``None``.
             Combined with ``config.context.extra_sections`` and sorted by
-            ``PromptSection.position`` (ascending, insertion-stable on ties).
+            ``PromptSection.order`` (ascending, insertion-stable on ties).
     """
-    sections: list[PromptSection] = [
+    sections: list[ToolkitPromptSection] = [
         PromptSection(
             name="identity",
             position=_POSITION_IDENTITY,
@@ -137,16 +127,7 @@ def render_system_prompt(
         if section is not None:
             sections.append(section)
 
-    ordered = _sort_sections(sections)
-    system = "\n\n".join(section.content for section in ordered)
-    fingerprint = hashlib.sha256(system.encode("utf-8")).hexdigest()
-    return RenderedPrompt(system=system, sections=tuple(ordered), fingerprint=fingerprint)
-
-
-def _sort_sections(sections: Sequence[PromptSection]) -> list[PromptSection]:
-    """Sort ascending by position; insertion order preserved on ties."""
-    indexed = sorted(enumerate(sections), key=lambda pair: (pair[1].position, pair[0]))
-    return [section for _index, section in indexed]
+    return render_prompt(Prompt(sections=tuple(sections)))
 
 
 def _bullet_section(title: str, values: tuple[str, ...]) -> str:

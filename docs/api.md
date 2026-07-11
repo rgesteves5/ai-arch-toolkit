@@ -128,6 +128,16 @@ Each factory has a companion `*_initial_state(task)` helper that creates the ini
 | `load_text()`, `load_json()`, `load_toml()`, `load_yaml()`, `load_markdown()` | File loaders |
 | `load_directory()` | Bulk loader (flat or recursive) |
 
+### Toolkit — Structured Prompts
+
+| Symbol | Description |
+|--------|-------------|
+| `PromptSection` | Named content with deterministic order and stability metadata |
+| `Prompt` | Immutable section collection with a configurable separator |
+| `RenderedPrompt` | Exact text, ordered sections, SHA-256 fingerprint, and stable-prefix diagnostics |
+| `render_prompt()` | Validate and render a structured prompt |
+| `prompt_from_sections()` | Freeze a sequence of sections into a `Prompt` |
+
 ### Toolkit — Moderation
 
 | Symbol | Description |

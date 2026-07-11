@@ -15,6 +15,7 @@ This page is the capabilities index — each subsystem now has its own focused p
 | Middleware (before/after hooks, async, execution order) | [Middleware](middleware.md) |
 | Graph-backed agent memory | [Memory](memory.md) |
 | Prompt-injectable reference data | [Knowledge Registry](knowledge.md) |
+| Structured prompt composition, stability, and fingerprints | [Structured Prompts](prompts.md) |
 | Messages and multimodal content | [Content & Messages](content.md) |
 | Cost estimation, the pricing registry, run-wide budgets | [Pricing & Cost Tracking](pricing.md) |
 | Input/output content moderation | [Moderation](moderation.md) |
@@ -144,6 +145,7 @@ result = await flow.run(state)
 | **Middleware** | Hooks into every LLM call | Cost tracking, logging, memory injection |
 | **Memory** | `MemoryMiddleware` + `memory_tools()` | Agents remember across conversations |
 | **Knowledge** | Injected into system prompts | Domain context, style guides |
+| **Structured prompts** | Rendered into `ReasoningSpec.system` or an LLM system prompt | Ordered sections and experiment fingerprints |
 | **Pre-built tools** | 132 ready-to-use tools | Weather, Wikipedia, math, papers, public data |
 | **Server tools** | Provider-hosted web search, code execution | `tools=[web_search()]` |
 | **Tool governance** | Risk levels, approval, blocking | `@tool(requires_approval=True)` |

@@ -11,6 +11,13 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Literal
 
+from ai_arch_toolkit.toolkit.prompts import (
+    PromptSection as ToolkitPromptSection,
+)
+from ai_arch_toolkit.toolkit.prompts import (
+    PromptStability,
+)
+
 type ReasoningStrategy = Literal[
     "react",
     "plan_execute",
@@ -76,27 +83,44 @@ or negatives to land before identity.
 """
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
-class PromptSection:
-    """A named system-prompt section, optionally positioned."""
+class PromptSection(ToolkitPromptSection):
+    """Nanope-compatible prompt section defaulting after built-in sections."""
 
-    name: str
-    content: str
-    position: int = DEFAULT_SECTION_POSITION
+    __slots__ = ()
 
-    def __post_init__(self) -> None:
-        if not self.name:
-            raise ValueError("PromptSection.name is required")
+    def __init__(
+        self,
+        *,
+        name: str,
+        content: str,
+        position: int | None = None,
+        order: int | None = None,
+        stability: PromptStability = "static",
+        metadata: Mapping[str, Any] | None = None,
+    ) -> None:
+        if position is None and order is None:
+            position = DEFAULT_SECTION_POSITION
+        super().__init__(
+            name=name,
+            content=content,
+            position=position,
+            order=order,
+            stability=stability,
+            metadata=metadata,
+        )
 
 
-def _coerce_prompt_section(value: Any) -> PromptSection:
-    if isinstance(value, PromptSection):
+def _coerce_prompt_section(value: Any) -> ToolkitPromptSection:
+    if isinstance(value, ToolkitPromptSection):
         return value
     if isinstance(value, Mapping):
+        raw_order = value.get("order", value.get("position", DEFAULT_SECTION_POSITION))
         return PromptSection(
             name=str(value.get("name", "")),
             content=str(value.get("content", "")),
-            position=int(value.get("position", DEFAULT_SECTION_POSITION)),
+            order=int(raw_order),
+            stability=value.get("stability", "static"),
+            metadata=value.get("metadata") or {},
         )
     raise TypeError(
         f"extra_sections entries must be PromptSection or mapping, got {type(value).__name__}"
@@ -132,7 +156,7 @@ class AgentContext:
     tasks: tuple[str, ...] = ()
     style: str = ""
     constraints: tuple[str, ...] = ()
-    extra_sections: tuple[PromptSection, ...] = ()
+    extra_sections: tuple[ToolkitPromptSection, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "goals", tuple(str(v) for v in self.goals))
@@ -299,6 +323,8 @@ class AgentConfig:
                         "name": section.name,
                         "content": section.content,
                         "position": section.position,
+                        "stability": section.stability,
+                        "metadata": _plain(section.metadata),
                     }
                     for section in self.context.extra_sections
                 ],

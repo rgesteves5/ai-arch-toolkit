@@ -12,6 +12,7 @@ A lightweight, unified LLM client and agent architecture toolkit for Python.
 - **Memory system** — graph-backed agent memory with search, temporal/relational/property views, middleware
 - **Flow orchestration** — sequential, cyclic, and DAG execution over `State`, `Step`, `Policy`, and `Trace`
 - **Knowledge registry** — prompt-injectable reference data with category/tag filtering and file loaders
+- **Structured prompts** — named sections, deterministic rendering, stability diagnostics, and exact fingerprints
 - **Moderation** — protocol-level moderation types plus LLM/OpenAI moderation helpers
 - **Structured output** — native JSON mode + Pydantic model support
 - **Streaming** — text chunks and rich structured events (thinking, tool calls)

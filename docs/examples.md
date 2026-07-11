@@ -69,3 +69,4 @@ All examples live in the `examples/` directory. Each is a self-contained script.
 | 33 | `33_flow_with_llm.py` | Flow calling LLM in each step, accumulating cost and tokens |
 | 34 | `34_knowledge_registry.py` | Register reference data, filter by category/tags, build prompt context |
 | 35 | `35_knowledge_loaders.py` | Load knowledge from files (text, JSON, TOML, Markdown) and directories |
+| 38 | `38_structured_prompts.py` | Compose ordered prompt sections, inject knowledge, inspect stability, and record a fingerprint |

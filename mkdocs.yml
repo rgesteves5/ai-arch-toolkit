@@ -14,6 +14,7 @@ nav:
   - Concurrency & Throttling: concurrency.md
   - LLM Facade: llm.md
   - Content & Messages: content.md
+  - Structured Prompts: prompts.md
   - Tools: tools.md
   - Tools Catalog: tools-catalog.md
   - Tool Governance & Safety: safety.md

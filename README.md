@@ -6,7 +6,7 @@
 
 A lightweight, unified LLM client for Anthropic, OpenAI, Gemini, and xAI — plus
 Flow orchestration, nine built-in agent architectures, a typed graph layer with
-agent memory, knowledge loading, moderation, budgets, and metering. Zero core
+agent memory, structured prompts, knowledge loading, moderation, budgets, and metering. Zero core
 dependencies; bring your own provider SDK.
 
 ## Why
@@ -170,12 +170,13 @@ ai_arch_toolkit/
 │                graph, retry, middleware, pricing, metering, moderation
 └── toolkit/     Convenience layer — Flow orchestration, 9 agent factories
                  under toolkit.agents, budget helpers,
-                 pre-built tools, graph-backed memory, knowledge registry,
+                 pre-built tools, graph-backed memory, structured prompts,
+                 knowledge registry,
                  moderation
 ```
 
 For a deeper read, see [`docs/framework-overview.md`](docs/framework-overview.md)
-and the 37 runnable scripts under [`examples/`](examples/).
+and the 38 runnable scripts under [`examples/`](examples/).
 
 ## Documentation
 
@@ -188,6 +189,7 @@ uv run pdoc ai_arch_toolkit -o site/api
 Browse `docs/` for guides, or jump straight to:
 
 - [`docs/getting-started.md`](docs/getting-started.md)
+- [`docs/prompts.md`](docs/prompts.md)
 - [`docs/framework-overview.md`](docs/framework-overview.md)
 - [`docs/flow-architecture.md`](docs/flow-architecture.md)
 - [`docs/graph.md`](docs/graph.md)

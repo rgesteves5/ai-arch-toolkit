@@ -1,6 +1,6 @@
 # Examples
 
-Thirty-seven runnable scripts that walk through the main public surfaces in the
+Thirty-eight runnable scripts that walk through the main public surfaces in the
 toolkit, from a one-line completion to budgets and metering. Each file is
 self-contained — pick a number, copy-paste, run.
 
@@ -117,6 +117,14 @@ Prompt-injectable reference data.
 | 34 | [`34_knowledge_registry.py`](34_knowledge_registry.py) | `KnowledgeRegistry`, categories, `as_context()` | None |
 | 35 | [`35_knowledge_loaders.py`](35_knowledge_loaders.py) | File and directory loaders (text, json, toml, yaml, markdown) | None |
 
+### 🧩 Structured prompts
+
+Deterministic prompt composition and experiment provenance.
+
+| # | File | What it shows | Key |
+|---|------|---------------|-----|
+| 38 | [`38_structured_prompts.py`](38_structured_prompts.py) | `PromptSection`, stability layout, `KnowledgeRegistry`, and fingerprints | None |
+
 ### 💰 Budgets & metering
 
 Measure what a run costs, and cap it.
@@ -137,7 +145,7 @@ than strict numerical order:
    architecture you need.
 5. **Memory** — 28 → 29 → 30.
 6. **Compose your own flows** — 31, 32, 33.
-7. **Knowledge + reliability** — 34, 35, 22, 23, 36.
+7. **Prompts, knowledge + reliability** — 38, 34, 35, 22, 23, 36.
 8. **Budgets & cost** — 37 (measure a run, then cap it).
 
 For deep notes on examples 28–36, see [`EXAMPLES_REPORT.md`](EXAMPLES_REPORT.md).
