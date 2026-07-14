@@ -1,5 +1,22 @@
 # LLM Facade
 
+## Reusable system prompts
+
+The LLM core accepts model-visible strings and does not depend on toolkit prompt objects:
+
+```python
+from ai_arch_toolkit import LLM, load_prompt
+
+template = load_prompt("prompts/reviewer.prompt.yaml")
+rendered = template.render(language="Python")
+
+llm = LLM("gpt-4.1-nano")
+response = llm.complete_sync("Review this change.", system=rendered.text)
+```
+
+Prompt `layout` controls the input text. `output_schema`/`json_mode` control the model
+response; these are independent settings.
+
 The `LLM` class is the single interface to all providers. The model prefix auto-routes to the right adapter:
 
 ```python

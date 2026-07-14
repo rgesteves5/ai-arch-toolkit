@@ -125,6 +125,9 @@ Each factory has a companion `*_initial_state(task)` helper that creates the ini
 |--------|-------------|
 | `KnowledgeRegistry` | In-memory store for reference data |
 | `KnowledgeEntry` | Entry with `key`, `content`, `format`, `category`, `tags` |
+| `KnowledgeAlreadyExistsError` | Duplicate key without explicit `overwrite=True` |
+| `KnowledgeRegistry.load()` / `.from_directory()` | Resource-backed loading conveniences |
+| `KnowledgeRegistry.search()` | Deterministic lexical search with explainable scores |
 | `load_text()`, `load_json()`, `load_toml()`, `load_yaml()`, `load_markdown()` | File loaders |
 | `load_directory()` | Bulk loader (flat or recursive) |
 
@@ -134,10 +137,30 @@ Each factory has a companion `*_initial_state(task)` helper that creates the ini
 |--------|-------------|
 | `PromptSection` | Named content with deterministic order and stability metadata |
 | `Prompt` | Immutable section collection with a configurable separator |
+| `PromptTemplate`, `PromptTemplateSection` | Reusable sources, variables, and explicit templates |
+| `PromptVariable` | Required/default/type/JSON-Schema variable declaration |
 | `RenderedPrompt` | Exact text, ordered sections, SHA-256 fingerprint, and stable-prefix diagnostics |
+| `PromptConversation`, `PromptMessage` | Ordered system/user/assistant prompts over text or multimodal `Content` |
+| `RenderedPromptConversation`, `RenderedPromptMessage` | Rendered messages and plain LLM request conversion |
 | `render_prompt()` | Validate and render a structured prompt |
+| `load_prompt()` | Load a `.prompt.yaml`, `.prompt.json`, or `.prompt.toml` manifest |
+| `TextLayout`, `MarkdownLayout`, `XmlLayout`, `JsonLayout` | Built-in section layouts |
+| `SeparatorPolicy`, `SectionSpan` | Boundary separators and rendered offsets |
 | `validate_cache_layout()` | Opt-in validation of a cache-optimized stability layout |
 | `prompt_from_sections()` | Freeze a sequence of sections into a `Prompt` |
+
+### Toolkit — Resources
+
+| Symbol | Description |
+|--------|-------------|
+| `Resource`, `ResourceRef`, `ResourceProvenance` | Raw, decoded, parsed, and origin data |
+| `ResourceResolver` | Loader/codec registry and resolution facade |
+| `ResourcePolicy` | Allowed roots, size, symlink, and remote rules |
+| `load_resource()`, `load_resources()` | Load a file or deterministic directory snapshot |
+| `JsonPointer`, `MarkdownHeading`, `LineRange`, `NamedBlock` | Built-in selectors |
+| `serialize_resource_value()` | Text/JSON/YAML/Markdown serialization |
+| `SerializerRegistry` | Resolver-scoped custom serializer registration |
+| `Resource.from_text()` / `.from_bytes()` | Immutable in-memory resource snapshots |
 
 ### Toolkit — Moderation
 

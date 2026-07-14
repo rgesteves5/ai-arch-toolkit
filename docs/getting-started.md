@@ -30,6 +30,21 @@ response = llm.complete_sync("What is the capital of France?")
 print(response.text)
 ```
 
+### Reusable Prompt Files
+
+```python
+from ai_arch_toolkit import LLM, load_prompt
+
+template = load_prompt("prompts/story-writer.prompt.yaml")
+rendered = template.render(genre="mystery", task="Write chapter one")
+
+llm = LLM("gpt-4.1-nano")
+response = llm.complete_sync("Begin.", system=rendered.text)
+```
+
+Prompt loading and rendering require no provider or API key. Install the `prompts` extra
+for the complete YAML, Jinja, and JSON Schema feature set. See [Prompts](prompts.md).
+
 ### Using Tools
 
 ```python
@@ -188,5 +203,6 @@ See `examples/28_memory_graph_basics.py` for the memory layer built on top of th
 ## Next Steps
 
 - See `examples/` for complete working examples
+- Read [Prompts](prompts.md) and the [Context Model](context-model.md)
 - Read the [API docs](api.md) for detailed reference
 - Check the [UV guide](uv-guide.md) for development setup

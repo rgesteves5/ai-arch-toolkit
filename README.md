@@ -6,7 +6,8 @@
 
 A lightweight, unified LLM client for Anthropic, OpenAI, Gemini, and xAI — plus
 Flow orchestration, nine built-in agent architectures, a typed graph layer with
-agent memory, structured prompts, knowledge loading, moderation, budgets, and metering. Zero core
+agent memory, file-backed prompt templates, knowledge loading, moderation, budgets, and
+metering. Zero core
 dependencies; bring your own provider SDK.
 
 ## Why
@@ -37,6 +38,8 @@ Pip works the same way. Extras:
 | `graph`     | `networkx>=3.0` (required by graph + memory backends) |
 | `tokens`    | `tiktoken>=0.7` (local token counting)                |
 | `yaml`      | `pyyaml>=6.0` (YAML knowledge/config loaders)         |
+| `templates` | `jinja2>=3.1` (optional Jinja prompt templates)       |
+| `prompts`   | YAML, Jinja, and JSON Schema prompt support            |
 | `youtube`   | `youtube-transcript-api>=1.2.4`                       |
 | `all`       | Every provider plus every optional feature            |
 | `app`       | Reflex app support plus `graph,yaml`                  |
@@ -130,6 +133,21 @@ print(state["response"].text)
 print(f"Steps: {len(result.trace.steps)} · Cost: ${result.total_cost:.4f}")
 ```
 
+### A prompt from reusable files
+
+```python
+from ai_arch_toolkit import load_prompt
+
+template = load_prompt("prompts/story-writer.prompt.yaml")
+rendered = template.render(genre="mystery", task="Write chapter one")
+
+response = llm.complete_sync("Begin.", system=rendered.text)
+```
+
+Prompt manifests can load TXT, Markdown, JSON, YAML, and TOML fragments and render them as
+plain text, Markdown, XML, or JSON. Validate them locally with
+`ai-arch prompt validate <file>` before calling a model.
+
 ## Provider × feature matrix
 
 |                       | Anthropic | OpenAI | Gemini | xAI |
@@ -171,12 +189,12 @@ ai_arch_toolkit/
 └── toolkit/     Convenience layer — Flow orchestration, 9 agent factories
                  under toolkit.agents, budget helpers,
                  pre-built tools, graph-backed memory, structured prompts,
-                 knowledge registry,
+                 resources, knowledge registry,
                  moderation
 ```
 
 For a deeper read, see [`docs/framework-overview.md`](docs/framework-overview.md)
-and the 38 runnable scripts under [`examples/`](examples/).
+and the 45 runnable scripts under [`examples/`](examples/).
 
 ## Documentation
 
@@ -190,6 +208,8 @@ Browse `docs/` for guides, or jump straight to:
 
 - [`docs/getting-started.md`](docs/getting-started.md)
 - [`docs/prompts.md`](docs/prompts.md)
+- [`docs/context-model.md`](docs/context-model.md)
+- [`docs/resources.md`](docs/resources.md)
 - [`docs/framework-overview.md`](docs/framework-overview.md)
 - [`docs/flow-architecture.md`](docs/flow-architecture.md)
 - [`docs/graph.md`](docs/graph.md)

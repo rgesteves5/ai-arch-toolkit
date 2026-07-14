@@ -41,7 +41,9 @@ ai_arch_toolkit/
 │   ├── budget/        # Budget policy over the meter (BudgetPolicy, BudgetController, BudgetReport)
 │   ├── tools/         # ~120 pre-built tools across 25 domains (+ opt-in dangerous/)
 │   ├── memory/        # Graph-backed memory for agents (GraphStore, views, search)
-│   ├── knowledge/     # Sync registry for prompt-injectable reference data
+│   ├── resources/     # Reusable loaders, codecs, selectors, serializers, policies
+│   ├── knowledge/     # Resource-backed registry for reference data
+│   ├── prompts/       # Sections, templates, layouts, manifests, rendering
 │   └── moderation/    # LLM/OpenAI moderators + ModerationMiddleware
 └── __init__.py        # Re-exports from core/ + toolkit/
 ```
@@ -100,7 +102,15 @@ Graph-backed memory for LLM agents, built on `core/graph/`. `GraphStore` wraps `
 
 #### Knowledge (`toolkit/knowledge/`)
 
-Sync in-memory registry for prompt-injectable reference data. `KnowledgeRegistry` stores `KnowledgeEntry` items with category/tags/format. Querying via `by_category()`, `by_tags()`. `as_context()` builds prompt strings with separator/transform. Loaders: `load_text()`, `load_json()`, `load_toml()`, `load_yaml()`, `load_markdown()`, `load_directory()` (flat or recursive).
+Sync registry for prompt-injectable reference data, built on `toolkit.resources`. `load()` / `from_directory()` preserve parsed data, fingerprints, and provenance. Query via `by_category()` / `by_tags()`. Legacy context and loader helpers remain compatible.
+
+#### Resources (`toolkit/resources/`)
+
+`Resource`, `ResourceRef`, `ResourceResolver`, and `ResourcePolicy` provide reusable local/package loading. Codecs cover text, Markdown, JSON, TOML, YAML, and bytes; selectors cover JSON Pointer, Markdown headings, line ranges, and named blocks.
+
+#### Prompts (`toolkit/prompts/`)
+
+Resolved literal `Prompt` / `PromptSection` plus `PromptTemplate`, typed variables, explicit template engines, Resource/Knowledge sources, versioned manifests, Text/Markdown/XML/JSON layouts, section spans, fingerprints, and provenance. `load_prompt()` is the manifest entry point; default rendering remains byte-compatible.
 
 #### Moderation (`toolkit/moderation/`)
 

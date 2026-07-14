@@ -26,6 +26,14 @@ uv sync --extra dev
 uv sync --extra dev --extra docs
 ```
 
+Prompt features keep the base package dependency-free. Select extras as needed:
+
+```bash
+uv add "ai-arch-toolkit[yaml]"       # YAML resources/manifests
+uv add "ai-arch-toolkit[templates]"  # Jinja templates
+uv add "ai-arch-toolkit[prompts]"    # complete YAML/Jinja/JSON-Schema support
+```
+
 That's it. `uv sync` reads `pyproject.toml`, resolves dependencies using
 `uv.lock`, creates a `.venv/` in the project root, and installs everything —
 typically in under a second.

@@ -39,7 +39,9 @@ ai_arch_toolkit/
 │   ├── flow/          # Flow orchestration (Flow, FlowStep, FlowResult, FlowEvent)
 │   ├── tools/         # Pre-built tools (datetime, geo, shell, Python, web, etc.)
 │   ├── memory/        # Graph-backed memory for agents (GraphStore, views, search)
-│   └── knowledge/     # Sync registry for prompt-injectable reference data
+│   ├── resources/     # Reusable loaders, codecs, selectors, serializers, policies
+│   ├── knowledge/     # Resource-backed registry for reference data
+│   └── prompts/       # Sections, templates, layouts, manifests, rendering
 └── __init__.py        # Re-exports from core/ + toolkit/
 ```
 
@@ -94,7 +96,15 @@ Graph-backed memory for LLM agents, built on `core/graph/`. `GraphStore` wraps `
 
 #### Knowledge (`toolkit/knowledge/`)
 
-Sync in-memory registry for prompt-injectable reference data. `KnowledgeRegistry` stores `KnowledgeEntry` items with category/tags/format. Querying via `by_category()`, `by_tags()`. `as_context()` builds prompt strings with separator/transform. Loaders: `load_text()`, `load_json()`, `load_toml()`, `load_yaml()`, `load_markdown()`, `load_directory()` (flat or recursive).
+Sync in-memory registry for prompt-injectable reference data, built on `toolkit.resources`. `KnowledgeRegistry.load()` / `.from_directory()` preserve parsed data, fingerprints, and provenance. Query via `by_category()` / `by_tags()`. Legacy `as_context()` and `load_text()` / `load_json()` / etc. remain compatibility helpers.
+
+#### Resources (`toolkit/resources/`)
+
+Reusable local/package resource loading with `Resource`, `ResourceRef`, `ResourceResolver`, and `ResourcePolicy`. Built-in codecs cover text, Markdown, JSON, TOML, YAML, and bytes. Selectors include RFC 6901 JSON Pointer, Markdown headings, line ranges, and named blocks; selected values serialize as text, JSON, YAML, or Markdown.
+
+#### Prompts (`toolkit/prompts/`)
+
+`Prompt` remains a resolved immutable collection of literal `PromptSection` values. `PromptTemplate` adds typed variables, explicit stdlib/Jinja engines, Resource/Knowledge sources, and compilation. `load_prompt()` reads versioned `.prompt.yaml` / JSON / TOML manifests. Layouts (`TextLayout`, `MarkdownLayout`, `XmlLayout`, `JsonLayout`) return exact text and section spans; default rendering remains byte-compatible.
 
 #### Runner
 
@@ -105,7 +115,7 @@ Sync in-memory registry for prompt-injectable reference data. `KnowledgeRegistry
 ## Testing Patterns
 
 - **Config**: pytest-asyncio with `asyncio_mode = "auto"` — no `@pytest.mark.asyncio` needed.
-- **Test layout**: `tests/` (core tests), `tests/agents/flows/` (agent flow tests), `tests/toolkit/` (toolkit tool tests), `tests/graph/` (core graph tests), `tests/memory/` (memory tests), `tests/flow/` (flow tests), `tests/knowledge/` (knowledge tests).
+- **Test layout**: `tests/` (core tests), `tests/agents/flows/` (agent flow tests), `tests/toolkit/` (toolkit tool tests), `tests/graph/` (core graph tests), `tests/memory/` (memory tests), `tests/flow/` (flow tests), `tests/resources/`, `tests/prompts/`, and `tests/knowledge/`.
 - **Core test fixtures** (`tests/conftest.py`): `MockResponse` class (mimics `requests.Response`), `mock_post` fixture, `weather_tool` fixture.
 - **Agent test fixtures** (`tests/agents/conftest.py`): `make_response()`, `make_tool_call()` factories. Mock `LLM` with `AsyncMock`, set `llm.complete.side_effect` with pre-built `Response` objects.
 - **Toolkit tests**: Mock `urllib.request.urlopen` for API tools. Use `tmp_path` for filesystem tools.

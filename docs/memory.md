@@ -1,5 +1,16 @@
 # Memory
 
+Memory stores information learned or recorded across runs. It is not the same as a
+[Resource](resources.md) (a loaded content snapshot), [Knowledge](knowledge.md) (application
+reference content under stable keys), or a [Prompt](prompts.md) (resolved instructions).
+
+| Use | Subsystem |
+|---|---|
+| Read a checked-in style guide | Resources |
+| Register that guide as `company.style` | Knowledge |
+| Compose it with role and request instructions | Prompts |
+| Remember a user's preference after a conversation | Memory |
+
 Graph-backed memory for agents. Built on the [`core/graph/`](graph.md) layer: every memory is a `Node`, relationships are `Edge`s, and a `GraphStore` coordinates the backend, an optional vector index, and an optional embedding function.
 
 The whole API is async-first. All symbols below are re-exported from the top-level package (`from ai_arch_toolkit import GraphStore, Node, ...`) or from `ai_arch_toolkit.toolkit.memory`.

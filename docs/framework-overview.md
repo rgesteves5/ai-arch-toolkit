@@ -14,8 +14,9 @@ This document summarizes the **ai-arch-toolkit** package: its structure, feature
 6. **Pre-built safe tools** plus explicit opt-in dangerous tools for files, shell, Python, and arbitrary URL fetching
 7. A **general-purpose graph layer** (`Graph`, `Node[T]`, `Edge`, algorithms)
 8. **Graph-backed memory** for agents (search, views, middleware, presets)
-9. **Knowledge registry** for prompt-injectable reference data
-10. **Structured prompts** with deterministic section ordering and exact fingerprints
+9. **Resources** for reusable file loading, parsing, selection, and provenance
+10. **Knowledge registry** for categorized prompt-injectable reference data
+11. **Structured prompts** with files, templates, layouts, manifests, and exact fingerprints
 11. **Moderation helpers** for classifier-style guardrails and middleware
 
 The public API is re-exported from the top level:
@@ -150,15 +151,26 @@ Each factory has a companion `*_initial_state(task)` helper that creates the ini
 
 - **`PromptSection`** — named prompt content with deterministic `order` and
   `static`/`session`/`request` stability.
-- **`Prompt`** — immutable collection of sections and a separator.
+- **`Prompt`** — immutable collection of fully resolved literal sections.
+- **`PromptTemplate`** — reusable sources, typed variables, and explicit template engines.
+- **`load_prompt()`** — loads versioned YAML/JSON/TOML manifests.
+- **Layouts** — deterministic Text, Markdown, XML, and JSON serialization with section spans.
 - **`render_prompt()`** — validates unique names and renders strictly by section order.
 - **`validate_cache_layout()`** — optional strict validation for a cache-optimized
   `static → session → request` layout.
 - **`RenderedPrompt`** — exact text, ordered sections, SHA-256 fingerprint, and static-prefix
   diagnostics.
 
-Knowledge and prompt composition remain separate: `KnowledgeRegistry` selects reusable
-content, while `Prompt` controls its placement and provenance.
+Resources load and parse content; Knowledge catalogs reusable content; PromptTemplate resolves
+sources and variables; Prompt controls final section order; layouts produce model-visible text.
+
+### Resources (`toolkit/resources/`)
+
+- **`Resource` / `ResourceRef`** — raw bytes, decoded text, parsed data, fingerprint, provenance.
+- **`ResourceResolver`** — composable loaders and codecs for local/package resources.
+- **Selectors** — JSON Pointer, Markdown headings, line ranges, named blocks.
+- **Serializers** — text, JSON, YAML, and Markdown fragment rendering.
+- **`ResourcePolicy`** — allowed roots, size limits, symlinks, and remote-access policy.
 
 ### Pre-built Tools (`toolkit/tools/`)
 
@@ -202,8 +214,8 @@ Sync in-memory registry for prompt-injectable reference data.
 
 - **`KnowledgeRegistry`** — stores `KnowledgeEntry` items with category, tags, and format.
 - Querying: `by_category()`, `by_tags()` (match_all or match_any).
-- **`as_context()`** — builds prompt strings with separator/transform.
-- Loaders: `load_text()`, `load_json()`, `load_toml()`, `load_yaml()`, `load_markdown()`, `load_directory()` (flat or recursive).
+- **`load()` / `from_directory()`** — register Resources with parsed data and provenance.
+- **`as_context()`** and the original loaders remain compatibility helpers.
 
 ### Moderation (`toolkit/moderation/`)
 
@@ -262,14 +274,16 @@ src/ai_arch_toolkit/
     │   └── _executor.py # execute_flow(), iter_flow()
     ├── tools/           # Pre-built tools
     ├── memory/          # Graph-backed memory (GraphStore, views, search)
-    ├── knowledge/       # Knowledge registry + loaders
+    ├── resources/       # Resource loading, codecs, selectors, serializers
+    ├── knowledge/       # Knowledge registry built on Resources
+    ├── prompts/         # Templates, manifests, layouts, rendering
     ├── moderation/      # LLM/OpenAI moderation helpers
     └── _runner.py       # run_tools() convenience wrapper
 ```
 
 Supporting directories:
 
-- **`examples/`** — examples (01–36): hello world, streaming, tools, agent flows, middleware, server tools, memory, flows, knowledge, fallback chains
+- **`examples/`** — runnable examples covering LLMs, agents, resources, prompts, knowledge, and flows
 - **`tests/`** — `tests/` (core), `tests/agents/`, `tests/agents/flows/`, `tests/toolkit/`, `tests/graph/`, `tests/memory/`, `tests/knowledge/`, `tests/flow/`
 - **`research/`** — standalone Markdown reference guides (not part of the package)
 - **`docs/`** — MkDocs site source
@@ -295,7 +309,9 @@ Supporting directories:
 | **Agent flows** | Built-in flow factories for ReAct-style loops, planners, tree search, and generate-review workflows. |
 | **Graph** | `Graph` facade with `Node[T]`/`Edge`, algorithms (BFS, DFS, PageRank, etc.), persistence. |
 | **Memory** | `GraphStore` with keyword/vector search, temporal/relational/property views, middleware. |
-| **Knowledge** | `KnowledgeRegistry` with category/tag filtering, context building, file loaders. |
+| **Resources** | TXT/Markdown/JSON/YAML/TOML loading, selection, serialization, provenance. |
+| **Knowledge** | `KnowledgeRegistry` with category/tag filtering and Resource integration. |
+| **Prompts** | Literal sections, typed templates, manifests, layouts, spans, fingerprints. |
 | **Moderation** | `Moderator` protocol with `LLMModerator`, `OpenAIModerator`, and `ModerationMiddleware`. |
 | **Server tools** | `code_execution()`, `web_search()` for provider-hosted capabilities. |
 

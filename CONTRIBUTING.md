@@ -106,6 +106,18 @@ docstrings/comments, and when to use classes vs functions — see
    from the `make_response` factory in `tests/agents/conftest.py`.
 6. Mention it in the README matrix and `docs/agents-and-capabilities.md`.
 
+## Extending resources and prompts
+
+- Resource origin loaders, codecs, selectors, and serializers belong under
+  `toolkit/resources/` and must respect `ResourcePolicy`.
+- Prompt layouts must return one valid `SectionSpan` per ordered section.
+- Template engines are always explicit, strict on missing values, and must not
+  expose arbitrary Python execution.
+- Add focused tests under `tests/resources/` or `tests/prompts/`, including
+  malformed input, escaping, deterministic ordering, and policy failures.
+- Update `docs/prompt-extensibility.md` and add an offline runnable example for
+  a new public extension point.
+
 ## Commit + PR format
 
 - Short imperative subject (under ~70 chars). Match the existing style:

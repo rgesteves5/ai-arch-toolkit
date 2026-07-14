@@ -11,8 +11,9 @@ A lightweight, unified LLM client and agent architecture toolkit for Python.
 - **Graph layer** — `Graph` facade with typed nodes, directed edges, algorithms (BFS, DFS, PageRank, etc.), persistence
 - **Memory system** — graph-backed agent memory with search, temporal/relational/property views, middleware
 - **Flow orchestration** — sequential, cyclic, and DAG execution over `State`, `Step`, `Policy`, and `Trace`
-- **Knowledge registry** — prompt-injectable reference data with category/tag filtering and file loaders
-- **Structured prompts** — named sections, deterministic rendering, stability diagnostics, and exact fingerprints
+- **Resources** — reusable TXT/Markdown/JSON/YAML/TOML loading, selection, and provenance
+- **Knowledge registry** — categorized and tagged reusable reference data built on Resources
+- **Structured prompts** — files, typed templates, manifests, layouts, deterministic rendering, and fingerprints
 - **Moderation** — protocol-level moderation types plus LLM/OpenAI moderation helpers
 - **Structured output** — native JSON mode + Pydantic model support
 - **Streaming** — text chunks and rich structured events (thinking, tool calls)
@@ -42,6 +43,8 @@ print(response.text)
 ## Links
 
 - [Getting Started](getting-started.md) — installation, first steps, examples
+- [Prompts](prompts.md) — literal prompts, files, templates, manifests, and layouts
+- [Context Model](context-model.md) — Content vs Resources vs Knowledge vs Memory
 - [Model Compatibility](model-compatibility.md) — live-probed model feature matrix
 - [Code Style](code-style.md) — linting, docstrings, comments, and class/function choices
 - [API Docs](api.md) — detailed API reference

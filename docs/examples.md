@@ -60,7 +60,7 @@ All examples live in the `examples/` directory. Each is a self-contained script.
 | 29 | `29_memory_middleware.py` | MemoryMiddleware auto-injects memories into system prompt, auto-records interactions |
 | 30 | `30_memory_agent_tools.py` | `memory_tools()` — remember, recall, explore, forget as agent-usable tools with `react_flow` |
 
-## Flow and Knowledge
+## Flow, Resources, Knowledge, and Prompts
 
 | # | File | What it demonstrates |
 |---|------|---------------------|
@@ -69,4 +69,11 @@ All examples live in the `examples/` directory. Each is a self-contained script.
 | 33 | `33_flow_with_llm.py` | Flow calling LLM in each step, accumulating cost and tokens |
 | 34 | `34_knowledge_registry.py` | Register reference data, filter by category/tags, build prompt context |
 | 35 | `35_knowledge_loaders.py` | Load knowledge from files (text, JSON, TOML, Markdown) and directories |
-| 38 | `38_structured_prompts.py` | Compose ordered prompt sections, inject knowledge, inspect stability, and record a fingerprint |
+| 38 | `38_structured_prompts.py` | Compose literal ordered sections, inspect stability, and record a fingerprint |
+| 39 | `39_prompt_files.py` | Load prompt sections from files and select structured/Markdown fragments |
+| 40 | `40_prompt_templates.py` | Explicit stdlib templates, typed variables, defaults, and fingerprints |
+| 41 | `41_prompt_layouts.py` | Text boundary separators plus Markdown, XML, and JSON layouts |
+| 42 | `42_prompt_manifest.py` | Validate, inspect, and render a versioned YAML prompt manifest |
+| 43 | `43_prompt_knowledge.py` | Integrate Resource-backed Knowledge without manual context concatenation |
+| 44 | `44_custom_prompt_extension.py` | Register and consume a custom Resource codec |
+| 45 | `45_prompt_messages.py` | Compose ordered text and multimodal Content messages |

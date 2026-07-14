@@ -14,8 +14,9 @@ This page is the capabilities index — each subsystem now has its own focused p
 | Risk levels, approval gates, dangerous-tool blocking, trace redaction, budgets | [Tool Governance & Safety](safety.md) |
 | Middleware (before/after hooks, async, execution order) | [Middleware](middleware.md) |
 | Graph-backed agent memory | [Memory](memory.md) |
+| Reusable file and structured-data loading | [Resources](resources.md) |
 | Prompt-injectable reference data | [Knowledge Registry](knowledge.md) |
-| Structured prompt composition, stability, and fingerprints | [Structured Prompts](prompts.md) |
+| Files, templates, manifests, layouts, stability, and fingerprints | [Prompts](prompts.md) |
 | Messages and multimodal content | [Content & Messages](content.md) |
 | Cost estimation, the pricing registry, run-wide budgets | [Pricing & Cost Tracking](pricing.md) |
 | Input/output content moderation | [Moderation](moderation.md) |
@@ -29,7 +30,7 @@ This page is the capabilities index — each subsystem now has its own focused p
 
 ```python
 from ai_arch_toolkit import (
-    LLM, ToolGroup, KnowledgeRegistry, GraphStore, MemoryMiddleware,
+    LLM, ToolGroup, KnowledgeRegistry, GraphStore, MemoryMiddleware, Prompt, PromptSection,
     SimilarityView, TemporalView,
 )
 from ai_arch_toolkit.core import State
@@ -41,7 +42,14 @@ from ai_arch_toolkit.toolkit.memory.graph._networkx import NetworkXBackend
 # Knowledge base
 knowledge = KnowledgeRegistry()
 knowledge.register("research_guidelines", content="Always cite sources. Verify claims.")
-context = knowledge.as_context("research_guidelines")
+system_prompt = Prompt(
+    sections=(
+        PromptSection(name="role", content="You are a research assistant.", order=100),
+        PromptSection.from_knowledge(
+            knowledge, ["research_guidelines"], name="knowledge", order=200
+        ),
+    )
+).render()
 
 # Memory
 store = GraphStore(NetworkXBackend())
@@ -63,7 +71,7 @@ llm = LLM(
 tools = ToolGroup(get_weather, wikipedia_search, datetime_now, *mem.tools)
 flow = react_flow(
     llm, tools,
-    system=f"You are a research assistant.\n\n{context}",
+    system=system_prompt.text,
     max_iterations=15,
 )
 

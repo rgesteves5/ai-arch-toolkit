@@ -1,47 +1,120 @@
-# Structured Prompts
+# Prompts
 
-`toolkit.prompts` composes named prompt sections into deterministic text and records an
-exact fingerprint of what was rendered. It is provider-agnostic: the result can be passed
-to `LLM.complete(..., system=...)`, `ReasoningSpec.system`, or another application.
+`toolkit.prompts` turns literal text, files, structured data, knowledge, and runtime
+variables into deterministic model-visible text. Start with the smallest API that fits;
+the same resolved `Prompt` and `RenderedPrompt` contracts are used at every level.
+
+## Literal prompts
 
 ```python
-from ai_arch_toolkit.toolkit.prompts import Prompt, PromptSection, render_prompt
+from ai_arch_toolkit import Prompt, PromptSection
 
 prompt = Prompt(
     sections=(
-        PromptSection(
-            name="role",
-            content="You are a senior software architect.",
-            order=100,
-        ),
-        PromptSection(
-            name="rules",
-            content="Be concise and explain trade-offs.",
-            order=200,
-        ),
+        PromptSection(name="role", content="You are an architect.", order=100),
+        PromptSection(name="rules", content="Explain trade-offs.", order=200),
     )
 )
 
-rendered = render_prompt(prompt)
-
+rendered = prompt.render()
 print(rendered.text)
-print(rendered.section_names)
-print(rendered.fingerprint)  # sha256:...
+print(rendered.fingerprint)
 ```
 
-## Deterministic rendering
+For one section:
 
-Sections are sorted by `order`. Sections with the same order retain insertion order.
-Names must be unique; duplicate names raise `ValueError` instead of silently overriding
-or duplicating instructions. The configured separator defaults to two newlines.
+```python
+prompt = Prompt.from_text("You are a helpful assistant.")
+```
 
-Metadata is recursively frozen for built-in containers. It participates in object equality
-but is excluded from hashing and from the rendered-text fingerprint, so prompts and sections
-remain hashable without conflating metadata with model-visible content.
+## Prompts from files
 
+```python
+prompt = Prompt.from_file("prompts/system.md")
+```
+
+```python
+section = PromptSection.from_file(
+    "prompts/rules.yaml",
+    name="rules",
+    selector="/writing/rules",
+    serialize_as="markdown",
+    order=200,
+)
+```
+
+See [Resources & File Loading](resources.md) for supported formats and selectors.
+
+## Templates and manifests
+
+```python
+from ai_arch_toolkit import load_prompt
+
+template = load_prompt("prompts/story-writer.prompt.yaml")
+rendered = template.render(genre="mystery", task="Write chapter one")
+```
+
+Content remains literal unless a section explicitly selects a template engine. See
+[Templates & Variables](prompt-templates.md) and
+[Declarative Manifests](prompt-manifests.md).
+
+## Rendering and layouts
+
+The default output is section content joined with two newlines. Other layouts are
+explicit:
+
+```python
+rendered = prompt.render(layout="xml")
+rendered = prompt.render(layout="json")
+rendered = prompt.render(layout="markdown")
+```
+
+See [Layouts & Separators](prompt-layouts.md).
+
+## Determinism and provenance
+
+Sections are ordered by `order`; ties preserve insertion order. Names must be unique.
 The fingerprint is SHA-256 over the exact UTF-8 bytes of `RenderedPrompt.text`, including
-whitespace. It identifies the rendered prompt, not the entire generation: model, tools,
-messages, parameters, and output schema must be tracked separately for complete replay.
+whitespace and layout wrappers.
+
+`RenderedPrompt` exposes:
+
+- `text` and the compatibility alias `system`;
+- ordered `sections` and `section_names`;
+- `section_spans` and `section_text(name)`;
+- `fingerprint`;
+- `stable_prefix` and `stable_prefix_end`;
+- `layout` and non-sensitive `provenance`.
+
+The fingerprint identifies prompt text, not the whole generation. Model, tools, messages,
+parameters, and output schema must be tracked separately for full replay.
+
+## Deliberate scope boundary
+
+This delivery stops at the stable prompt/resource contracts and the real consumer integrations.
+It does not add generic `compose_prompts`, `PromptProvider`, `PromptMiddleware`, or
+`AgentDefinition` abstractions yet. Those APIs should be designed only after the Story Creator
+and Nanope have concrete repeated composition/lifecycle needs; adding them now would create a
+second orchestration layer without a validated consumer.
+
+## Stability and cache layout
+
+`PromptSection.stability` describes the expected content lifetime:
+
+| Value | Intended lifetime |
+|---|---|
+| `static` | Shared role, policies, examples |
+| `session` | Tenant or conversation context |
+| `request` | Current request data |
+
+`order` remains the only semantic ordering key. Stability never reorders or rejects a
+normal render. `validate_cache_layout(prompt)` is an opt-in check for a monotonic
+`static → session → request` arrangement.
+
+Stable-prefix diagnostics do not activate provider caching. Provider cache behavior remains
+provider-specific; see [Content & Messages](content.md).
+
+## Sending to an LLM
 
 ```python
 response = llm.complete_sync(
@@ -50,114 +123,21 @@ response = llm.complete_sync(
 )
 ```
 
-## Stability and cache layout
+The LLM core accepts strings and `Content`; it deliberately does not depend on toolkit
+prompt objects.
 
-`PromptSection.stability` describes how often content may change:
+When the workflow needs ordered system/user/assistant turns, use
+[Prompt Messages & Content](prompt-messages.md). It preserves multimodal `Content` parts and
+returns the plain `messages, system` pair expected by `LLM`.
 
-| Value | Intended lifetime |
-|---|---|
-| `static` | Shared by requests, such as role, policies, and examples |
-| `session` | Shared within one session or tenant context |
-| `request` | Specific to the current request |
+## Next steps
 
-```python
-prompt = Prompt(
-    sections=(
-        PromptSection(name="rules", content=rules, order=100),
-        PromptSection(
-            name="tenant",
-            content=tenant_context,
-            order=200,
-            stability="session",
-        ),
-        PromptSection(
-            name="current_request",
-            content=request_context,
-            order=300,
-            stability="request",
-        ),
-    )
-)
-```
-
-`order` is always the only semantic ordering key. Stability never reorders or rejects a
-prompt: a static section after session/request content is valid, but it cannot be part of the
-initial reusable prefix. `RenderedPrompt.stable_prefix` and `stable_prefix_end` expose that
-initial static text for diagnostics.
-
-Applications that require a cache-optimized `static → session → request` layout can validate
-it explicitly:
-
-```python
-from ai_arch_toolkit.toolkit.prompts import validate_cache_layout
-
-validate_cache_layout(prompt)  # raises ValueError for a non-monotonic layout
-```
-
-This is a layout diagnostic, not provider cache activation. Provider caching still depends
-on each API and the current core content contract. Use `cache()` for the Anthropic content
-blocks supported by the LLM facade; see [Content & Messages](content.md).
-
-## Knowledge Registry
-
-The two APIs have separate responsibilities:
-
-- `KnowledgeRegistry` stores and selects reusable content.
-- `Prompt` determines structure, order, stability, and provenance.
-
-```python
-from ai_arch_toolkit import KnowledgeRegistry
-from ai_arch_toolkit.toolkit.prompts import Prompt, PromptSection, render_prompt
-
-knowledge = KnowledgeRegistry()
-knowledge.register("style", "Use short sentences.")
-knowledge.register("domain", "Use architecture terminology.")
-
-prompt = Prompt(
-    sections=(
-        PromptSection(name="role", content="You are an architect.", order=100),
-        PromptSection(
-            name="knowledge",
-            content=knowledge.as_context("style", "domain"),
-            order=200,
-        ),
-    )
-)
-
-rendered = render_prompt(prompt)
-```
-
-## Template scope
-
-The first public API intentionally treats every section as literal text. It does not perform
-variable substitution, so JSON, shell, code, Mermaid, and other brace- or dollar-heavy
-content needs no escaping. A template contract will only be added after its syntax is
-validated against real prompts from multiple projects.
-
-## API
-
-```python
-Prompt(
-    *,
-    sections: tuple[PromptSection, ...] = (),
-    separator: str = "\n\n",
-)
-
-PromptSection(
-    *,
-    name: str,
-    content: str,
-    order: int = 0,
-    stability: Literal["static", "session", "request"] = "static",
-    metadata: Mapping[str, Any] | None = None,
-)
-
-render_prompt(prompt: Prompt) -> RenderedPrompt
-validate_cache_layout(prompt: Prompt) -> None
-prompt_from_sections(sections, *, separator="\n\n") -> Prompt
-```
-
-`position=` remains a temporary compatibility alias for Nanope's experimental configurable
-agent. New toolkit code should use `order=`. Nanope config mappings still place an extra
-section without either field at order `1000`; direct `PromptSection` construction uses the
-toolkit default `0`. Duplicate names, including collisions with Nanope built-ins, are rejected.
+- [Context Model](context-model.md): Prompt vs Resource vs Knowledge vs Memory.
+- [Resources & File Loading](resources.md): files and fragments.
+- [Prompt Messages & Content](prompt-messages.md): ordered and multimodal conversations.
+- [Templates & Variables](prompt-templates.md): explicit substitution.
+- [Layouts & Separators](prompt-layouts.md): Text, Markdown, XML, JSON.
+- [Declarative Manifests](prompt-manifests.md): versioned configuration.
+- [Knowledge Registry](knowledge.md): reusable reference content.
+- [Extending the Prompt System](prompt-extensibility.md): custom protocols.
+- [Migration Guide](prompt-migration.md): existing APIs and replacements.

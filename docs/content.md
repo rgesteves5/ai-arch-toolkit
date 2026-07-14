@@ -2,6 +2,12 @@
 
 Helpers for building messages and multimodal content. Every `LLM` and agent flow accepts `Content` — a plain string or a list of typed parts — so the same call site handles text, images, PDFs, and prompt caching.
 
+`Content` is the provider-input contract. It is distinct from a
+[Resource](resources.md), which is a loaded application asset, and from a
+[Prompt](prompts.md), which organizes resolved instruction sections. Render a prompt to text
+before passing it as the `system` argument. Files that should be sent natively to a provider
+remain `DocumentPart`/`ImagePart`; files used to construct instructions are Resources.
+
 ## Message constructors
 
 ```python

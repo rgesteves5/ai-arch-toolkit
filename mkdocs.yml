@@ -14,13 +14,22 @@ nav:
   - Concurrency & Throttling: concurrency.md
   - LLM Facade: llm.md
   - Content & Messages: content.md
-  - Structured Prompts: prompts.md
+  - Prompts & Context:
+      - Context Model: context-model.md
+      - Prompts: prompts.md
+      - Prompt Messages & Content: prompt-messages.md
+      - Resources & File Loading: resources.md
+      - Templates & Variables: prompt-templates.md
+      - Layouts & Separators: prompt-layouts.md
+      - Declarative Manifests: prompt-manifests.md
+      - Knowledge Registry: knowledge.md
+      - Extending: prompt-extensibility.md
+      - Migration Guide: prompt-migration.md
   - Tools: tools.md
   - Tools Catalog: tools-catalog.md
   - Tool Governance & Safety: safety.md
   - Middleware: middleware.md
   - Memory: memory.md
-  - Knowledge Registry: knowledge.md
   - Moderation: moderation.md
   - Pricing & Cost Tracking: pricing.md
   - Graph: graph.md

@@ -1,73 +1,128 @@
 # Knowledge Registry
 
-A sync, in-memory registry for prompt-injectable reference data. Use it for domain knowledge, style guides, few-shot examples, or any structured context you want to weave into a system prompt.
+`KnowledgeRegistry` gives application-level keys, categories, tags, and lookup behavior to
+reusable reference content. File parsing belongs to `toolkit.resources`; Knowledge consumes
+loaded resources and focuses on its domain.
 
-`KnowledgeRegistry` owns reusable content; [Structured Prompts](prompts.md) owns section
-order, stability, rendering, and fingerprints. Use `as_context()` as the content of a
-`PromptSection` when both are needed.
+## Register literal knowledge
 
 ```python
 from ai_arch_toolkit import KnowledgeRegistry
 
-registry = KnowledgeRegistry()
-
-# Register entries
-registry.register(
-    "company_style",
-    content="Always use Oxford commas. Avoid passive voice.",
+knowledge = KnowledgeRegistry()
+knowledge.register(
+    "company.style",
+    "Use short sentences and active voice.",
     category="style",
-    tags=frozenset({"writing", "formatting"}),
+    tags=("writing", "company"),
 )
 
-registry.register(
-    "api_reference",
-    content='{"endpoints": ["/users", "/posts"]}',
-    format="json",
-    category="technical",
-)
-
-# Query
-style_guides = registry.by_category("style")
-writing_docs = registry.by_tags("writing", "formatting")
-
-# Inject into prompts
-context = registry.as_context("company_style", "api_reference", separator="\n---\n")
-# → "Always use Oxford commas. Avoid passive voice.\n---\n{\"endpoints\": ...}"
-
-response = await llm.complete(
-    "Write API documentation",
-    system=f"Follow these guidelines:\n{context}",
-)
+style = knowledge.require("company.style")
+print(style.content)
+print(style.fingerprint)
 ```
 
-`register(key, content, *, format="text", category="", tags=(), metadata=None, source="")` returns a `KnowledgeEntry`. `as_context(*keys, separator=..., transform=...)` builds the combined prompt string, optionally transforming each entry.
-
----
-
-## Loaders
-
-Load knowledge from files:
+Duplicate keys are rejected. Replacement is explicit:
 
 ```python
-from ai_arch_toolkit.toolkit.knowledge import (
-    load_text, load_json, load_yaml, load_toml, load_markdown, load_directory,
-)
-
-# Single file
-entries = load_text("style-guide.txt")
-
-# Structured data (nested keys become separate entries)
-entries = load_json("api-spec.json")
-entries = load_yaml("config.yaml")
-entries = load_toml("settings.toml")
-
-# Markdown (sections become entries)
-entries = load_markdown("docs/reference.md")
-
-# Bulk load a directory
-entries = load_directory("knowledge/", recursive=True)
+knowledge.register("company.style", "New guide", overwrite=True)
 ```
 
----
+## Load knowledge from a file
 
-For long-lived, agent-managed memory (as opposed to static reference data), see [Memory](memory.md).
+```python
+knowledge.load(
+    "story.rules",
+    "knowledge/story.yaml",
+    selector="/writing/rules",
+    serialize_as="markdown",
+    category="writing",
+    tags=("story", "rules"),
+)
+```
+
+`KnowledgeEntry` exposes model-ready `content`, parsed `data`, `media_type`, source
+`fingerprint`, category, tags, metadata, and source.
+
+## Load a directory
+
+```python
+knowledge = KnowledgeRegistry.from_directory(
+    "knowledge/",
+    recursive=True,
+    prefix="kb.",
+)
+```
+
+Nested paths become deterministic dotted keys such as `kb.product.rules`.
+
+## Query
+
+```python
+writing = knowledge.by_category("writing")
+story_rules = knowledge.by_tags("story", "rules")
+anything_story_or_style = knowledge.by_tags("story", "style", match_all=False)
+```
+
+For a small deterministic registry, `search()` provides explainable lexical ranking without
+embeddings or a network dependency:
+
+```python
+matches = knowledge.search("short writing rules", limit=5, category="style")
+for match in matches:
+    print(match.entry.key, match.score, match.matched_terms)
+```
+
+Scores weight matches in keys and tags above categories and content. Ties are resolved by key,
+so the same registry snapshot produces the same result. This is intentionally a lightweight
+domain query; use [Memory](memory.md) for durable agent memories or a specialized vector index
+for large corpora.
+
+## Use knowledge in a prompt
+
+```python
+from ai_arch_toolkit import Prompt, PromptSection
+
+prompt = Prompt(
+    sections=(
+        PromptSection.from_knowledge(
+            knowledge,
+            ["company.style", "story.rules"],
+            name="knowledge",
+            include_names=True,
+        ),
+    )
+)
+```
+
+Manifests can use Knowledge when a registry is supplied to `load_prompt()`:
+
+```yaml
+- name: knowledge
+  knowledge:
+    keys: [company.style, story.rules]
+    include_names: true
+```
+
+```python
+template = load_prompt("writer.prompt.yaml", knowledge=knowledge)
+```
+
+## Compatibility loaders
+
+The original functions remain available and delegate to Resources:
+
+```python
+load_text(registry, "style", "style.txt")
+load_json(registry, "schema", "schema.json")
+load_yaml(registry, "rules", "rules.yaml")
+load_toml(registry, "settings", "settings.toml")
+load_markdown(registry, "guide", "guide.md")
+load_directory(registry, "knowledge/", recursive=True)
+```
+
+Their required `registry`, `key`, and `path` arguments are retained. `as_context()` also
+retains its exact legacy joining behavior, but new prompt code should prefer
+`PromptSection.from_knowledge()` or a manifest Knowledge source.
+
+For long-lived, agent-managed information, use [Memory](memory.md), not Knowledge.
