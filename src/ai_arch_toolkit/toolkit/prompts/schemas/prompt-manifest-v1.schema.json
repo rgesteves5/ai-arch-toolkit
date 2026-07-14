@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-arch-toolkit.dev/schemas/prompt-manifest-v1.schema.json",
+  "title": "ai-arch-toolkit prompt manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version"],
+  "properties": {
+    "version": {"const": 1},
+    "name": {"type": "string"},
+    "description": {"type": "string"},
+    "extends": {"type": "string"},
+    "include": {
+      "oneOf": [
+        {"type": "string"},
+        {"type": "array", "items": {"type": "string"}}
+      ]
+    },
+    "separator": {"type": "string"},
+    "layout": {
+      "oneOf": [
+        {"enum": ["text", "markdown", "xml", "json"]},
+        {"type": "object", "required": ["type"]}
+      ]
+    },
+    "metadata": {"type": "object"},
+    "variables": {
+      "type": "object",
+      "additionalProperties": {
+        "oneOf": [
+          {"enum": ["any", "array", "boolean", "integer", "number", "object", "string"]},
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {"enum": ["any", "array", "boolean", "integer", "number", "object", "string"]},
+              "required": {"type": "boolean"},
+              "default": true,
+              "description": {"type": "string"},
+              "json_schema": {"type": "object"}
+            }
+          }
+        ]
+      }
+    },
+    "sections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "order": {"type": "integer"},
+          "stability": {"enum": ["static", "session", "request"]},
+          "metadata": {"type": "object"},
+          "replace": {"type": "boolean"},
+          "remove": {"type": "boolean"},
+          "content": {"type": "string"},
+          "source": {
+            "oneOf": [
+              {"type": "string"},
+              {"type": "object", "required": ["path"]}
+            ]
+          },
+          "template": {
+            "oneOf": [
+              {"type": "string"},
+              {"type": "object"}
+            ]
+          },
+          "knowledge": {
+            "oneOf": [
+              {"type": "string"},
+              {"type": "array", "items": {"type": "string"}},
+              {"type": "object", "required": ["keys"]}
+            ]
+          }
+        }
+      }
+    }
+  }
+}

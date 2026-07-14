@@ -1,17 +1,12 @@
 """38 — Structured Prompts.
 
-Compose deterministic prompt sections, inject registered knowledge, and keep
-an exact fingerprint for experiment tracking without making an API call.
+Compose deterministic literal prompt sections and keep exact rendering
+fingerprints without making an API call.
 """
 
 from __future__ import annotations
 
-from ai_arch_toolkit.toolkit.knowledge import KnowledgeRegistry
 from ai_arch_toolkit.toolkit.prompts import Prompt, PromptSection, render_prompt
-
-knowledge = KnowledgeRegistry()
-knowledge.register("style", "Be concise and state important trade-offs.")
-knowledge.register("domain", "Prefer provider-agnostic architecture advice.")
 
 prompt = Prompt(
     sections=(
@@ -21,8 +16,11 @@ prompt = Prompt(
             order=100,
         ),
         PromptSection(
-            name="knowledge",
-            content=knowledge.as_context("style", "domain", separator="\n"),
+            name="rules",
+            content=(
+                "Be concise and state important trade-offs.\n"
+                "Prefer provider-agnostic architecture advice."
+            ),
             order=200,
         ),
         PromptSection(

@@ -5,7 +5,21 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from ai_arch_toolkit.toolkit.knowledge import KnowledgeRegistry
+    from ai_arch_toolkit.toolkit.prompts._layouts import PromptLayout, SectionSpan
+    from ai_arch_toolkit.toolkit.resources import (
+        Resource,
+        ResourcePolicy,
+        ResourceResolver,
+        ResourceSelector,
+        ResourceSerializer,
+        SerializerRegistry,
+    )
 
 type PromptStability = Literal["static", "session", "request"]
 
@@ -65,6 +79,130 @@ class PromptSection:
         """Compatibility alias for the Nanope ``position`` field."""
         return self.order
 
+    @classmethod
+    def from_file(
+        cls,
+        path: str | Path,
+        *,
+        name: str,
+        selector: str | ResourceSelector | None = None,
+        serialize_as: str | ResourceSerializer | None = None,
+        order: int = 0,
+        stability: PromptStability = "static",
+        metadata: Mapping[str, Any] | None = None,
+        policy: ResourcePolicy | None = None,
+        resolver: ResourceResolver | None = None,
+    ) -> PromptSection:
+        """Load one literal section from a file resource."""
+        from ai_arch_toolkit.toolkit.resources import (
+            load_resource,
+            select_resource,
+            serialize_resource_value,
+        )
+
+        resource = load_resource(path, policy=policy, resolver=resolver)
+        if selector is None and serialize_as is None and resource.text is not None:
+            content = resource.text
+        else:
+            value = select_resource(resource, selector)
+            serializer = (
+                resolver.serializers.resolve(serialize_as)
+                if resolver is not None and serialize_as is not None
+                else serialize_as or "text"
+            )
+            content = serialize_resource_value(value, as_format=serializer)
+        resource_metadata = {
+            "source": resource.ref.uri,
+            "media_type": resource.media_type,
+            "resource_fingerprint": resource.fingerprint,
+            **dict(metadata or {}),
+        }
+        return cls(
+            name=name,
+            content=content,
+            order=order,
+            stability=stability,
+            metadata=resource_metadata,
+        )
+
+    @classmethod
+    def from_resource(
+        cls,
+        resource: Resource,
+        *,
+        name: str,
+        selector: str | ResourceSelector | None = None,
+        serialize_as: str | ResourceSerializer | None = None,
+        serializer_registry: SerializerRegistry | None = None,
+        order: int = 0,
+        stability: PromptStability = "static",
+        metadata: Mapping[str, Any] | None = None,
+    ) -> PromptSection:
+        """Create one literal section from an already loaded resource."""
+        from ai_arch_toolkit.toolkit.resources import (
+            Resource,
+            select_resource,
+            serialize_resource_value,
+        )
+
+        if not isinstance(resource, Resource):
+            raise TypeError("resource must be a Resource")
+        if selector is None and serialize_as is None and resource.text is not None:
+            content = resource.text
+        else:
+            value = select_resource(resource, selector)
+            content = serialize_resource_value(
+                value,
+                as_format=serialize_as or "text",
+                registry=serializer_registry,
+            )
+        resource_metadata = {
+            "source": resource.ref.uri,
+            "media_type": resource.media_type,
+            "resource_fingerprint": resource.fingerprint,
+            **dict(metadata or {}),
+        }
+        return cls(
+            name=name,
+            content=content,
+            order=order,
+            stability=stability,
+            metadata=resource_metadata,
+        )
+
+    @classmethod
+    def from_knowledge(
+        cls,
+        registry: KnowledgeRegistry,
+        keys: Sequence[str],
+        *,
+        name: str = "knowledge",
+        separator: str = "\n\n---\n\n",
+        include_names: bool = False,
+        order: int = 0,
+        stability: PromptStability = "static",
+        metadata: Mapping[str, Any] | None = None,
+    ) -> PromptSection:
+        """Create a literal section from registered knowledge keys."""
+        from ai_arch_toolkit.toolkit.prompts._sources import KnowledgeSource
+
+        resolution = KnowledgeSource(
+            registry=registry,
+            keys=tuple(keys),
+            separator=separator,
+            include_names=include_names,
+        ).resolve({})
+        return cls(
+            name=name,
+            content=resolution.content,
+            order=order,
+            stability=stability,
+            metadata={
+                **dict(metadata or {}),
+                "source_provenance": dict(resolution.provenance),
+            },
+        )
+
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Prompt:
@@ -85,6 +223,89 @@ class Prompt:
         if not isinstance(self.separator, str):
             raise TypeError("Prompt.separator must be a string")
 
+    @classmethod
+    def from_text(
+        cls,
+        text: str,
+        *,
+        name: str = "prompt",
+        stability: PromptStability = "static",
+    ) -> Prompt:
+        """Create a one-section literal prompt."""
+        return cls(sections=(PromptSection(name=name, content=text, stability=stability),))
+
+    @classmethod
+    def from_sections(
+        cls,
+        *sections: PromptSection,
+        separator: str = "\n\n",
+    ) -> Prompt:
+        """Create a prompt from positional sections."""
+        return cls(sections=sections, separator=separator)
+
+    @classmethod
+    def from_file(
+        cls,
+        path: str | Path,
+        *,
+        name: str = "prompt",
+        selector: str | ResourceSelector | None = None,
+        serialize_as: str | ResourceSerializer | None = None,
+        stability: PromptStability = "static",
+        policy: ResourcePolicy | None = None,
+        resolver: ResourceResolver | None = None,
+    ) -> Prompt:
+        """Create a one-section literal prompt from a file resource."""
+        section = PromptSection.from_file(
+            path,
+            name=name,
+            selector=selector,
+            serialize_as=serialize_as,
+            stability=stability,
+            policy=policy,
+            resolver=resolver,
+        )
+        return cls(sections=(section,))
+
+    @classmethod
+    def from_resource(
+        cls,
+        resource: Resource,
+        *,
+        name: str = "prompt",
+        selector: str | ResourceSelector | None = None,
+        serialize_as: str | ResourceSerializer | None = None,
+        serializer_registry: SerializerRegistry | None = None,
+        stability: PromptStability = "static",
+    ) -> Prompt:
+        """Create a one-section literal prompt from an in-memory resource."""
+        section = PromptSection.from_resource(
+            resource,
+            name=name,
+            selector=selector,
+            serialize_as=serialize_as,
+            serializer_registry=serializer_registry,
+            stability=stability,
+        )
+        return cls(sections=(section,))
+
+    def render(
+        self,
+        *,
+        layout: str | PromptLayout | None = None,
+        separator: str | None = None,
+    ) -> RenderedPrompt:
+        """Render this prompt using a built-in name or layout object."""
+        from ai_arch_toolkit.toolkit.prompts._layouts import layout_from_name
+        from ai_arch_toolkit.toolkit.prompts._render import render_prompt
+
+        if separator is None:
+            return render_prompt(self, layout=layout)
+        if layout is not None and not isinstance(layout, str):
+            raise ValueError("separator cannot be combined with a layout object")
+        active_layout = layout_from_name(layout or "text", separator=separator)
+        return render_prompt(self, layout=active_layout)
+
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class RenderedPrompt:
@@ -94,6 +315,12 @@ class RenderedPrompt:
     sections: tuple[PromptSection, ...]
     fingerprint: str
     stable_prefix_end: int | None = None
+    section_spans: tuple[SectionSpan, ...] = ()
+    layout: str = "text"
+    provenance: Mapping[str, Any] = field(default_factory=dict, hash=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "provenance", _freeze_metadata(self.provenance))
 
     @property
     def section_names(self) -> tuple[str, ...]:
@@ -111,6 +338,13 @@ class RenderedPrompt:
     def system(self) -> str:
         """Compatibility alias for Nanope's former rendered prompt contract."""
         return self.text
+
+    def section_text(self, name: str) -> str:
+        """Return the exact rendered slice occupied by a named section."""
+        for span in self.section_spans:
+            if span.name == name:
+                return self.text[span.start : span.end]
+        raise KeyError(f"rendered prompt has no section named {name!r}")
 
 
 def prompt_from_sections(

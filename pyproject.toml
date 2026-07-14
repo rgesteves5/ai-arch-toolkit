@@ -10,6 +10,9 @@ requires-python = ">=3.13"
 license = "MIT"
 dependencies = []
 
+[project.scripts]
+ai-arch = "ai_arch_toolkit._cli:main"
+
 [project.optional-dependencies]
 # Provider SDKs — install the one matching the model you plan to call.
 anthropic = ["anthropic>=0.40"]
@@ -21,6 +24,8 @@ xai = ["xai-sdk>=1.7.0"]
 graph = ["networkx>=3.0"]
 tokens = ["tiktoken>=0.7"]
 yaml = ["pyyaml>=6.0"]
+templates = ["jinja2>=3.1"]
+prompts = ["pyyaml>=6.0", "jinja2>=3.1", "jsonschema>=4.0"]
 youtube = ["youtube-transcript-api>=1.2.4"]
 
 # Aggregate: install every provider plus every optional feature.
@@ -29,6 +34,7 @@ all = [
     "ai-arch-toolkit[gemini]",
     "ai-arch-toolkit[graph]",
     "ai-arch-toolkit[openai]",
+    "ai-arch-toolkit[prompts]",
     "ai-arch-toolkit[tokens]",
     "ai-arch-toolkit[xai]",
     "ai-arch-toolkit[youtube]",
@@ -84,3 +90,15 @@ markers = [
     "integration: marks tests as integration tests (require API keys)",
     "timeout: set test timeout in seconds",
 ]
+
+[tool.hatch.build]
+exclude = [
+    "**/.web/**",
+    "**/__pycache__/**",
+    "**/*.pyc",
+    "**/*.pyo",
+    "**/node_modules/**",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ai_arch_toolkit"]
