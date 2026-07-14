@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from ai_arch_toolkit.toolkit.knowledge import KnowledgeEntry, KnowledgeRegistry
+from ai_arch_toolkit.toolkit.knowledge import (
+    KnowledgeAlreadyExistsError,
+    KnowledgeEntry,
+    KnowledgeRegistry,
+)
 
 
 class TestKnowledgeEntry:
@@ -39,10 +43,12 @@ class TestKnowledgeRegistry:
         with pytest.raises(KeyError, match="Available: a"):
             reg.require("missing")
 
-    def test_overwrite_silently(self):
+    def test_overwrite_requires_explicit_opt_in(self):
         reg = KnowledgeRegistry()
         reg.register("k", "v1")
-        reg.register("k", "v2")
+        with pytest.raises(KnowledgeAlreadyExistsError, match="overwrite=True"):
+            reg.register("k", "v2")
+        reg.register("k", "v2", overwrite=True)
         assert reg.get("k").content == "v2"
 
     def test_remove(self):
@@ -93,6 +99,39 @@ class TestKnowledgeRegistry:
         reg.register("b", "y", tags=("t3",))
         result = reg.by_tags("t1", "t3", match_all=False)
         assert len(result) == 2
+
+    def test_search_ranks_domain_fields_and_content_deterministically(self):
+        reg = KnowledgeRegistry()
+        reg.register("python.rules", "Use type hints in Python code", tags=("python",))
+        reg.register("general", "Python can also appear in ordinary content")
+        reg.register("other", "Unrelated", category="python")
+
+        results = reg.search("python")
+
+        assert [result.entry.key for result in results] == [
+            "python.rules",
+            "other",
+            "general",
+        ]
+        assert results[0].score > results[-1].score
+        assert results[0].matched_terms == ("python",)
+
+    def test_search_filters_and_validates_inputs(self):
+        reg = KnowledgeRegistry()
+        reg.register("a", "story rules", category="writing", tags=("story", "rules"))
+        reg.register("b", "story style", category="writing", tags=("story",))
+        reg.register("c", "story domain", category="domain", tags=("story", "rules"))
+        assert [
+            result.entry.key for result in reg.search("story", category="writing", tags=("rules",))
+        ] == ["a"]
+        assert [
+            result.entry.key
+            for result in reg.search("story", tags=("rules", "missing"), match_all_tags=False)
+        ] == ["a", "c"]
+        with pytest.raises(ValueError, match="non-empty"):
+            reg.search("")
+        with pytest.raises(ValueError, match="positive integer"):
+            reg.search("story", limit=0)
 
     def test_categories_unique_sorted(self):
         reg = KnowledgeRegistry()
