@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from typing import TYPE_CHECKING
 
 from ai_arch_toolkit.nanope.advanced_multi_purpose_configurable_agent._config import (
     AgentConfig,
@@ -11,8 +12,12 @@ from ai_arch_toolkit.nanope.advanced_multi_purpose_configurable_agent._config im
 from ai_arch_toolkit.toolkit.prompts import (
     Prompt,
     RenderedPrompt,
+    load_prompt,
     render_prompt,
 )
+
+if TYPE_CHECKING:
+    from ai_arch_toolkit.toolkit.knowledge import KnowledgeRegistry
 
 # Built-in section positions. Multiples of 100 leave room for custom sections
 # to slot in between (e.g. position=350 lands between goals and tasks).
@@ -33,6 +38,7 @@ def render_system_prompt(
     config: AgentConfig,
     *,
     providers: Sequence[SectionProvider] = (),
+    knowledge: KnowledgeRegistry | None = None,
 ) -> RenderedPrompt:
     """Render the agent system prompt from a resolved config.
 
@@ -126,7 +132,20 @@ def render_system_prompt(
         if section is not None:
             sections.append(section)
 
-    return render_prompt(Prompt(sections=tuple(sections)))
+    separator = "\n\n"
+    layout = config.prompt.layout
+    if config.prompt.manifest:
+        template = load_prompt(config.prompt.manifest, knowledge=knowledge)
+        external = template.compile(**dict(config.prompt.variables))
+        if config.prompt.mode == "replace":
+            sections = list(external.sections)
+        else:
+            sections.extend(external.sections)
+        separator = template.separator
+        if layout is None:
+            layout = template.layout
+
+    return render_prompt(Prompt(sections=tuple(sections), separator=separator), layout=layout)
 
 
 def _bullet_section(title: str, values: tuple[str, ...]) -> str:

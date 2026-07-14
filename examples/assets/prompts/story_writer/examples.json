@@ -1,0 +1,12 @@
+{
+  "genres": {
+    "mystery": [
+      "Reveal clues before the solution.",
+      "Maintain suspense without withholding essential facts."
+    ],
+    "fantasy": [
+      "Make the rules of magic consistent.",
+      "Tie world-building details to the characters' choices."
+    ]
+  }
+}

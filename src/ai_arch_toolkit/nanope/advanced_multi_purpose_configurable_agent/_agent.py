@@ -46,6 +46,7 @@ from ai_arch_toolkit.nanope.advanced_multi_purpose_configurable_agent._tools imp
 from ai_arch_toolkit.toolkit.agents._compile import build_flow, extract_text, initial_state
 from ai_arch_toolkit.toolkit.agents._spec import ReasoningSpec
 from ai_arch_toolkit.toolkit.flow._flow import FlowResult
+from ai_arch_toolkit.toolkit.knowledge import KnowledgeRegistry
 
 type AgentStatus = Literal["completed", "failed", "cancelled", "stopped"]
 type LLMFactory = Callable[[ModelConfig], Any]
@@ -86,6 +87,7 @@ class ConfigurableAgent:
         tool_registry: ToolRegistry | Mapping[str, Callable[..., Any]] | None = None,
         llm_factory: LLMFactory | None = None,
         memory: Any = None,
+        knowledge: KnowledgeRegistry | None = None,
         prompt_section_providers: Sequence[SectionProvider] = (),
     ) -> None:
         self._config = (
@@ -98,6 +100,7 @@ class ConfigurableAgent:
             self._tool_registry = ToolRegistry.from_mapping(tool_registry)
         self._llm_factory = llm_factory or _default_llm_factory
         self._memory = memory
+        self._knowledge = knowledge
         self._prompt_section_providers = tuple(prompt_section_providers)
 
     def resolve_config(
@@ -121,7 +124,11 @@ class ConfigurableAgent:
     def render_prompt(self, config: AgentConfig | None = None) -> RenderedPrompt:
         """Render a prompt from a config or the resolved base config."""
         resolved = config or self.resolve_config().config
-        return render_system_prompt(resolved, providers=self._prompt_section_providers)
+        return render_system_prompt(
+            resolved,
+            providers=self._prompt_section_providers,
+            knowledge=self._knowledge,
+        )
 
     def describe_capabilities(
         self,
@@ -158,7 +165,11 @@ class ConfigurableAgent:
         """Run the configured agent on one task."""
         resolved = self.resolve_config(run_overrides=overrides)
         config = resolved.config
-        prompt = render_system_prompt(config, providers=self._prompt_section_providers)
+        prompt = render_system_prompt(
+            config,
+            providers=self._prompt_section_providers,
+            knowledge=self._knowledge,
+        )
         tools, memory_store = self._resolve_tools_for_config(config, create_memory=True)
         llm = self._llm_factory(config.model)
 

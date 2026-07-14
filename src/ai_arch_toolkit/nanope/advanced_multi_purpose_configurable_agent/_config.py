@@ -6,7 +6,7 @@ import hashlib
 import json
 import tomllib
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Literal
@@ -235,6 +235,31 @@ class OutputConfig:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class AgentPromptConfig:
+    """Optional toolkit prompt manifest integrated into the agent system prompt."""
+
+    manifest: str = ""
+    variables: Mapping[str, Any] = field(default_factory=dict)
+    layout: str | None = None
+    mode: Literal["append", "replace"] = "append"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.manifest, str):
+            raise TypeError("prompt.manifest must be a string")
+        if not isinstance(self.variables, Mapping):
+            raise TypeError("prompt.variables must be a mapping")
+        if self.layout is not None and not isinstance(self.layout, str):
+            raise TypeError("prompt.layout must be a string or None")
+        if not isinstance(self.mode, str):
+            raise TypeError("prompt.mode must be a string")
+        if self.layout not in {None, "text", "markdown", "xml", "json"}:
+            raise ValueError("prompt.layout must be one of: text, markdown, xml, json")
+        if self.mode not in {"append", "replace"}:
+            raise ValueError("prompt.mode must be 'append' or 'replace'")
+        object.__setattr__(self, "variables", _freeze(self.variables))
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class OverridePolicy:
     """Runtime override allow/deny policy."""
 
@@ -259,6 +284,7 @@ class AgentConfig:
     limits: LimitsConfig = field(default_factory=LimitsConfig)
     observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
+    prompt: AgentPromptConfig = field(default_factory=AgentPromptConfig)
     capability_profiles: tuple[str, ...] = ()
     override_policy: OverridePolicy = field(default_factory=OverridePolicy)
 
@@ -343,6 +369,12 @@ class AgentConfig:
                 "name": self.output.name,
                 "strict": self.output.strict,
             },
+            "prompt": {
+                "manifest": self.prompt.manifest,
+                "variables": _plain(self.prompt.variables),
+                "layout": self.prompt.layout,
+                "mode": self.prompt.mode,
+            },
             "capability_profiles": list(self.capability_profiles),
             "override_policy": {
                 "allow": list(self.override_policy.allow),
@@ -384,6 +416,7 @@ def agent_config_from_mapping(data: Mapping[str, Any]) -> AgentConfig:
     limits_data = raw.get("limits") or {}
     observability_data = raw.get("observability") or {}
     output_data = raw.get("output") or {}
+    prompt_data = raw.get("prompt") or {}
     override_policy_data = raw.get("override_policy") or {}
 
     return AgentConfig(
@@ -449,6 +482,12 @@ def agent_config_from_mapping(data: Mapping[str, Any]) -> AgentConfig:
             name=str(output_data.get("name", "agent_output")),
             strict=bool(output_data.get("strict", True)),
         ),
+        prompt=AgentPromptConfig(
+            manifest=str(prompt_data.get("manifest", "")),
+            variables=prompt_data.get("variables", {}),
+            layout=prompt_data.get("layout"),
+            mode=prompt_data.get("mode", "append"),
+        ),
         capability_profiles=tuple(str(v) for v in _tuple(raw.get("capability_profiles"))),
         override_policy=OverridePolicy(
             allow=tuple(str(v) for v in _tuple(override_policy_data.get("allow"))),
@@ -461,7 +500,8 @@ def load_agent_config(path: str | Path) -> AgentConfig:
     """Load an agent config from TOML, or YAML when PyYAML is installed."""
     path = Path(path)
     if path.suffix == ".toml":
-        return agent_config_from_mapping(tomllib.loads(path.read_text()))
+        config = agent_config_from_mapping(tomllib.loads(path.read_text()))
+        return _resolve_prompt_manifest_path(config, path)
     if path.suffix in {".yaml", ".yml"}:
         try:
             import yaml
@@ -469,8 +509,17 @@ def load_agent_config(path: str | Path) -> AgentConfig:
             raise RuntimeError(
                 "YAML config loading requires the optional pyyaml dependency"
             ) from exc
-        return agent_config_from_mapping(yaml.safe_load(path.read_text()) or {})
+        config = agent_config_from_mapping(yaml.safe_load(path.read_text()) or {})
+        return _resolve_prompt_manifest_path(config, path)
     raise ValueError(f"Unsupported config file extension: {path.suffix!r}")
+
+
+def _resolve_prompt_manifest_path(config: AgentConfig, config_path: Path) -> AgentConfig:
+    manifest = config.prompt.manifest
+    if not manifest or Path(manifest).is_absolute():
+        return config
+    prompt = replace(config.prompt, manifest=str((config_path.parent / manifest).resolve()))
+    return replace(config, prompt=prompt)
 
 
 def _normalize_raw_config(data: Mapping[str, Any]) -> dict[str, Any]:

@@ -297,6 +297,8 @@ Implemented:
 - capability profile resolution
 - runtime overrides with allow/deny policy
 - deterministic system prompt rendering
+- optional toolkit prompt manifests with typed variables and Text/Markdown/XML/JSON layouts
+- toolkit Knowledge injection into prompt manifests (including resource-backed entries)
 - small tool registry and enabled/disabled tool resolution
 - `ConfigurableAgent.run()` and `ConfigurableAgent.run_sync()`
 - terminal chat for manual real-LLM testing
@@ -495,6 +497,35 @@ uv run python -m ai_arch_toolkit.nanope.advanced_multi_purpose_configurable_agen
   --override model.temperature=0.4 \
   --override reasoning.max_iterations=8
 ```
+
+Use a reusable toolkit prompt manifest alongside or instead of built-in sections:
+
+```toml
+[prompt]
+manifest = "prompts/researcher.prompt.yaml"
+layout = "markdown"
+mode = "append" # or "replace"
+
+[prompt.variables]
+domain = "distributed systems"
+```
+
+Relative manifest paths are resolved against the agent configuration file.
+
+Knowledge is supplied at construction time so the agent does not own file parsing or registry
+lifecycle:
+
+```python
+from ai_arch_toolkit.nanope.advanced_multi_purpose_configurable_agent import ConfigurableAgent
+from ai_arch_toolkit.toolkit.knowledge import KnowledgeRegistry
+
+knowledge = KnowledgeRegistry.from_directory("knowledge/", recursive=True, prefix="kb.")
+agent = ConfigurableAgent(config, knowledge=knowledge)
+```
+
+Manifest sections can then select keys with `knowledge:`. For command-line prompt workflows,
+use `ai-arch prompt render ... --knowledge-dir knowledge/` or repeated
+`--knowledge key=path` options.
 
 Request structured output with a JSON Schema file:
 

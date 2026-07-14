@@ -1,0 +1,45 @@
+version: 1
+name: story-writer
+description: Produces a story chapter from reusable prompt assets.
+
+layout:
+  type: markdown
+  heading_level: 2
+
+variables:
+  genre:
+    type: string
+    required: true
+  audience:
+    type: string
+    default: general readers
+  task:
+    type: string
+    required: true
+
+sections:
+  - name: role
+    source: role.md
+    order: 100
+    stability: static
+
+  - name: rules
+    source:
+      path: rules.yaml
+      select: /writing/rules
+      serialize_as: markdown
+    order: 200
+    stability: static
+
+  - name: examples
+    source:
+      path: examples.json
+      select: /genres/${genre}
+      serialize_as: markdown
+    order: 300
+    stability: session
+
+  - name: request
+    template: request.template.md
+    order: 900
+    stability: request

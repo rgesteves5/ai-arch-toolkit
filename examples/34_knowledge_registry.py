@@ -1,7 +1,7 @@
 """34 — Knowledge Registry.
 
-Register reference data, filter by category and tags, and build
-prompt context strings for injection into LLM calls.
+Register reference data, filter/search it, and inject selected entries
+through structured prompt sections.
 
 No API keys needed.
 """
@@ -9,6 +9,7 @@ No API keys needed.
 from __future__ import annotations
 
 from ai_arch_toolkit.toolkit.knowledge import KnowledgeRegistry
+from ai_arch_toolkit.toolkit.prompts import Prompt, PromptSection, XmlLayout
 
 # --- 1. Create a registry and register entries ---
 
@@ -55,6 +56,11 @@ print(f"Keys: {registry.keys()}")
 print(f"Categories: {registry.categories()}")
 print()
 
+print("=== Search: Python/API reference ===")
+for result in registry.search("api errors"):
+    print(f"  [{result.entry.key}] score={result.score:.1f}")
+print()
+
 # --- 2. Retrieve entries ---
 
 entry = registry.require("tone_guide")
@@ -95,32 +101,23 @@ print("=== Custom Separator ===")
 print(context)
 print()
 
-# Custom transform: wrap each entry in XML-style tags
-context = registry.as_context(
-    "project_context",
-    "tone_guide",
-    "api_schema",
-    transform=lambda key, content: f"<{key}>\n{content}\n</{key}>",
+# --- 6. Inject Knowledge through the prompt layer ---
+
+prompt = Prompt.from_sections(
+    PromptSection(name="role", content="You are a technical writer.", order=100),
+    PromptSection.from_knowledge(
+        registry,
+        ["project_context", "tone_guide", "audience"],
+        name="knowledge",
+        include_names=True,
+        order=200,
+    ),
+    PromptSection(
+        name="request",
+        content="Use the supplied guidelines for all responses.",
+        order=300,
+    ),
 )
-print("=== XML-Tagged Context ===")
-print(context)
-print()
 
-# --- 6. Use in a prompt template ---
-
-system_prompt = f"""You are a technical writer.
-
-{
-    registry.as_context(
-        "project_context",
-        "tone_guide",
-        "audience",
-        separator="\n\n",
-        transform=lambda k, c: f"[{k.upper().replace('_', ' ')}]\n{c}",
-    )
-}
-
-Use the above guidelines for all responses."""
-
-print("=== System Prompt ===")
-print(system_prompt)
+print("=== Structured XML Prompt ===")
+print(prompt.render(layout=XmlLayout(root_tag="instructions")).text)

@@ -1,6 +1,6 @@
 # Examples
 
-Thirty-eight runnable scripts that walk through the main public surfaces in the
+Forty-five runnable scripts that walk through the main public surfaces in the
 toolkit, from a one-line completion to budgets and metering. Each file is
 self-contained — pick a number, copy-paste, run.
 
@@ -114,8 +114,8 @@ Prompt-injectable reference data.
 
 | # | File | What it shows | Key |
 |---|------|---------------|-----|
-| 34 | [`34_knowledge_registry.py`](34_knowledge_registry.py) | `KnowledgeRegistry`, categories, `as_context()` | None |
-| 35 | [`35_knowledge_loaders.py`](35_knowledge_loaders.py) | File and directory loaders (text, json, toml, yaml, markdown) | None |
+| 34 | [`34_knowledge_registry.py`](34_knowledge_registry.py) | `KnowledgeRegistry`, categories, tags, legacy `as_context()` | None |
+| 35 | [`35_knowledge_loaders.py`](35_knowledge_loaders.py) | Compatibility file/directory loaders built on Resources | None |
 
 ### 🧩 Structured prompts
 
@@ -123,7 +123,14 @@ Deterministic prompt composition and experiment provenance.
 
 | # | File | What it shows | Key |
 |---|------|---------------|-----|
-| 38 | [`38_structured_prompts.py`](38_structured_prompts.py) | `PromptSection`, stability layout, `KnowledgeRegistry`, and fingerprints | None |
+| 38 | [`38_structured_prompts.py`](38_structured_prompts.py) | Literal `PromptSection`, stability, spans, and fingerprints | None |
+| 39 | [`39_prompt_files.py`](39_prompt_files.py) | File sources, JSON Pointer, and Markdown selectors | None |
+| 40 | [`40_prompt_templates.py`](40_prompt_templates.py) | Explicit templates and typed variables | None |
+| 41 | [`41_prompt_layouts.py`](41_prompt_layouts.py) | Text, Markdown, XML, JSON, boundary separators | None |
+| 42 | [`42_prompt_manifest.py`](42_prompt_manifest.py) | Versioned YAML manifest loading and rendering | None |
+| 43 | [`43_prompt_knowledge.py`](43_prompt_knowledge.py) | Resource-backed Knowledge prompt integration | None |
+| 44 | [`44_custom_prompt_extension.py`](44_custom_prompt_extension.py) | Custom Resource codec | None |
+| 45 | [`45_prompt_messages.py`](45_prompt_messages.py) | Ordered and multimodal Content messages | None |
 
 ### 💰 Budgets & metering
 
@@ -145,7 +152,6 @@ than strict numerical order:
    architecture you need.
 5. **Memory** — 28 → 29 → 30.
 6. **Compose your own flows** — 31, 32, 33.
-7. **Prompts, knowledge + reliability** — 38, 34, 35, 22, 23, 36.
-8. **Budgets & cost** — 37 (measure a run, then cap it).
-
-For deep notes on examples 28–36, see [`EXAMPLES_REPORT.md`](EXAMPLES_REPORT.md).
+7. **Prompts and context** — 38 → 39 → 40 → 41 → 42 → 43 (then 44 for extensions).
+8. **Reliability** — 22, 23, 36.
+9. **Budgets & cost** — 37 (measure a run, then cap it).

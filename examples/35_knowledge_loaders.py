@@ -13,14 +13,8 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from ai_arch_toolkit.toolkit.knowledge import (
-    KnowledgeRegistry,
-    load_directory,
-    load_json,
-    load_markdown,
-    load_text,
-    load_toml,
-)
+from ai_arch_toolkit.toolkit.knowledge import KnowledgeRegistry
+from ai_arch_toolkit.toolkit.prompts import Prompt, PromptSection
 
 # --- 1. Create temporary files to load ---
 
@@ -50,17 +44,19 @@ print()
 
 registry = KnowledgeRegistry()
 
-entry = load_text(registry, "style", tmp / "style_guide.txt", category="guides")
+entry = registry.load("style", tmp / "style_guide.txt", category="guides")
 print(f"Loaded text: key={entry.key}, format={entry.format}, source={entry.source}")
 
-entry = load_json(registry, "api_config", tmp / "api_config.json", category="config")
+entry = registry.load(
+    "api_config", tmp / "api_config.json", serialize_as="json", category="config"
+)
 print(f"Loaded JSON: key={entry.key}, format={entry.format}")
 print(f"  Content (formatted):\n{entry.content}")
 
-entry = load_toml(registry, "model_settings", tmp / "settings.toml", category="config")
+entry = registry.load("model_settings", tmp / "settings.toml", category="config")
 print(f"Loaded TOML: key={entry.key}, format={entry.format}")
 
-entry = load_markdown(registry, "overview", tmp / "readme.md", category="docs")
+entry = registry.load("overview", tmp / "readme.md", category="docs")
 print(f"Loaded Markdown: key={entry.key}, format={entry.format}")
 print()
 
@@ -70,16 +66,14 @@ print()
 
 # --- 3. Load an entire directory at once ---
 
-registry2 = KnowledgeRegistry()
-count = load_directory(
-    registry2,
+registry2 = KnowledgeRegistry.from_directory(
     tmp,
     prefix="project.",
     category="project-files",
     tags=("auto-loaded",),
 )
 
-print(f"=== load_directory loaded {count} files ===")
+print(f"=== from_directory loaded {len(registry2)} files ===")
 for key in registry2.keys():  # noqa: SIM118
     e = registry2.require(key)
     print(f"  {key}: format={e.format}, tags={e.tags}, source={Path(e.source).name}")
@@ -95,24 +89,27 @@ print()
 user_schema = {"type": "object", "properties": {"name": {"type": "string"}}}
 (tmp / "schemas" / "user.json").write_text(json.dumps(user_schema))
 
-registry3 = KnowledgeRegistry()
-count = load_directory(registry3, tmp, recursive=True, prefix="kb.")
+registry3 = KnowledgeRegistry.from_directory(tmp, recursive=True, prefix="kb.")
 
-print(f"=== Recursive load: {count} files ===")
+print(f"=== Recursive load: {len(registry3)} files ===")
 for key in registry3.keys():  # noqa: SIM118
     print(f"  {key}")
 print()
 
 # --- 5. Filter loaded entries and build context ---
 
-# Combine specific entries into a prompt context
-context = registry.as_context(
-    "overview",
-    "style",
-    transform=lambda k, c: f"## {k.replace('_', ' ').title()}\n{c}",
+# Combine specific entries through a prompt section
+prompt = Prompt.from_sections(
+    PromptSection(name="role", content="You are a project assistant.", order=100),
+    PromptSection.from_knowledge(
+        registry,
+        ["overview", "style"],
+        include_names=True,
+        order=200,
+    ),
 )
-print("=== Combined Context ===")
-print(context)
+print("=== Combined Prompt Context ===")
+print(prompt.render(layout="markdown").text)
 
 # Cleanup
 shutil.rmtree(tmp)
