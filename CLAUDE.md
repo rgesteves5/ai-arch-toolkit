@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build & Development Commands
 
 ```bash
-uv sync --dev                            # Install all dev dependencies
+uv sync --extra dev                      # Install all dev dependencies
 uv run pytest                            # Run full test suite
 uv run pytest tests/test_content.py      # Run a single test file
 uv run pytest -k "test_chat_basic"       # Run tests matching a pattern
@@ -15,7 +15,7 @@ uv run ruff format src tests examples    # Auto-format
 uv run python examples/01_hello_world.py # Run an example (needs API keys in .env)
 
 # Documentation
-uv sync --group docs                     # Install docs dependencies
+uv sync --extra dev --extra docs         # Install docs dependencies
 uv run mkdocs serve                      # Local docs server
 uv run pdoc ai_arch_toolkit -o site/api  # Generate API docs
 ```
@@ -24,7 +24,7 @@ Running examples requires API keys. Load them with `set -a && source .env && set
 
 ## Architecture
 
-Two layers under `src/ai_arch_toolkit/`:
+Two layers under `src/ai_arch_toolkit/`, plus the `ai-arch` CLI entry point and the WIP `nanope/` sub-package:
 
 ```
 ai_arch_toolkit/
@@ -35,16 +35,18 @@ ai_arch_toolkit/
 │   ├── _metering/     # Neutral cost/usage mechanism (Money, Cost, MeterStore, MeterScope)
 │   └── graph/         # General-purpose graph: Node[T], Edge, Graph, protocols
 ├── toolkit/           # Convenience utilities built on core/
-│   ├── agents/        # 8 agent architectures as Flow factories
+│   ├── agents/        # 9 agent architectures as Flow factories
 │   │   └── flows/     # react_flow, reflexion_flow, rewoo_flow, etc.
 │   ├── flow/          # Flow orchestration (Flow, FlowStep, FlowResult, FlowEvent)
 │   ├── budget/        # Budget policy over the meter (BudgetPolicy, BudgetController, BudgetReport)
-│   ├── tools/         # ~120 pre-built tools across 25 domains (+ opt-in dangerous/)
+│   ├── tools/         # ~130 pre-built tools across 25 domains (+ opt-in dangerous/)
 │   ├── memory/        # Graph-backed memory for agents (GraphStore, views, search)
 │   ├── resources/     # Reusable loaders, codecs, selectors, serializers, policies
 │   ├── knowledge/     # Resource-backed registry for reference data
 │   ├── prompts/       # Sections, templates, layouts, manifests, rendering
 │   └── moderation/    # LLM/OpenAI moderators + ModerationMiddleware
+├── nanope/            # WIP sub-projects (Reflex app; excluded from ruff/pyright)
+├── _cli.py            # `ai-arch` CLI (prompt validate / inspect / render)
 └── __init__.py        # Re-exports from core/ + toolkit/
 ```
 
@@ -72,7 +74,7 @@ The stateless, async-first foundation. All new code should build on this.
 
 #### Agent Flows (`toolkit/agents/flows/`)
 
-Eight agent architectures as **Flow factories** built on core/ primitives (`LLM`, `ToolGroup`, `State`, `Step`, `Result`). Each factory returns a `Flow` and has a companion `*_initial_state(task)` helper.
+Nine agent architectures as **Flow factories** built on core/ primitives (`LLM`, `ToolGroup`, `State`, `Step`, `Result`). Each factory returns a `Flow` and has a companion `*_initial_state(task)` helper.
 
 - **`react_flow()`**: Cyclic LLM → tool execution loop. Params: `system`, `max_iterations`, `parallel_tool_calls`, `timeout`, `policy`, `llm_kwargs`.
 - **`reflexion_flow()`**: Inner ReAct with evaluate + reflect retry. Requires `evaluator: Callable[[str, str], float]`, `threshold`, `max_retries`.
@@ -82,6 +84,7 @@ Eight agent architectures as **Flow factories** built on core/ primitives (`LLM`
 - **`lats_flow()`**: Language Agent Tree Search (MCTS). `n_candidates`, `max_rollouts`, `exploration_weight`.
 - **`self_discovery_flow()`**: Select reasoning modules → Adapt → Operationalize → Solve via inner ReAct.
 - **`llm_compiler_flow()`**: Plan DAG → Parallel execute → Join. `max_replans`.
+- **`generate_review_flow()`**: Generator → reviewer retry loop, with optional tools in both phases.
 - Task input accepts `Content` (str or multimodal list) for vision+tools use cases.
 
 Usage pattern:
@@ -94,7 +97,7 @@ answer = state["response"].text
 
 #### Tools (`toolkit/tools/`)
 
-~120 pre-built tools across ~45 files (25 domains), all using stdlib only (zero pip deps) and the `@tool` decorator from core/. Domains include datetime/math/text/JSON-CSV utilities, weather + air quality, geo + OpenStreetMap, reference (Wikipedia, Wikidata, dictionary, news), scholarly (arXiv, PubMed, Europe PMC, Semantic Scholar, Crossref, ROR, DataCite, Open Library), biomedical/chemistry (UniProt, PDB, ChEMBL, RxNorm/DailyMed, ClinicalTrials), and public data (GBIF, Open Food Facts, openFDA, World Bank, WHO, Eurostat, USGS/EONET, NVD). The default `toolkit.tools` namespace is safe-by-default; filesystem/shell/Python/web-fetch tools are opt-in via `toolkit.tools.dangerous` and should be gated (see `docs/safety.md`). Full per-tool list: `docs/tools-catalog.md`.
+~130 pre-built tools across ~45 files (25 domains), all using stdlib only (zero pip deps) and the `@tool` decorator from core/. Domains include datetime/math/text/JSON-CSV utilities, weather + air quality, geo + OpenStreetMap, reference (Wikipedia, Wikidata, dictionary, news), scholarly (arXiv, PubMed, Europe PMC, Semantic Scholar, Crossref, ROR, DataCite, Open Library), biomedical/chemistry (UniProt, PDB, ChEMBL, RxNorm/DailyMed, ClinicalTrials), and public data (GBIF, Open Food Facts, openFDA, World Bank, WHO, Eurostat, USGS/EONET, NVD). The default `toolkit.tools` namespace is safe-by-default; filesystem/shell/Python/web-fetch tools are opt-in via `toolkit.tools.dangerous` and should be gated (see `docs/safety.md`). Full per-tool list: `docs/tools-catalog.md`.
 
 #### Memory (`toolkit/memory/`)
 
@@ -110,7 +113,7 @@ Sync registry for prompt-injectable reference data, built on `toolkit.resources`
 
 #### Prompts (`toolkit/prompts/`)
 
-Resolved literal `Prompt` / `PromptSection` plus `PromptTemplate`, typed variables, explicit template engines, Resource/Knowledge sources, versioned manifests, Text/Markdown/XML/JSON layouts, section spans, fingerprints, and provenance. `load_prompt()` is the manifest entry point; default rendering remains byte-compatible.
+Resolved literal `Prompt` / `PromptSection` plus `PromptTemplate`, typed variables, explicit template engines, Resource/Knowledge sources, versioned manifests, Text/Markdown/XML/JSON layouts, section spans, fingerprints, and provenance. `load_prompt()` is the manifest entry point (the `ai-arch prompt validate|inspect|render` CLI works on the same manifests); default rendering remains byte-compatible.
 
 #### Moderation (`toolkit/moderation/`)
 
@@ -129,7 +132,7 @@ The **opinion** layer over the neutral `core/_metering` mechanism. `BudgetPolicy
 ## Testing Patterns
 
 - **Config**: pytest-asyncio with `asyncio_mode = "auto"` — no `@pytest.mark.asyncio` needed.
-- **Test layout**: `tests/` (core tests), `tests/agents/flows/` (agent flow tests), `tests/toolkit/` (toolkit tool tests), `tests/graph/` (core graph tests), `tests/memory/` (memory tests), `tests/flow/` (flow tests), `tests/knowledge/` (knowledge tests), `tests/metering/` (core metering primitives + store + scope), `tests/budget/` (toolkit budget policy/controller).
+- **Test layout**: `tests/` (core tests), `tests/agents/flows/` (agent flow tests), `tests/toolkit/` (toolkit tool tests), `tests/graph/` (core graph tests), `tests/memory/` (memory tests), `tests/flow/` (flow tests), `tests/knowledge/` (knowledge tests), `tests/metering/` (core metering primitives + store + scope), `tests/budget/` (toolkit budget policy/controller), `tests/moderation/` (moderators), `tests/prompts/` + `tests/resources/` (prompt/resource system), `tests/integration/` (real-API tests, `integration` marker), `tests/nanope/` (WIP app).
 - **Metering tests**: for a metered LLM/tool, use a REAL `LLM` with a fake `_provider` (so the charge site runs) — a mocked `llm.complete` bypasses metering. Bind a scope with `MeterScope(RunConfig(controller=BudgetController(policy)))`.
 - **Core test fixtures** (`tests/conftest.py`): `MockResponse` class (mimics `requests.Response`), `mock_post` fixture, `weather_tool` fixture.
 - **Agent test fixtures** (`tests/agents/conftest.py`): `make_response()`, `make_tool_call()` factories. Mock `LLM` with `AsyncMock`, set `llm.complete.side_effect` with pre-built `Response` objects.
@@ -147,6 +150,7 @@ The **opinion** layer over the neutral `core/_metering` mechanism. `BudgetPolicy
 - Internal modules prefixed with `_`; public API via `__init__.py` re-exports only.
 - Google-style docstrings — no type info repeated (type hints suffice).
 - Toolkit tools return error strings (never raise) for graceful agent handling.
+- Practical code-writing guidance lives in `docs/code-style.md`: linting shape, docstring/comment style, and class vs function decisions.
 
 ## Provider-Specific Gotchas
 

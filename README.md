@@ -160,8 +160,8 @@ plain text, Markdown, XML, or JSON. Validate them locally with
 | Multimodal (image)    | ✅        | ✅     | ✅     | ✅  |
 | Documents (PDF, etc.) | ✅        | ✅     | ✅     | —   |
 | Prompt caching        | ✅        | ✅     | —      | —   |
-| Extended thinking     | ✅        | —      | ✅     | ✅  |
-| Server-hosted tools   | ✅ code+web | ✅ code+web | —      | —   |
+| Extended thinking     | ✅        | ✅ effort | ✅     | ✅  |
+| Server-hosted tools   | ✅ code+web | ✅ code+web | ✅ code+web | —   |
 | Batch API             | ✅        | ✅     | —      | —   |
 
 ## Agent architectures
