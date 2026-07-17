@@ -27,6 +27,33 @@ For one section:
 prompt = Prompt.from_text("You are a helpful assistant.")
 ```
 
+## Subsections
+
+Sections nest: `PromptSection.sections` holds subsections, and rendering visits a
+section's own content first, then its subsections (canonical preorder). `order`
+sorts each sibling level; names must be unique across the whole tree.
+
+```python
+prompt = Prompt(
+    sections=(
+        PromptSection(
+            name="context",
+            content="General rules.",
+            sections=(
+                PromptSection(name="rules", content="Sub-rules."),
+                PromptSection(name="examples", content="Examples."),
+            ),
+        ),
+        PromptSection(name="task", content="The task."),
+    )
+)
+```
+
+Layouts translate depth: Markdown deepens headings one level per nesting level,
+XML nests `<section>` elements, JSON nests a `sections` array, and the text
+layout flattens the tree in preorder. A parent's span covers its whole subtree,
+so `section_text("context")` returns the parent together with its subsections.
+
 ## Prompts from files
 
 ```python
@@ -73,15 +100,17 @@ See [Layouts & Separators](prompt-layouts.md).
 
 ## Determinism and provenance
 
-Sections are ordered by `order`; ties preserve insertion order. Names must be unique.
-The fingerprint is SHA-256 over the exact UTF-8 bytes of `RenderedPrompt.text`, including
-whitespace and layout wrappers.
+Sections are ordered by `order` within each sibling level; ties preserve insertion
+order. Names must be unique across the whole section tree. The fingerprint is
+SHA-256 over the exact UTF-8 bytes of `RenderedPrompt.text`, including whitespace
+and layout wrappers.
 
 `RenderedPrompt` exposes:
 
 - `text` and the compatibility alias `system`;
-- ordered `sections` and `section_names`;
-- `section_spans` and `section_text(name)`;
+- ordered top-level `sections` and preorder `section_names`;
+- `section_spans` (one per tree node, with `depth`) and `section_text(name)`
+  (a parent's slice includes its subsections);
 - `fingerprint`;
 - `stable_prefix` and `stable_prefix_end`;
 - `layout` and non-sensitive `provenance`.

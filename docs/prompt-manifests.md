@@ -47,6 +47,27 @@ Paths are relative to the manifest and constrained to its directory by default. 
 fields, invalid selectors, missing variables, duplicate sections, and cycles fail before an
 LLM call.
 
+## Subsections
+
+A section may declare nested `sections`. A parent with content renders it before its
+subsections; a parent with only `sections` is a pure container. Names must be unique
+across the whole tree.
+
+```yaml
+sections:
+  - name: context
+    content: General rules.
+    sections:
+      - name: rules
+        source: rules.md
+      - name: examples
+        content: Examples.
+```
+
+The TOML equivalent nests arrays of tables (`[[sections.sections]]`); JSON nests the
+`sections` key. Nested definitions cannot carry `remove`/`replace`/`merge` flags — those
+are merge operations, described below.
+
 Package manifests can be loaded without copying them to the current working directory:
 
 ```python
@@ -70,6 +91,24 @@ sections:
     content: New rules
   - name: legacy
     remove: true
+```
+
+Because names are unique across the tree, `replace` and `remove` address sections at any
+nesting level; `replace` swaps the whole subtree and `remove` prunes it. To operate on a
+section's subsections without restating the parent, use the explicit `merge` flag — a
+merge entry may only define `sections`, whose entries are themselves operations:
+
+```yaml
+extends: base.prompt.yaml
+sections:
+  - name: context
+    merge: true
+    sections:
+      - name: examples
+        content: New nested section
+      - name: rules
+        replace: true
+        content: Replaced nested rules
 ```
 
 Includes and inheritance are cycle checked and depth limited. Variables in a child override

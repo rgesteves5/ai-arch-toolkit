@@ -22,8 +22,12 @@ prompt = Prompt.from_file("rules.upper", resolver=resolver)
 
 The same registry supports custom URI-scheme loaders. Custom selectors implement
 `select(resource)`. Serializers implement `serialize(value)`. Prompt layouts implement
-`render(sections)` and return `LayoutResult` with one `SectionSpan` per section. Template
-engines implement strict `render()` and variable discovery.
+`render(sections)` and return `LayoutResult` with one `SectionSpan` per tree node in
+preorder: layouts receive ordered top-level sections and are responsible for ordering and
+rendering each section's `sections` subtree (a parent's span covers its subtree and carries
+the node's `depth`). A layout that ignores subsections fails span validation with a clear
+error rather than silently dropping content. Template engines implement strict `render()`
+and variable discovery.
 
 Custom Python callables can be wrapped in `CallableSource`; they are intentionally not
 serializable in manifests.

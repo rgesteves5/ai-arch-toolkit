@@ -1,7 +1,9 @@
 # Prompt and Knowledge Migration
 
 The existing literal prompt API remains supported. Default rendering and fingerprints are
-byte-compatible.
+byte-compatible. Subsections (`PromptSection.sections`) are additive: prompts without them
+render the exact same bytes, keep the same fingerprints (text and definition), and produce
+the same spans.
 
 | Existing use | Preferred addition |
 |---|---|

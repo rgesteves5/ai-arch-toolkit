@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
@@ -30,7 +30,11 @@ from ai_arch_toolkit.toolkit.resources import ResourcePolicy, ResourceResolver
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class PromptTemplateSection:
-    """An unresolved section backed by a source and optional template engine."""
+    """An unresolved section backed by a source and optional template engine.
+
+    ``sections`` holds optional unresolved subsections compiled into the
+    resulting :class:`PromptSection` tree.
+    """
 
     name: str
     source: PromptSource
@@ -38,6 +42,7 @@ class PromptTemplateSection:
     stability: PromptStability = "static"
     engine: str | TemplateEngine | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict, hash=False)
+    sections: tuple[PromptTemplateSection, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name:
@@ -58,6 +63,12 @@ class PromptTemplateSection:
             raise TypeError("PromptTemplateSection.engine must implement TemplateEngine")
         if not isinstance(self.metadata, Mapping):
             raise TypeError("PromptTemplateSection.metadata must be a mapping")
+        sections = tuple(self.sections)
+        if not all(isinstance(section, PromptTemplateSection) for section in sections):
+            raise TypeError(
+                "PromptTemplateSection.sections must contain PromptTemplateSection values"
+            )
+        object.__setattr__(self, "sections", sections)
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
 
     @classmethod
@@ -70,6 +81,7 @@ class PromptTemplateSection:
         stability: PromptStability = "static",
         engine: str | TemplateEngine | None = None,
         metadata: Mapping[str, Any] | None = None,
+        sections: Sequence[PromptTemplateSection] = (),
     ) -> PromptTemplateSection:
         """Create a template section from inline content."""
         return cls(
@@ -79,6 +91,7 @@ class PromptTemplateSection:
             stability=stability,
             engine=engine,
             metadata=metadata or {},
+            sections=tuple(sections),
         )
 
     @classmethod
@@ -93,6 +106,7 @@ class PromptTemplateSection:
         stability: PromptStability = "static",
         engine: str | TemplateEngine | None = None,
         metadata: Mapping[str, Any] | None = None,
+        sections: Sequence[PromptTemplateSection] = (),
         policy: ResourcePolicy | None = None,
         resolver: ResourceResolver | None = None,
     ) -> PromptTemplateSection:
@@ -110,7 +124,46 @@ class PromptTemplateSection:
             stability=stability,
             engine=engine,
             metadata=metadata or {},
+            sections=tuple(sections),
         )
+
+
+def _walk_template_sections(
+    sections: Sequence[PromptTemplateSection],
+) -> Iterator[PromptTemplateSection]:
+    """Yield template sections in definition-order preorder."""
+    for section in sections:
+        yield section
+        yield from _walk_template_sections(section.sections)
+
+
+def _inspect_section(section: PromptTemplateSection) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "name": section.name,
+        "order": section.order,
+        "stability": section.stability,
+        "engine": getattr(section.engine, "name", section.engine),
+        "source": dict(section.source.describe()),
+    }
+    if section.sections:
+        payload["sections"] = [_inspect_section(child) for child in section.sections]
+    return payload
+
+
+def _fingerprint_section(section: PromptTemplateSection) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "name": section.name,
+        "order": section.order,
+        "stability": section.stability,
+        "engine": (
+            section.engine if isinstance(section.engine, str) else type(section.engine).__name__
+        ),
+        "provenance": dict(section.source.describe()),
+        "metadata": dict(section.metadata),
+    }
+    if section.sections:
+        payload["sections"] = [_fingerprint_section(child) for child in section.sections]
+    return payload
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -198,8 +251,10 @@ class PromptTemplate:
 
     @property
     def sources(self) -> tuple[Mapping[str, Any], ...]:
-        """Return non-sensitive source provenance snapshots."""
-        return tuple(section.source.describe() for section in self.sections)
+        """Return non-sensitive source provenance snapshots in preorder."""
+        return tuple(
+            section.source.describe() for section in _walk_template_sections(self.sections)
+        )
 
     def inspect(self) -> Mapping[str, Any]:
         """Return a non-sensitive, serializable definition summary."""
@@ -208,16 +263,7 @@ class PromptTemplate:
             "description": self.description,
             "fingerprint": self.fingerprint,
             "layout": getattr(self.layout, "name", self.layout or "text"),
-            "sections": [
-                {
-                    "name": section.name,
-                    "order": section.order,
-                    "stability": section.stability,
-                    "engine": getattr(section.engine, "name", section.engine),
-                    "source": dict(section.source.describe()),
-                }
-                for section in self.sections
-            ],
+            "sections": [_inspect_section(section) for section in self.sections],
             "variables": [
                 {
                     "name": variable.name,
@@ -232,7 +278,7 @@ class PromptTemplate:
 
     def validate(self) -> None:
         """Validate names, variable declarations, and configured template engines."""
-        section_names = [section.name for section in self.sections]
+        section_names = [section.name for section in _walk_template_sections(self.sections)]
         duplicates = sorted({name for name in section_names if section_names.count(name) > 1})
         if duplicates:
             raise ValueError(
@@ -248,7 +294,7 @@ class PromptTemplate:
                 "prompt variable names must be unique; duplicates: "
                 + ", ".join(repr(name) for name in duplicate_variables)
             )
-        for section in self.sections:
+        for section in _walk_template_sections(self.sections):
             if section.engine is not None:
                 template_engine(section.engine)
 
@@ -260,8 +306,8 @@ class PromptTemplate:
             variables,
             allow_extra=self.allow_extra_variables,
         )
-        sections: list[PromptSection] = []
-        for template_section in self.sections:
+
+        def build(template_section: PromptTemplateSection) -> PromptSection:
             resolution = template_section.source.resolve(resolved_variables)
             content = resolution.content
             engine_name: str | None = None
@@ -276,16 +322,17 @@ class PromptTemplate:
             if engine_name:
                 metadata["template_engine"] = engine_name
                 metadata["template_variables"] = tuple(sorted(resolved_variables))
-            sections.append(
-                PromptSection(
-                    name=template_section.name,
-                    content=content,
-                    order=template_section.order,
-                    stability=template_section.stability,
-                    metadata=metadata,
-                )
+            return PromptSection(
+                name=template_section.name,
+                content=content,
+                order=template_section.order,
+                stability=template_section.stability,
+                metadata=metadata,
+                sections=tuple(build(child) for child in template_section.sections),
             )
-        prompt = Prompt(sections=tuple(sections), separator=self.separator)
+
+        sections = tuple(build(template_section) for template_section in self.sections)
+        prompt = Prompt(sections=sections, separator=self.separator)
         # Validate duplicate section names at compile time, before consumers call an LLM.
         render_prompt(prompt)
         return prompt
@@ -318,21 +365,7 @@ class PromptTemplate:
             "layout": self.layout if isinstance(self.layout, str) else repr(self.layout),
             "allow_extra_variables": self.allow_extra_variables,
             "metadata": dict(self.metadata),
-            "sections": [
-                {
-                    "name": section.name,
-                    "order": section.order,
-                    "stability": section.stability,
-                    "engine": (
-                        section.engine
-                        if isinstance(section.engine, str)
-                        else type(section.engine).__name__
-                    ),
-                    "provenance": dict(section.source.describe()),
-                    "metadata": dict(section.metadata),
-                }
-                for section in self.sections
-            ],
+            "sections": [_fingerprint_section(section) for section in self.sections],
             "variables": [
                 {
                     "name": variable.name,

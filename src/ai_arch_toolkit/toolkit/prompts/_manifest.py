@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import difflib
 import importlib.resources
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import unquote, urlparse
@@ -28,7 +28,11 @@ from ai_arch_toolkit.toolkit.prompts._sources import (
     LiteralSource,
     ResourceSource,
 )
-from ai_arch_toolkit.toolkit.prompts._templates import PromptTemplate, PromptTemplateSection
+from ai_arch_toolkit.toolkit.prompts._templates import (
+    PromptTemplate,
+    PromptTemplateSection,
+    _walk_template_sections,
+)
 from ai_arch_toolkit.toolkit.prompts._variables import PromptVariable
 from ai_arch_toolkit.toolkit.resources import (
     JsonPointer,
@@ -62,11 +66,13 @@ _SECTION_FIELDS = frozenset(
     {
         "content",
         "knowledge",
+        "merge",
         "metadata",
         "name",
         "order",
         "remove",
         "replace",
+        "sections",
         "source",
         "stability",
         "template",
@@ -79,6 +85,7 @@ class _SectionOperation:
     name: str
     action: str
     section: PromptTemplateSection | None = None
+    operations: tuple[_SectionOperation, ...] = ()
 
 
 def load_prompt(
@@ -232,16 +239,21 @@ def _load_prompt(
     for variable in local_variables:
         variables[variable.name] = variable
 
-    sections = list(base.sections if base else ())
-    section_names = {section.name for section in sections}
+    sections: list[PromptTemplateSection] = list(base.sections if base else ())
+    section_names = {section.name for section in _walk_template_sections(sections)}
     for included in included_templates:
         for section in included.sections:
+            subtree_names = {item.name for item in _walk_template_sections((section,))}
             if section.name in section_names:
+                duplicated = section.name
+            else:
+                duplicated = next(iter(sorted(subtree_names & section_names)), None)
+            if duplicated is not None:
                 raise PromptValidationError(
-                    f"included prompt section {section.name!r} is duplicated in {canonical}"
+                    f"included prompt section {duplicated!r} is duplicated in {canonical}"
                 )
             sections.append(section)
-            section_names.add(section.name)
+            section_names.update(subtree_names)
 
     operations = _parse_sections(
         data.get("sections", ()),
@@ -249,34 +261,7 @@ def _load_prompt(
         resolver=resolver,
         knowledge=knowledge,
     )
-    for operation in operations:
-        existing_index = next(
-            (index for index, section in enumerate(sections) if section.name == operation.name),
-            None,
-        )
-        if operation.action == "remove":
-            if existing_index is None:
-                raise PromptValidationError(
-                    f"cannot remove unknown prompt section {operation.name!r} in {canonical}"
-                )
-            sections.pop(existing_index)
-            section_names.remove(operation.name)
-        elif operation.action == "replace":
-            if existing_index is None:
-                raise PromptValidationError(
-                    f"cannot replace unknown prompt section {operation.name!r} in {canonical}"
-                )
-            assert operation.section is not None
-            sections[existing_index] = operation.section
-        else:
-            if existing_index is not None:
-                raise PromptValidationError(
-                    f"prompt section {operation.name!r} is duplicated in {canonical}; "
-                    "use replace: true when extending a base manifest"
-                )
-            assert operation.section is not None
-            sections.append(operation.section)
-            section_names.add(operation.name)
+    sections = list(_apply_section_operations(tuple(sections), operations, canonical))
 
     try:
         _infer_manifest_variables(sections, variables)
@@ -372,59 +357,242 @@ def _parse_sections(
         if not isinstance(name, str) or not name:
             raise PromptValidationError(f"prompt section at index {index} requires a name")
         remove = config.get("remove", False)
-        replace = config.get("replace", False)
-        if not isinstance(remove, bool) or not isinstance(replace, bool):
-            raise PromptValidationError(f"section {name!r} remove/replace flags must be booleans")
-        if remove and replace:
+        replace_flag = config.get("replace", False)
+        merge = config.get("merge", False)
+        if not all(isinstance(flag, bool) for flag in (remove, replace_flag, merge)):
+            raise PromptValidationError(
+                f"section {name!r} remove/replace/merge flags must be booleans"
+            )
+        if remove and replace_flag:
             raise PromptValidationError(f"section {name!r} cannot both remove and replace")
+        if merge and (remove or replace_flag):
+            raise PromptValidationError(
+                f"section {name!r} cannot combine merge with remove or replace"
+            )
         if remove:
             content_fields = {"content", "knowledge", "source", "template"} & set(config)
             if content_fields:
                 raise PromptValidationError(f"removed section {name!r} cannot define content")
+            if "sections" in config:
+                raise PromptValidationError(f"removed section {name!r} cannot define sections")
             operations.append(_SectionOperation(name=name, action="remove"))
             continue
-        source_fields = {"content", "knowledge", "source", "template"} & set(config)
-        if len(source_fields) != 1:
-            raise PromptValidationError(
-                f"section {name!r} must define exactly one of content, knowledge, source, template"
-            )
-        try:
-            engine: str | None = None
-            if "content" in config:
-                content = config["content"]
-                if not isinstance(content, str):
-                    raise PromptValidationError(f"section {name!r} content must be a string")
-                source = LiteralSource(content)
-            elif "source" in config:
-                source = _parse_resource_source(
-                    config["source"], manifest_path=manifest_path, resolver=resolver
+        if merge:
+            extra = sorted(set(config) - {"merge", "name", "sections"})
+            if extra:
+                raise PromptValidationError(
+                    f"merge section {name!r} may only define sections; found: "
+                    + ", ".join(repr(field) for field in extra)
                 )
-            elif "template" in config:
-                source, engine = _parse_template_source(
-                    config["template"], manifest_path=manifest_path, resolver=resolver
+            nested = config.get("sections")
+            if not isinstance(nested, Sequence) or isinstance(nested, str | bytes) or not nested:
+                raise PromptValidationError(
+                    f"merge section {name!r} requires a non-empty sections list"
                 )
-            else:
-                if knowledge is None:
-                    raise PromptValidationError(
-                        f"section {name!r} uses knowledge but load_prompt() received no registry"
-                    )
-                source = _parse_knowledge_source(config["knowledge"], registry=knowledge)
-            section = PromptTemplateSection(
-                name=name,
-                source=source,
-                order=config.get("order", 0),
-                stability=config.get("stability", "static"),
-                engine=engine,
-                metadata=_mapping(config.get("metadata", {}), f"section {name!r} metadata"),
+            operations.append(
+                _SectionOperation(
+                    name=name,
+                    action="merge",
+                    operations=_parse_sections(
+                        nested,
+                        manifest_path=manifest_path,
+                        resolver=resolver,
+                        knowledge=knowledge,
+                    ),
+                )
             )
-        except (PromptLoadError, PromptValidationError):
-            raise
-        except (TypeError, ValueError) as exc:
-            raise PromptValidationError(f"invalid prompt section {name!r}: {exc}") from exc
+            continue
+        section = _parse_section_definition(
+            config,
+            name=name,
+            manifest_path=manifest_path,
+            resolver=resolver,
+            knowledge=knowledge,
+        )
         operations.append(
-            _SectionOperation(name=name, action="replace" if replace else "add", section=section)
+            _SectionOperation(
+                name=name,
+                action="replace" if replace_flag else "add",
+                section=section,
+            )
         )
     return tuple(operations)
+
+
+def _parse_section_definition(
+    config: Mapping[str, Any],
+    *,
+    name: str,
+    manifest_path: Path,
+    resolver: ResourceResolver,
+    knowledge: KnowledgeRegistry | None,
+) -> PromptTemplateSection:
+    subsections = _parse_subsections(
+        config.get("sections", ()),
+        parent_name=name,
+        manifest_path=manifest_path,
+        resolver=resolver,
+        knowledge=knowledge,
+    )
+    source_fields = {"content", "knowledge", "source", "template"} & set(config)
+    if len(source_fields) > 1 or (not source_fields and not subsections):
+        raise PromptValidationError(
+            f"section {name!r} must define exactly one of content, knowledge, source, template"
+        )
+    try:
+        engine: str | None = None
+        source: LiteralSource | ResourceSource | KnowledgeSource
+        if "content" in config:
+            content = config["content"]
+            if not isinstance(content, str):
+                raise PromptValidationError(f"section {name!r} content must be a string")
+            source = LiteralSource(content)
+        elif "source" in config:
+            source = _parse_resource_source(
+                config["source"], manifest_path=manifest_path, resolver=resolver
+            )
+        elif "template" in config:
+            source, engine = _parse_template_source(
+                config["template"], manifest_path=manifest_path, resolver=resolver
+            )
+        elif "knowledge" in config:
+            if knowledge is None:
+                raise PromptValidationError(
+                    f"section {name!r} uses knowledge but load_prompt() received no registry"
+                )
+            source = _parse_knowledge_source(config["knowledge"], registry=knowledge)
+        else:
+            source = LiteralSource("")
+        return PromptTemplateSection(
+            name=name,
+            source=source,
+            order=config.get("order", 0),
+            stability=config.get("stability", "static"),
+            engine=engine,
+            metadata=_mapping(config.get("metadata", {}), f"section {name!r} metadata"),
+            sections=subsections,
+        )
+    except (PromptLoadError, PromptValidationError):
+        raise
+    except (TypeError, ValueError) as exc:
+        raise PromptValidationError(f"invalid prompt section {name!r}: {exc}") from exc
+
+
+def _parse_subsections(
+    value: Any,
+    *,
+    parent_name: str,
+    manifest_path: Path,
+    resolver: ResourceResolver,
+    knowledge: KnowledgeRegistry | None,
+) -> tuple[PromptTemplateSection, ...]:
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes):
+        raise PromptValidationError(f"section {parent_name!r} sections must be a list")
+    subsections: list[PromptTemplateSection] = []
+    for index, config in enumerate(value):
+        if not isinstance(config, Mapping):
+            raise PromptValidationError(
+                f"subsection at index {index} of section {parent_name!r} must be an object"
+            )
+        _reject_unknown(config, _SECTION_FIELDS, context=f"subsection of section {parent_name!r}")
+        name = config.get("name")
+        if not isinstance(name, str) or not name:
+            raise PromptValidationError(
+                f"subsection at index {index} of section {parent_name!r} requires a name"
+            )
+        flags = {flag: config.get(flag, False) for flag in ("merge", "remove", "replace")}
+        if not all(isinstance(flag, bool) for flag in flags.values()):
+            raise PromptValidationError(
+                f"section {name!r} remove/replace/merge flags must be booleans"
+            )
+        if any(flags.values()):
+            raise PromptValidationError(
+                f"subsection {name!r} of section {parent_name!r} cannot use "
+                "remove, replace, or merge flags"
+            )
+        subsections.append(
+            _parse_section_definition(
+                config,
+                name=name,
+                manifest_path=manifest_path,
+                resolver=resolver,
+                knowledge=knowledge,
+            )
+        )
+    return tuple(subsections)
+
+
+def _rewrite_section(
+    sections: tuple[PromptTemplateSection, ...],
+    name: str,
+    rewrite: Callable[[PromptTemplateSection], tuple[PromptTemplateSection, ...]],
+) -> tuple[PromptTemplateSection, ...] | None:
+    """Rewrite the named node anywhere in the tree; None when the name is absent."""
+    for index, section in enumerate(sections):
+        if section.name == name:
+            return (*sections[:index], *rewrite(section), *sections[index + 1 :])
+        rewritten_children = _rewrite_section(section.sections, name, rewrite)
+        if rewritten_children is not None:
+            updated = replace(section, sections=rewritten_children)
+            return (*sections[:index], updated, *sections[index + 1 :])
+    return None
+
+
+def _apply_section_operations(
+    sections: tuple[PromptTemplateSection, ...],
+    operations: Sequence[_SectionOperation],
+    canonical: Path,
+) -> tuple[PromptTemplateSection, ...]:
+    for operation in operations:
+        existing_names = {section.name for section in _walk_template_sections(sections)}
+        if operation.action == "remove":
+            if operation.name not in existing_names:
+                raise PromptValidationError(
+                    f"cannot remove unknown prompt section {operation.name!r} in {canonical}"
+                )
+            rewritten = _rewrite_section(sections, operation.name, lambda _target: ())
+            assert rewritten is not None
+            sections = rewritten
+        elif operation.action == "replace":
+            if operation.name not in existing_names:
+                raise PromptValidationError(
+                    f"cannot replace unknown prompt section {operation.name!r} in {canonical}"
+                )
+            assert operation.section is not None
+            replacement = operation.section
+            rewritten = _rewrite_section(
+                sections,
+                operation.name,
+                lambda _target, _section=replacement: (_section,),
+            )
+            assert rewritten is not None
+            sections = rewritten
+        elif operation.action == "merge":
+            if operation.name not in existing_names:
+                raise PromptValidationError(
+                    f"cannot merge into unknown prompt section {operation.name!r} in {canonical}"
+                )
+            nested_operations = operation.operations
+
+            def merge_children(
+                target: PromptTemplateSection,
+                nested: tuple[_SectionOperation, ...] = nested_operations,
+            ) -> tuple[PromptTemplateSection, ...]:
+                merged = _apply_section_operations(target.sections, nested, canonical)
+                return (replace(target, sections=merged),)
+
+            rewritten = _rewrite_section(sections, operation.name, merge_children)
+            assert rewritten is not None
+            sections = rewritten
+        else:
+            if operation.name in existing_names:
+                raise PromptValidationError(
+                    f"prompt section {operation.name!r} is duplicated in {canonical}; "
+                    "use replace: true when extending a base manifest"
+                )
+            assert operation.section is not None
+            sections = (*sections, operation.section)
+    return sections
 
 
 def _parse_resource_source(
@@ -718,7 +886,7 @@ def _infer_manifest_variables(
     from ai_arch_toolkit.toolkit.prompts._template_engines import template_engine
 
     inferred: set[str] = set()
-    for section in sections:
+    for section in _walk_template_sections(tuple(sections)):
         if section.engine is not None:
             source = section.source
             if isinstance(source, LiteralSource):

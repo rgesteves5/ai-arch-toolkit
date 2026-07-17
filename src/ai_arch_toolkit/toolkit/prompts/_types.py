@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal
@@ -30,6 +30,9 @@ _STABILITIES = frozenset({"static", "session", "request"})
 class PromptSection:
     """A named piece of prompt content with deterministic ordering metadata.
 
+    ``sections`` holds optional subsections; rendering visits a section's own
+    content first and then its subsections in canonical preorder.
+
     ``position`` is accepted as a compatibility alias for ``order`` while
     experimental Nanope consumers migrate to the toolkit API.
     """
@@ -39,6 +42,7 @@ class PromptSection:
     order: int
     stability: PromptStability
     metadata: Mapping[str, Any] = field(hash=False)
+    sections: tuple[PromptSection, ...]
 
     def __init__(
         self,
@@ -48,6 +52,7 @@ class PromptSection:
         order: int | None = None,
         stability: PromptStability = "static",
         metadata: Mapping[str, Any] | None = None,
+        sections: Sequence[PromptSection] | None = None,
         position: int | None = None,
     ) -> None:
         if not isinstance(name, str) or not name:
@@ -64,10 +69,19 @@ class PromptSection:
         if not isinstance(resolved_order, int):
             raise TypeError("PromptSection.order must be an integer")
 
+        resolved_sections = tuple(sections) if sections is not None else ()
+        for index, child in enumerate(resolved_sections):
+            if not isinstance(child, PromptSection):
+                raise TypeError(
+                    f"PromptSection.sections[{index}] must be a PromptSection, "
+                    f"got {type(child).__name__}"
+                )
+
         object.__setattr__(self, "name", name)
         object.__setattr__(self, "content", content)
         object.__setattr__(self, "order", resolved_order)
         object.__setattr__(self, "stability", stability)
+        object.__setattr__(self, "sections", resolved_sections)
         if metadata is not None and not isinstance(metadata, Mapping):
             raise TypeError("PromptSection.metadata must be a mapping")
         object.__setattr__(
@@ -90,6 +104,7 @@ class PromptSection:
         order: int = 0,
         stability: PromptStability = "static",
         metadata: Mapping[str, Any] | None = None,
+        sections: Sequence[PromptSection] = (),
         policy: ResourcePolicy | None = None,
         resolver: ResourceResolver | None = None,
     ) -> PromptSection:
@@ -123,6 +138,7 @@ class PromptSection:
             order=order,
             stability=stability,
             metadata=resource_metadata,
+            sections=sections,
         )
 
     @classmethod
@@ -137,6 +153,7 @@ class PromptSection:
         order: int = 0,
         stability: PromptStability = "static",
         metadata: Mapping[str, Any] | None = None,
+        sections: Sequence[PromptSection] = (),
     ) -> PromptSection:
         """Create one literal section from an already loaded resource."""
         from ai_arch_toolkit.toolkit.resources import (
@@ -168,6 +185,7 @@ class PromptSection:
             order=order,
             stability=stability,
             metadata=resource_metadata,
+            sections=sections,
         )
 
     @classmethod
@@ -182,6 +200,7 @@ class PromptSection:
         order: int = 0,
         stability: PromptStability = "static",
         metadata: Mapping[str, Any] | None = None,
+        sections: Sequence[PromptSection] = (),
     ) -> PromptSection:
         """Create a literal section from registered knowledge keys."""
         from ai_arch_toolkit.toolkit.prompts._sources import KnowledgeSource
@@ -201,7 +220,25 @@ class PromptSection:
                 **dict(metadata or {}),
                 "source_provenance": dict(resolution.provenance),
             },
+            sections=sections,
         )
+
+
+def _ordered_sections(sections: Sequence[PromptSection]) -> tuple[PromptSection, ...]:
+    """Order one sibling level by ``order``, preserving insertion order on ties."""
+    indexed = sorted(enumerate(sections), key=lambda pair: (pair[1].order, pair[0]))
+    return tuple(section for _index, section in indexed)
+
+
+def _walk_sections(
+    sections: Sequence[PromptSection],
+    *,
+    depth: int = 0,
+) -> Iterator[tuple[PromptSection, int]]:
+    """Yield ``(section, depth)`` in canonical preorder, ordering each sibling level."""
+    for section in _ordered_sections(sections):
+        yield section, depth
+        yield from _walk_sections(section.sections, depth=depth + 1)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -324,8 +361,8 @@ class RenderedPrompt:
 
     @property
     def section_names(self) -> tuple[str, ...]:
-        """Return section names in render order."""
-        return tuple(section.name for section in self.sections)
+        """Return section names in canonical preorder render order."""
+        return tuple(section.name for section, _depth in _walk_sections(self.sections))
 
     @property
     def stable_prefix(self) -> str:

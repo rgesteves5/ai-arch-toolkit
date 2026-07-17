@@ -90,6 +90,9 @@ def _coerce_prompt_section(value: Any) -> PromptSection:
             order=int(raw_order),
             stability=value.get("stability", "static"),
             metadata=value.get("metadata") or {},
+            sections=tuple(
+                _coerce_prompt_section(child) for child in value.get("sections") or ()
+            ),
         )
     raise TypeError(
         f"extra_sections entries must be PromptSection or mapping, got {type(value).__name__}"

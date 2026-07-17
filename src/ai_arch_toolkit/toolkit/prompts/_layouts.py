@@ -10,18 +10,24 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Protocol
 
-from ai_arch_toolkit.toolkit.prompts._types import PromptSection
+from ai_arch_toolkit.toolkit.prompts._types import PromptSection, _ordered_sections
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class SectionSpan:
-    """Offsets occupied by one section in rendered prompt text."""
+    """Offsets occupied by one section in rendered prompt text.
+
+    A parent section's span covers its whole subtree; ``content_start`` and
+    ``content_end`` bound only the section's own content. ``depth`` is the
+    section's nesting level in canonical preorder.
+    """
 
     name: str
     start: int
     end: int
     content_start: int | None = None
     content_end: int | None = None
+    depth: int = 0
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name:
@@ -32,6 +38,10 @@ class SectionSpan:
             for value in offsets
         ):
             raise TypeError("section span offsets must be integers or None")
+        if not isinstance(self.depth, int) or isinstance(self.depth, bool):
+            raise TypeError("SectionSpan.depth must be an integer")
+        if self.depth < 0:
+            raise ValueError("SectionSpan.depth must be non-negative")
         if self.start < 0 or self.end < self.start:
             raise ValueError("invalid section span offsets")
         if (self.content_start is None) != (self.content_end is None):
@@ -62,7 +72,12 @@ class LayoutResult:
 
 
 class PromptLayout(Protocol):
-    """Serialize already ordered prompt sections."""
+    """Serialize already ordered prompt sections.
+
+    Layouts receive top-level sections in render order and are responsible for
+    ordering and rendering each section's subsections (canonical preorder),
+    returning one span per tree node.
+    """
 
     @property
     def name(self) -> str:
@@ -139,7 +154,10 @@ def _after(separator: str | SeparatorPolicy, section: PromptSection) -> str:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class TextLayout:
-    """Join literal section content with configurable separators."""
+    """Join literal section content with configurable separators.
+
+    Subsections are flattened in preorder; text has no hierarchy affordance.
+    """
 
     separator: str | SeparatorPolicy = "\n\n"
     name: str = field(default="text", init=False)
@@ -150,10 +168,11 @@ class TextLayout:
 
     def render(self, sections: Sequence[PromptSection]) -> LayoutResult:
         parts: list[str] = []
-        spans: list[SectionSpan] = []
         cursor = 0
         previous: PromptSection | None = None
-        for section in sections:
+
+        def emit(section: PromptSection, depth: int) -> list[SectionSpan]:
+            nonlocal cursor, previous
             if previous is not None:
                 separator = (
                     self.separator
@@ -168,25 +187,38 @@ class TextLayout:
             start = cursor
             parts.append(section.content)
             cursor += len(section.content)
-            spans.append(
-                SectionSpan(
-                    name=section.name,
-                    start=start,
-                    end=cursor,
-                    content_start=start,
-                    content_end=cursor,
-                )
-            )
+            content_end = cursor
             after = _after(self.separator, section)
             parts.append(after)
             cursor += len(after)
             previous = section
+            child_spans: list[SectionSpan] = []
+            for child in _ordered_sections(section.sections):
+                child_spans.extend(emit(child, depth + 1))
+            end = child_spans[-1].end if child_spans else content_end
+            span = SectionSpan(
+                name=section.name,
+                start=start,
+                end=end,
+                content_start=start,
+                content_end=content_end,
+                depth=depth,
+            )
+            return [span, *child_spans]
+
+        spans: list[SectionSpan] = []
+        for section in sections:
+            spans.extend(emit(section, 0))
         return LayoutResult(text="".join(parts), spans=tuple(spans), layout=self.name)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class MarkdownLayout:
-    """Render sections as titled Markdown blocks."""
+    """Render sections as titled Markdown blocks.
+
+    Subsections deepen the heading by one level each; rendering fails when a
+    subsection would exceed heading level 6.
+    """
 
     heading_level: int = 2
     separator: str | SeparatorPolicy = "\n\n"
@@ -204,45 +236,63 @@ class MarkdownLayout:
             raise TypeError("MarkdownLayout.include_headings must be a boolean")
 
     def render(self, sections: Sequence[PromptSection]) -> LayoutResult:
-        blocks: list[str] = []
-        spans: list[SectionSpan] = []
+        parts: list[str] = []
         cursor = 0
         previous: PromptSection | None = None
-        for section in sections:
+
+        def emit(section: PromptSection, depth: int) -> list[SectionSpan]:
+            nonlocal cursor, previous
             if previous is not None:
                 separator = (
                     self.separator
                     if isinstance(self.separator, str)
                     else self.separator.separator(previous, section)
                 )
-                blocks.append(separator)
+                parts.append(separator)
                 cursor += len(separator)
             before = _before(self.separator, section)
-            blocks.append(before)
+            parts.append(before)
             cursor += len(before)
             title = section.metadata.get("title", section.name)
             if not isinstance(title, str):
                 raise TypeError(f"section {section.name!r} metadata title must be a string")
-            prefix = f"{'#' * self.heading_level} {title}\n\n" if self.include_headings else ""
+            prefix = ""
+            if self.include_headings:
+                level = self.heading_level + depth
+                if level > 6:
+                    raise ValueError(
+                        f"markdown heading level {level} for section {section.name!r} "
+                        "exceeds 6; reduce heading_level or nesting depth"
+                    )
+                prefix = f"{'#' * level} {title}\n\n"
             block = prefix + section.content
             start = cursor
             content_start = start + len(prefix)
-            blocks.append(block)
+            parts.append(block)
             cursor += len(block)
-            spans.append(
-                SectionSpan(
-                    name=section.name,
-                    start=start,
-                    end=cursor,
-                    content_start=content_start,
-                    content_end=cursor,
-                )
-            )
+            content_end = cursor
             after = _after(self.separator, section)
-            blocks.append(after)
+            parts.append(after)
             cursor += len(after)
             previous = section
-        return LayoutResult(text="".join(blocks), spans=tuple(spans), layout=self.name)
+            child_spans: list[SectionSpan] = []
+            for child in _ordered_sections(section.sections):
+                child_spans.extend(emit(child, depth + 1))
+            end = child_spans[-1].end if child_spans else content_end
+            span = SectionSpan(
+                name=section.name,
+                start=start,
+                end=end,
+                content_start=content_start,
+                content_end=content_end,
+                depth=depth,
+            )
+            return [span, *child_spans]
+
+        spans: list[SectionSpan] = []
+        for section in sections:
+            spans.extend(emit(section, 0))
+        return LayoutResult(text="".join(parts), spans=tuple(spans), layout=self.name)
 
 
 _XML_TAG = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
@@ -250,7 +300,7 @@ _XML_TAG = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class XmlLayout:
-    """Render sections as escaped XML elements."""
+    """Render sections as escaped XML elements; subsections nest as child elements."""
 
     root_tag: str = "prompt"
     section_tag: str = "section"
@@ -272,48 +322,66 @@ class XmlLayout:
             raise ValueError("XmlLayout.metadata_attributes must contain non-empty strings")
         object.__setattr__(self, "metadata_attributes", attributes)
 
+    def _serialize_element(self, section: PromptSection) -> str:
+        element = ET.Element(self.section_tag, {"name": section.name})
+        if self.include_stability:
+            element.set("stability", section.stability)
+        for name in self.metadata_attributes:
+            if name in section.metadata:
+                value = section.metadata[name]
+                if not isinstance(value, str | int | float | bool):
+                    raise TypeError(
+                        f"section {section.name!r} metadata attribute {name!r} must be a scalar"
+                    )
+                element.set(name, str(value).lower() if isinstance(value, bool) else str(value))
+        element.text = section.content
+        return ET.tostring(element, encoding="unicode", short_empty_elements=False)
+
     def render(self, sections: Sequence[PromptSection]) -> LayoutResult:
         root = ET.Element(self.root_tag)
         empty_root = ET.tostring(root, encoding="unicode", short_empty_elements=False)
         close_root = f"</{self.root_tag}>"
         open_root = empty_root[: -len(close_root)]
+        close_section = f"</{self.section_tag}>"
         parts = [open_root]
-        spans: list[SectionSpan] = []
         cursor = len(open_root)
+
+        def emit(section: PromptSection, depth: int) -> list[SectionSpan]:
+            nonlocal cursor
+            serialized = self._serialize_element(section)
+            open_and_text = serialized[: -len(close_section)]
+            start = cursor
+            content_start = start + serialized.index(">") + 1
+            parts.append(open_and_text)
+            cursor += len(open_and_text)
+            content_end = cursor
+            child_spans: list[SectionSpan] = []
+            children = _ordered_sections(section.sections)
+            for child in children:
+                parts.append(self.separator)
+                cursor += len(self.separator)
+                child_spans.extend(emit(child, depth + 1))
+            if children:
+                parts.append(self.separator)
+                cursor += len(self.separator)
+            parts.append(close_section)
+            cursor += len(close_section)
+            span = SectionSpan(
+                name=section.name,
+                start=start,
+                end=cursor,
+                content_start=content_start,
+                content_end=content_end,
+                depth=depth,
+            )
+            return [span, *child_spans]
+
+        spans: list[SectionSpan] = []
         if sections:
             parts.append(self.separator)
             cursor += len(self.separator)
         for index, section in enumerate(sections):
-            element = ET.Element(self.section_tag, {"name": section.name})
-            if self.include_stability:
-                element.set("stability", section.stability)
-            for name in self.metadata_attributes:
-                if name in section.metadata:
-                    value = section.metadata[name]
-                    if not isinstance(value, str | int | float | bool):
-                        raise TypeError(
-                            f"section {section.name!r} metadata attribute {name!r} "
-                            "must be a scalar"
-                        )
-                    element.set(
-                        name, str(value).lower() if isinstance(value, bool) else str(value)
-                    )
-            element.text = section.content
-            serialized = ET.tostring(element, encoding="unicode", short_empty_elements=False)
-            start = cursor
-            content_start = start + serialized.index(">") + 1
-            content_end = start + serialized.rindex(f"</{self.section_tag}>")
-            parts.append(serialized)
-            cursor += len(serialized)
-            spans.append(
-                SectionSpan(
-                    name=section.name,
-                    start=start,
-                    end=cursor,
-                    content_start=content_start,
-                    content_end=content_end,
-                )
-            )
+            spans.extend(emit(section, 0))
             if index < len(sections) - 1:
                 parts.append(self.separator)
                 cursor += len(self.separator)
@@ -326,7 +394,7 @@ class XmlLayout:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class JsonLayout:
-    """Render sections as an ordered JSON array."""
+    """Render sections as an ordered JSON array; subsections nest recursively."""
 
     indent: int | None = 2
     include_stability: bool = False
@@ -346,67 +414,124 @@ class JsonLayout:
         if self.mode not in {"array", "object"}:
             raise ValueError("JsonLayout.mode must be 'array' or 'object'")
 
+    def _dumps(self, value: str) -> str:
+        return json.dumps(value, ensure_ascii=self.ensure_ascii)
+
     def render(self, sections: Sequence[PromptSection]) -> LayoutResult:
         if self.mode == "object":
             return self._render_object(sections)
+        compact = self.indent is None
+        key_joiner = ":" if compact else ": "
+        item_joiner = "," if compact else ", "
         if self.indent is None:
             prefix, separator, suffix, item_prefix = "[", ",", "]", ""
         else:
             prefix, separator, suffix, item_prefix = "[\n", ",\n", "\n]", " " * self.indent
+        if not sections and self.indent is not None:
+            return LayoutResult(text="[]", spans=(), layout=self.name)
         parts = [prefix]
-        spans: list[SectionSpan] = []
         cursor = len(prefix)
+
+        def emit(section: PromptSection, depth: int, lead: str) -> list[SectionSpan]:
+            nonlocal cursor
+            start = cursor
+            fields = [
+                f"{self._dumps('name')}{key_joiner}{self._dumps(section.name)}",
+                f"{self._dumps('content')}{key_joiner}{self._dumps(section.content)}",
+            ]
+            if self.include_stability:
+                fields.append(
+                    f"{self._dumps('stability')}{key_joiner}{self._dumps(section.stability)}"
+                )
+            opening = lead + "{" + item_joiner.join(fields)
+            parts.append(opening)
+            cursor += len(opening)
+            child_spans: list[SectionSpan] = []
+            children = _ordered_sections(section.sections)
+            if children:
+                sections_key = f"{item_joiner}{self._dumps('sections')}{key_joiner}["
+                parts.append(sections_key)
+                cursor += len(sections_key)
+                for child_index, child in enumerate(children):
+                    if child_index:
+                        parts.append(item_joiner)
+                        cursor += len(item_joiner)
+                    child_spans.extend(emit(child, depth + 1, ""))
+                parts.append("]")
+                cursor += 1
+            parts.append("}")
+            cursor += 1
+            span = SectionSpan(name=section.name, start=start, end=cursor, depth=depth)
+            return [span, *child_spans]
+
+        spans: list[SectionSpan] = []
         for index, section in enumerate(sections):
             if index:
                 parts.append(separator)
                 cursor += len(separator)
-            payload: dict[str, str] = {"name": section.name, "content": section.content}
-            if self.include_stability:
-                payload["stability"] = section.stability
-            serialized = json.dumps(
-                payload,
-                ensure_ascii=self.ensure_ascii,
-                separators=(",", ":") if self.indent is None else None,
-            )
-            if item_prefix:
-                serialized = item_prefix + serialized
-            start = cursor
-            parts.append(serialized)
-            cursor += len(serialized)
-            spans.append(SectionSpan(name=section.name, start=start, end=cursor))
-        if not sections and self.indent is not None:
-            return LayoutResult(text="[]", spans=(), layout=self.name)
+            spans.extend(emit(section, 0, item_prefix))
         parts.append(suffix)
         return LayoutResult(text="".join(parts), spans=tuple(spans), layout=self.name)
 
     def _render_object(self, sections: Sequence[PromptSection]) -> LayoutResult:
         compact = self.indent is None
-        value_separators = (",", ":") if compact else None
-        joiner = ":" if compact else ": "
-        entries: list[str] = []
-        for section in sections:
-            value: str | dict[str, str] = section.content
-            if self.include_stability:
-                value = {"content": section.content, "stability": section.stability}
-            key = json.dumps(section.name, ensure_ascii=self.ensure_ascii)
-            serialized_value = json.dumps(
-                value, ensure_ascii=self.ensure_ascii, separators=value_separators
-            )
-            entries.append(f"{key}{joiner}{serialized_value}")
-        if compact:
-            text = "{" + ",".join(entries) + "}"
-        elif entries:
-            padding = " " * self.indent  # type: ignore[operator]
-            text = "{\n" + ",\n".join(padding + entry for entry in entries) + "\n}"
-        else:
-            text = "{}"
-        spans: list[SectionSpan] = []
+        key_joiner = ":" if compact else ": "
+        item_joiner = "," if compact else ", "
+        parts: list[str] = []
         cursor = 0
-        for section, entry in zip(sections, entries, strict=True):
-            start = text.find(entry, cursor)
-            spans.append(SectionSpan(name=section.name, start=start, end=start + len(entry)))
-            cursor = start + len(entry)
-        return LayoutResult(text=text, spans=tuple(spans), layout=self.name)
+
+        def write(text: str) -> None:
+            nonlocal cursor
+            parts.append(text)
+            cursor += len(text)
+
+        def emit_entry(section: PromptSection, depth: int) -> list[SectionSpan]:
+            start = cursor
+            write(f"{self._dumps(section.name)}{key_joiner}")
+            child_spans = emit_value(section, depth)
+            span = SectionSpan(name=section.name, start=start, end=cursor, depth=depth)
+            return [span, *child_spans]
+
+        def emit_value(section: PromptSection, depth: int) -> list[SectionSpan]:
+            children = _ordered_sections(section.sections)
+            if not children and not self.include_stability:
+                write(self._dumps(section.content))
+                return []
+            write("{" + f"{self._dumps('content')}{key_joiner}{self._dumps(section.content)}")
+            if self.include_stability:
+                write(f"{item_joiner}{self._dumps('stability')}{key_joiner}")
+                write(self._dumps(section.stability))
+            child_spans: list[SectionSpan] = []
+            if children:
+                write(f"{item_joiner}{self._dumps('sections')}{key_joiner}" + "{")
+                for index, child in enumerate(children):
+                    if index:
+                        write(item_joiner)
+                    child_spans.extend(emit_entry(child, depth + 1))
+                write("}")
+            write("}")
+            return child_spans
+
+        spans: list[SectionSpan] = []
+        if compact:
+            write("{")
+            for index, section in enumerate(sections):
+                if index:
+                    write(",")
+                spans.extend(emit_entry(section, 0))
+            write("}")
+        else:
+            if not sections:
+                return LayoutResult(text="{}", spans=(), layout=self.name)
+            padding = " " * self.indent  # type: ignore[operator]
+            write("{\n")
+            for index, section in enumerate(sections):
+                if index:
+                    write(",\n")
+                write(padding)
+                spans.extend(emit_entry(section, 0))
+            write("\n}")
+        return LayoutResult(text="".join(parts), spans=tuple(spans), layout=self.name)
 
 
 def layout_from_name(name: str, *, separator: str = "\n\n") -> PromptLayout:

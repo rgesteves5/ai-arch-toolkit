@@ -45,37 +45,45 @@
     },
     "sections": {
       "type": "array",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["name"],
-        "properties": {
-          "name": {"type": "string", "minLength": 1},
-          "order": {"type": "integer"},
-          "stability": {"enum": ["static", "session", "request"]},
-          "metadata": {"type": "object"},
-          "replace": {"type": "boolean"},
-          "remove": {"type": "boolean"},
-          "content": {"type": "string"},
-          "source": {
-            "oneOf": [
-              {"type": "string"},
-              {"type": "object", "required": ["path"]}
-            ]
-          },
-          "template": {
-            "oneOf": [
-              {"type": "string"},
-              {"type": "object"}
-            ]
-          },
-          "knowledge": {
-            "oneOf": [
-              {"type": "string"},
-              {"type": "array", "items": {"type": "string"}},
-              {"type": "object", "required": ["keys"]}
-            ]
-          }
+      "items": {"$ref": "#/$defs/section"}
+    }
+  },
+  "$defs": {
+    "section": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "order": {"type": "integer"},
+        "stability": {"enum": ["static", "session", "request"]},
+        "metadata": {"type": "object"},
+        "replace": {"type": "boolean"},
+        "remove": {"type": "boolean"},
+        "merge": {"type": "boolean"},
+        "content": {"type": "string"},
+        "source": {
+          "oneOf": [
+            {"type": "string"},
+            {"type": "object", "required": ["path"]}
+          ]
+        },
+        "template": {
+          "oneOf": [
+            {"type": "string"},
+            {"type": "object"}
+          ]
+        },
+        "knowledge": {
+          "oneOf": [
+            {"type": "string"},
+            {"type": "array", "items": {"type": "string"}},
+            {"type": "object", "required": ["keys"]}
+          ]
+        },
+        "sections": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/section"}
         }
       }
     }

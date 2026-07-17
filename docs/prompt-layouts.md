@@ -10,6 +10,16 @@ prompt.render(layout="xml")
 prompt.render(layout="json")
 ```
 
+## Subsections and depth
+
+Each layout translates section nesting its own way:
+
+- **text** is hierarchy-blind: subsections flatten in preorder with the usual separators;
+- **markdown** deepens the heading one level per nesting level and raises when a
+  subsection would exceed heading level 6;
+- **xml** nests `<section>` elements inside their parent;
+- **json** nests a recursive `sections` array (or object in `mode="object"`).
+
 ## Text and boundary separators
 
 ```python
@@ -65,5 +75,7 @@ keys (names are still validated as unique by the prompt renderer):
 prompt.render(layout=JsonLayout(mode="object", include_stability=True))
 ```
 
-Every built-in layout produces section spans. `RenderedPrompt.section_text(name)` returns
-the exact layout-visible slice, and stable-prefix diagnostics use those offsets.
+Every built-in layout produces section spans — one per tree node, tagged with `depth`. A
+parent's span covers its whole subtree while `content_start`/`content_end` bound only its
+own content. `RenderedPrompt.section_text(name)` returns the exact layout-visible slice,
+and stable-prefix diagnostics use those offsets.

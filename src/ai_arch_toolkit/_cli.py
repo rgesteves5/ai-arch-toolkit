@@ -58,7 +58,8 @@ def _run_prompt(args: argparse.Namespace) -> int:
         template.validate()
         print(
             f"valid prompt {template.name or args.path.name!r}: "
-            f"{len(template.sections)} sections, {len(template.variables)} variables"
+            f"{_count_sections(template.sections)} sections, "
+            f"{len(template.variables)} variables"
         )
         return 0
     if args.prompt_command == "inspect":
@@ -95,6 +96,10 @@ def _load_knowledge(args: argparse.Namespace) -> KnowledgeRegistry | None:
         registry = registry or KnowledgeRegistry()
         registry.load(key, Path(raw_path))
     return registry
+
+
+def _count_sections(sections: Sequence[Any]) -> int:
+    return sum(1 + _count_sections(section.sections) for section in sections)
 
 
 def _inspect_template(template: Any) -> dict[str, Any]:
