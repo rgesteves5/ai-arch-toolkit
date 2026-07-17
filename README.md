@@ -243,6 +243,7 @@ Browse `docs/` for guides, or jump straight to:
 - [`docs/flow-architecture.md`](docs/flow-architecture.md)
 - [`docs/graph.md`](docs/graph.md)
 - [`docs/model-compatibility.md`](docs/model-compatibility.md)
+- [`CHANGELOG.md`](CHANGELOG.md) — what's new
 
 ## Development
 
