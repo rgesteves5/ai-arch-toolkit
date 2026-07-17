@@ -35,7 +35,7 @@ ai_arch_toolkit/
 │   ├── _metering/     # Neutral cost/usage mechanism (Money, Cost, MeterStore, MeterScope)
 │   └── graph/         # General-purpose graph: Node[T], Edge, Graph, protocols
 ├── toolkit/           # Convenience utilities built on core/
-│   ├── agents/        # 9 agent architectures as Flow factories
+│   ├── agents/        # Agent + ReasoningSpec facade; 9 agent architectures as Flow factories
 │   │   └── flows/     # react_flow, reflexion_flow, rewoo_flow, etc.
 │   ├── flow/          # Flow orchestration (Flow, FlowStep, FlowResult, FlowEvent)
 │   ├── budget/        # Budget policy over the meter (BudgetPolicy, BudgetController, BudgetReport)
@@ -49,6 +49,8 @@ ai_arch_toolkit/
 ├── _cli.py            # `ai-arch` CLI (prompt validate / inspect / render)
 └── __init__.py        # Re-exports from core/ + toolkit/
 ```
+
+Layer rules: `core/` is the neutral mechanism layer — stateless, zero dependencies, zero opinions; it never imports `toolkit/`. `toolkit/` is the opinionated convenience layer built on top of core. `nanope/` is a scratchpad of WIP sub-projects (e.g. a Reflex app with its own idioms) — not part of the public API and excluded from repo-wide ruff/pyright.
 
 ### Core layer (`core/`)
 
@@ -72,6 +74,10 @@ The stateless, async-first foundation. All new code should build on this.
 
 ### Toolkit layer (`toolkit/`)
 
+#### Agent & ReasoningSpec (`toolkit/agents/`)
+
+The recommended user-facing entry point (see `docs/agents.md`). `ReasoningSpec` (`_spec.py`): frozen, serializable description of how an agent reasons — `strategy`, `system`, `max_iterations`, `knobs` (strategy-specific options), `policy`, `timeout`, `llm_kwargs`, `output_schema`; `from_mapping()` builds one from parsed JSON/YAML. `Agent` (`_agent.py`): binds a spec to an `LLM` + `ToolGroup`, compiles the `Flow` once via `build_flow()`, and exposes `run()` / `run_sync()` / `iter()` (each accepts a per-run `budget_policy=`), `Agent.from_flow()` (wrap a hand-built Flow), and `as_step()` (compose into a larger Flow). `AgentResult`: `text`, `response`, `flow_result`, meter-derived `usage`/`cost`/`report`, `errors`. Strategy registry (`_builders.py`/`_compile.py`): `register_strategy()` / `get_strategy()`, `FlowStrategy`, `StrategyBuilder`, `BuildContext` — 10 built-in strategies (the 9 flow factories below + `completion`, a single LLM call with no tool loop); only `react`/`completion` support `output_schema`.
+
 #### Agent Flows (`toolkit/agents/flows/`)
 
 Nine agent architectures as **Flow factories** built on core/ primitives (`LLM`, `ToolGroup`, `State`, `Step`, `Result`). Each factory returns a `Flow` and has a companion `*_initial_state(task)` helper.
@@ -87,8 +93,11 @@ Nine agent architectures as **Flow factories** built on core/ primitives (`LLM`,
 - **`generate_review_flow()`**: Generator → reviewer retry loop, with optional tools in both phases.
 - Task input accepts `Content` (str or multimodal list) for vision+tools use cases.
 
-Usage pattern:
+Usage pattern — high level (preferred) and the flow-factory equivalent:
 ```python
+agent = Agent(ReasoningSpec(strategy="react"), llm, tools)
+result = agent.run_sync("your task")  # result.text / result.cost / result.report
+
 flow = react_flow(llm, tools, max_iterations=5)
 state = State(operational=react_initial_state("your task"))
 result = flow.run_sync(state)

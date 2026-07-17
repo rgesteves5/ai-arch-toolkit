@@ -15,7 +15,7 @@ dependencies; bring your own provider SDK.
 - **One client, every provider.** `LLM("claude-…")`, `LLM("gpt-…")`, `LLM("gemini-…")`, `LLM("grok-…")` — same call surface, automatic routing.
 - **Local models.** Point at Ollama, LM Studio, or vLLM with `base_url=` — arbitrary model tags, no API key needed on localhost, real-time reasoning events.
 - **Async-first, sync everywhere.** Every coroutine has a `_sync` wrapper, so you never have to choose.
-- **Agent architectures as building blocks.** ReAct, Reflexion, ReWOO, Plan-Execute, Tree of Thoughts, LATS, Self-Discovery, LLM Compiler, and Generate-Review — all as `Flow` factories.
+- **Agent architectures as building blocks.** ReAct, Reflexion, ReWOO, Plan-Execute, Tree of Thoughts, LATS, Self-Discovery, LLM Compiler, and Generate-Review — as declarative `Agent` strategies or standalone `Flow` factories.
 - **No mandatory deps.** Install only the provider SDKs you actually use.
 
 ## Install
@@ -117,7 +117,31 @@ while response.has_tool_calls:
 print(response.text)
 ```
 
-### A ReAct agent in five lines
+### An agent from a spec (recommended)
+
+`Agent` binds a declarative, serializable `ReasoningSpec` to an `LLM` and tools,
+compiles it to a `Flow` once, and returns a structured result.
+
+```python
+from ai_arch_toolkit import LLM, ToolGroup
+from ai_arch_toolkit.toolkit.agents import Agent, ReasoningSpec
+from ai_arch_toolkit.toolkit.tools import geocode, get_weather
+
+llm = LLM("gpt-4.1-nano")
+agent = Agent(ReasoningSpec(strategy="react"), llm, ToolGroup(get_weather, geocode))
+result = agent.run_sync("Weather and coordinates of Tokyo?")
+
+print(result.text)
+print(f"Cost: ${result.cost:.4f}")
+```
+
+Ten built-in strategies (`react`, `completion`, `rewoo`, `plan_execute`, `tot`,
+`lats`, `reflexion`, `self_discovery`, `llm_compiler`, `generate_review`), or
+register your own — see [`docs/agents.md`](docs/agents.md).
+
+### The same agent, one level down
+
+Every strategy compiles to a `Flow` you can also build and drive yourself:
 
 ```python
 from ai_arch_toolkit import LLM, State, ToolGroup
@@ -167,6 +191,8 @@ plain text, Markdown, XML, or JSON. Validate them locally with
 ## Agent architectures
 
 Each factory returns a `Flow` and has a matching `*_initial_state(task)` helper.
+Each is also a named `Agent` strategy; `completion` (a single LLM call, no tool
+loop) is registered as a tenth strategy with no standalone factory.
 
 | Factory                 | Pattern                                                  |
 | ----------------------- | -------------------------------------------------------- |
@@ -185,12 +211,14 @@ Each factory returns a `Flow` and has a matching `*_initial_state(task)` helper.
 ```
 ai_arch_toolkit/
 ├── core/        Stateless async-first foundation — LLM, providers, tools,
-│                graph, retry, middleware, pricing, metering, moderation
-└── toolkit/     Convenience layer — Flow orchestration, 9 agent factories
-                 under toolkit.agents, budget helpers,
-                 pre-built tools, graph-backed memory, structured prompts,
-                 resources, knowledge registry,
-                 moderation
+│                graph, retry, middleware, pricing, metering, moderation.
+│                Zero dependencies and zero opinions; never imports toolkit/.
+├── toolkit/     Convenience layer built on core/ — Agent + ReasoningSpec,
+│                Flow orchestration, 9 agent flow factories, budget helpers,
+│                pre-built tools, graph-backed memory, structured prompts,
+│                resources, knowledge registry, moderation
+└── nanope/      Work-in-progress sub-projects — not part of the public API,
+                 no stability guarantees
 ```
 
 For a deeper read, see [`docs/framework-overview.md`](docs/framework-overview.md)
@@ -207,6 +235,7 @@ uv run pdoc ai_arch_toolkit -o site/api
 Browse `docs/` for guides, or jump straight to:
 
 - [`docs/getting-started.md`](docs/getting-started.md)
+- [`docs/agents.md`](docs/agents.md)
 - [`docs/prompts.md`](docs/prompts.md)
 - [`docs/context-model.md`](docs/context-model.md)
 - [`docs/resources.md`](docs/resources.md)
