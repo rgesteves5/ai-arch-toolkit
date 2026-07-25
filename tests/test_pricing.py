@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ai_arch_toolkit.core._pricing import ModelPricing, PricingRegistry, estimate_cost, pricing
+from ai_arch_toolkit.core import ModelPricing, PricingRegistry, pricing
+from ai_arch_toolkit.core._pricing import estimate_cost
 
 
 class TestPricingRegistryDefaults:

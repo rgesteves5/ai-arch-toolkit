@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `ModelPricing` and `PricingRegistry` are public core/top-level exports, so custom pricing can be
+  registered without importing a private module.
 - **Recursive prompt subsections.** `PromptSection` accepts nested `sections=`, forming a tree: each section renders its own content and then its subsections, and every layout translates depth (Markdown deepens heading levels, XML nests elements; Text/JSON follow suit). Manifests, section spans, provenance, and the `ai-arch prompt` CLI all follow the hierarchy; see `examples/46_prompt_subsections.py`.
 - **Complete prompt and resource system.** `toolkit.resources` now provides policy-controlled local/package loading, TXT/Markdown/JSON/YAML/TOML codecs, RFC 6901 and text selectors, deterministic serializers, fingerprints, and provenance. `toolkit.prompts` adds file-backed sections, typed `PromptTemplate` variables, explicit stdlib/Jinja engines, Text/Markdown/XML/JSON layouts with section spans, versioned YAML/JSON/TOML manifests with includes/extends, Knowledge sources, and `ai-arch prompt validate|inspect|render`. Nanope can append or replace its built-in prompt with a toolkit manifest.
 - Prompt messages now compose resolved prompts, templates, literal text, and multimodal `Content` into deterministic system/user/assistant conversations. Resources support in-memory snapshots, resolver-scoped custom serializers, media-type policy allowlists, and direct `Prompt.from_resource()` / `PromptSection.from_resource()` conveniences. Knowledge adds deterministic lexical search and Nanope/CLI integrations.

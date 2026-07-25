@@ -13,5 +13,8 @@ def test_core_exports_tool_helpers() -> None:
 
 def test_core_exports_pricing() -> None:
     assert hasattr(core, "pricing")
+    custom = core.PricingRegistry()
+    custom.register("custom-model", core.ModelPricing(input=1.0, output=2.0))
+    assert custom.has("custom-model-v1")
     cost = core.pricing.estimate_cost("unknown-model", input_tokens=123)
     assert cost is None

@@ -24,15 +24,15 @@ p = pricing.get("claude-sonnet-4-20250514")
 p.input   # USD per 1M input tokens
 p.output  # USD per 1M output tokens
 
-# Estimate cost
-cost, known = pricing.estimate_cost(
+# Estimate cost (None means the model has no registered pricing)
+cost = pricing.estimate_cost(
     "claude-sonnet-4-20250514",
     input_tokens=1000,
     output_tokens=500,
 )
 
-# Register custom pricing
-from ai_arch_toolkit.core._pricing import ModelPricing
+# Register custom pricing through the public API
+from ai_arch_toolkit import ModelPricing
 pricing.register("my-model", ModelPricing(input=1.0, output=3.0))
 
 # List all priced models

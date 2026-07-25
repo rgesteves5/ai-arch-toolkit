@@ -17,6 +17,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+__all__ = ["ModelPricing", "PricingRegistry", "pricing"]
+
 _MISS = object()  # sentinel: distinguishes "not cached" from a cached None (known-unpriced)
 
 
@@ -44,9 +46,9 @@ class PricingRegistry:
 
     Usage::
 
-        from ai_arch_toolkit.core._pricing import pricing
+        from ai_arch_toolkit.core import ModelPricing, pricing
 
-        cost, known = pricing.estimate_cost("claude-sonnet-4-20250514", input_tokens=1000)
+        cost = pricing.estimate_cost("claude-sonnet-4-20250514", input_tokens=1000)
         pricing.register("my-model", ModelPricing(input=1.0, output=2.0))
         pricing.load("./my_pricing.toml")
         pricing.reset()
