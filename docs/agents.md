@@ -178,6 +178,72 @@ spec = ReasoningSpec.from_mapping({
 coerced from a mapping). `output_schema` accepts a `{"name", "schema", "strict"}`
 mapping, an `OutputSchema`, or a supported model class such as a Pydantic model.
 
+## File-backed agent manifests
+
+Use `load_agent_manifest()` when configuration lives in versioned files. The
+public loader supports `.agent.yaml`, `.agent.yml`, `.agent.json`, and
+`.agent.toml`; YAML requires the `yaml` extra. It strictly rejects unknown
+fields and resolves, in order, inherited parents, the child, an optional named
+profile, and governed dotted-path overrides.
+
+```yaml
+version: 1
+id: support.answer
+extends: ../profiles/default.agent.yaml
+
+strategy:
+  name: react
+  max_iterations: 6
+  parallel_tool_calls: false
+
+prompts:
+  system_manifest: ../prompts/support.prompt.yaml
+
+limits:
+  timeout_seconds: 30
+  max_llm_calls: 6
+  max_cost: 0.25
+  reserve: strict
+
+override_policy:
+  allow: [model.model, model.temperature, limits.timeout_seconds]
+  deny: [strategy, prompts, tools]
+```
+
+```python
+from ai_arch_toolkit.toolkit.agents import Agent, load_agent_manifest
+
+manifest = load_agent_manifest(
+    "agents/support.agent.yaml",
+    profile="production",
+    overrides={"model.temperature": 0.2},
+    allowed_roots=(project_config_root,),
+)
+spec = manifest.reasoning_spec(system=rendered_system, output_schema=Answer)
+result = await Agent(spec, llm, tools).run(
+    rendered_user,
+    budget_policy=manifest.budget_policy(),
+)
+```
+
+Relative prompt/tool-manifest paths are resolved against the file that declares
+them, including paths inside embedded profiles, and cannot leave `allowed_roots`.
+A relative path supplied by a runtime override resolves against the entry
+manifest's directory. `manifest.fingerprint` is machine-path independent and
+includes the selected profile, fully resolved configuration, and referenced
+prompt/tool content; source and referenced fingerprints remain available
+separately for provenance. With multiple allowed roots, source provenance keys
+use `root[N]:relative/path` so equal relative paths cannot overwrite one another.
+
+Manifest files and override values accept only canonical JSON-like data: null,
+strings, booleans, integers, finite floats, arrays, and objects with string keys.
+Executable or process-local objects are deliberately rejected; applications
+resolve schema, prompt, tool, and adapter ids through their own allowlisted
+registries. Secret-like fields are rejected in every source/profile before
+selection and again after overrides. Override `deny` paths protect both their
+ancestors and descendants, so replacing an allowed parent object cannot bypass a
+denied child.
+
 ## Escape hatch: `Agent.from_flow`
 
 When you have built a `Flow` by hand (any composition of `Step`s) and want the

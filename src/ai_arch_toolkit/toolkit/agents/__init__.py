@@ -12,6 +12,13 @@ from ai_arch_toolkit.toolkit.agents._builders import (
     strategy_names,
 )
 from ai_arch_toolkit.toolkit.agents._compile import build_flow, extract_text, initial_state
+from ai_arch_toolkit.toolkit.agents._manifest import (
+    AgentManifestCycleError,
+    AgentManifestError,
+    AgentOverrideError,
+    ResolvedAgentManifest,
+    load_agent_manifest,
+)
 from ai_arch_toolkit.toolkit.agents._spec import ReasoningSpec
 from ai_arch_toolkit.toolkit.agents.flows import (
     generate_review_flow,
@@ -36,10 +43,14 @@ from ai_arch_toolkit.toolkit.agents.flows import (
 
 __all__ = [
     "Agent",
+    "AgentManifestCycleError",
+    "AgentManifestError",
+    "AgentOverrideError",
     "AgentResult",
     "BuildContext",
     "FlowStrategy",
     "ReasoningSpec",
+    "ResolvedAgentManifest",
     "StrategyBuilder",
     "build_flow",
     "extract_text",
@@ -51,6 +62,7 @@ __all__ = [
     "lats_initial_state",
     "llm_compiler_flow",
     "llm_compiler_initial_state",
+    "load_agent_manifest",
     "plan_execute_flow",
     "plan_execute_initial_state",
     "react_flow",

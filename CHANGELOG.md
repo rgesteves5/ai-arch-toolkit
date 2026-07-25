@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - `ModelPricing` and `PricingRegistry` are public core/top-level exports, so custom pricing can be
   registered without importing a private module.
+- **Public configurable-agent manifests.** `load_agent_manifest()` strictly loads
+  versioned YAML/JSON/TOML agent definitions with multi-parent inheritance, embedded
+  profiles, relative-path confinement, governed deterministic overrides, provenance,
+  content-aware fingerprints, and direct `ReasoningSpec` / `BudgetPolicy` construction.
 - **Recursive prompt subsections.** `PromptSection` accepts nested `sections=`, forming a tree: each section renders its own content and then its subsections, and every layout translates depth (Markdown deepens heading levels, XML nests elements; Text/JSON follow suit). Manifests, section spans, provenance, and the `ai-arch prompt` CLI all follow the hierarchy; see `examples/46_prompt_subsections.py`.
 - **Complete prompt and resource system.** `toolkit.resources` now provides policy-controlled local/package loading, TXT/Markdown/JSON/YAML/TOML codecs, RFC 6901 and text selectors, deterministic serializers, fingerprints, and provenance. `toolkit.prompts` adds file-backed sections, typed `PromptTemplate` variables, explicit stdlib/Jinja engines, Text/Markdown/XML/JSON layouts with section spans, versioned YAML/JSON/TOML manifests with includes/extends, Knowledge sources, and `ai-arch prompt validate|inspect|render`. Nanope can append or replace its built-in prompt with a toolkit manifest.
 - Prompt messages now compose resolved prompts, templates, literal text, and multimodal `Content` into deterministic system/user/assistant conversations. Resources support in-memory snapshots, resolver-scoped custom serializers, media-type policy allowlists, and direct `Prompt.from_resource()` / `PromptSection.from_resource()` conveniences. Knowledge adds deterministic lexical search and Nanope/CLI integrations.
@@ -64,6 +68,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   after observable output are surfaced without replay. Abandoned async streams close
   their provider iterators immediately; all streams remain outside `inference_limit` and
   preserve nested fallback chains configured on fallback `LLM` instances.
+- Agent manifests now resolve relative paths inside embedded profiles against the
+  declaring file and override-supplied paths against the entry manifest, validate
+  inherited `*.agent.*` suffixes, and default a missing `strategy` section to ReAct.
+  Their canonical JSON-like data boundary now guarantees deterministic fingerprints;
+  secret scanning covers every source/profile; descendant deny rules cannot be bypassed
+  through parent overrides; and multi-root source provenance cannot collide.
 - `BudgetPolicy` and agent-manifest limits now reject invalid `reserve` / `unpriced`
   modes, malformed count caps, and non-finite numeric caps instead of silently
   weakening enforcement.
