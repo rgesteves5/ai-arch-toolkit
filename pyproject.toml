@@ -87,7 +87,8 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = [
-    "integration: marks tests as integration tests (require API keys)",
+    "integration: cross-component system tests (offline unless also marked live_api)",
+    "live_api: calls external provider APIs and may incur cost",
     "timeout: set test timeout in seconds",
 ]
 

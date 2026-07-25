@@ -25,10 +25,11 @@ and populate `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, and/or
 ## Day-to-day commands
 
 ```bash
-uv run pytest                                # full suite (1200+ tests, ~5s)
+uv run pytest                                # full suite (2400+ tests)
 uv run pytest tests/test_llm.py              # one file
 uv run pytest -k "stream"                    # by pattern
-uv run pytest -m integration                 # live API tests (need keys)
+uv run pytest -m "integration and not live_api"  # deterministic system tests
+uv run pytest -m live_api                    # real APIs (needs keys; may cost money)
 
 uv run ruff check src tests examples         # lint
 uv run ruff format src tests examples        # auto-format
@@ -37,9 +38,10 @@ uv run pre-commit run --all-files            # everything pre-commit will run
 uv lock --check                              # verify pyproject.toml and uv.lock agree
 ```
 
-CI runs three jobs in parallel — `lint`, `typecheck` (non-blocking until the
-error count is driven down), and `test` across Ubuntu and macOS on Python
-3.13.
+CI runs three jobs in parallel — blocking `lint` and `typecheck` jobs, plus
+`test` across Ubuntu and macOS on Python 3.13 and 3.14. Hermetic integration
+tests run in that normal matrix. Live-provider tests run only in the scheduled
+or manually dispatched integration workflow.
 
 ## Code conventions
 
@@ -136,7 +138,4 @@ and `uv run ruff format --check src tests examples` locally. `pre-commit`
 runs the lint/format hooks on every commit, but the full test suite is still
 on you.
 
-Pyright is currently non-blocking in CI while the existing standard-mode
-warnings (≈200) are driven down. If you add new code, please keep it
-pyright-clean — and consider fixing a handful of pre-existing warnings while
-you're in the area.
+Pyright is blocking in CI. New code must remain clean in standard mode.

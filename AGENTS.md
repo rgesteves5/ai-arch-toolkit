@@ -26,7 +26,7 @@ uv run python examples/01_hello_world.py     # run an example (needs API keys)
 ```
 
 - After editing dependencies in `pyproject.toml`, run `uv lock` — CI fails on `uv lock --check` if the lockfile is stale.
-- Examples and `tests/integration/` need API keys: `set -a && source .env && set +a` (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY` — wins over `GEMINI_API_KEY` — `XAI_API_KEY`).
+- Examples and `pytest -m live_api` need API keys: `set -a && source .env && set +a` (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY` — wins over `GEMINI_API_KEY` — `XAI_API_KEY`). Hermetic system tests use `pytest -m "integration and not live_api"`.
 - Docs: `uv sync --extra dev --extra docs`, then `uv run mkdocs serve`. API reference: `uv run pdoc ai_arch_toolkit -o site/api`.
 - One-time setup: `uv run pre-commit install` (ruff hooks on commit).
 
@@ -63,7 +63,7 @@ Deeper reading, in `docs/`: `framework-overview.md` (layer tour), `agents.md` (A
 ## Testing
 
 - pytest-asyncio with `asyncio_mode = "auto"` — no `@pytest.mark.asyncio` needed.
-- The test tree mirrors the package (`tests/agents/`, `tests/flow/`, `tests/metering/`, `tests/budget/`, `tests/prompts/`, …); real-API tests live in `tests/integration/` behind the `integration` marker.
+- The test tree mirrors the package (`tests/agents/`, `tests/flow/`, `tests/metering/`, `tests/budget/`, `tests/prompts/`, …). Cross-component system tests live in `tests/integration/` behind `integration`; tests that call real providers also carry `live_api`.
 - Provider tests: build fake SDK objects with `SimpleNamespace` and inject a mocked client via `provider._client = AsyncMock()` (Anthropic `messages.create`, OpenAI `chat.completions.create`; streams are async iterators of fake chunk objects). Patch the SDK module where it's imported, e.g. `@patch("ai_arch_toolkit.core._providers._anthropic.anthropic")`. Helper factories: `tests/test_openai_provider.py`, `tests/test_anthropic_provider.py`.
 - Agent tests: `make_response()`/`make_tool_call()` factories in `tests/agents/conftest.py`; mock the `LLM` with `AsyncMock` and feed `complete.side_effect` prebuilt `Response` objects.
 - Metering/budget tests: use a real `LLM` with a fake `_provider` so the charge site runs — mocking `llm.complete` bypasses metering entirely.

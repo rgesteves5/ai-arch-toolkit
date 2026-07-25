@@ -34,4 +34,4 @@ jobs:
           python-version: "3.13"
       - run: uv sync --extra dev
       - name: Run integration tests
-        run: uv run pytest -m integration -v
+        run: uv run pytest -m live_api -v

@@ -1,12 +1,22 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from ai_arch_toolkit.core import LLM, RateLimitMiddleware, State, ToolGroup, tool, tool_result
-from ai_arch_toolkit.toolkit.agents import react_flow, react_initial_state
+from ai_arch_toolkit.toolkit.agents import (
+    Agent,
+    load_agent_manifest,
+    react_flow,
+    react_initial_state,
+)
+from ai_arch_toolkit.toolkit.prompts import load_prompt
 from tests.integration.conftest import skip_no_openai
 
 MODEL = "gpt-4.1-nano"
+pytestmark = pytest.mark.live_api
 
 
 # ---------------------------------------------------------------------------
@@ -139,3 +149,66 @@ async def test_fallback_chain():
     assert resp.text
     assert len(resp.attempts) >= 1
     await llm.close()
+
+
+# ---------------------------------------------------------------------------
+# Test 6: file-backed configured Agent through the real provider
+# ---------------------------------------------------------------------------
+
+
+@skip_no_openai
+@pytest.mark.timeout(30)
+@pytest.mark.integration
+async def test_configured_agent_e2e(tmp_path: Path):
+    prompt_path = tmp_path / "system.prompt.json"
+    prompt_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "sections": [
+                    {
+                        "name": "instruction",
+                        "content": "Reply with exactly CONFIGURED_OK and nothing else.",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest_path = tmp_path / "configured.agent.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "id": "configured-smoke",
+                "strategy": {"name": "completion"},
+                "model": {
+                    "model": MODEL,
+                    "temperature": 0,
+                    "max_tokens": 16,
+                },
+                "prompts": {"system_manifest": prompt_path.name},
+                "limits": {"max_llm_calls": 1},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = load_agent_manifest(manifest_path, allowed_roots=(tmp_path,))
+    data = manifest.as_dict()
+    system = load_prompt(data["prompts"]["system_manifest"]).render().text
+    model = data["model"]
+
+    async with LLM(
+        model["model"],
+        temperature=model["temperature"],
+        max_tokens=model["max_tokens"],
+    ) as llm:
+        result = await Agent(manifest.reasoning_spec(system=system), llm).run(
+            "Confirm that the configured agent is active.",
+            budget_policy=manifest.budget_policy(),
+        )
+
+    assert "CONFIGURED_OK" in result.text
+    assert result.report is not None
+    assert result.report.llm_calls == 1

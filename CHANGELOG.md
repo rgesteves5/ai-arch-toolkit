@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Hermetic configured-agent system tests now exercise manifest inheritance and profiles,
+  prompt rendering, governed tools, agent compilation, metering, and hard budgets as one
+  end-to-end path. The separate `live_api` marker keeps paid provider smoke tests explicit.
 - `ModelPricing` and `PricingRegistry` are public core/top-level exports, so custom pricing can be
   registered without importing a private module.
 - **Public configurable-agent manifests.** `load_agent_manifest()` strictly loads
