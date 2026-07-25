@@ -96,10 +96,15 @@ class Agent:
         """
         state = State(operational=self._make_state(task))
         flow_result = await self._flow.run(state, budget_policy=budget_policy)
-        response = state.get("response") or state.get("last_response")
+        response = state.get("response")
+        if response is None:
+            response = state.get("last_response")
         if not isinstance(response, Response):
             response = None
-        errors = tuple(r.error for r in flow_result.results.values() if r.error)
+        # A cyclic flow can execute the same named step more than once. ``results`` keeps only
+        # the latest result per name, so derive errors from the trace or an earlier failed turn
+        # would disappear after a later success.
+        errors = tuple(record.error for record in flow_result.trace.steps if record.error)
         report = flow_result.meter  # meter-derived (single source of truth); snapshot once, reuse
         return AgentResult(
             text=extract_text(state, flow_result),

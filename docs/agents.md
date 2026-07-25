@@ -49,7 +49,7 @@ is a valid ReAct spec.
 | `policy` | `Policy \| None` | `None` | Per-step retry/timeout/confidence ([Flow Architecture](flow-architecture.md)) |
 | `timeout` | `float \| None` | `None` | Wall-clock timeout (seconds) |
 | `llm_kwargs` | `Mapping[str, Any]` | `{}` | Extra kwargs forwarded to the LLM (e.g. `temperature`) |
-| `output_schema` | `OutputSchema \| None` | `None` | Structured output; only some strategies support it (see table) |
+| `output_schema` | `OutputSchema \| type \| None` | `None` | Structured output; accepts a schema or supported model class (see table) |
 
 `knobs` vs the dedicated fields: a field is dedicated when every strategy uses it
 the same way (`system`, `timeout`, `policy`). Anything strategy-specific —
@@ -71,12 +71,12 @@ object.
 | `completion` | single LLM call (no tools loop) | ✅ | — |
 | `plan_execute` | `plan_execute_flow` | — | `max_replans`, `max_iterations_per_step` |
 | `rewoo` | `rewoo_flow` | — | — |
-| `reflexion` | `reflexion_flow` | — | `threshold`, `max_retries`, `evaluator` |
+| `reflexion` | `reflexion_flow` | — | `threshold`, `max_retries` |
 | `generate_review` | `generate_review_flow` | — | `max_cycles`, `max_review_iterations` |
 | `self_discovery` | `self_discovery_flow` | — | — |
 | `llm_compiler` | `llm_compiler_flow` | — | `max_replans` |
 | `tot` | `tot_flow` | — | `n_candidates`, `max_depth`, `search_strategy` |
-| `lats` | `lats_flow` | — | `n_candidates`, `max_rollouts`, `evaluator_fn` |
+| `lats` | `lats_flow` | — | `n_candidates`, `max_rollouts` |
 
 `completion` is the one strategy with no flow factory of its own — a plain
 single-shot LLM call, handy as a baseline or for non-agentic steps in a larger
@@ -176,7 +176,7 @@ spec = ReasoningSpec.from_mapping({
 
 `policy` is passed through only if it is already a `Policy` instance (it is not
 coerced from a mapping). `output_schema` accepts a `{"name", "schema", "strict"}`
-mapping or an `OutputSchema`.
+mapping, an `OutputSchema`, or a supported model class such as a Pydantic model.
 
 ## Escape hatch: `Agent.from_flow`
 

@@ -28,7 +28,7 @@ class ReasoningSpec:
     policy: Policy | None = None
     timeout: float | None = None
     llm_kwargs: Mapping[str, Any] = field(default_factory=dict)
-    output_schema: OutputSchema | None = None
+    output_schema: OutputSchema | type | None = None
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> ReasoningSpec:
@@ -46,8 +46,8 @@ class ReasoningSpec:
         )
 
 
-def _coerce_output_schema(value: Any) -> OutputSchema | None:
-    if value is None or isinstance(value, OutputSchema):
+def _coerce_output_schema(value: Any) -> OutputSchema | type | None:
+    if value is None or isinstance(value, (OutputSchema, type)):
         return value
     if isinstance(value, Mapping):
         schema = value.get("schema")

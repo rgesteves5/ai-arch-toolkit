@@ -41,8 +41,10 @@ class BudgetPolicy:
     unpriced: Unpriced = "fail_closed"
 
     def __post_init__(self) -> None:
-        # Reject non-finite caps (NaN/inf) as well as negatives: a NaN cap passes a bare `< 0`
-        # check but then silently disables enforcement — every `total > NaN` is False (fail-open).
+        if self.reserve not in ("none", "strict"):
+            raise ValueError(f"reserve must be 'none' or 'strict', got {self.reserve!r}")
+        if self.unpriced not in ("fail_closed", "allow"):
+            raise ValueError(f"unpriced must be 'fail_closed' or 'allow', got {self.unpriced!r}")
         for name in (
             "max_llm_calls",
             "max_tool_calls",
@@ -51,12 +53,22 @@ class BudgetPolicy:
             "max_total_tokens",
         ):
             value = getattr(self, name)
-            if value is not None and (not math.isfinite(value) or value < 0):
-                raise ValueError(f"{name} must be a finite number >= 0, got {value}")
-        if self.max_cost is not None and (not math.isfinite(self.max_cost) or self.max_cost < 0):
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, int) or value < 0
+            ):
+                raise ValueError(f"{name} must be a non-negative integer, got {value!r}")
+        if self.max_cost is not None and (
+            isinstance(self.max_cost, bool)
+            or not isinstance(self.max_cost, (int, float))
+            or not math.isfinite(self.max_cost)
+            or self.max_cost < 0
+        ):
             raise ValueError(f"max_cost must be a finite number >= 0, got {self.max_cost}")
         if self.max_wall_s is not None and (
-            not math.isfinite(self.max_wall_s) or self.max_wall_s <= 0
+            isinstance(self.max_wall_s, bool)
+            or not isinstance(self.max_wall_s, (int, float))
+            or not math.isfinite(self.max_wall_s)
+            or self.max_wall_s <= 0
         ):
             raise ValueError(f"max_wall_s must be a finite positive number, got {self.max_wall_s}")
 

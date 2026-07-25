@@ -48,10 +48,29 @@ def test_to_limits_maps_cost_to_money():
         {"max_wall_s": float("nan")},
         {"max_wall_s": float("inf")},
         {"max_llm_calls": float("nan")},
+        {"max_llm_calls": 1.5},
+        {"max_llm_calls": True},
+        {"max_llm_calls": "3"},
+        {"max_cost": True},
+        {"max_wall_s": "30"},
     ],
 )
 def test_policy_validation(kwargs):
     with pytest.raises(ValueError):
+        BudgetPolicy(**kwargs)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"reserve": "strcit"}, "reserve must be 'none' or 'strict'"),
+        ({"reserve": ["strict"]}, "reserve must be 'none' or 'strict'"),
+        ({"unpriced": "fail-close"}, "unpriced must be 'fail_closed' or 'allow'"),
+        ({"unpriced": ["allow"]}, "unpriced must be 'fail_closed' or 'allow'"),
+    ],
+)
+def test_policy_rejects_invalid_modes(kwargs, message):
+    with pytest.raises(ValueError, match=message):
         BudgetPolicy(**kwargs)
 
 

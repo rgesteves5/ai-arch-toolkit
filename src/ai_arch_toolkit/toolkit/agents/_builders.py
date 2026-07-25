@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol, cast, runtime_checkable
 
 from ai_arch_toolkit.core._content import Content, user
 from ai_arch_toolkit.core._llm import LLM
@@ -86,8 +86,22 @@ class FlowStrategy:
     builder: Callable[[BuildContext], Flow]
     initializer: Callable[[Content], dict[str, Any]]
     supports_output_schema: bool = False
+    allowed_knobs: frozenset[str] | None = None
+    knob_validators: Mapping[str, Callable[[Any], bool]] = field(default_factory=dict)
 
     def build(self, ctx: BuildContext) -> Flow:
+        if self.allowed_knobs is not None:
+            unknown = sorted(set(ctx.spec.knobs) - self.allowed_knobs)
+            if unknown:
+                raise ValueError(
+                    f"strategy {ctx.spec.strategy!r} received unknown knobs: {', '.join(unknown)}"
+                )
+        for name, validator in self.knob_validators.items():
+            if name in ctx.spec.knobs and not validator(ctx.spec.knobs[name]):
+                raise ValueError(
+                    f"strategy {ctx.spec.strategy!r} received invalid value "
+                    f"for knob {name!r}: {ctx.spec.knobs[name]!r}"
+                )
         return self.builder(ctx)
 
     def init_state(self, task: Content) -> dict[str, Any]:
@@ -120,6 +134,28 @@ def strategy_names() -> tuple[str, ...]:
 
 def _default_evaluator(_task: str, answer: str) -> float:
     return 1.0 if answer.strip() else 0.0
+
+
+def _is_bool(value: Any) -> bool:
+    return isinstance(value, bool)
+
+
+def _is_positive_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _is_nonnegative_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _is_probability(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= float(value) <= 1
+    )
+
+
+def _is_search_strategy(value: Any) -> bool:
+    return isinstance(value, str) and value in {"bfs", "dfs"}
 
 
 def _build_react(ctx: BuildContext) -> Flow:
@@ -193,7 +229,10 @@ def _build_rewoo(ctx: BuildContext) -> Flow:
 
 def _build_reflexion(ctx: BuildContext) -> Flow:
     s = ctx.spec
-    evaluator = ctx.deps.get("evaluator") or s.knobs.get("evaluator") or _default_evaluator
+    configured_evaluator = ctx.deps.get("evaluator", _default_evaluator)
+    if not callable(configured_evaluator):
+        raise ValueError("strategy 'reflexion' dependency 'evaluator' must be callable")
+    evaluator = cast(Callable[[str, str], float], configured_evaluator)
     return reflexion_flow(
         ctx.llm,
         ctx.tools,
@@ -268,6 +307,10 @@ def _build_tot(ctx: BuildContext) -> Flow:
 
 def _build_lats(ctx: BuildContext) -> Flow:
     s = ctx.spec
+    configured_evaluator = ctx.deps.get("evaluator_fn")
+    if configured_evaluator is not None and not callable(configured_evaluator):
+        raise ValueError("strategy 'lats' dependency 'evaluator_fn' must be callable")
+    evaluator_fn = cast(Callable[[str, str], float] | None, configured_evaluator)
     return lats_flow(
         ctx.llm,
         ctx.tools,
@@ -275,28 +318,119 @@ def _build_lats(ctx: BuildContext) -> Flow:
         n_candidates=s.knobs.get("n_candidates", 5),
         max_rollouts=s.knobs.get("max_rollouts", s.max_iterations),
         max_react_iterations=s.max_iterations,
-        evaluator_fn=ctx.deps.get("evaluator_fn") or s.knobs.get("evaluator_fn"),
+        evaluator_fn=evaluator_fn,
         timeout=s.timeout,
         policy=s.policy,
     )
 
 
 register_strategy(
-    "react", FlowStrategy(_build_react, react_initial_state, supports_output_schema=True)
+    "react",
+    FlowStrategy(
+        _build_react,
+        react_initial_state,
+        supports_output_schema=True,
+        allowed_knobs=frozenset(
+            {
+                "final_answer_hint",
+                "parallel_tool_calls",
+                "show_turn_counter",
+                "strip_tools_on_final",
+            }
+        ),
+        knob_validators={
+            "final_answer_hint": _is_bool,
+            "parallel_tool_calls": _is_bool,
+            "show_turn_counter": _is_bool,
+            "strip_tools_on_final": _is_bool,
+        },
+    ),
 )
 register_strategy(
     "completion",
-    FlowStrategy(_build_completion, _completion_initial_state, supports_output_schema=True),
+    FlowStrategy(
+        _build_completion,
+        _completion_initial_state,
+        supports_output_schema=True,
+        allowed_knobs=frozenset(),
+    ),
 )
-register_strategy("plan_execute", FlowStrategy(_build_plan_execute, plan_execute_initial_state))
-register_strategy("rewoo", FlowStrategy(_build_rewoo, rewoo_initial_state))
-register_strategy("reflexion", FlowStrategy(_build_reflexion, reflexion_initial_state))
 register_strategy(
-    "generate_review", FlowStrategy(_build_generate_review, generate_review_initial_state)
+    "plan_execute",
+    FlowStrategy(
+        _build_plan_execute,
+        plan_execute_initial_state,
+        allowed_knobs=frozenset({"max_iterations_per_step", "max_replans"}),
+        knob_validators={
+            "max_iterations_per_step": _is_positive_int,
+            "max_replans": _is_nonnegative_int,
+        },
+    ),
 )
 register_strategy(
-    "self_discovery", FlowStrategy(_build_self_discovery, self_discovery_initial_state)
+    "rewoo",
+    FlowStrategy(_build_rewoo, rewoo_initial_state, allowed_knobs=frozenset()),
 )
-register_strategy("llm_compiler", FlowStrategy(_build_llm_compiler, llm_compiler_initial_state))
-register_strategy("tot", FlowStrategy(_build_tot, tot_initial_state))
-register_strategy("lats", FlowStrategy(_build_lats, lats_initial_state))
+register_strategy(
+    "reflexion",
+    FlowStrategy(
+        _build_reflexion,
+        reflexion_initial_state,
+        allowed_knobs=frozenset({"max_retries", "threshold"}),
+        knob_validators={"max_retries": _is_nonnegative_int, "threshold": _is_probability},
+    ),
+)
+register_strategy(
+    "generate_review",
+    FlowStrategy(
+        _build_generate_review,
+        generate_review_initial_state,
+        allowed_knobs=frozenset({"max_cycles", "max_review_iterations"}),
+        knob_validators={
+            "max_cycles": _is_positive_int,
+            "max_review_iterations": _is_positive_int,
+        },
+    ),
+)
+register_strategy(
+    "self_discovery",
+    FlowStrategy(
+        _build_self_discovery,
+        self_discovery_initial_state,
+        allowed_knobs=frozenset(),
+    ),
+)
+register_strategy(
+    "llm_compiler",
+    FlowStrategy(
+        _build_llm_compiler,
+        llm_compiler_initial_state,
+        allowed_knobs=frozenset({"max_replans"}),
+        knob_validators={"max_replans": _is_nonnegative_int},
+    ),
+)
+register_strategy(
+    "tot",
+    FlowStrategy(
+        _build_tot,
+        tot_initial_state,
+        allowed_knobs=frozenset({"max_depth", "n_candidates", "search_strategy"}),
+        knob_validators={
+            "max_depth": _is_positive_int,
+            "n_candidates": _is_positive_int,
+            "search_strategy": _is_search_strategy,
+        },
+    ),
+)
+register_strategy(
+    "lats",
+    FlowStrategy(
+        _build_lats,
+        lats_initial_state,
+        allowed_knobs=frozenset({"max_rollouts", "n_candidates"}),
+        knob_validators={
+            "max_rollouts": _is_positive_int,
+            "n_candidates": _is_positive_int,
+        },
+    ),
+)

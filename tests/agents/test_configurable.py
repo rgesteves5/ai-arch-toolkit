@@ -8,7 +8,10 @@ import pytest
 
 from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._response import OutputSchema, Response, ToolCall, Usage
+from ai_arch_toolkit.core._state import State
+from ai_arch_toolkit.core._step import Result
 from ai_arch_toolkit.core._tools._group import ToolGroup
+from ai_arch_toolkit.core._trace import StepTrace, Trace
 from ai_arch_toolkit.toolkit.agents import (
     Agent,
     FlowStrategy,
@@ -19,7 +22,7 @@ from ai_arch_toolkit.toolkit.agents import (
     strategy_names,
 )
 from ai_arch_toolkit.toolkit.agents.flows._react import react_flow, react_initial_state
-from ai_arch_toolkit.toolkit.flow._flow import Flow
+from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowResult
 
 _BUILTINS = {
     "react",
@@ -94,6 +97,14 @@ class TestReasoningSpec:
         assert spec.output_schema is not None
         assert spec.output_schema.name == "out"
 
+    def test_output_schema_accepts_model_class(self) -> None:
+        class StructuredResult:
+            pass
+
+        spec = ReasoningSpec.from_mapping({"output_schema": StructuredResult})
+
+        assert spec.output_schema is StructuredResult
+
 
 class TestRegistry:
     def test_builtins_are_registered(self) -> None:
@@ -130,6 +141,18 @@ class TestBuildFlow:
         )
         assert isinstance(flow, Flow)
 
+    def test_model_class_output_schema_allowed_on_completion(self) -> None:
+        class StructuredResult:
+            pass
+
+        flow = build_flow(
+            ReasoningSpec(strategy="completion", output_schema=StructuredResult),
+            AsyncMock(),
+            ToolGroup(),
+        )
+
+        assert isinstance(flow, Flow)
+
     def test_output_schema_rejected_on_unsupported_strategy(self) -> None:
         schema = OutputSchema(name="out", schema={"type": "object"})
         with pytest.raises(ValueError, match="does not support output_schema"):
@@ -137,6 +160,74 @@ class TestBuildFlow:
                 ReasoningSpec(strategy="plan_execute", output_schema=schema),
                 AsyncMock(),
                 ToolGroup(),
+            )
+
+    @pytest.mark.parametrize("strategy", sorted(_BUILTINS))
+    def test_unknown_strategy_knob_is_rejected(self, strategy: str) -> None:
+        with pytest.raises(ValueError, match="unknown knobs"):
+            build_flow(
+                ReasoningSpec(strategy=strategy, knobs={"misspelled_knob": 1}),
+                AsyncMock(),
+                ToolGroup(),
+            )
+
+    @pytest.mark.parametrize(
+        ("strategy", "knobs"),
+        [
+            ("react", {"parallel_tool_calls": "yes"}),
+            ("plan_execute", {"max_replans": -1}),
+            ("reflexion", {"threshold": 1.5}),
+            ("generate_review", {"max_cycles": 0}),
+            ("llm_compiler", {"max_replans": -1}),
+            ("tot", {"search_strategy": "random"}),
+            ("tot", {"search_strategy": ["dfs"]}),
+            ("lats", {"n_candidates": 0}),
+        ],
+    )
+    def test_invalid_strategy_knob_value_is_rejected(
+        self, strategy: str, knobs: dict[str, object]
+    ) -> None:
+        with pytest.raises(ValueError, match="invalid value"):
+            build_flow(ReasoningSpec(strategy=strategy, knobs=knobs), AsyncMock(), ToolGroup())
+
+    @pytest.mark.parametrize(
+        ("strategy", "knob"),
+        [("reflexion", "evaluator"), ("lats", "evaluator_fn")],
+    )
+    def test_runtime_evaluators_are_not_serializable_knobs(self, strategy: str, knob: str) -> None:
+        with pytest.raises(ValueError, match="unknown knobs"):
+            build_flow(
+                ReasoningSpec(strategy=strategy, knobs={knob: lambda *_: 1.0}),
+                AsyncMock(),
+                ToolGroup(),
+            )
+
+    @pytest.mark.parametrize(
+        ("strategy", "dependency"),
+        [("reflexion", "evaluator"), ("lats", "evaluator_fn")],
+    )
+    def test_runtime_evaluators_are_accepted_through_deps(
+        self, strategy: str, dependency: str
+    ) -> None:
+        flow = build_flow(
+            ReasoningSpec(strategy=strategy),
+            AsyncMock(),
+            ToolGroup(),
+            deps={dependency: lambda *_: 1.0},
+        )
+        assert isinstance(flow, Flow)
+
+    @pytest.mark.parametrize(
+        ("strategy", "dependency"),
+        [("reflexion", "evaluator"), ("lats", "evaluator_fn")],
+    )
+    def test_runtime_evaluators_must_be_callable(self, strategy: str, dependency: str) -> None:
+        with pytest.raises(ValueError, match="must be callable"):
+            build_flow(
+                ReasoningSpec(strategy=strategy),
+                AsyncMock(),
+                ToolGroup(),
+                deps={dependency: "not callable"},
             )
 
 
@@ -152,6 +243,18 @@ class TestAgentRun:
         assert result.response is not None
         assert result.usage.input_tokens == 10
         assert result.errors == ()
+
+    async def test_structured_response_without_text_is_preserved(self) -> None:
+        """A parsed response is valid even when its string payload is empty."""
+        parsed = {"answer": 42}
+        response = Response(parsed=parsed, usage=Usage(input_tokens=3, output_tokens=2))
+        agent = Agent(ReasoningSpec(strategy="completion"), _metered_llm(response))
+
+        result = await agent.run("Return JSON")
+
+        assert result.response is not None
+        assert result.response.parsed is parsed
+        assert result.text == ""
 
     async def test_react_agent_runs(self) -> None:
         llm = AsyncMock()
@@ -170,6 +273,25 @@ class TestAgentRun:
         result = agent.run_sync("Hi")
 
         assert result.text == "Sync!"
+
+    async def test_errors_retain_earlier_failure_for_repeated_step_name(self) -> None:
+        flow = AsyncMock()
+        flow.run.return_value = FlowResult(
+            state=State(),
+            trace=Trace(
+                flow_name="cyclic",
+                steps=(
+                    StepTrace(name="turn", error="first turn failed"),
+                    StepTrace(name="turn"),
+                ),
+            ),
+            results={"turn": Result(value="eventual success")},
+        )
+        agent = Agent.from_flow(flow)
+
+        result = await agent.run("Question")
+
+        assert result.errors == ("first turn failed",)
 
 
 class TestEscapeHatch:

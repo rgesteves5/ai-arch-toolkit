@@ -34,6 +34,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `.env.example` documenting every provider API key; the sync-timeout configuration now validates its inputs.
 
 ### Changed
+- Built-in agent strategies now reject unknown strategy knobs and invalid knob values at
+  compile time, before an agent can spend tokens.
+- Reflexion and LATS evaluators are runtime dependencies only (`deps["evaluator"]` and
+  `deps["evaluator_fn"]`); serializable strategy knobs no longer accept executable callables.
+- `ReasoningSpec.output_schema` now accepts supported model classes in addition to `OutputSchema` instances and schema mappings, matching `LLM.complete()`.
 - **Knowledge loading now delegates to Resources.** `KnowledgeRegistry.load()` and `.from_directory()` retain parsed data and source fingerprints; the original `load_text()` / `load_json()` / etc. signatures remain compatibility wrappers. Duplicate `register()` keys now require explicit `overwrite=True`.
 - **The meter is the single source of truth for spend.** Agent flows no longer thread `cost` / `usage` into their step results by hand — `FlowResult.total_cost` / `.usage` / `.meter` and `AgentResult.cost` / `.usage` / `.report` all derive from the run's meter, so nested, parallel, and streaming spend can no longer drift from a parallel hand-rolled tally. A per-step `Policy.max_cost` is now enforced against that step's **metered span cost** (previously the step's manually declared `Result.cost`, which flows no longer set). `Trace.total_cost` / `total_usage` remain a raw view of any cost a custom step annotates via `Result(cost=…)`.
 - **String fallback routing.** A string `fallback=` is now routed by its own model name: a recognizable model (e.g. `claude-…`) fails over to its own provider and connection, so a local-primary → cloud-fallback chain works; a bare local tag inherits the primary's `base_url` / `provider`, assuming it lives on the same server. Pass `LLM` instances as fallbacks for full per-fallback control.
@@ -59,8 +64,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   after observable output are surfaced without replay. Abandoned async streams close
   their provider iterators immediately; all streams remain outside `inference_limit` and
   preserve nested fallback chains configured on fallback `LLM` instances.
+- `BudgetPolicy` and agent-manifest limits now reject invalid `reserve` / `unpriced`
+  modes, malformed count caps, and non-finite numeric caps instead of silently
+  weakening enforcement.
 - The Gemini extra now requires `google-genai>=1.21.0`, the first supported SDK floor
   with `HttpOptions.retry_options`.
+- Structured agent responses with an empty text field now retain their parsed payload in
+  `AgentResult.response`.
+- `AgentResult.errors` now retains failures from earlier iterations of cyclic flows instead of
+  losing them when a later result with the same step name succeeds.
 - **Cached input tokens are no longer double-counted.** OpenAI, Gemini, and xAI adapters (including OpenAI batch responses) now normalize provider-reported inclusive input totals into disjoint `Usage.input_tokens` and `cache_read_tokens`, so pricing and budget metering charge cached tokens only at the cache rate.
 - **Anthropic structured output now validates into the Pydantic model.** When `output_schema` carries a `model_class`, the Anthropic adapter coerces the parsed JSON via `model_validate()` — at parity with the OpenAI, Gemini, and xAI adapters (it previously returned a raw `dict`). It also tolerates Markdown-fenced JSON in the reply.
 - OpenAI-compatible streaming now flushes accumulated tool calls when a server ends the turn with `finish_reason="stop"` instead of `"tool_calls"` (some Ollama / LM Studio / vLLM builds), so tool-using agents no longer silently see zero tool calls.
