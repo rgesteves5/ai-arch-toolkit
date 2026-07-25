@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from ai_arch_toolkit.core._exceptions import APIError
 from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._metering._admission import (
     AdmissionDecision,
@@ -18,6 +19,7 @@ from ai_arch_toolkit.core._metering._operation import OperationRequest
 from ai_arch_toolkit.core._metering._scope import MeterScope, RunConfig
 from ai_arch_toolkit.core._providers._base import StreamState
 from ai_arch_toolkit.core._response import Response, StreamEvent, Usage
+from ai_arch_toolkit.core._retry import RetryConfig
 
 MODEL = "claude-sonnet-4-6"  # priced in _default_pricing.toml
 
@@ -208,9 +210,85 @@ async def test_stream_provider_failure_is_a_failed_attempt():
     prov = FakeStreamProvider(error=ConnectionError("down"))  # a PROVIDER_ERROR, no fallbacks
     llm = make_stream_llm(prov)
     with MeterScope() as scope, pytest.raises(ConnectionError):
-        llm.stream("hi")
+        await _drain(llm.stream("hi"))
     snap = scope.snapshot()
     assert snap.llm_calls == 1 and snap.unknown_cost_count == 1
+
+
+async def test_stream_retry_meters_every_physical_attempt(monkeypatch):
+    calls = 0
+
+    class RetryProvider:
+        def stream(self, messages, *, system=None, tools=None, **kwargs):
+            nonlocal calls
+            calls += 1
+            state = StreamState()
+            if calls == 1:
+
+                async def _failing():
+                    raise APIError(500, "temporary")
+                    yield  # pragma: no cover
+
+                return _failing(), state
+
+            state.usage = Usage(input_tokens=20, output_tokens=4)
+
+            async def _success():
+                yield "ok"
+
+            return _success(), state
+
+    async def _no_sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr("ai_arch_toolkit.core._retry.asyncio.sleep", _no_sleep)
+    llm = make_stream_llm(RetryProvider())  # type: ignore[arg-type]
+    llm._retry = RetryConfig(max_retries=1, base_delay=0.01)
+
+    with MeterScope() as scope:
+        stream = llm.stream("hi")
+        await _drain(stream)
+
+    snap = scope.snapshot()
+    assert calls == 2
+    assert snap.llm_calls == 2
+    assert snap.unknown_cost_count == 1
+    assert snap.input_tokens == 20 and snap.output_tokens == 4
+    assert stream.response is not None
+    assert [attempt.status for attempt in stream.response.attempts] == ["failed", "ok"]
+
+
+async def test_stream_retry_admission_denial_is_terminal(monkeypatch):
+    calls = 0
+
+    class AlwaysFailingProvider:
+        def stream(self, messages, *, system=None, tools=None, **kwargs):
+            nonlocal calls
+            calls += 1
+            state = StreamState()
+
+            async def _failing():
+                raise APIError(500, "temporary")
+                yield  # pragma: no cover
+
+            return _failing(), state
+
+    async def _no_sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr("ai_arch_toolkit.core._retry.asyncio.sleep", _no_sleep)
+    llm = make_stream_llm(AlwaysFailingProvider())  # type: ignore[arg-type]
+    llm._retry = RetryConfig(max_retries=1, base_delay=0.01)
+
+    with (
+        MeterScope(RunConfig(controller=CapController(max_llm_calls=1))) as scope,
+        pytest.raises(AdmissionDenied),
+    ):
+        await _drain(llm.stream("hi"))
+
+    assert calls == 1
+    assert scope.snapshot().llm_calls == 1
+    assert scope.snapshot().unknown_cost_count == 1
 
 
 async def test_stream_events_is_metered_on_drain():

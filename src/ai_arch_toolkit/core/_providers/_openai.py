@@ -305,7 +305,9 @@ class OpenAIProvider(BaseProvider):
         timeout: float | None = None,
     ) -> None:
         self._model = model
-        client_kwargs: dict[str, Any] = {"api_key": api_key}
+        # Retry ownership belongs to LLM(RetryConfig(...)): hidden SDK retries
+        # would be neither metered nor represented in Response.attempts.
+        client_kwargs: dict[str, Any] = {"api_key": api_key, "max_retries": 0}
         if base_url:
             client_kwargs["base_url"] = base_url
         if timeout is not None:

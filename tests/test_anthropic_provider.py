@@ -377,6 +377,7 @@ class TestAnthropicProviderComplete:
         mock_client.messages.create.return_value = _sdk_message(text="Hello!")
 
         provider = AnthropicProvider("claude-sonnet-4-20250514", "test-key")
+        mock_sdk.AsyncAnthropic.assert_called_once_with(api_key="test-key", max_retries=0)
         provider._client = mock_client
         result = await provider.complete([{"role": "user", "content": "Hi"}])
         assert result.text == "Hello!"

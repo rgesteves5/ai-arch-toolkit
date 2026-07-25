@@ -135,8 +135,10 @@ async def test_stream_fallback_does_not_mask_a_denial():
     primary._fallbacks = [healthy]  # type: ignore[assignment]
     primary._fallback_on = (Exception,)  # type: ignore[assignment]
 
+    stream = primary.stream("hi")
     with pytest.raises(AdmissionDenied):
-        primary.stream("hi")
+        async for _ in stream:
+            pass
     assert healthy.called is False  # short-circuited on the denial; no fallback stream tried
 
 
@@ -147,6 +149,8 @@ async def test_stream_events_fallback_does_not_mask_a_denial():
     primary._fallbacks = [healthy]  # type: ignore[assignment]
     primary._fallback_on = (Exception,)  # type: ignore[assignment]
 
+    stream = primary.stream_events("hi")
     with pytest.raises(AdmissionDenied):
-        primary.stream_events("hi")
+        async for _ in stream:
+            pass
     assert healthy.called is False

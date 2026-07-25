@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import contextvars
 import logging
 import os
 import threading
-from collections.abc import AsyncIterator, Callable, Coroutine, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator
 from queue import Queue
 from typing import Any, cast
 
@@ -95,10 +96,20 @@ def _stream_sync[T](async_iterator_factory: Callable[[], AsyncIterator[T]]) -> I
     event loop.
     """
     q: Queue[object] = Queue()
+    stop = threading.Event()
 
     async def _drain() -> None:
-        async for item in async_iterator_factory():
-            q.put(item)
+        iterator = async_iterator_factory()
+        try:
+            async for item in iterator:
+                if stop.is_set():
+                    break
+                q.put(item)
+        finally:
+            close = getattr(iterator, "aclose", None)
+            if callable(close):
+                with contextlib.suppress(Exception):
+                    await cast(Callable[[], Awaitable[Any]], close)()
         q.put(_SENTINEL)
 
     # The drain always runs in a background thread; carry the caller's context (metering scope,
@@ -115,14 +126,22 @@ def _stream_sync[T](async_iterator_factory: Callable[[], AsyncIterator[T]]) -> I
     thread = threading.Thread(target=_target, daemon=True)
     thread.start()
 
-    while True:
-        item = q.get()
-        if item is _SENTINEL:
-            break
-        if isinstance(item, BaseException):
-            raise item
-        yield cast(T, item)
-
-    thread.join(timeout=_stream_join_timeout)
-    if thread.is_alive():
-        logger.warning("Stream thread still alive after %ss join timeout", _stream_join_timeout)
+    drained = False
+    try:
+        while True:
+            item = q.get()
+            if item is _SENTINEL:
+                break
+            if isinstance(item, BaseException):
+                raise item
+            yield cast(T, item)
+        drained = True
+    finally:
+        stop.set()
+    if drained:
+        thread.join(timeout=_stream_join_timeout)
+        if thread.is_alive():
+            logger.warning(
+                "Stream thread still alive after %ss join timeout",
+                _stream_join_timeout,
+            )

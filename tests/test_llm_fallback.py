@@ -282,8 +282,10 @@ class TestStreamWithFallback:
         mock_create.side_effect = [p1, p2]
 
         llm = LLM("model-a", api_key="test", fallback="model-b")
+        stream = llm.stream("Hi")
         with pytest.raises(ConnectionError):
-            llm.stream("Hi")
+            async for _ in stream:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -396,6 +398,23 @@ class TestAttemptTrackingStream:
         assert stream.response is not None
         assert len(stream.response.attempts) == 1
         assert stream.response.attempts[0].status == "ok"
+
+    @patch("ai_arch_toolkit.core._llm.create_provider")
+    async def test_stream_attempt_timestamp_starts_with_iteration(self, mock_create):
+        async def _fake_gen():
+            yield "hello"
+
+        provider = MagicMock()
+        provider.stream.return_value = (_fake_gen(), _make_stream_state())
+        mock_create.return_value = provider
+
+        stream = LLM("model-a", api_key="test").stream("Hi")
+        iteration_started = time.time()
+        async for _ in stream:
+            pass
+
+        assert stream.response is not None
+        assert stream.response.attempts[0].timestamp >= iteration_started
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_stream_fallback_has_merged_attempts(self, mock_create):

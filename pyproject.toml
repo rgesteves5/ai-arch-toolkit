@@ -16,7 +16,7 @@ ai-arch = "ai_arch_toolkit._cli:main"
 [project.optional-dependencies]
 # Provider SDKs — install the one matching the model you plan to call.
 anthropic = ["anthropic>=0.40"]
-gemini = ["google-genai>=1.0"]
+gemini = ["google-genai>=1.21.0"]
 openai = ["openai>=1.50"]
 xai = ["xai-sdk>=1.7.0"]
 
@@ -49,7 +49,7 @@ telemetry = ["opentelemetry-api>=1.27"]
 # Local development — pulls in test runners, lint, type-check, and all providers/features.
 dev = [
     "anthropic>=0.40",
-    "google-genai>=1.0",
+    "google-genai>=1.21.0",
     "networkx>=3.0",
     "openai>=1.50",
     "pre-commit>=4.0",

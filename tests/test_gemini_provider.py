@@ -343,7 +343,10 @@ def test_provider_timeout_is_converted_to_sdk_milliseconds(monkeypatch):
     GeminiProvider("gemini-2.0-flash", "test-key", timeout=45)
 
     assert captured["api_key"] == "test-key"
-    assert captured["http_options"] == {"timeout": 45_000}
+    assert captured["http_options"] == {
+        "retry_options": {"attempts": 1},
+        "timeout": 45_000,
+    }
 
 
 class TestGeminiProviderComplete:

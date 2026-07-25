@@ -51,6 +51,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `uv lock --upgrade` brought every transitive dependency to its latest compatible version (pydantic 2.13, urllib3 2.7, requests 2.34, websockets 16, xai-sdk 1.12, ruff 0.15.13, …); resolved the four Dependabot alerts.
 
 ### Fixed
+- Provider adapters now disable hidden Anthropic, OpenAI, Gemini, and xAI SDK
+  retry loops. `LLM.retry` is the single retry owner, so every attempt is
+  metered and exposed through `Response.attempts`.
+- Streaming now retries or enters the fallback chain when provider errors occur lazily
+  before the first emitted item. Each physical attempt is metered and recorded; errors
+  after observable output are surfaced without replay. Abandoned async streams close
+  their provider iterators immediately; all streams remain outside `inference_limit` and
+  preserve nested fallback chains configured on fallback `LLM` instances.
+- The Gemini extra now requires `google-genai>=1.21.0`, the first supported SDK floor
+  with `HttpOptions.retry_options`.
 - **Cached input tokens are no longer double-counted.** OpenAI, Gemini, and xAI adapters (including OpenAI batch responses) now normalize provider-reported inclusive input totals into disjoint `Usage.input_tokens` and `cache_read_tokens`, so pricing and budget metering charge cached tokens only at the cache rate.
 - **Anthropic structured output now validates into the Pydantic model.** When `output_schema` carries a `model_class`, the Anthropic adapter coerces the parsed JSON via `model_validate()` — at parity with the OpenAI, Gemini, and xAI adapters (it previously returned a raw `dict`). It also tolerates Markdown-fenced JSON in the reply.
 - OpenAI-compatible streaming now flushes accumulated tool calls when a server ends the turn with `finish_reason="stop"` instead of `"tool_calls"` (some Ollama / LM Studio / vLLM builds), so tool-using agents no longer silently see zero tool calls.

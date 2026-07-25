@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import warnings
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import grpc
 import pytest
@@ -285,6 +285,14 @@ def _make_mock_chat(response=None):
 
 
 class TestXAIProviderComplete:
+    @patch("ai_arch_toolkit.core._providers._xai.xai_sdk.AsyncClient")
+    def test_disables_transparent_grpc_retries(self, client_cls):
+        XAIProvider("grok-3", "test-key")
+
+        client_cls.assert_called_once_with(
+            api_key="test-key", channel_options=[("grpc.enable_retries", 0)]
+        )
+
     async def test_complete(self):
         mock_chat = _make_mock_chat()
         mock_client = MagicMock()

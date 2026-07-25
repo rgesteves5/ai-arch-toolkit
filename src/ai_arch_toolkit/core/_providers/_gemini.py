@@ -350,10 +350,16 @@ class GeminiProvider(BaseProvider):
         timeout: float | None = None,
     ) -> None:
         self._model = model
-        client_kwargs: dict[str, Any] = {"api_key": api_key}
+        # google-genai otherwise defaults to five physical attempts. Keep one
+        # so toolkit RetryConfig owns and audits every retry.
+        http_options: dict[str, Any] = {"retry_options": {"attempts": 1}}
+        client_kwargs: dict[str, Any] = {
+            "api_key": api_key,
+            "http_options": http_options,
+        }
         if timeout is not None:
             # google-genai expects HttpOptions.timeout in milliseconds.
-            client_kwargs["http_options"] = {"timeout": int(timeout * 1000)}
+            http_options["timeout"] = int(timeout * 1000)
         self._client = genai.Client(**client_kwargs)
 
     async def close(self) -> None:

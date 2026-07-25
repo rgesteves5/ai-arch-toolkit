@@ -54,11 +54,11 @@ response.thinking  # → tuple of ThinkingBlock
 response = await llm.complete(messages, json_mode=True)
 
 # Streaming (text chunks)
-async for chunk in await llm.stream(messages):
+async for chunk in llm.stream(messages):
     print(chunk, end="")
 
 # Streaming (structured events)
-async for event in await llm.stream_events(messages, tools=tools):
+async for event in llm.stream_events(messages, tools=tools):
     match event.kind:
         case "text": print(event.text, end="")
         case "thinking": print(f"[thinking] {event.thinking.text}")
@@ -95,6 +95,10 @@ response.has_tool_calls # bool shorthand
 response.to_message()   # convert to assistant message dict
 ```
 
+The four `Usage` counters are disjoint. `input_tokens` contains non-cached input only;
+add `cache_read_tokens` and `cache_write_tokens` to obtain total input. This keeps cache
+reads/writes from being charged again at the regular input rate.
+
 ---
 
 ## Fallback chains
@@ -130,6 +134,31 @@ llm = LLM(
 )
 ```
 
+The adapters disable retry loops built into the provider SDKs. `RetryConfig`
+is therefore the single retry owner: every attempt is metered and appears in
+`Response.attempts`. `max_retries=N` means at most `N + 1` physical attempts
+for that `LLM`. Retries are opt-in; omitting `retry=` performs one attempt.
+Fallbacks supplied as `LLM` objects use their own retry configuration, so pass
+configured instances when fallback models should retry too.
+
+For streaming, provider I/O starts when iteration begins. A retry or fallback is
+safe only before the first chunk/event becomes visible to the caller; after that
+boundary an error is surfaced without replay, avoiding duplicated or spliced
+output. Budget admission and the first call reservation still happen when
+`stream()` / `stream_events()` creates the stream object.
+
+Fully consuming a stream closes its provider iterator automatically. If the
+consumer may stop early, use the async context manager (or call `await
+stream.aclose()`) so provider resources are released immediately and the partial
+response is recorded as abandoned:
+
+```python
+async with llm.stream(messages) as stream:
+    async for chunk in stream:
+        if enough(chunk):
+            break
+```
+
 ---
 
 ## Limiting concurrent inference
@@ -147,7 +176,8 @@ with inference_limit(2):            # ≤ 2 concurrent inferences, across all ne
 
 It is a global, run-scoped, opt-in cap (default: unlimited). See
 [Concurrency & Throttling](concurrency.md) for the full model and how it differs
-from `Flow(max_parallelism=...)`.
+from `Flow(max_parallelism=...)`. Streaming calls are deliberately not throttled
+because their lifetime spans caller-controlled yields.
 
 ---
 

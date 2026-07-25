@@ -301,6 +301,7 @@ async def test_stream_clean_early_break_stays_incomplete_not_settled(caplog):
     snap = scope.snapshot()
     assert snap.llm_calls == 1 and snap.unknown_cost_count == 1
     assert s.response is not None and s.response.text == "ok"  # partial kept, not discarded
+    assert s.response.attempts[0].error_type == "StreamAbandoned"
     assert "keeping the first outcome" not in caplog.text  # no spurious re-terminal warning
 
 
@@ -317,8 +318,8 @@ async def test_stream_events_clean_early_break_stays_incomplete_not_settled():
 
 
 def test_sync_stream_clean_early_break_stays_incomplete_not_settled():
-    # The sync wrapper reuses the async finalizer, so it carries the same `_meter_op` — a clean
-    # early break out of `stream_sync()` must fail the op closed too, not settle a partial.
+    # The sync wrapper reuses the async lifecycle finalizer, so a clean early break out of
+    # `stream_sync()` must fail the op closed too, not settle a partial.
     llm = make_llm()
     scope = MeterScope(RunConfig())
     with scope, llm.stream_sync("hi") as s:

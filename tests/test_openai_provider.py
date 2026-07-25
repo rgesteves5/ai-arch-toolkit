@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import warnings
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -330,6 +330,12 @@ class TestStreamState:
 
 
 class TestOpenAIProviderComplete:
+    @patch("ai_arch_toolkit.core._providers._openai.openai.AsyncOpenAI")
+    def test_disables_hidden_sdk_retries(self, client_cls):
+        OpenAIProvider("gpt-4o", "test-key")
+
+        client_cls.assert_called_once_with(api_key="test-key", max_retries=0)
+
     async def test_complete(self):
         mock_client = AsyncMock()
         mock_client.chat.completions.create.return_value = _sdk_completion(text="Hello!")

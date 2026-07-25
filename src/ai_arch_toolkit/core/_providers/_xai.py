@@ -265,7 +265,12 @@ class XAIProvider(BaseProvider):
         timeout: float | None = None,
     ) -> None:
         self._model = model
-        self._client = xai_sdk.AsyncClient(api_key=api_key)
+        # Disable transparent gRPC retries; LLM(RetryConfig(...)) owns retries
+        # so each physical toolkit attempt is metered and audited.
+        self._client = xai_sdk.AsyncClient(
+            api_key=api_key,
+            channel_options=[("grpc.enable_retries", 0)],
+        )
         if timeout is not None:
             warnings.warn(
                 "timeout is not directly supported by xAI gRPC client, ignoring",

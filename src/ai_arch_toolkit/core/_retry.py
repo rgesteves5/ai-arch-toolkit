@@ -49,6 +49,27 @@ def _compute_delay(attempt: int, config: RetryConfig, retry_after: float | None)
     return min(delay + jitter, config.max_delay)
 
 
+async def _wait_before_retry(
+    exc: Exception,
+    attempt: int,
+    config: RetryConfig,
+) -> bool:
+    """Wait before the next retry, or return ``False`` when retries are exhausted."""
+    if not _is_retryable(exc, config) or attempt == config.max_retries:
+        return False
+    retry_after = getattr(exc, "retry_after", None)
+    delay = _compute_delay(attempt, config, retry_after)
+    logger.info(
+        "Retry %d/%d after %.1fs (error: %s)",
+        attempt + 1,
+        config.max_retries,
+        delay,
+        exc,
+    )
+    await asyncio.sleep(delay)
+    return True
+
+
 async def with_retry[T](
     coro_factory: Callable[[], Awaitable[T]],
     config: RetryConfig,
@@ -63,19 +84,9 @@ async def with_retry[T](
         try:
             return await coro_factory()
         except Exception as exc:
-            if not _is_retryable(exc, config) or attempt == config.max_retries:
+            if not await _wait_before_retry(exc, attempt, config):
                 raise
             last_exc = exc
-            retry_after = getattr(exc, "retry_after", None)
-            delay = _compute_delay(attempt, config, retry_after)
-            logger.info(
-                "Retry %d/%d after %.1fs (error: %s)",
-                attempt + 1,
-                config.max_retries,
-                delay,
-                exc,
-            )
-            await asyncio.sleep(delay)
 
     # Should not be reached, but satisfy type checker
     assert last_exc is not None

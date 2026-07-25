@@ -8,6 +8,7 @@ import asyncio
 import pytest
 
 from ai_arch_toolkit import LLM, inference_limit
+from ai_arch_toolkit.core._providers._base import StreamState
 from ai_arch_toolkit.core._response import Response, Usage
 
 
@@ -75,6 +76,37 @@ async def test_the_cap_is_global_across_nested_gathers():
 async def test_inference_limit_rejects_non_positive():
     with pytest.raises(ValueError), inference_limit(0):
         pass
+
+
+async def test_stream_abandonment_closes_provider_without_holding_inference_limit():
+    class Provider(_TrackingProvider):
+        def __init__(self) -> None:
+            super().__init__(delay=0)
+            self.stream_closed = False
+
+        def stream(self, *args, **kwargs):
+            state = StreamState()
+
+            async def chunks():
+                try:
+                    yield "first"
+                    await asyncio.Event().wait()
+                finally:
+                    self.stream_closed = True
+
+            return chunks(), state
+
+    provider = Provider()
+    llm = LLM("claude-sonnet-4-6", api_key="test")
+    llm._provider = provider  # type: ignore[assignment]
+
+    with inference_limit(1):
+        async with llm.stream("hi") as stream:
+            assert await stream.__anext__() == "first"
+            response = await asyncio.wait_for(llm.complete("still available"), timeout=0.2)
+            assert response.text == "ok"
+
+    assert provider.stream_closed is True
 
 
 # ── A: per-flow fan-out cap ──────────────────────────────────────────────────
