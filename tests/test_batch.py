@@ -143,7 +143,7 @@ def _sample_requests() -> list[dict[str, Any]]:
     ]
 
 
-def _success_jsonl_line(custom_id: str, text: str = "Hi there") -> str:
+def _success_jsonl_line(custom_id: str, text: str = "Hi there", *, cached_tokens: int = 0) -> str:
     """Build one JSONL output line with a successful chat completion body."""
     return json.dumps(
         {
@@ -156,7 +156,11 @@ def _success_jsonl_line(custom_id: str, text: str = "Hi there") -> str:
                             "finish_reason": "stop",
                         }
                     ],
-                    "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                    "usage": {
+                        "prompt_tokens": 10,
+                        "completion_tokens": 5,
+                        "prompt_tokens_details": {"cached_tokens": cached_tokens},
+                    },
                     "model": "gpt-4o",
                 }
             },
@@ -344,12 +348,13 @@ class TestOpenAIBatchResults:
         provider._client.batches.retrieve.return_value = batch_obj
 
         file_content = MagicMock()
-        file_content.text = _success_jsonl_line("req-1")
+        file_content.text = _success_jsonl_line("req-1", cached_tokens=4)
         provider._client.files.content.return_value = file_content
 
         results = await provider.batch_results("batch-u")
         resp = results[0].response
 
         assert resp is not None
-        assert resp.usage.input_tokens == 10
+        assert resp.usage.input_tokens == 6
         assert resp.usage.output_tokens == 5
+        assert resp.usage.cache_read_tokens == 4

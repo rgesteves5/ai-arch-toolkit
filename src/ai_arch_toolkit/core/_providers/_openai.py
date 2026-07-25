@@ -25,6 +25,7 @@ from ai_arch_toolkit.core._response import (
     ThinkingBlock,
     ToolCall,
     Usage,
+    _uncached_input_tokens,
 )
 
 require_sdk("openai", "openai")
@@ -199,8 +200,9 @@ def _extract_usage(sdk_usage: Any) -> Usage:
     details = getattr(sdk_usage, "prompt_tokens_details", None)
     if details:
         cache_read = getattr(details, "cached_tokens", 0) or 0
+    total_input = getattr(sdk_usage, "prompt_tokens", 0)
     return Usage(
-        input_tokens=getattr(sdk_usage, "prompt_tokens", 0),
+        input_tokens=_uncached_input_tokens(total_input, cache_read),
         output_tokens=getattr(sdk_usage, "completion_tokens", 0),
         cache_read_tokens=cache_read,
     )
@@ -746,9 +748,12 @@ class OpenAIProvider(BaseProvider):
             )
 
         raw_usage = body.get("usage", {})
+        prompt_details = raw_usage.get("prompt_tokens_details") or {}
+        cache_read = prompt_details.get("cached_tokens", 0) or 0
         usage = Usage(
-            input_tokens=raw_usage.get("prompt_tokens", 0),
+            input_tokens=_uncached_input_tokens(raw_usage.get("prompt_tokens", 0), cache_read),
             output_tokens=raw_usage.get("completion_tokens", 0),
+            cache_read_tokens=cache_read,
         )
         cost = _estimate_response_cost(self._model, usage)
 

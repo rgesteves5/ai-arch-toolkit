@@ -15,7 +15,14 @@ from ai_arch_toolkit.core._exceptions import APIError, RateLimitError
 from ai_arch_toolkit.core._pricing import _estimate_response_cost
 from ai_arch_toolkit.core._providers._base import BaseProvider, StreamState, parse_tool_args
 from ai_arch_toolkit.core._providers._imports import require_sdk
-from ai_arch_toolkit.core._response import OutputSchema, Response, ThinkingBlock, ToolCall, Usage
+from ai_arch_toolkit.core._response import (
+    OutputSchema,
+    Response,
+    ThinkingBlock,
+    ToolCall,
+    Usage,
+    _uncached_input_tokens,
+)
 
 require_sdk("xai_sdk", "xai")
 import xai_sdk  # noqa: E402
@@ -145,12 +152,13 @@ def _build_response_format(output_schema: OutputSchema) -> Any:
 
 def _extract_usage(sdk_usage: Any) -> Usage:
     """Convert SDK SamplingUsage to our Usage dataclass."""
+    total_input = getattr(sdk_usage, "input_tokens", 0) or getattr(sdk_usage, "prompt_tokens", 0)
+    cache_read = getattr(sdk_usage, "cached_prompt_text_tokens", 0) or 0
     return Usage(
-        input_tokens=getattr(sdk_usage, "input_tokens", 0)
-        or getattr(sdk_usage, "prompt_tokens", 0),
+        input_tokens=_uncached_input_tokens(total_input, cache_read),
         output_tokens=getattr(sdk_usage, "output_tokens", 0)
         or getattr(sdk_usage, "completion_tokens", 0),
-        cache_read_tokens=getattr(sdk_usage, "cached_prompt_text_tokens", 0),
+        cache_read_tokens=cache_read,
     )
 
 

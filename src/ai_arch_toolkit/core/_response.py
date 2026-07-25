@@ -35,12 +35,21 @@ class ToolCall:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Usage:
-    """Token usage counters."""
+    """Disjoint token usage counters.
+
+    ``input_tokens`` contains non-cached input only. Cache reads and writes are recorded
+    separately, so total input is the sum of all three input counters.
+    """
 
     input_tokens: int = 0
     output_tokens: int = 0
     cache_write_tokens: int = 0
     cache_read_tokens: int = 0
+
+
+def _uncached_input_tokens(total_input: int | None, cache_read: int | None) -> int:
+    """Return the non-cached part of a provider's inclusive input-token count."""
+    return max((total_input or 0) - (cache_read or 0), 0)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -135,7 +144,7 @@ class Response:
 
     @property
     def tokens(self) -> int:
-        """Total tokens (input + output)."""
+        """Non-cached input plus output tokens; cache counters remain separate."""
         return self.usage.input_tokens + self.usage.output_tokens
 
     @property

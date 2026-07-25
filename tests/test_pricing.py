@@ -201,6 +201,18 @@ class TestEstimateCost:
         assert cost is not None
         assert abs(cost - expected) < 1e-10
 
+    def test_cached_prompt_tokens_are_not_double_charged(self):
+        # Provider prompt total: 1,000 = 800 uncached + 200 cache reads.
+        cost = pricing.estimate_cost(
+            "gpt-4o",
+            input_tokens=800,
+            output_tokens=0,
+            cache_read_tokens=200,
+        )
+        expected = 2.50 * 800 / 1_000_000 + 1.25 * 200 / 1_000_000
+        assert cost is not None
+        assert abs(cost - expected) < 1e-10
+
     def test_cache_tokens_ignored_for_models_without_cache(self):
         # gpt-4-turbo has no cache pricing (None) — cache tokens should not contribute
         cost = pricing.estimate_cost(

@@ -246,9 +246,10 @@ class TestExtractUsage:
             cached_content_token_count=10,
         )
         usage = _extract_usage(meta)
-        assert usage.input_tokens == 100
+        assert usage.input_tokens == 90
         assert usage.output_tokens == 50
         assert usage.cache_read_tokens == 10
+        assert usage.input_tokens + usage.cache_read_tokens == 100
 
     def test_none_values(self):
         meta = SimpleNamespace(

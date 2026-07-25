@@ -228,6 +228,18 @@ class TestExtractUsage:
             prompt_tokens_details=SimpleNamespace(cached_tokens=20),
         )
         usage = _extract_usage(sdk_usage)
+        assert usage.input_tokens == 80
+        assert usage.cache_read_tokens == 20
+        assert usage.input_tokens + usage.cache_read_tokens == 100
+
+    def test_cache_read_tokens_cannot_make_input_negative(self):
+        sdk_usage = SimpleNamespace(
+            prompt_tokens=10,
+            completion_tokens=5,
+            prompt_tokens_details=SimpleNamespace(cached_tokens=20),
+        )
+        usage = _extract_usage(sdk_usage)
+        assert usage.input_tokens == 0
         assert usage.cache_read_tokens == 20
 
     def test_cache_read_tokens_none_details(self):

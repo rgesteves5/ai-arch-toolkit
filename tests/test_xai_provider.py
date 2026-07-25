@@ -172,17 +172,20 @@ class TestExtractUsage:
         assert usage.output_tokens == 50
 
     def test_cached_tokens(self):
-        usage = _extract_usage(_sdk_usage(cached_prompt_text_tokens=20))
+        usage = _extract_usage(_sdk_usage(prompt_tokens=100, cached_prompt_text_tokens=20))
+        assert usage.input_tokens == 80
         assert usage.cache_read_tokens == 20
+        assert usage.input_tokens + usage.cache_read_tokens == 100
 
     def test_input_output_tokens_fields(self):
         """xAI SDK may use input_tokens/output_tokens field names."""
         usage_obj = SimpleNamespace(
-            input_tokens=100, output_tokens=50, cached_prompt_text_tokens=0
+            input_tokens=100, output_tokens=50, cached_prompt_text_tokens=20
         )
         usage = _extract_usage(usage_obj)
-        assert usage.input_tokens == 100
+        assert usage.input_tokens == 80
         assert usage.output_tokens == 50
+        assert usage.cache_read_tokens == 20
 
 
 # ---------------------------------------------------------------------------

@@ -28,6 +28,7 @@ from ai_arch_toolkit.core._response import (
     ThinkingBlock,
     ToolCall,
     Usage,
+    _uncached_input_tokens,
 )
 
 require_sdk("google.genai", "gemini")
@@ -239,10 +240,12 @@ def _build_thinking_config(
 
 def _extract_usage(usage_meta: Any) -> Usage:
     """Convert SDK usage metadata to our Usage dataclass."""
+    total_input = getattr(usage_meta, "prompt_token_count", 0) or 0
+    cache_read = getattr(usage_meta, "cached_content_token_count", 0) or 0
     return Usage(
-        input_tokens=getattr(usage_meta, "prompt_token_count", 0) or 0,
+        input_tokens=_uncached_input_tokens(total_input, cache_read),
         output_tokens=getattr(usage_meta, "candidates_token_count", 0) or 0,
-        cache_read_tokens=getattr(usage_meta, "cached_content_token_count", 0) or 0,
+        cache_read_tokens=cache_read,
     )
 
 
