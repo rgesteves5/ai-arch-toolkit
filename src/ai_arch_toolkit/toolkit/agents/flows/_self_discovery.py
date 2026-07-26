@@ -52,6 +52,7 @@ def self_discovery_flow(
     timeout: float | None = None,
     policy: Policy | None = None,
     budget_policy: BudgetPolicy | None = None,
+    llm_kwargs: dict[str, Any] | None = None,
     reasoning_llm: LLM | None = None,
     solver_llm: LLM | None = None,
     solver_tools: ToolGroup | None = None,
@@ -71,6 +72,7 @@ def self_discovery_flow(
         timeout: Overall timeout in seconds.
         policy: Optional execution policy.
         budget_policy: Optional cumulative runtime budget for the flow.
+        llm_kwargs: Additional kwargs passed to every phase's LLM call.
         reasoning_llm: Override LLM for select/adapt/plan phases.
         solver_llm: Override LLM for the solve phase.
         solver_tools: Override tools for the solve phase.
@@ -78,6 +80,7 @@ def self_discovery_flow(
     reason_llm = reasoning_llm or llm
     solve_llm = solver_llm or llm
     solve_tools = solver_tools or tools
+    extra = llm_kwargs or {}
 
     modules_text = "\n".join(f"- {m}" for m in modules)
 
@@ -88,6 +91,7 @@ def self_discovery_flow(
         response = await reason_llm.complete(
             [user(f"Task: {task}\n\nAvailable modules:\n{modules_text}")],
             system=select_system,
+            **extra,
         )
         return Result(
             value=response.text,
@@ -102,6 +106,7 @@ def self_discovery_flow(
         response = await reason_llm.complete(
             [user(f"Task: {task}\n\nSelected modules:\n{selected}")],
             system=adapt_system,
+            **extra,
         )
         return Result(
             value=response.text,
@@ -116,6 +121,7 @@ def self_discovery_flow(
         response = await reason_llm.complete(
             [user(f"Task: {task}\n\nAdapted modules:\n{adapted}")],
             system=plan_system,
+            **extra,
         )
         return Result(
             value=response.text,
@@ -139,6 +145,7 @@ def self_discovery_flow(
             solve_tools,
             system=inner_system,
             max_iterations=max_react_iterations,
+            llm_kwargs=llm_kwargs,
         )
 
         state = State(operational=react_initial_state(task))

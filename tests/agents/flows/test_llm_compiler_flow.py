@@ -86,6 +86,53 @@ class TestLLMCompilerFlow:
 
         assert state.get("answer") is not None
 
+    async def test_exec_llm_override(self) -> None:
+        planner = AsyncMock()
+        planner.complete = AsyncMock(return_value=_make_response("$1. Do it [deps: none]"))
+        executor = AsyncMock()
+        executor.complete = AsyncMock(return_value=_make_response("done"))
+        joiner = AsyncMock()
+        joiner.complete = AsyncMock(return_value=_make_response("final"))
+        default = AsyncMock()
+        default.complete = AsyncMock(return_value=_make_response("unused"))
+
+        flow = llm_compiler_flow(
+            default,
+            ToolGroup(),
+            max_replans=0,
+            planner_llm=planner,
+            exec_llm=executor,
+            joiner_llm=joiner,
+        )
+        state = State(operational=llm_compiler_initial_state("task"))
+        await flow.run(state)
+
+        default.complete.assert_not_awaited()
+        executor.complete.assert_awaited()
+        assert state.get("answer") == "final"
+
+    async def test_default_planner_prompt_lists_executor_tools(self) -> None:
+        def lookup(query: str) -> str:
+            """Look up a fact."""
+            return "fact"
+
+        llm = AsyncMock()
+        llm.complete = AsyncMock(
+            side_effect=[
+                _make_response("$1. Do it [deps: none]"),
+                _make_response("done"),
+                _make_response("final"),
+            ]
+        )
+
+        flow = llm_compiler_flow(llm, ToolGroup(lookup), max_replans=0)
+        state = State(operational=llm_compiler_initial_state("task"))
+        await flow.run(state)
+
+        plan_system = llm.complete.await_args_list[0].kwargs["system"]
+        assert "- lookup:" in plan_system
+        assert "{tools}" not in plan_system
+
 
 class TestLLMCompilerInitialState:
     def test_creates_initial_state(self) -> None:

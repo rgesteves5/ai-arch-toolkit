@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ai_arch_toolkit.toolkit.agents._agent import Agent, AgentResult
+from ai_arch_toolkit.toolkit.agents._assemble import agent_from_manifest
 from ai_arch_toolkit.toolkit.agents._builders import (
     BuildContext,
     FlowStrategy,
@@ -52,6 +53,7 @@ __all__ = [
     "ReasoningSpec",
     "ResolvedAgentManifest",
     "StrategyBuilder",
+    "agent_from_manifest",
     "build_flow",
     "extract_text",
     "generate_review_flow",

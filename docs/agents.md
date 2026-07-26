@@ -72,11 +72,15 @@ object.
 | `plan_execute` | `plan_execute_flow` | — | `max_replans`, `max_iterations_per_step` |
 | `rewoo` | `rewoo_flow` | — | — |
 | `reflexion` | `reflexion_flow` | — | `threshold`, `max_retries` |
-| `generate_review` | `generate_review_flow` | — | `max_cycles`, `max_review_iterations` |
-| `self_discovery` | `self_discovery_flow` | — | — |
+| `generate_review` | `generate_review_flow` | — | `max_cycles`, `max_review_iterations`, `reviewer_kwargs` |
+| `self_discovery` | `self_discovery_flow` | — | `modules` |
 | `llm_compiler` | `llm_compiler_flow` | — | `max_replans` |
 | `tot` | `tot_flow` | — | `n_candidates`, `max_depth`, `search_strategy` |
-| `lats` | `lats_flow` | — | `n_candidates`, `max_rollouts` |
+| `lats` | `lats_flow` | — | `n_candidates`, `max_rollouts`, `exploration_weight` |
+
+Multi-phase strategies additionally accept per-phase prompt knobs
+(`planner_system`, `evaluator_system`, …) — see
+[Per-phase configuration](#per-phase-configuration).
 
 `completion` is the one strategy with no flow factory of its own — a plain
 single-shot LLM call, handy as a baseline or for non-agentic steps in a larger
@@ -94,7 +98,7 @@ strategy_names()   # ('completion', 'generate_review', 'lats', 'llm_compiler', .
 ## Runtime dependencies: `deps`
 
 Some strategies need a runtime object that **cannot** live in a config file — an
-evaluator callable, a second LLM, a memory store. These go in `deps`, separate
+evaluator callable, a per-phase LLM or ToolGroup. These go in `deps`, separate
 from the serializable `knobs`:
 
 ```python
@@ -102,9 +106,75 @@ spec = ReasoningSpec(strategy="reflexion", knobs={"threshold": 0.8})
 agent = Agent(spec, llm, tools, deps={"evaluator": my_scorer})
 ```
 
-Recognized `deps` keys: `reflexion` → `evaluator`; `lats` → `evaluator_fn`;
-`generate_review` → `review_llm`, `review_tools`. Anything a strategy doesn't use
-is ignored.
+Built-in strategies validate `deps` the same way they validate `knobs`: an
+unknown key or a wrongly-typed value raises `ValueError` at build time, so a
+typo like `evalutor` cannot be silently ignored. Custom strategies registered
+without `allowed_deps` keep the old accept-anything behavior.
+
+Callable deps: `reflexion` → `evaluator`; `lats` → `evaluator_fn`. The
+per-phase LLM/tool deps are listed in the next section.
+
+## Per-phase configuration
+
+Multi-phase strategies accept per-phase overrides through the two existing
+buckets: **runtime objects** (`<phase>_llm`, `<phase>_tools`) go in `deps`, and
+**prompts** (`<phase>_system`) go in `knobs`. Anything not overridden falls back
+to the agent's default `llm`/`tools` and the strategy's built-in prompts.
+
+```python
+spec = ReasoningSpec(
+    strategy="plan_execute",
+    knobs={"planner_system": "Plan in at most three numbered steps."},
+)
+agent = Agent(
+    spec, llm, tools,
+    deps={"planner_llm": haiku, "executor_tools": narrow_tools},
+)
+```
+
+| Strategy | Phase | `deps` keys | Prompt knob |
+|---|---|---|---|
+| `plan_execute` | planner | `planner_llm` | `planner_system` |
+| | executor | `executor_llm`, `executor_tools` | — |
+| | solver | `solver_llm` | `solver_system` |
+| `rewoo` | planner | `planner_llm` | `planner_system` |
+| | solver | `solver_llm` | `solver_system` |
+| `reflexion` | executor | `executor_llm`, `executor_tools` | — |
+| | reflector | `reflector_llm` | `reflector_system` |
+| `generate_review` | generator | `generator_llm`, `generator_tools` | *(the spec's `system`/`llm_kwargs`)* |
+| | reviewer | `reviewer_llm`, `reviewer_tools` | `reviewer_system`, `reviewer_kwargs` |
+| `self_discovery` | reasoning | `reasoning_llm` | `select_system`, `adapt_system`, `plan_system` |
+| | solver | `solver_llm`, `solver_tools` | `solver_system` |
+| `llm_compiler` | planner | `planner_llm` | `planner_system` |
+| | executor | `executor_llm`, `executor_tools` | — |
+| | joiner | `joiner_llm` | `joiner_system` |
+| `tot` | generator | `generator_llm` | — |
+| | evaluator | `evaluator_llm` | `evaluator_system` |
+| | solver | `solver_llm` | — |
+| `lats` | rollout | `rollout_llm`, `rollout_tools` | — |
+| | evaluator | `evaluator_llm` | `evaluator_system` |
+| | solver | `solver_llm` | — |
+| | reflector | `reflector_llm` | `reflector_system` |
+
+Notes:
+
+- Planner prompts may contain a literal `{tools}` token — the **only**
+  substitution the framework performs. At build time it is replaced with the
+  phase's resolved tool catalog (`- name: description` lines, `(none)` when
+  empty); a prompt without the token is never modified. The default planner
+  prompts of `plan_execute`, `rewoo`, and `llm_compiler` carry the token, so
+  tool awareness is visible in the declared text instead of appended silently.
+  (`rewoo`'s planner needs the tool names to emit `#E1 = ToolName[arg]` steps —
+  omit the token there only if your prompt manages tool naming itself.)
+- `self_discovery`'s reasoning phase has no single system prompt — its three
+  sub-prompts (`select_system`, `adapt_system`, `plan_system`) are plain knobs.
+- `generate_review` still accepts the legacy `review_llm` / `review_tools` dep
+  keys as aliases of `reviewer_llm` / `reviewer_tools`; passing both is an
+  error.
+- The spec-level `llm_kwargs` apply to **every** phase's LLM calls; a phase
+  override changes who is called, not what is passed. `reviewer_kwargs` merges
+  on top of the global `llm_kwargs`, winning per key.
+- `react` and `completion` have no phases and reject any `deps`.
 
 ## AgentResult
 
@@ -244,6 +314,72 @@ selection and again after overrides. Override `deny` paths protect both their
 ancestors and descendants, so replacing an allowed parent object cannot bypass a
 denied child.
 
+### Per-phase prompts and models: `strategy.phases`
+
+`strategy.phases` declares per-phase prompts and model choices declaratively —
+the per-phase counterpart of the established top-level split, where
+`strategy.system` flows into the spec and `model` is data the application
+resolves:
+
+```yaml
+strategy:
+  name: plan_execute
+  phases:
+    planner:
+      system_file: ../prompts/planner.md      # or an inline `system:`
+      model: { provider: anthropic, model: claude-haiku-4-5, temperature: 0 }
+    solver:
+      system: Solve tersely from the step results.
+```
+
+Prompts fold into the spec automatically: `manifest.reasoning_spec()` reads
+`system` — or the content of `system_file`, at bridge time, re-verified against
+the load-time hash so a file that changed since loading raises instead of
+running unaudited content — into the canonical `<phase>_system` knobs.
+`system_file` is **verbatim text**: no variables, no rendering (pointing it at
+a `.prompt.*`/`.agent.*` manifest is rejected); to use the prompts system,
+render in the application and declare the result. Declared prompt text may
+carry the `{tools}` token like any other phase prompt; the fingerprint pins the
+declared form, and the token resolves against the runtime tools at build time.
+Declaring both `strategy.phases.<name>.system` and
+`strategy.knobs.<name>_system` is a load error: one declaration site per value.
+`system_file` paths obey `allowed_roots` and join `referenced_fingerprints`, so
+editing the prompt file changes the manifest fingerprint without touching the
+YAML; dotted override governance covers `strategy.phases.*` like any other
+subtree, and secret scanning walks phase model configs.
+
+Phase `model` configs carry the same contract as the top-level `model` section:
+validated data, never constructed by the loader. Read them with
+`manifest.phase_models()` and resolve them yourself, or let
+`agent_from_manifest` do the wiring:
+
+```python
+from ai_arch_toolkit.toolkit.agents import agent_from_manifest
+
+agent = agent_from_manifest(
+    manifest, llm, tools,
+    llm_factory=lambda phase, cfg: LLM(cfg["model"]),   # app-owned resolution
+)
+```
+
+`llm_factory(phase, model_config)` runs once per declared phase model and binds
+the result as the canonical `<phase>_llm` dep. An explicit `deps` entry for a
+phase wins over the factory; a declared model with neither is an error — a
+manifest's model choice must not be silently ignored.
+
+Validate manifests statically in CI — registry-aware checks (strategy name,
+phase names, knob names and values) on top of the loader's shape checks:
+
+```bash
+ai-arch agent validate agents/support.agent.yaml --allowed-root .
+ai-arch agent inspect agents/support.agent.yaml --allowed-root .
+```
+
+`--allowed-root` (repeatable) mirrors the loader's `allowed_roots` — without it
+only the manifest's own directory may be referenced, so layouts that keep
+profiles or prompt files in sibling directories need it. `inspect` prints the
+resolved config and fingerprint.
+
 ## Escape hatch: `Agent.from_flow`
 
 When you have built a `Flow` by hand (any composition of `Step`s) and want the
@@ -287,7 +423,10 @@ agent = Agent(ReasoningSpec(strategy="my_strategy", knobs={"depth": 3}), llm, to
 ```
 
 `BuildContext` carries `spec`, `llm`, `tools`, and `deps` — read serializable
-config from `spec`/`spec.knobs` and runtime objects from `deps`.
+config from `spec`/`spec.knobs` and runtime objects from `deps`. `FlowStrategy`
+also accepts `allowed_knobs`/`knob_validators` and, symmetrically,
+`phases`/`allowed_deps`/`dep_validators`; leave `allowed_deps` as `None` to skip
+dep validation, or declare a set so typos fail at build time like the built-ins.
 
 ## Lower-level functions
 

@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Per-phase configuration for `Agent`/`ReasoningSpec` and manifests.** Multi-phase
+  strategies accept canonical per-phase overrides through the two existing buckets:
+  runtime LLM/tools as deps (`planner_llm`, `executor_tools`, `reviewer_llm`, …) and
+  prompts as knobs (`planner_system`, `evaluator_system`, …), validated per strategy —
+  `FlowStrategy` gains `phases`, `allowed_deps`, `dep_validators`, and `validate_spec()`.
+  Agent manifests gain a `strategy.phases` section: per-phase `system`/`system_file`
+  prompts fold into the spec's canonical knobs via `reasoning_spec()` (verbatim text,
+  governed by `allowed_roots`/override policy and re-verified against the load-time
+  fingerprint — drift raises), and per-phase `model` configs are exposed via
+  `ResolvedAgentManifest.phase_models()` and resolved by the application through the
+  new `agent_from_manifest(…, llm_factory=…)` helper (spec and strategy validate
+  before the factory runs). New CLI subcommands `ai-arch agent validate|inspect`
+  (with `--allowed-root`) run registry-aware checks — strategy name, phase names,
+  LLM-bindability of phases declaring models, knob values — for CI. Planner prompts (inline, knob, or
+  `system_file`) may carry a `{tools}` token — the only substitution the framework
+  performs — replaced at build time with the phase's resolved tool catalog. Also new:
+  the `lats.exploration_weight` and `self_discovery.modules` knobs. See
+  [docs/agents.md](docs/agents.md).
 - Hermetic configured-agent system tests now exercise manifest inheritance and profiles,
   prompt rendering, governed tools, agent compilation, metering, and hard budgets as one
   end-to-end path. The separate `live_api` marker keeps paid provider smoke tests explicit.
@@ -41,6 +59,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `.env.example` documenting every provider API key; the sync-timeout configuration now validates its inputs.
 
 ### Changed
+- Planner tool awareness is now an explicit `{tools}` token instead of a silent append:
+  a prompt containing the token gets the phase's rendered tool catalog substituted at
+  build time (`(none)` when empty), and a prompt without it is never modified. `rewoo`
+  previously appended the catalog to custom `planner_system` prompts unconditionally;
+  declare the token where you want the list — the built-in default planner prompts of
+  `plan_execute`, `rewoo`, and `llm_compiler` carry it.
+- Built-in agent strategies now validate `deps` the same way they validate knobs:
+  unknown keys and wrongly-typed values raise `ValueError` at build time, so a typo
+  like `deps={"evalutor": …}` can no longer be silently ignored. Custom strategies
+  registered without `allowed_deps` keep the previous accept-anything behavior.
+  `generate_review` accepts canonical `generator_llm`/`generator_tools` and
+  `reviewer_llm`/`reviewer_tools` dep keys, with `review_llm`/`review_tools` kept as
+  legacy aliases (passing both is an error).
 - Built-in agent strategies now reject unknown strategy knobs and invalid knob values at
   compile time, before an agent can spend tokens.
 - Reflexion and LATS evaluators are runtime dependencies only (`deps["evaluator"]` and
@@ -63,6 +94,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `uv lock --upgrade` brought every transitive dependency to its latest compatible version (pydantic 2.13, urllib3 2.7, requests 2.34, websockets 16, xai-sdk 1.12, ruff 0.15.13, …); resolved the four Dependabot alerts.
 
 ### Fixed
+- `ReasoningSpec.llm_kwargs` now reach every phase of all multi-phase strategies
+  (`plan_execute`, `rewoo`, `reflexion`, `self_discovery`, `llm_compiler`, `tot`,
+  `lats`, and `generate_review`'s reviewer — where `reviewer_kwargs` merges on top,
+  winning per key); previously they were silently dropped.
+- `llm_compiler_flow` supports an executor LLM override again (`exec_llm`); the inner
+  ReAct always used the default LLM even though planner/joiner overrides existed.
+- `plan_execute_flow`'s planner sees the executor's tool catalog again — and
+  `llm_compiler_flow`'s planner gains it for the first time — via the `{tools}` token
+  in their default planner prompts, so plans match what the execution phase can
+  actually call.
 - Provider adapters now disable hidden Anthropic, OpenAI, Gemini, and xAI SDK
   retry loops. `LLM.retry` is the single retry owner, so every attempt is
   metered and exposed through `Response.attempts`.

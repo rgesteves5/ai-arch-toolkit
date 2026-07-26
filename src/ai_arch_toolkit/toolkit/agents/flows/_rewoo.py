@@ -13,6 +13,7 @@ from ai_arch_toolkit.core._response import ToolCall
 from ai_arch_toolkit.core._state import StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
+from ai_arch_toolkit.toolkit.agents.flows._common import substitute_tools
 from ai_arch_toolkit.toolkit.budget import BudgetPolicy
 from ai_arch_toolkit.toolkit.flow._flow import Flow
 
@@ -28,7 +29,8 @@ def rewoo_flow(
         "You are a planning agent. Break the task into steps.\n"
         "For each step, specify a tool call in the format:\n"
         "#E1 = ToolName[argument]\n#E2 = ToolName[argument using #E1]\n"
-        "You can reference previous evidence with #E{n}."
+        "You can reference previous evidence with #E{n}.\n\n"
+        "Available tools:\n{tools}"
     ),
     solver_system: str = (
         "You are a solving agent. Given the task and evidence from "
@@ -37,6 +39,7 @@ def rewoo_flow(
     timeout: float | None = None,
     policy: Policy | None = None,
     budget_policy: BudgetPolicy | None = None,
+    llm_kwargs: dict[str, Any] | None = None,
     planner_llm: LLM | None = None,
     solver_llm: LLM | None = None,
 ) -> Flow:
@@ -46,36 +49,33 @@ def rewoo_flow(
         llm: Default language model.
         tools: Tool group for execution.
         system: Base system prompt.
-        planner_system: System prompt for the planner phase.
+        planner_system: System prompt for the planner phase; a ``{tools}`` token
+            is replaced with the rendered tool catalog (a prompt without the
+            token is never modified).
         solver_system: System prompt for the solver phase.
         timeout: Overall timeout in seconds.
         policy: Optional execution policy.
         budget_policy: Optional cumulative runtime budget for the flow.
+        llm_kwargs: Additional kwargs passed to every phase's LLM call.
         planner_llm: Override LLM for planning.
         solver_llm: Override LLM for solving.
     """
     plan_llm = planner_llm or llm
     solve_llm = solver_llm or llm
+    extra = llm_kwargs or {}
 
-    # Build tool descriptions from the group's provider-safe definitions.
+    # Tool schemas drive execution-time argument mapping; the planner prompt's
+    # "{tools}" token resolves against the same group.
     tool_schemas: dict[str, dict[str, Any]] = {}
     if hasattr(tools, "definitions"):
         tool_schemas = {d["name"]: d for d in tools.definitions}
-
-    tool_descriptions = "\n".join(
-        f"- {name}: {schema.get('description', 'No description')}"
-        for name, schema in tool_schemas.items()
-    )
+    plan_system = substitute_tools(planner_system, tools)
 
     async def plan(snap: StateSnapshot) -> Result:
         """Generate a plan with #E{n} evidence placeholders."""
         task: str = snap.require("task")
 
-        full_system = planner_system
-        if tool_descriptions:
-            full_system += f"\n\nAvailable tools:\n{tool_descriptions}"
-
-        response = await plan_llm.complete([user(task)], system=full_system)
+        response = await plan_llm.complete([user(task)], system=plan_system, **extra)
         plan_text = response.text
 
         # Parse plan steps
@@ -146,6 +146,7 @@ def rewoo_flow(
         response = await solve_llm.complete(
             [user(f"Task: {task}\n\nPlan:\n{plan_text}\n\nEvidence:\n{evidence_block}")],
             system=solver_system,
+            **extra,
         )
 
         return Result(

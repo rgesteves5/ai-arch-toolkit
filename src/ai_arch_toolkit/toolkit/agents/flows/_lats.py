@@ -77,6 +77,7 @@ def lats_flow(
     timeout: float | None = None,
     policy: Policy | None = None,
     budget_policy: BudgetPolicy | None = None,
+    llm_kwargs: dict[str, Any] | None = None,
     rollout_llm: LLM | None = None,
     rollout_tools: ToolGroup | None = None,
     eval_llm: LLM | None = None,
@@ -99,6 +100,7 @@ def lats_flow(
         timeout: Overall timeout in seconds.
         policy: Optional execution policy.
         budget_policy: Optional cumulative runtime budget for the flow.
+        llm_kwargs: Additional kwargs passed to every phase's LLM call.
         rollout_llm: Override LLM for rollouts.
         rollout_tools: Override tools for rollouts.
         eval_llm: Override LLM for evaluation.
@@ -110,6 +112,7 @@ def lats_flow(
     evaluator_llm = eval_llm or llm
     solve_llm = solver_llm or llm
     reflect_llm = reflector_llm or llm
+    extra = llm_kwargs or {}
 
     async def mcts_rollout(snap: StateSnapshot) -> Result:
         """One MCTS rollout: select, expand (ReAct), evaluate, backprop."""
@@ -133,6 +136,7 @@ def lats_flow(
             inner_tools,
             system=inner_system,
             max_iterations=max_react_iterations,
+            llm_kwargs=llm_kwargs,
         )  # no budget_policy: a nested flow inherits the enclosing scope (one cumulative budget)
 
         inner_initial = react_initial_state(leaf.state)
@@ -150,6 +154,7 @@ def lats_flow(
                 evaluator_llm,
                 [user(f"Task: {task}\n\nAnswer: {answer}\n\nScore (0.0-1.0):")],
                 system=evaluator_system,
+                **extra,
             )
             match = _SCORE_RE.search(eval_response.text)
             score = float(match.group(1)) if match else 0.5
@@ -188,6 +193,7 @@ def lats_flow(
                 solve_llm,
                 [user(f"Task: {task}\n\nBest answer: {answer}\n\nProvide the final answer.")],
                 system=system or None,
+                **extra,
             )
             artifacts["answer"] = sol_response.text
             artifacts["response"] = sol_response
@@ -209,6 +215,7 @@ def lats_flow(
                     )
                 ],
                 system=reflect_system,
+                **extra,
             )
             child.reflection = ref_response.text
 
@@ -218,6 +225,7 @@ def lats_flow(
                 solve_llm,
                 [user(f"Task: {task}\n\nBest answer: {best_answer}\n\nProvide the final answer.")],
                 system=system or None,
+                **extra,
             )
             artifacts["answer"] = sol_response.text
             artifacts["response"] = sol_response

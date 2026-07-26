@@ -77,6 +77,47 @@ class TestReWOOFlow:
         assert "#E1" in evidence
         assert "Error" in evidence["#E1"] or "Unknown" in evidence["#E1"]
 
+    async def test_default_planner_prompt_lists_tools(self) -> None:
+        def lookup(query: str) -> str:
+            """Look up a fact."""
+            return "fact"
+
+        llm = AsyncMock()
+        llm.complete = AsyncMock(
+            side_effect=[
+                _make_response(text="#E1 = lookup[France]"),
+                _make_response(text="Final answer"),
+            ]
+        )
+
+        flow = rewoo_flow(llm, ToolGroup(lookup))
+        state = State(operational=rewoo_initial_state("test"))
+        await flow.run(state)
+
+        plan_system = llm.complete.await_args_list[0].kwargs["system"]
+        assert "- lookup:" in plan_system
+        assert "Look up a fact" in plan_system
+        assert "{tools}" not in plan_system
+
+    async def test_custom_planner_prompt_without_token_untouched(self) -> None:
+        def lookup(query: str) -> str:
+            """Look up a fact."""
+            return "fact"
+
+        llm = AsyncMock()
+        llm.complete = AsyncMock(
+            side_effect=[
+                _make_response(text="no tool calls"),
+                _make_response(text="Final answer"),
+            ]
+        )
+
+        flow = rewoo_flow(llm, ToolGroup(lookup), planner_system="PLAN ONLY")
+        state = State(operational=rewoo_initial_state("test"))
+        await flow.run(state)
+
+        assert llm.complete.await_args_list[0].kwargs["system"] == "PLAN ONLY"
+
 
 class TestReWOOInitialState:
     def test_creates_initial_state(self) -> None:

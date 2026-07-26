@@ -13,6 +13,7 @@ from ai_arch_toolkit.core._policy import Policy
 from ai_arch_toolkit.core._state import State, StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
+from ai_arch_toolkit.toolkit.agents.flows._common import substitute_tools
 from ai_arch_toolkit.toolkit.agents.flows._react import react_flow, react_initial_state
 from ai_arch_toolkit.toolkit.budget import BudgetPolicy
 from ai_arch_toolkit.toolkit.flow._flow import Flow
@@ -61,7 +62,8 @@ def llm_compiler_flow(
         "You are a planning agent. Break the task into a DAG of subtasks.\n"
         "Format each task as:\n$1. Task description [deps: none]\n"
         "$2. Task description [deps: $1]\n$3. Task description [deps: $1, $2]\n"
-        "Use $N references for dependencies."
+        "Use $N references for dependencies.\n\n"
+        "Available tools:\n{tools}"
     ),
     joiner_system: str = (
         "You are a synthesis agent. Given the task and results from all "
@@ -72,7 +74,9 @@ def llm_compiler_flow(
     timeout: float | None = None,
     policy: Policy | None = None,
     budget_policy: BudgetPolicy | None = None,
+    llm_kwargs: dict[str, Any] | None = None,
     planner_llm: LLM | None = None,
+    exec_llm: LLM | None = None,
     exec_tools: ToolGroup | None = None,
     joiner_llm: LLM | None = None,
 ) -> Flow:
@@ -80,10 +84,18 @@ def llm_compiler_flow(
 
     The plan-execute-join cycle with replanning is handled internally in a
     single step. The flow is sequential: compile → (result with answer).
+    ``llm_kwargs`` apply to every phase's LLM calls; ``planner_llm``/
+    ``exec_llm``/``exec_tools``/``joiner_llm`` override the default LLM and
+    tools per phase. A ``{tools}`` token in ``planner_system`` is replaced with
+    the executor's rendered tool catalog; a prompt without the token is never
+    modified.
     """
     plan_llm = planner_llm or llm
+    inner_llm = exec_llm or llm
     inner_tools = exec_tools or tools
     join_llm = joiner_llm or llm
+    extra = llm_kwargs or {}
+    plan_system = substitute_tools(planner_system, inner_tools)
 
     async def compile(snap: StateSnapshot) -> Result:
         """Plan DAG, execute in parallel, join — with optional replanning."""
@@ -94,7 +106,7 @@ def llm_compiler_flow(
 
         for _replan in range(max_replans + 1):
             # PLAN
-            response = await _complete(plan_llm, [user(task)], system=planner_system)
+            response = await _complete(plan_llm, [user(task)], system=plan_system, **extra)
 
             dag: list[_DAGTask] = []
             valid_ids: set[int] = set()
@@ -138,10 +150,11 @@ def llm_compiler_flow(
                     inner_system += f"Subtask: {desc}"
 
                     inner = react_flow(
-                        llm,
+                        inner_llm,
                         inner_tools,
                         system=inner_system,
                         max_iterations=max_react_iterations,
+                        llm_kwargs=llm_kwargs,
                     )  # nested flow inherits the enclosing scope; its own budget_policy is ignored
 
                     state = State(operational=react_initial_state(task))
@@ -166,6 +179,7 @@ def llm_compiler_flow(
                 join_llm,
                 [user(f"Task: {task}\n\nResults:\n{results_block}")],
                 system=joiner_system,
+                **extra,
             )
 
             first_line = join_response.text.strip().split("\n")[0]

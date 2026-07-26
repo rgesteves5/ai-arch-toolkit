@@ -11,6 +11,7 @@ from ai_arch_toolkit.core._policy import Policy
 from ai_arch_toolkit.core._state import State, StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
+from ai_arch_toolkit.toolkit.agents.flows._common import substitute_tools
 from ai_arch_toolkit.toolkit.agents.flows._react import react_flow, react_initial_state
 from ai_arch_toolkit.toolkit.budget import BudgetPolicy
 from ai_arch_toolkit.toolkit.flow._flow import Flow
@@ -27,7 +28,8 @@ def plan_execute_flow(
     max_iterations_per_step: int = 3,
     planner_system: str = (
         "You are a planning agent. Break the task into numbered steps.\n"
-        "Format: 1. First step\n2. Second step\n..."
+        "Format: 1. First step\n2. Second step\n...\n\n"
+        "Available tools:\n{tools}"
     ),
     solver_system: str = (
         "You are a solving agent. Given the task, plan, and results "
@@ -36,6 +38,7 @@ def plan_execute_flow(
     timeout: float | None = None,
     policy: Policy | None = None,
     budget_policy: BudgetPolicy | None = None,
+    llm_kwargs: dict[str, Any] | None = None,
     planner_llm: LLM | None = None,
     exec_llm: LLM | None = None,
     exec_tools: ToolGroup | None = None,
@@ -44,12 +47,20 @@ def plan_execute_flow(
     """Create a PlanExecute Flow — plan, execute each step via ReAct, solve.
 
     The plan+execute cycle handles replanning internally. The flow is two
-    sequential steps: plan_and_execute → solve.
+    sequential steps: plan_and_execute → solve. ``llm_kwargs`` apply to every
+    phase's LLM calls; ``planner_llm``/``exec_llm``/``exec_tools``/``solver_llm``
+    override the default LLM and tools per phase. A ``{tools}`` token in
+    ``planner_system`` is replaced with the executor's rendered tool catalog;
+    a prompt without the token is never modified.
     """
     plan_llm = planner_llm or llm
     inner_llm = exec_llm or llm
     inner_tools = exec_tools or tools
     solve_llm = solver_llm or llm
+    extra = llm_kwargs or {}
+    # "{tools}" resolves against the executor's tools, so the plan matches what
+    # the execution phase can actually call.
+    plan_system = substitute_tools(planner_system, inner_tools)
 
     async def plan_and_execute(snap: StateSnapshot) -> Result:
         """Plan, execute each step, and optionally replan."""
@@ -59,7 +70,7 @@ def plan_execute_flow(
 
         for _attempt in range(max_replans + 1):
             # PLAN
-            response = await plan_llm.complete([user(task)], system=planner_system)
+            response = await plan_llm.complete([user(task)], system=plan_system, **extra)
             plan_text = response.text
             planned_steps = _STEP_RE.findall(plan_text)
 
@@ -82,6 +93,7 @@ def plan_execute_flow(
                     inner_tools,
                     system=inner_system,
                     max_iterations=max_iterations_per_step,
+                    llm_kwargs=llm_kwargs,
                 )
 
                 state = State(operational=react_initial_state(step_desc))
@@ -119,6 +131,7 @@ def plan_execute_flow(
         response = await solve_llm.complete(
             [user(f"Task: {task}\n\nPlan:\n{plan_text}\n\nResults:\n{results_block}")],
             system=solver_system,
+            **extra,
         )
 
         return Result(

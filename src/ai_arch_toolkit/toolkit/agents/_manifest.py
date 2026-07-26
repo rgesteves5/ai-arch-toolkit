@@ -32,6 +32,7 @@ __all__ = [
 ]
 
 _SUFFIXES = (".agent.yaml", ".agent.yml", ".agent.json", ".agent.toml")
+_RENDERED_SUFFIXES = (".prompt.yaml", ".prompt.yml", ".prompt.json", ".prompt.toml", *_SUFFIXES)
 _TOP_LEVEL_FIELDS = frozenset(
     {
         "description",
@@ -60,6 +61,7 @@ _STRATEGY_FIELDS = frozenset(
         "max_iterations",
         "name",
         "parallel_tool_calls",
+        "phases",
         "show_turn_counter",
         "strip_tools_on_final",
         "system",
@@ -77,6 +79,7 @@ _MODEL_FIELDS = frozenset(
         "temperature",
     }
 )
+_PHASE_FIELDS = frozenset({"model", "system", "system_file"})
 _PROMPT_FIELDS = frozenset(
     {
         "input_adapter",
@@ -166,6 +169,12 @@ class ResolvedAgentManifest:
         Provider/model construction, prompt rendering, tool factories, and schema-id
         registries remain application concerns. ``system`` and ``output_schema`` let
         an application supply their already-resolved runtime values.
+
+        Per-phase prompts declared under ``strategy.phases`` fold into the spec's
+        canonical ``<phase>_system`` knobs; ``system_file`` content is read here,
+        at bridge time, and re-verified against the load-time fingerprint — a
+        file that changed since the manifest was loaded raises instead of running
+        unaudited content.
         """
         strategy = _mapping(self.data.get("strategy", {}), "strategy")
         knobs = dict(_mapping(strategy.get("knobs", {}), "strategy.knobs"))
@@ -177,6 +186,12 @@ class ResolvedAgentManifest:
         ):
             if field in strategy:
                 knobs[field] = strategy[field]
+        for name, value in _mapping(strategy.get("phases", {}), "strategy.phases").items():
+            phase = _mapping(value, f"strategy.phases.{name}")
+            if "system" in phase:
+                knobs[f"{name}_system"] = str(phase["system"])
+            elif "system_file" in phase:
+                knobs[f"{name}_system"] = self._read_phase_prompt(name, str(phase["system_file"]))
         limits = _mapping(self.data.get("limits", {}), "limits")
         timeout = strategy.get("timeout", limits.get("timeout_seconds"))
         configured_system = strategy.get("system", "")
@@ -190,6 +205,46 @@ class ResolvedAgentManifest:
             llm_kwargs=dict(_mapping(strategy.get("llm_kwargs", {}), "strategy.llm_kwargs")),
             output_schema=output_schema,
         )
+
+    def _read_phase_prompt(self, name: str, raw_path: str) -> str:
+        """Read a phase ``system_file``, re-verifying it against the load-time hash."""
+        path = Path(raw_path)
+        try:
+            payload = path.read_bytes()
+        except OSError as exc:
+            raise AgentManifestError(
+                f"could not read strategy.phases.{name}.system_file: {exc}"
+            ) from exc
+        key = f"strategy.phases.{name}.system_file:{_portable(path, self.allowed_roots)}"
+        expected = self.referenced_fingerprints.get(key)
+        digest = "sha256:" + hashlib.sha256(payload).hexdigest()
+        if expected is not None and digest != expected:
+            raise AgentManifestError(
+                f"strategy.phases.{name}.system_file changed since the manifest was "
+                f"loaded; reload the manifest (expected {expected}, found {digest})"
+            )
+        try:
+            return payload.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise AgentManifestError(
+                f"strategy.phases.{name}.system_file must be UTF-8 text: {exc}"
+            ) from exc
+
+    def phase_models(self) -> dict[str, dict[str, Any]]:
+        """Return per-phase model configurations declared under ``strategy.phases``.
+
+        Mirrors the top-level ``model`` section contract: validated data that the
+        application resolves into runtime LLMs (directly, or via
+        ``agent_from_manifest``'s ``llm_factory``).
+        """
+        strategy = _mapping(self.data.get("strategy", {}), "strategy")
+        models: dict[str, dict[str, Any]] = {}
+        for name, value in _mapping(strategy.get("phases", {}), "strategy.phases").items():
+            phase = _mapping(value, f"strategy.phases.{name}")
+            model = phase.get("model")
+            if model is not None:
+                models[str(name)] = _thaw(model)
+        return models
 
     def budget_policy(self) -> BudgetPolicy | None:
         """Build hard run-level budget caps declared under ``limits``.
@@ -430,17 +485,11 @@ def _validate_manifest(data: Mapping[str, Any], path: Path, *, resolved: bool) -
         for field in ("knobs", "llm_kwargs"):
             if field in strategy:
                 _mapping(strategy[field], f"strategy.{field}")
+        _validate_phases(strategy)
 
     model = _optional_mapping(data, "model", path)
     if model is not None:
-        _reject_unknown(model, _MODEL_FIELDS, "model")
-        for field in ("base_url", "model", "profile", "provider", "structured_output_mode"):
-            _optional_string(model, field, "model")
-        _positive_int(model, "max_tokens", "model")
-        if "temperature" in model:
-            value = model["temperature"]
-            if not _is_number(value) or not 0 <= float(value) <= 2:
-                raise AgentManifestError("model.temperature must be a number between 0 and 2")
+        _validate_model_section(model, "model")
 
     prompts = _optional_mapping(data, "prompts", path)
     if prompts is not None:
@@ -501,6 +550,52 @@ def _validate_manifest(data: Mapping[str, Any], path: Path, *, resolved: bool) -
                 raise AgentManifestError("agent profile names must be non-empty strings")
             profile = _mapping(value, f"profiles.{name}")
             _validate_profile(profile, path)
+
+
+def _validate_model_section(model: Mapping[str, Any], context: str) -> None:
+    _reject_unknown(model, _MODEL_FIELDS, context)
+    for field in ("base_url", "model", "profile", "provider", "structured_output_mode"):
+        _optional_string(model, field, context)
+    _positive_int(model, "max_tokens", context)
+    if "temperature" in model:
+        value = model["temperature"]
+        if not _is_number(value) or not 0 <= float(value) <= 2:
+            raise AgentManifestError(f"{context}.temperature must be a number between 0 and 2")
+
+
+def _validate_phases(strategy: Mapping[str, Any]) -> None:
+    """Validate the ``strategy.phases`` section shape (loader-level, registry-agnostic)."""
+    phases = strategy.get("phases")
+    if phases is None:
+        return
+    phases_map = _mapping(phases, "strategy.phases")
+    knobs = strategy.get("knobs")
+    knob_map = knobs if isinstance(knobs, Mapping) else {}
+    for name, value in phases_map.items():
+        if not isinstance(name, str) or not name:
+            raise AgentManifestError("strategy.phases names must be non-empty strings")
+        context = f"strategy.phases.{name}"
+        phase = _mapping(value, context)
+        _reject_unknown(phase, _PHASE_FIELDS, context)
+        for field in ("system", "system_file"):
+            _optional_string(phase, field, context)
+        if "system" in phase and "system_file" in phase:
+            raise AgentManifestError(f"{context} must declare system or system_file, not both")
+        file_value = phase.get("system_file")
+        if isinstance(file_value, str) and file_value.endswith(_RENDERED_SUFFIXES):
+            raise AgentManifestError(
+                f"{context}.system_file must reference verbatim prompt text, not a "
+                "prompt/agent manifest; render templates in the application and "
+                "declare the result"
+            )
+        if ("system" in phase or "system_file" in phase) and f"{name}_system" in knob_map:
+            raise AgentManifestError(
+                f"{context} and strategy.knobs.{name}_system are both set; "
+                "declare the phase prompt in one place"
+            )
+        model = phase.get("model")
+        if model is not None:
+            _validate_model_section(_mapping(model, f"{context}.model"), f"{context}.model")
 
 
 def _validate_profile(data: Mapping[str, Any], path: Path) -> None:
@@ -588,6 +683,26 @@ def _resolve_path_fields(
         path = (base / value).resolve()
         _require_allowed(path, roots, context=f"{context_prefix}{section}.{field}")
         section_value[field] = str(path)
+    for name, phase in _phase_sections(data):
+        value = phase.get("system_file")
+        if not isinstance(value, str) or not value or "://" in value:
+            continue
+        path = (base / value).resolve()
+        _require_allowed(
+            path, roots, context=f"{context_prefix}strategy.phases.{name}.system_file"
+        )
+        phase["system_file"] = str(path)
+
+
+def _phase_sections(data: Mapping[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    """Return mutable (name, phase) pairs under ``strategy.phases``, if present."""
+    strategy = data.get("strategy")
+    if not isinstance(strategy, dict):
+        return []
+    phases = strategy.get("phases")
+    if not isinstance(phases, dict):
+        return []
+    return [(str(name), phase) for name, phase in phases.items() if isinstance(phase, dict)]
 
 
 def _validate_manifest_suffix(path: Path, *, context: str) -> None:
@@ -612,6 +727,16 @@ def _referenced_fingerprints(data: Mapping[str, Any], roots: tuple[Path, ...]) -
         if not path.is_file():
             raise AgentManifestError(f"referenced file does not exist: {path}")
         fingerprints[f"{section}.{field}:{_portable(path, roots)}"] = _file_fingerprint(path)
+    for name, phase in _phase_sections(data):
+        value = phase.get("system_file")
+        if not isinstance(value, str) or not value or "://" in value:
+            continue
+        path = Path(value).resolve()
+        _require_allowed(path, roots, context=f"strategy.phases.{name}.system_file")
+        if not path.is_file():
+            raise AgentManifestError(f"referenced file does not exist: {path}")
+        key = f"strategy.phases.{name}.system_file:{_portable(path, roots)}"
+        fingerprints[key] = _file_fingerprint(path)
     return dict(sorted(fingerprints.items()))
 
 
@@ -624,6 +749,10 @@ def _portable_config(data: Mapping[str, Any], roots: tuple[Path, ...]) -> dict[s
         value = section_value.get(field)
         if isinstance(value, str) and value and "://" not in value:
             section_value[field] = _portable(Path(value), roots)
+    for _name, phase in _phase_sections(portable):
+        value = phase.get("system_file")
+        if isinstance(value, str) and value and "://" not in value:
+            phase["system_file"] = _portable(Path(value), roots)
     return portable
 
 

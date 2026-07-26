@@ -32,6 +32,7 @@ def reflexion_flow(
     timeout: float | None = None,
     policy: Policy | None = None,
     budget_policy: BudgetPolicy | None = None,
+    llm_kwargs: dict[str, Any] | None = None,
     exec_llm: LLM | None = None,
     exec_tools: ToolGroup | None = None,
     reflect_llm: LLM | None = None,
@@ -50,6 +51,7 @@ def reflexion_flow(
         timeout: Overall timeout in seconds.
         policy: Optional execution policy.
         budget_policy: Optional cumulative runtime budget for the flow.
+        llm_kwargs: Additional kwargs passed to every phase's LLM call.
         exec_llm: Override LLM for the executor (inner ReAct).
         exec_tools: Override tools for the executor.
         reflect_llm: Override LLM for the reflector.
@@ -57,6 +59,7 @@ def reflexion_flow(
     inner_llm = exec_llm or llm
     inner_tools = exec_tools or tools
     reflector_llm = reflect_llm or llm
+    extra = llm_kwargs or {}
 
     async def attempt(snap: StateSnapshot) -> Result:
         """Run inner ReAct and return the answer."""
@@ -72,6 +75,7 @@ def reflexion_flow(
             inner_tools,
             system=inner_system,
             max_iterations=max_iterations,
+            llm_kwargs=llm_kwargs,
         )
 
         state = State(operational=react_initial_state(task))
@@ -120,6 +124,7 @@ def reflexion_flow(
                 )
             ],
             system=reflect_system,
+            **extra,
         )
 
         reflections.append(response.text)

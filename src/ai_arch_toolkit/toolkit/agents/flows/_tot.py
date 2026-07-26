@@ -35,6 +35,7 @@ def tot_flow(
     timeout: float | None = None,
     policy: Policy | None = None,
     budget_policy: BudgetPolicy | None = None,
+    llm_kwargs: dict[str, Any] | None = None,
     gen_llm: LLM | None = None,
     eval_llm: LLM | None = None,
     solver_llm: LLM | None = None,
@@ -53,6 +54,7 @@ def tot_flow(
         timeout: Overall timeout in seconds.
         policy: Optional execution policy.
         budget_policy: Optional cumulative runtime budget for the flow.
+        llm_kwargs: Additional kwargs passed to every phase's LLM call.
         gen_llm: Override LLM for generating candidate thoughts.
         eval_llm: Override LLM for evaluating thoughts.
         solver_llm: Override LLM for final solution.
@@ -60,6 +62,7 @@ def tot_flow(
     generator_llm = gen_llm or llm
     evaluator_llm = eval_llm or llm
     solve_llm = solver_llm or llm
+    extra = llm_kwargs or {}
 
     async def search_step(snap: StateSnapshot) -> Result:
         """One iteration of tree search: select, generate, evaluate, expand."""
@@ -88,6 +91,7 @@ def tot_flow(
                 solve_llm,
                 [user(f"Task: {task}\n\nReasoning so far:\n{state}\n\nProvide the final answer.")],
                 system=system or None,
+                **extra,
             )
             return Result(
                 value=response.text,
@@ -112,6 +116,7 @@ def tot_flow(
                 )
             ],
             system=system or None,
+            **extra,
         )
         candidates = _NUMBERED_RE.findall(gen_response.text)[:n_candidates]
 
@@ -137,6 +142,7 @@ def tot_flow(
                     )
                 ],
                 system=evaluator_system,
+                **extra,
             )
             match = _SCORE_RE.search(eval_response.text)
             score = float(match.group(1)) if match else 0.5
@@ -156,6 +162,7 @@ def tot_flow(
                     )
                 ],
                 system=system or None,
+                **extra,
             )
             return Result(
                 value=response.text,
