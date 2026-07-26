@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from ai_arch_toolkit.core._response import Response, StreamEvent, ThinkingBlock, ToolCall, Usage
@@ -37,6 +38,54 @@ def _parse_retry_after(value: str | None) -> float | None:
     except (ValueError, TypeError):
         logger.debug("Could not parse retry-after header: %r", value)
         return None
+
+
+class LoopAwareClientCache:
+    """Rebuild a cached async SDK client whose pool died with its event loop.
+
+    The sync wrappers drive every call through a fresh ``asyncio.run()`` loop
+    that is closed afterwards. An async SDK client binds its connection pool
+    (httpx, gRPC aio) to the loop that served its first request, so the next
+    call — on a new loop — fails with a connection error. Providers install
+    their client with ``_install_client``; the ``_client`` property rebuilds it
+    from the factory once the loop it served is closed. A client assigned
+    directly (``provider._client = mock`` in tests) has no factory and is never
+    replaced. Using one provider from two concurrently *live* loops remains
+    unsupported.
+    """
+
+    _client_value: Any
+    _client_factory: Callable[[], Any] | None = None
+    _client_loop: asyncio.AbstractEventLoop | None = None
+
+    def _install_client(self, factory: Callable[[], Any]) -> None:
+        """Install an SDK client that ``_client`` may rebuild after loop turnover."""
+        self._client_value = factory()
+        self._client_factory = factory
+        self._client_loop = None
+
+    @property
+    def _client(self) -> Any:
+        if self._client_factory is not None:
+            try:
+                loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+            if loop is not None:
+                if self._client_loop is None:
+                    self._client_loop = loop
+                elif self._client_loop is not loop and self._client_loop.is_closed():
+                    # The dead loop's pool cannot be closed without its loop —
+                    # drop the old client and start fresh on this one.
+                    self._client_value = self._client_factory()
+                    self._client_loop = loop
+        return self._client_value
+
+    @_client.setter
+    def _client(self, value: Any) -> None:
+        self._client_value = value
+        self._client_factory = None
+        self._client_loop = None
 
 
 class BaseProvider(ABC):

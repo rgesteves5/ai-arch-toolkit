@@ -17,6 +17,7 @@ from ai_arch_toolkit.core._providers._base import (
     DEFAULT_THINKING_BUDGET,
     THINKING_EFFORT_BUDGETS,
     BaseProvider,
+    LoopAwareClientCache,
     StreamState,
     _parse_retry_after,
 )
@@ -339,7 +340,7 @@ def _parse_sdk_response(
 # ---------------------------------------------------------------------------
 
 
-class GeminiProvider(BaseProvider):
+class GeminiProvider(LoopAwareClientCache, BaseProvider):
     """Google Gemini provider via the official ``google-genai`` SDK."""
 
     def __init__(
@@ -360,7 +361,7 @@ class GeminiProvider(BaseProvider):
         if timeout is not None:
             # google-genai expects HttpOptions.timeout in milliseconds.
             http_options["timeout"] = int(timeout * 1000)
-        self._client = genai.Client(**client_kwargs)
+        self._install_client(lambda: genai.Client(**client_kwargs))
 
     async def close(self) -> None:
         self._client.close()

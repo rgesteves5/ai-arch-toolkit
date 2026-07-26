@@ -13,7 +13,12 @@ import grpc
 from ai_arch_toolkit.core._content import ImagePart
 from ai_arch_toolkit.core._exceptions import APIError, RateLimitError
 from ai_arch_toolkit.core._pricing import _estimate_response_cost
-from ai_arch_toolkit.core._providers._base import BaseProvider, StreamState, parse_tool_args
+from ai_arch_toolkit.core._providers._base import (
+    BaseProvider,
+    LoopAwareClientCache,
+    StreamState,
+    parse_tool_args,
+)
 from ai_arch_toolkit.core._providers._imports import require_sdk
 from ai_arch_toolkit.core._response import (
     OutputSchema,
@@ -250,7 +255,7 @@ def _grpc_code_to_http(code: grpc.StatusCode) -> int:
 # ---------------------------------------------------------------------------
 
 
-class XAIProvider(BaseProvider):
+class XAIProvider(LoopAwareClientCache, BaseProvider):
     """xAI provider via the official ``xai-sdk`` (gRPC).
 
     Provides access to Grok models with native support for reasoning,
@@ -267,9 +272,11 @@ class XAIProvider(BaseProvider):
         self._model = model
         # Disable transparent gRPC retries; LLM(RetryConfig(...)) owns retries
         # so each physical toolkit attempt is metered and audited.
-        self._client = xai_sdk.AsyncClient(
-            api_key=api_key,
-            channel_options=[("grpc.enable_retries", 0)],
+        self._install_client(
+            lambda: xai_sdk.AsyncClient(
+                api_key=api_key,
+                channel_options=[("grpc.enable_retries", 0)],
+            )
         )
         if timeout is not None:
             warnings.warn(

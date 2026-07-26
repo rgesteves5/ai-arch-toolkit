@@ -109,6 +109,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   models the providers no longer serve: Claude 3.x and 4.0, `o1-mini`/`o3-pro`/
   `o3-deep-research`, Gemini 1.5, and `grok-2`. Stale 6x fast-mode rates were dropped
   from Opus 4.6/4.7 (fast mode was removed on those models).
+- A second sync call on the same `LLM` instance no longer fails with
+  `APIConnectionError`. The sync wrappers run each call on a fresh `asyncio.run()`
+  loop, but every adapter cached its async SDK client, whose connection pool stayed
+  bound to the first (closed) loop. Providers now rebuild the client once the loop it
+  served has closed (`LoopAwareClientCache`, all four adapters); directly assigned
+  clients — e.g. test mocks — are never replaced. Repeated `complete_sync`/`run_sync`
+  calls, notebook usage, and per-test event loops all recover; using one instance
+  from two concurrently live loops remains unsupported.
 - `uv sync --extra dev` now installs `jsonschema` and `jinja2`, so the prompt-template
   tests pass on a fresh dev environment (previously only the `prompts` extra pulled
   them in).

@@ -16,6 +16,7 @@ from ai_arch_toolkit.core._providers._base import (
     DEFAULT_THINKING_BUDGET,
     THINKING_EFFORT_BUDGETS,
     BaseProvider,
+    LoopAwareClientCache,
     StreamEvent,
     StreamState,
     _parse_retry_after,
@@ -332,7 +333,7 @@ def _parse_sdk_response(
 # ---------------------------------------------------------------------------
 
 
-class AnthropicProvider(BaseProvider):
+class AnthropicProvider(LoopAwareClientCache, BaseProvider):
     """Anthropic Messages API provider via the official SDK."""
 
     def __init__(
@@ -351,7 +352,7 @@ class AnthropicProvider(BaseProvider):
             client_kwargs["base_url"] = base_url
         if timeout is not None:
             client_kwargs["timeout"] = timeout
-        self._client = anthropic.AsyncAnthropic(**client_kwargs)
+        self._install_client(lambda: anthropic.AsyncAnthropic(**client_kwargs))
 
     async def close(self) -> None:
         await self._client.close()

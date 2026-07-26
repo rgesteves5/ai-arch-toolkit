@@ -13,6 +13,7 @@ from ai_arch_toolkit.core._exceptions import APIError, RateLimitError
 from ai_arch_toolkit.core._pricing import _estimate_response_cost
 from ai_arch_toolkit.core._providers._base import (
     BaseProvider,
+    LoopAwareClientCache,
     StreamState,
     _parse_retry_after,
     parse_tool_args,
@@ -293,7 +294,7 @@ def _parse_sdk_response(
 # ---------------------------------------------------------------------------
 
 
-class OpenAIProvider(BaseProvider):
+class OpenAIProvider(LoopAwareClientCache, BaseProvider):
     """OpenAI Chat Completions API provider via the official SDK."""
 
     def __init__(
@@ -314,7 +315,7 @@ class OpenAIProvider(BaseProvider):
             import httpx
 
             client_kwargs["timeout"] = httpx.Timeout(timeout)
-        self._client = openai.AsyncOpenAI(**client_kwargs)
+        self._install_client(lambda: openai.AsyncOpenAI(**client_kwargs))
 
     async def close(self) -> None:
         await self._client.close()
