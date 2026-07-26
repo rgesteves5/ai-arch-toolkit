@@ -12,8 +12,10 @@ class TestPricingRegistryDefaults:
     """The module-level singleton loads from _default_pricing.toml."""
 
     def test_has_claude_models(self):
-        assert pricing.has("claude-sonnet-4-20250514")
-        assert pricing.has("claude-opus-4-20250514")
+        assert pricing.has("claude-opus-5")
+        assert pricing.has("claude-sonnet-5")
+        assert pricing.has("claude-fable-5")
+        assert pricing.has("claude-opus-4-8")
 
     def test_has_claude_46_models(self):
         assert pricing.has("claude-opus-4-6-20260101")
@@ -39,8 +41,14 @@ class TestPricingRegistryDefaults:
         assert pricing.has("gpt-5.2")
         assert pricing.has("gpt-5.2-pro")
         assert pricing.has("gpt-5-pro")
+        assert pricing.has("gpt-5.6-sol")
+        assert pricing.has("gpt-5.6-terra")
+        assert pricing.has("gpt-5.6-luna")
 
     def test_has_gemini_models(self):
+        assert pricing.has("gemini-3.6-flash")
+        assert pricing.has("gemini-3.5-flash")
+        assert pricing.has("gemini-3.5-flash-lite")
         assert pricing.has("gemini-3.1-pro-preview-20260301")
         assert pricing.has("gemini-3-flash-preview")
         assert pricing.has("gemini-2.5-flash")
@@ -48,13 +56,16 @@ class TestPricingRegistryDefaults:
         assert pricing.has("gemini-2.0-flash-lite")
 
     def test_has_o_series_models(self):
-        assert pricing.has("o3-pro")
-        assert pricing.has("o3-deep-research")
+        assert pricing.has("o3")
+        assert pricing.has("o3-mini")
         assert pricing.has("o4-mini-deep-research")
         assert pricing.has("o1-pro")
         assert pricing.has("grok-3")
 
     def test_has_grok4_models(self):
+        assert pricing.has("grok-4.5")
+        assert pricing.has("grok-4.20-0309-reasoning")
+        assert pricing.has("grok-build-0.1")
         assert pricing.has("grok-4")
         assert pricing.has("grok-4-1-fast-reasoning")
         assert pricing.has("grok-4-fast-reasoning")
@@ -72,31 +83,31 @@ class TestPricingRegistryDefaults:
 
 class TestPricingRegistryGet:
     def test_exact_prefix_match(self):
-        p = pricing.get("claude-sonnet-4-20250514")
+        p = pricing.get("claude-sonnet-4-6-20260101")
         assert p is not None
         assert p.input == 3.0
 
     def test_longest_prefix_wins(self):
-        # "claude-3-5-sonnet" is longer than "claude-3-sonnet"
-        p = pricing.get("claude-3-5-sonnet-20241022")
+        # "grok-4.5" is longer than "grok-4"
+        p = pricing.get("grok-4.5")
         assert p is not None
-        assert p.input == 3.0
+        assert p.input == 2.0  # grok-4.5, not grok-4's $1.25
 
     def test_gpt_4o_mini_before_gpt_4o(self):
         p = pricing.get("gpt-4o-mini-2024-07-18")
         assert p is not None
         assert p.input == 0.15
 
-    def test_opus_46_wins_over_opus_4(self):
-        # "claude-opus-4-6" is longer than "claude-opus-4"
-        p = pricing.get("claude-opus-4-6-20260101")
+    def test_gpt56_variant_wins_over_gpt5(self):
+        # "gpt-5.6-sol" is longer than "gpt-5"
+        p = pricing.get("gpt-5.6-sol")
         assert p is not None
-        assert p.input == 5.0  # opus 4.6, not opus 4.0's $15
+        assert p.input == 5.0  # gpt-5.6-sol, not gpt-5's $1.25
 
     def test_haiku_45_specific_prefix(self):
         p = pricing.get("claude-haiku-4-5-20251001")
         assert p is not None
-        assert p.input == 1.0  # haiku 4.5, not haiku 4's $0.80
+        assert p.input == 1.0
 
     def test_o3_updated_pricing(self):
         p = pricing.get("o3")
@@ -153,8 +164,8 @@ class TestPricingRegistryRegister:
 
     def test_override_existing(self):
         reg = PricingRegistry()
-        reg.register("claude-sonnet-4", ModelPricing(input=99.0, output=99.0))
-        p = reg.get("claude-sonnet-4-20250514")
+        reg.register("claude-sonnet-4-6", ModelPricing(input=99.0, output=99.0))
+        p = reg.get("claude-sonnet-4-6-20260101")
         assert p is not None
         assert p.input == 99.0
 
@@ -173,13 +184,13 @@ class TestPricingRegistryReset:
         reg.reset()
         assert not reg.has("custom-v1")
         # Defaults still there
-        assert reg.has("claude-sonnet-4-20250514")
+        assert reg.has("claude-sonnet-4-6-20260101")
 
 
 class TestEstimateCost:
     def test_known_model(self):
         cost = pricing.estimate_cost(
-            "claude-sonnet-4-20250514", input_tokens=1000, output_tokens=500
+            "claude-sonnet-4-6-20260101", input_tokens=1000, output_tokens=500
         )
         expected = 3.0 * 1000 / 1_000_000 + 15.0 * 500 / 1_000_000
         assert cost is not None
@@ -191,7 +202,7 @@ class TestEstimateCost:
 
     def test_cache_tokens(self):
         cost = pricing.estimate_cost(
-            "claude-sonnet-4-20250514",
+            "claude-sonnet-4-6-20260101",
             input_tokens=1000,
             output_tokens=0,
             cache_write_tokens=500,
@@ -227,7 +238,7 @@ class TestEstimateCost:
 
     def test_batch_pricing(self):
         cost = pricing.estimate_cost(
-            "claude-sonnet-4-20250514",
+            "claude-sonnet-4-6-20260101",
             input_tokens=1000,
             output_tokens=500,
             is_batch=True,
@@ -306,8 +317,8 @@ class TestLongContextPricing:
         assert abs(cost - expected) < 1e-10
 
     def test_no_long_context_for_models_without_threshold(self):
-        # claude-haiku-4 has no long_context_threshold — always standard
-        p = pricing.get("claude-haiku-4-20250514")
+        # claude-haiku-4-5 has no long_context_threshold — always standard
+        p = pricing.get("claude-haiku-4-5-20251001")
         assert p is not None
         assert p.long_context_threshold is None
 
@@ -322,36 +333,48 @@ class TestLongContextPricing:
 class TestFastModePricing:
     def test_fast_mode(self):
         cost = pricing.estimate_cost(
-            "claude-opus-4-6-20260101",
+            "claude-opus-5",
             input_tokens=1000,
             output_tokens=500,
             is_fast=True,
         )
-        expected = 30.0 * 1000 / 1_000_000 + 150.0 * 500 / 1_000_000
+        expected = 10.0 * 1000 / 1_000_000 + 50.0 * 500 / 1_000_000
         assert cost is not None
         assert abs(cost - expected) < 1e-10
 
     def test_fast_mode_takes_priority_over_batch(self):
         cost = pricing.estimate_cost(
-            "claude-opus-4-6-20260101",
+            "claude-opus-5",
             input_tokens=1000,
             output_tokens=500,
             is_fast=True,
             is_batch=True,
         )
-        expected = 30.0 * 1000 / 1_000_000 + 150.0 * 500 / 1_000_000
+        expected = 10.0 * 1000 / 1_000_000 + 50.0 * 500 / 1_000_000
         assert cost is not None
         assert abs(cost - expected) < 1e-10
 
     def test_fast_mode_takes_priority_over_long_context(self):
-        cost = pricing.estimate_cost(
-            "claude-opus-4-6-20260101",
-            input_tokens=300_000,
-            output_tokens=1000,
-            is_fast=True,
+        # No bundled model carries both fast and long-context rates today, so
+        # exercise the precedence with a registered synthetic entry.
+        reg = PricingRegistry()
+        reg.register(
+            "fast-long",
+            ModelPricing(
+                input=1.0,
+                output=2.0,
+                fast_input=5.0,
+                fast_output=10.0,
+                long_context_threshold=200_000,
+                long_context_input=2.0,
+                long_context_output=4.0,
+            ),
+        )
+        cost = reg.estimate_cost(
+            "fast-long-v1", input_tokens=300_000, output_tokens=1000, is_fast=True
         )
         # Should use fast rates, not long-context
-        expected = 30.0 * 300_000 / 1_000_000 + 150.0 * 1000 / 1_000_000
+        expected = 5.0 * 300_000 / 1_000_000 + 10.0 * 1000 / 1_000_000
         assert cost is not None
         assert abs(cost - expected) < 1e-10
 
@@ -370,7 +393,7 @@ class TestFastModePricing:
     def test_fast_fallback_to_batch_when_both_flags_set(self):
         # No fast pricing → falls through to batch
         cost = pricing.estimate_cost(
-            "claude-sonnet-4-20250514",
+            "claude-sonnet-4-6-20260101",
             input_tokens=1000,
             output_tokens=500,
             is_fast=True,
@@ -381,15 +404,15 @@ class TestFastModePricing:
         assert abs(cost - expected) < 1e-10
 
     def test_model_pricing_fast_fields(self):
-        p = pricing.get("claude-opus-4-6-20260101")
+        p = pricing.get("claude-opus-5")
         assert p is not None
-        assert p.fast_input == 30.0
-        assert p.fast_output == 150.0
+        assert p.fast_input == 10.0
+        assert p.fast_output == 50.0
 
 
 class TestConvenienceEstimateCost:
     def test_returns_float_for_known(self):
-        cost = estimate_cost("claude-sonnet-4-20250514", input_tokens=1000, output_tokens=500)
+        cost = estimate_cost("claude-sonnet-4-6-20260101", input_tokens=1000, output_tokens=500)
         assert isinstance(cost, float)
         assert cost > 0
 
@@ -397,11 +420,9 @@ class TestConvenienceEstimateCost:
         assert estimate_cost("unknown-model", input_tokens=1000) is None
 
     def test_is_fast_passthrough(self):
-        cost = estimate_cost(
-            "claude-opus-4-6-20260101", input_tokens=1000, output_tokens=500, is_fast=True
-        )
+        cost = estimate_cost("claude-opus-5", input_tokens=1000, output_tokens=500, is_fast=True)
         assert cost is not None
-        expected = 30.0 * 1000 / 1_000_000 + 150.0 * 500 / 1_000_000
+        expected = 10.0 * 1000 / 1_000_000 + 50.0 * 500 / 1_000_000
         assert abs(cost - expected) < 1e-10
 
 
@@ -429,7 +450,7 @@ class TestLoad:
         # Custom model loaded
         assert reg.has("custom-v1")
         # Defaults still present
-        assert reg.has("claude-sonnet-4-20250514")
+        assert reg.has("claude-sonnet-4-6-20260101")
 
     def test_load_long_context_fields(self, tmp_path: Path):
         toml_content = (
@@ -479,7 +500,7 @@ class TestModelPricingNone:
         assert p.fast_input is None
 
     def test_claude_has_cache_pricing(self):
-        p = pricing.get("claude-sonnet-4-20250514")
+        p = pricing.get("claude-sonnet-4-6-20260101")
         assert p is not None
         assert p.cache_write is not None
         assert p.cache_read is not None

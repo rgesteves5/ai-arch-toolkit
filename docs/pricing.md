@@ -17,16 +17,16 @@ Costs come from a bundled pricing registry (`_default_pricing.toml`) covering th
 from ai_arch_toolkit import pricing
 
 # Check if a model has pricing
-pricing.has("claude-sonnet-4-20250514")  # True
+pricing.has("claude-sonnet-5")  # True
 
 # Get pricing details
-p = pricing.get("claude-sonnet-4-20250514")
+p = pricing.get("claude-sonnet-5")
 p.input   # USD per 1M input tokens
 p.output  # USD per 1M output tokens
 
 # Estimate cost (None means the model has no registered pricing)
 cost = pricing.estimate_cost(
-    "claude-sonnet-4-20250514",
+    "claude-sonnet-5",
     input_tokens=1000,
     output_tokens=500,
 )

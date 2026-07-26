@@ -121,7 +121,7 @@ Provider-hosted tools run on the provider's side (no local execution). Pass them
 ```python
 from ai_arch_toolkit import LLM, code_execution, web_search
 
-llm = LLM("claude-sonnet-4-20250514")
+llm = LLM("claude-sonnet-5")
 response = llm.complete_sync(
     "Plot the first 10 primes and tell me their sum.",
     tools=[code_execution(), web_search()],

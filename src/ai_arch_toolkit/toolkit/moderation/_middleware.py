@@ -29,7 +29,7 @@ class ModerationMiddleware:
 
         mod = OpenAIModerator()
         mw = ModerationMiddleware(input=mod, on_flagged="raise")
-        llm = LLM("claude-sonnet-4-20250514", middleware=[mw])
+        llm = LLM("claude-sonnet-5", middleware=[mw])
     """
 
     __slots__ = ("_input", "_on_flagged", "_output")

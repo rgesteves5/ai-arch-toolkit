@@ -21,7 +21,7 @@ class CostTracker:
         return response
 
 tracker = CostTracker()
-llm = LLM("claude-sonnet-4-20250514", middleware=[tracker])
+llm = LLM("claude-sonnet-5", middleware=[tracker])
 ```
 
 ---
@@ -90,7 +90,7 @@ class CostGuard:
             raise RuntimeError(f"Budget exceeded: ${self.spent:.2f}")
         return res
 
-llm = LLM("claude-sonnet-4-20250514", middleware=[Logger(), CostGuard(1.00)])
+llm = LLM("claude-sonnet-5", middleware=[Logger(), CostGuard(1.00)])
 # Request:  Logger.before → CostGuard.before (no-op) → Provider
 # Response: CostGuard.after → Logger.after ← Provider
 ```
@@ -108,7 +108,7 @@ Proactive client-side rate limiting via a token bucket. Smooths bursts so you st
 ```python
 from ai_arch_toolkit import LLM, RateLimitMiddleware
 
-llm = LLM("claude-sonnet-4-20250514", middleware=[RateLimitMiddleware(requests_per_minute=60)])
+llm = LLM("claude-sonnet-5", middleware=[RateLimitMiddleware(requests_per_minute=60)])
 # burst defaults to int(requests_per_minute); override with burst=...
 ```
 
@@ -121,7 +121,7 @@ Emits an OpenTelemetry span per LLM call, tagged with input/output tokens, cost,
 ```python
 from ai_arch_toolkit import LLM, TracingMiddleware
 
-llm = LLM("claude-sonnet-4-20250514", middleware=[TracingMiddleware(tracer_name="my-app")])
+llm = LLM("claude-sonnet-5", middleware=[TracingMiddleware(tracer_name="my-app")])
 ```
 
 ### MemoryMiddleware & ModerationMiddleware

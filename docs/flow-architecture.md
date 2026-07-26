@@ -425,7 +425,7 @@ Every flow factory follows the same pattern:
 from ai_arch_toolkit.core import LLM, State, ToolGroup
 from ai_arch_toolkit.toolkit.agents.flows import react_flow, react_initial_state
 
-llm = LLM("claude-sonnet-4-20250514")
+llm = LLM("claude-sonnet-5")
 tools = ToolGroup(my_tool_a, my_tool_b)
 
 # Create the flow
@@ -451,9 +451,9 @@ Most flow factories accept override parameters for different phases:
 flow = plan_execute_flow(
     llm,
     tools,
-    planner_llm=LLM("claude-sonnet-4-20250514"),    # cheap model for planning
-    exec_llm=LLM("claude-sonnet-4-20250514"),        # same for execution
-    solver_llm=LLM("claude-opus-4-0-20250514"),      # expensive model for final answer
+    planner_llm=LLM("claude-sonnet-5"),    # cheap model for planning
+    exec_llm=LLM("claude-sonnet-5"),        # same for execution
+    solver_llm=LLM("claude-opus-5"),      # expensive model for final answer
 )
 ```
 
@@ -608,7 +608,7 @@ A custom flow that plans in parallel, then synthesizes:
 from ai_arch_toolkit.core import LLM, State, Step, Result, Policy, StateSnapshot
 from ai_arch_toolkit.toolkit.flow import Flow, FlowStep, Scope
 
-llm = LLM("claude-sonnet-4-20250514")
+llm = LLM("claude-sonnet-5")
 
 async def research_tech(snap: StateSnapshot) -> Result:
     task = snap.require("task")

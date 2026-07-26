@@ -22,7 +22,7 @@ The `LLM` class is the single interface to all providers. The model prefix auto-
 ```python
 from ai_arch_toolkit import LLM
 
-llm = LLM("claude-sonnet-4-20250514")  # → Anthropic
+llm = LLM("claude-sonnet-5")  # → Anthropic
 llm = LLM("gpt-4o")                    # → OpenAI
 llm = LLM("gemini-2.0-flash")          # → Gemini
 llm = LLM("grok-2")                    # → xAI
@@ -105,8 +105,8 @@ reads/writes from being charged again at the regular input rate.
 
 ```python
 llm = LLM(
-    "claude-opus-4-0-20250514",
-    fallback=["claude-sonnet-4-20250514", "gpt-4o"],
+    "claude-opus-5",
+    fallback=["claude-sonnet-5", "gpt-4o"],
     fallback_on=(APIError, TimeoutError),  # default
 )
 
@@ -124,7 +124,7 @@ A string fallback routes by its own model name (a recognizable model fails over 
 from ai_arch_toolkit import RetryConfig
 
 llm = LLM(
-    "claude-sonnet-4-20250514",
+    "claude-sonnet-5",
     retry=RetryConfig(
         max_retries=3,
         base_delay=1.0,      # exponential backoff
@@ -216,7 +216,7 @@ For high-volume, non-interactive workloads, submit many requests as a single bat
 import dataclasses
 from ai_arch_toolkit import LLM, BatchRequest, user
 
-llm = LLM("claude-sonnet-4-20250514")
+llm = LLM("claude-sonnet-5")
 
 requests = [
     BatchRequest(messages=[user("Summarize the French Revolution.")], custom_id="job-1"),

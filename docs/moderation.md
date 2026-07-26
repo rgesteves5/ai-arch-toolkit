@@ -28,7 +28,7 @@ Uses any `LLM` as a classifier against your own category list — handy for cust
 from ai_arch_toolkit import LLM
 from ai_arch_toolkit.toolkit.moderation import LLMModerator
 
-classifier = LLM("claude-haiku-4-5-20251001")
+classifier = LLM("claude-haiku-4-5")
 mod = LLMModerator(classifier, ["Violence", "Harassment", "PII"], fail_behavior="closed")
 result = await mod.moderate("some text")
 ```
@@ -52,7 +52,7 @@ mw = ModerationMiddleware(
     output=None,                 # optionally screen the model's reply too
     on_flagged="raise",          # "raise" -> ModerationError, "warn" -> log only
 )
-llm = LLM("claude-sonnet-4-20250514", middleware=[mw])
+llm = LLM("claude-sonnet-5", middleware=[mw])
 
 response = llm.complete_sync("User prompt here")  # raises ModerationError if flagged
 ```

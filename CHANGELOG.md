@@ -94,6 +94,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `uv lock --upgrade` brought every transitive dependency to its latest compatible version (pydantic 2.13, urllib3 2.7, requests 2.34, websockets 16, xai-sdk 1.12, ruff 0.15.13, …); resolved the four Dependabot alerts.
 
 ### Fixed
+- Examples and docs no longer reference retired Anthropic model ids: the retired
+  `claude-sonnet-4-20250514` (404 since 2026-06-15) and the malformed
+  `claude-opus-4-0-20250514` became `claude-sonnet-5` / `claude-opus-5`, and the dated
+  `claude-haiku-4-5-20251001` was normalized to the recommended `claude-haiku-4-5`
+  alias.
+- **Bundled pricing table refreshed against each provider's live model list**
+  (2026-07-26). Added: `claude-fable-5`/`claude-mythos-5`, `claude-opus-5` (with 2x
+  fast-mode rates), `claude-sonnet-5`, and `claude-opus-4-8` — the latter previously
+  fell through the `claude-opus-4` fallback prefix and was **billed at 3x its real
+  price**; OpenAI `gpt-5.6-sol`/`-terra`/`-luna`; `gemini-3.6-flash`,
+  `gemini-3.5-flash`, `gemini-3.5-flash-lite`; `grok-4.5` and `grok-build-0.1`, plus
+  the 200k-prompt long-context tiers on all current Grok entries. Removed entries for
+  models the providers no longer serve: Claude 3.x and 4.0, `o1-mini`/`o3-pro`/
+  `o3-deep-research`, Gemini 1.5, and `grok-2`. Stale 6x fast-mode rates were dropped
+  from Opus 4.6/4.7 (fast mode was removed on those models).
 - The Anthropic adapter now drops the client-default `temperature` for every model
   family that rejects sampling parameters — Opus 4.7/4.8/5, Sonnet 5, and Fable/Mythos 5,
   matched by prefix. Previously only `claude-opus-4-7` was covered, so every call to a

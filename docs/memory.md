@@ -249,7 +249,7 @@ mw = MemoryMiddleware(
     k=3,
     header="Relevant memories:",
 )
-llm = LLM("claude-sonnet-4-20250514", middleware=[mw])
+llm = LLM("claude-sonnet-5", middleware=[mw])
 # Every call now gets the top-k memories prepended to the system prompt,
 # and each turn is recorded back into the store.
 ```

@@ -1,18 +1,74 @@
 # Default pricing table — USD per 1M tokens
-# Last updated: 2026-05-19
+# Last updated: 2026-07-26 (verified against each provider's live model list)
 # Override with: pricing.load("your_file.toml") or pricing.register(...)
-# Known simplification: cache_write uses Anthropic's 5-min TTL tier (1.25x input).
-# The 1-hour tier (2x input) can be overridden via pricing.register().
+# Known simplifications: cache_write uses Anthropic's 5-min TTL tier (1.25x input) —
+# the 1-hour tier (2x input) can be overridden via pricing.register(); tiered
+# cached-input rates on long prompts (xAI, Gemini) are not modeled — cache_read
+# uses the base tier.
 
 # ═══════════════════════════════════════════════════════════════════
 # Anthropic Claude
-# Source: https://docs.anthropic.com/en/docs/about-claude/models
+# Source: https://platform.claude.com/docs/en/pricing
+# Retired families (Claude 3.x, Claude 4.0) are intentionally absent — the API
+# returns 404 for them.
 # ═══════════════════════════════════════════════════════════════════
+
+# ── Claude 5 ──
+
+# Opus 5, Sonnet 5, and Fable/Mythos 5 ship with full 1M context at standard
+# pricing (no long-context tier). Fast mode (Opus 5 only) is 2x standard rates.
+[claude-fable-5]
+input = 10.0
+output = 50.0
+cache_write = 12.50
+cache_read = 1.0
+batch_input = 5.0
+batch_output = 25.0
+
+# Same model and pricing as Fable 5, distributed through Project Glasswing.
+[claude-mythos-5]
+input = 10.0
+output = 50.0
+cache_write = 12.50
+cache_read = 1.0
+batch_input = 5.0
+batch_output = 25.0
+
+[claude-opus-5]
+input = 5.0
+output = 25.0
+cache_write = 6.25
+cache_read = 0.50
+batch_input = 2.50
+batch_output = 12.50
+fast_input = 10.0
+fast_output = 50.0
+
+# List price; an introductory $2/$10 rate applies through 2026-08-31.
+[claude-sonnet-5]
+input = 3.0
+output = 15.0
+cache_write = 3.75
+cache_read = 0.30
+batch_input = 1.50
+batch_output = 7.50
+
+# ── Claude 4.8 ──
+
+# Opus 4.8 supports fast mode, but its fast rates are not published — override
+# via pricing.register() if you use it.
+[claude-opus-4-8]
+input = 5.0
+output = 25.0
+cache_write = 6.25
+cache_read = 0.50
+batch_input = 2.50
+batch_output = 12.50
 
 # ── Claude 4.7 ──
 
-# Opus 4.7 ships with full 1M context at standard pricing (no long-context tier).
-# Fast mode (research preview) is 6x standard rates.
+# Opus 4.7 ships with full 1M context at standard pricing (no long-context
+# tier). Fast mode was removed on 4.7 — no fast rates.
 [claude-opus-4-7]
 input = 5.0
 output = 25.0
@@ -20,13 +76,12 @@ cache_write = 6.25
 cache_read = 0.50
 batch_input = 2.50
 batch_output = 12.50
-fast_input = 30.0
-fast_output = 150.0
 
 # ── Claude 4.6 ──
 
 # Opus 4.6 and Sonnet 4.6 ship with full 1M context at standard pricing
-# (no long-context tier). Fast mode (Opus 4.6 only) is 6x standard rates.
+# (no long-context tier). Opus 4.6 fast mode was retired (requests silently
+# fall back to standard) — no fast rates.
 [claude-opus-4-6]
 input = 5.0
 output = 25.0
@@ -34,8 +89,6 @@ cache_write = 6.25
 cache_read = 0.50
 batch_input = 2.50
 batch_output = 12.50
-fast_input = 30.0
-fast_output = 150.0
 
 [claude-sonnet-4-6]
 input = 3.0
@@ -79,6 +132,7 @@ batch_output = 2.50
 
 # ── Claude 4.1 ──
 
+# Deprecated — retires 2026-08-05; migrate to claude-opus-5.
 [claude-opus-4-1]
 input = 15.0
 output = 75.0
@@ -90,83 +144,37 @@ long_context_threshold = 200_000
 long_context_input = 30.0
 long_context_output = 112.50
 
-# ── Claude 4.0 (fallback for claude-opus-4-20250514 etc.) ──
-
-[claude-opus-4]
-input = 15.0
-output = 75.0
-cache_write = 18.75
-cache_read = 1.50
-batch_input = 7.50
-batch_output = 37.50
-
-[claude-sonnet-4]
-input = 3.0
-output = 15.0
-cache_write = 3.75
-cache_read = 0.30
-batch_input = 1.50
-batch_output = 7.50
-long_context_threshold = 200_000
-long_context_input = 6.0
-long_context_output = 22.50
-
-[claude-haiku-4]
-input = 0.80
-output = 4.0
-cache_write = 1.0
-cache_read = 0.08
-batch_input = 0.40
-batch_output = 2.0
-
-# ── Claude 3.5 ──
-
-[claude-3-5-sonnet]
-input = 3.0
-output = 15.0
-cache_write = 3.75
-cache_read = 0.30
-batch_input = 1.50
-batch_output = 7.50
-
-[claude-3-5-haiku]
-input = 0.80
-output = 4.0
-cache_write = 1.0
-cache_read = 0.08
-batch_input = 0.40
-batch_output = 2.0
-
-# ── Claude 3 ──
-
-[claude-3-opus]
-input = 15.0
-output = 75.0
-cache_write = 18.75
-cache_read = 1.50
-batch_input = 7.50
-batch_output = 37.50
-
-[claude-3-sonnet]
-input = 3.0
-output = 15.0
-cache_write = 3.75
-cache_read = 0.30
-
-[claude-3-haiku]
-input = 0.25
-output = 1.25
-cache_write = 0.30
-cache_read = 0.03
-batch_input = 0.125
-batch_output = 0.625
-
 # ═══════════════════════════════════════════════════════════════════
 # OpenAI
-# Source: https://openai.com/api/pricing/
+# Source: https://developers.openai.com/api/docs/pricing
+# Retired ids (o1-mini, o3-pro, o3-deep-research) are intentionally absent —
+# they no longer appear in /v1/models.
 # ═══════════════════════════════════════════════════════════════════
 
-# ── GPT-5 family ──
+# ── GPT-5.6 family (sol > terra > luna capability tiers) ──
+
+["gpt-5.6-sol"]
+input = 5.0
+output = 30.0
+cache_read = 0.50
+batch_input = 2.50
+batch_output = 15.0
+
+["gpt-5.6-terra"]
+input = 2.50
+output = 15.0
+cache_read = 0.25
+batch_input = 1.25
+batch_output = 7.50
+
+["gpt-5.6-luna"]
+input = 1.0
+output = 6.0
+cache_read = 0.10
+batch_input = 0.50
+batch_output = 3.0
+
+# ── GPT-5 .1–.5 ──
 
 # gpt-5.5 base — covers gpt-5.5 ID only (pro variant is separate below).
 ["gpt-5.5-pro"]
@@ -210,7 +218,7 @@ cache_read = 0.25
 batch_input = 1.25
 batch_output = 7.50
 
-# gpt-5.3 covers gpt-5.3, gpt-5.3-codex, gpt-5.3-codex-spark, gpt-5.3-chat-latest
+# gpt-5.3 covers gpt-5.3-codex, gpt-5.3-codex-spark, gpt-5.3-chat-latest
 # (all share pricing with gpt-5.2 base).
 ["gpt-5.3"]
 input = 1.75
@@ -300,30 +308,23 @@ cache_read = 1.25
 batch_input = 1.25
 batch_output = 5.0
 
-# ── GPT legacy ──
+# ── GPT legacy (still served) ──
 
 [gpt-4-turbo]
 input = 10.0
 output = 30.0
+
+# Bare gpt-4 / gpt-4-0613 — the longer gpt-4o/gpt-4.1/gpt-4-turbo prefixes win
+# for those families.
+[gpt-4]
+input = 30.0
+output = 60.0
 
 ["gpt-3.5-turbo"]
 input = 0.50
 output = 1.50
 
 # ── o-series (reasoning) ──
-
-[o3-pro]
-input = 20.0
-output = 80.0
-batch_input = 10.0
-batch_output = 40.0
-
-[o3-deep-research]
-input = 10.0
-output = 40.0
-cache_read = 2.50
-batch_input = 5.0
-batch_output = 20.0
 
 [o3-mini]
 input = 1.10
@@ -359,13 +360,6 @@ output = 600.0
 batch_input = 75.0
 batch_output = 300.0
 
-[o1-mini]
-input = 1.10
-output = 4.40
-cache_read = 0.55
-batch_input = 0.55
-batch_output = 2.20
-
 [o1]
 input = 15.0
 output = 60.0
@@ -377,9 +371,28 @@ batch_output = 30.0
 # Google Gemini
 # Source: https://ai.google.dev/gemini-api/docs/pricing
 # Note: prices are for text input; audio input is higher on some models.
+# Gemini 1.5 is retired (absent from the live models list) and intentionally
+# absent here.
 # ═══════════════════════════════════════════════════════════════════
 
-# ── Gemini 3.x (preview) ──
+# ── Gemini 3.5 / 3.6 ──
+
+["gemini-3.6-flash"]
+input = 1.50
+output = 7.50
+cache_read = 0.15
+
+["gemini-3.5-flash"]
+input = 1.50
+output = 9.0
+cache_read = 0.15
+
+["gemini-3.5-flash-lite"]
+input = 0.30
+output = 2.50
+cache_read = 0.03
+
+# ── Gemini 3.0 / 3.1 ──
 
 # gemini-3-pro-preview — same pricing as 3.1-pro family.
 ["gemini-3-pro"]
@@ -430,6 +443,8 @@ cache_read = 0.010
 
 # ── Gemini 2.0 ──
 
+# Deprecation announced (shutdown was scheduled for 2026-06-01), but the API
+# still serves these ids.
 ["gemini-2.0-flash"]
 input = 0.15
 output = 0.60
@@ -438,42 +453,49 @@ output = 0.60
 input = 0.075
 output = 0.30
 
-# ── Gemini 1.5 (legacy) ──
-
-["gemini-1.5-pro"]
-input = 1.25
-output = 5.0
-
-["gemini-1.5-flash"]
-input = 0.075
-output = 0.30
-
 # ═══════════════════════════════════════════════════════════════════
 # xAI Grok
 # Source: https://docs.x.ai/developers/models
+# Prices are tiered by prompt length: the base rate below 200k prompt tokens,
+# the long_context rate at or above it. grok-2 was retired ("model not found")
+# and is intentionally absent.
 # ═══════════════════════════════════════════════════════════════════
 
-# grok-4.3 — 1M context window, standard pricing across full context.
-# Per xAI docs, the following model IDs are aliases routing to grok-4.3 and
-# billed at grok-4.3 rates: grok-4, grok-4-0709, grok-4-latest, grok-4-fast,
-# grok-4-fast-reasoning, grok-4-fast-non-reasoning, grok-4-1-fast,
-# grok-4-1-fast-reasoning, grok-4-1-fast-non-reasoning, grok-3, grok-3-fast,
-# grok-3-mini, grok-3-mini-fast, grok-3-mini-high, grok-code-fast-1.
-# The entries below exist purely for longest-prefix-match resolution of those
-# IDs; all share grok-4.3's pricing.
+["grok-4.5"]
+input = 2.0
+output = 6.0
+cache_read = 0.30
+batch_input = 1.0
+batch_output = 3.0
+long_context_threshold = 200_000
+long_context_input = 4.0
+long_context_output = 12.0
+
+# grok-4.20-* ids resolve through the grok-4 prefix below at these same rates.
 ["grok-4.3"]
 input = 1.25
 output = 2.50
 cache_read = 0.20
 batch_input = 0.625
 batch_output = 1.25
+long_context_threshold = 200_000
+long_context_input = 2.50
+long_context_output = 5.0
 
+# Legacy alias ids — still callable; xAI resolves them server-side to grok-4.3
+# and bills at grok-4.3 rates (verified live: a grok-4 request answers as
+# grok-4.3). Covered by these prefix entries: grok-4, grok-4-0709,
+# grok-4-latest, grok-4-fast(-reasoning/-non-reasoning), grok-4-1-fast(-…),
+# grok-3, grok-3-fast, grok-3-mini(-fast/-high), grok-code-fast-1.
 [grok-4]
 input = 1.25
 output = 2.50
 cache_read = 0.20
 batch_input = 0.625
 batch_output = 1.25
+long_context_threshold = 200_000
+long_context_input = 2.50
+long_context_output = 5.0
 
 ["grok-4-1-fast"]
 input = 1.25
@@ -481,6 +503,9 @@ output = 2.50
 cache_read = 0.20
 batch_input = 0.625
 batch_output = 1.25
+long_context_threshold = 200_000
+long_context_input = 2.50
+long_context_output = 5.0
 
 [grok-4-fast]
 input = 1.25
@@ -488,6 +513,9 @@ output = 2.50
 cache_read = 0.20
 batch_input = 0.625
 batch_output = 1.25
+long_context_threshold = 200_000
+long_context_input = 2.50
+long_context_output = 5.0
 
 [grok-code-fast-1]
 input = 1.25
@@ -495,6 +523,9 @@ output = 2.50
 cache_read = 0.20
 batch_input = 0.625
 batch_output = 1.25
+long_context_threshold = 200_000
+long_context_input = 2.50
+long_context_output = 5.0
 
 [grok-3]
 input = 1.25
@@ -502,6 +533,9 @@ output = 2.50
 cache_read = 0.20
 batch_input = 0.625
 batch_output = 1.25
+long_context_threshold = 200_000
+long_context_input = 2.50
+long_context_output = 5.0
 
 [grok-3-mini]
 input = 1.25
@@ -509,7 +543,16 @@ output = 2.50
 cache_read = 0.20
 batch_input = 0.625
 batch_output = 1.25
+long_context_threshold = 200_000
+long_context_input = 2.50
+long_context_output = 5.0
 
-[grok-2]
-input = 2.0
-output = 10.0
+["grok-build-0.1"]
+input = 1.0
+output = 2.0
+cache_read = 0.20
+batch_input = 0.50
+batch_output = 1.0
+long_context_threshold = 200_000
+long_context_input = 2.0
+long_context_output = 4.0

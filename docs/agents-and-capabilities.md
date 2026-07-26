@@ -62,7 +62,7 @@ memory_mw = MemoryMiddleware(           # auto-inject relevant memories on every
 
 # LLM with memory middleware
 llm = LLM(
-    "claude-sonnet-4-20250514",
+    "claude-sonnet-5",
     middleware=[memory_mw],
     fallback="gpt-4o",
 )
@@ -88,8 +88,8 @@ from ai_arch_toolkit import LLM, ToolGroup
 from ai_arch_toolkit.core import State
 from ai_arch_toolkit.toolkit.agents.flows import plan_execute_flow, plan_execute_initial_state
 
-fast = LLM("claude-haiku-4-5-20251001")
-smart = LLM("claude-opus-4-0-20250514")
+fast = LLM("claude-haiku-4-5")
+smart = LLM("claude-opus-5")
 
 flow = plan_execute_flow(
     fast,  # default model
@@ -111,7 +111,7 @@ from ai_arch_toolkit.core import LLM, State, Step, Result, StateSnapshot
 from ai_arch_toolkit.toolkit.flow import Flow, FlowStep
 from ai_arch_toolkit.toolkit.agents.flows import react_flow, react_initial_state
 
-llm = LLM("claude-sonnet-4-20250514")
+llm = LLM("claude-sonnet-5")
 
 async def research_topic(topic_key: str):
     """Create a step that researches a topic via inner ReAct."""

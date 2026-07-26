@@ -48,7 +48,7 @@ Stateless, async-first foundation. All new code should build on this.
 ```python
 from ai_arch_toolkit import LLM
 
-llm = LLM("claude-sonnet-4-20250514")  # Anthropic
+llm = LLM("claude-sonnet-5")  # Anthropic
 llm = LLM("gpt-4o")                    # OpenAI
 llm = LLM("gemini-2.0-flash")          # Gemini
 llm = LLM("grok-2")                    # xAI

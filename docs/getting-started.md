@@ -25,7 +25,7 @@ install the extra for that provider.
 ```python
 from ai_arch_toolkit import LLM
 
-llm = LLM("claude-sonnet-4-20250514")
+llm = LLM("claude-sonnet-5")
 response = llm.complete_sync("What is the capital of France?")
 print(response.text)
 ```
@@ -55,7 +55,7 @@ def get_weather(city: str) -> str:
     """Get current weather for a city."""
     return f"Sunny, 22°C in {city}"
 
-llm = LLM("claude-sonnet-4-20250514")
+llm = LLM("claude-sonnet-5")
 tools = ToolGroup(get_weather)
 
 response = llm.complete_sync(
@@ -76,7 +76,7 @@ def search(query: str) -> str:
     """Search for information."""
     return f"Result for: {query}"
 
-llm = LLM("claude-sonnet-4-20250514")
+llm = LLM("claude-sonnet-5")
 tools = ToolGroup(search)
 
 flow = react_flow(llm, tools, max_iterations=5)
@@ -90,7 +90,7 @@ print(state["response"].text)
 ```python
 from ai_arch_toolkit import LLM
 
-llm = LLM("claude-sonnet-4-20250514")
+llm = LLM("claude-sonnet-5")
 
 # Text streaming
 stream = llm.stream_sync("Tell me a joke")
@@ -117,7 +117,7 @@ Switch providers by changing the model name:
 from ai_arch_toolkit import LLM
 
 # Anthropic
-llm = LLM("claude-sonnet-4-20250514")
+llm = LLM("claude-sonnet-5")
 
 # OpenAI
 llm = LLM("gpt-4o")

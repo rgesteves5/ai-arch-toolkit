@@ -22,7 +22,7 @@ class MemoryMiddleware:
             find=similarity_view.find,
             record=temporal_view.append,
         )
-        llm = LLM("claude-sonnet-4-20250514", middleware=[mw])
+        llm = LLM("claude-sonnet-5", middleware=[mw])
     """
 
     __slots__ = ("_find", "_header", "_k", "_record")

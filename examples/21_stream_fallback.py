@@ -10,7 +10,7 @@ Requires API keys for both providers (e.g. ANTHROPIC_API_KEY + OPENAI_API_KEY).
 from ai_arch_toolkit import LLM
 
 # Primary: Anthropic, Fallback: OpenAI
-llm = LLM("claude-sonnet-4-20250514", fallback="gpt-4.1-nano")
+llm = LLM("claude-sonnet-5", fallback="gpt-4.1-nano")
 
 print("=== Streaming with fallback ===\n")
 

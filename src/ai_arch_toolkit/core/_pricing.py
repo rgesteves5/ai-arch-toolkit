@@ -48,7 +48,7 @@ class PricingRegistry:
 
         from ai_arch_toolkit.core import ModelPricing, pricing
 
-        cost = pricing.estimate_cost("claude-sonnet-4-20250514", input_tokens=1000)
+        cost = pricing.estimate_cost("claude-sonnet-5", input_tokens=1000)
         pricing.register("my-model", ModelPricing(input=1.0, output=2.0))
         pricing.load("./my_pricing.toml")
         pricing.reset()

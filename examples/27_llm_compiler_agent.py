@@ -9,7 +9,7 @@ Three phases per iteration: Plan DAG → Parallel Execute → Join.
 from ai_arch_toolkit import LLM, State, ToolGroup, tool
 from ai_arch_toolkit.toolkit.agents import llm_compiler_flow, llm_compiler_initial_state
 
-llm = LLM("claude-sonnet-4-20250514")
+llm = LLM("claude-sonnet-5")
 
 
 @tool

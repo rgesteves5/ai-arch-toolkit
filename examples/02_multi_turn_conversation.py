@@ -6,7 +6,7 @@ and continue the conversation by appending the assistant's reply.
 
 from ai_arch_toolkit import LLM, user
 
-llm = LLM("claude-haiku-4-5-20251001")
+llm = LLM("claude-haiku-4-5")
 
 messages = [
     user("My name is Alice. What's a fun fact about space?"),

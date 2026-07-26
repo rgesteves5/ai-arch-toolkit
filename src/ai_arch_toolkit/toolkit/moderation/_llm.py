@@ -39,7 +39,7 @@ class LLMModerator:
 
     Example::
 
-        classifier = LLM("claude-haiku-4-5-20251001")
+        classifier = LLM("claude-haiku-4-5")
         mod = LLMModerator(classifier, ["Violence", "Harassment", "PII"])
         result = await mod.moderate("some text")
     """

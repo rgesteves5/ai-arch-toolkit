@@ -6,7 +6,7 @@ locally, and send the tool_result back for a final answer.
 
 from ai_arch_toolkit import LLM, tool_result, user
 
-llm = LLM("claude-haiku-4-5-20251001")
+llm = LLM("claude-haiku-4-5")
 
 weather_tool = {
     "name": "get_weather",

@@ -7,7 +7,7 @@ thinking_effort (string level like "low", "medium", "high").
 
 from ai_arch_toolkit import LLM
 
-llm = LLM("claude-haiku-4-5-20251001")
+llm = LLM("claude-haiku-4-5")
 
 # --- Extended thinking with a token budget ---
 print("=== Extended Thinking (thinking_budget=2048) ===")

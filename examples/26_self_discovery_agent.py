@@ -9,7 +9,7 @@ Four phases: Select → Adapt → Operationalize → Solve.
 from ai_arch_toolkit import LLM, State, ToolGroup, tool
 from ai_arch_toolkit.toolkit.agents import self_discovery_flow, self_discovery_initial_state
 
-llm = LLM("claude-sonnet-4-20250514")
+llm = LLM("claude-sonnet-5")
 
 
 @tool

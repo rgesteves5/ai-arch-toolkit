@@ -9,7 +9,7 @@ Requires an Anthropic model (claude-*).
 from ai_arch_toolkit import LLM
 from ai_arch_toolkit.core import cache, user
 
-llm = LLM("claude-sonnet-4-20250514")
+llm = LLM("claude-sonnet-5")
 
 # A long system context that benefits from caching
 long_context = (

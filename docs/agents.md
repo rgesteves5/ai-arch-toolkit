@@ -21,7 +21,7 @@ from ai_arch_toolkit import LLM, ToolGroup
 from ai_arch_toolkit.toolkit.agents import Agent, ReasoningSpec
 from ai_arch_toolkit.toolkit.tools import wikipedia_search, datetime_now
 
-llm = LLM("claude-sonnet-4-20250514")
+llm = LLM("claude-sonnet-5")
 tools = ToolGroup(wikipedia_search, datetime_now)
 
 spec = ReasoningSpec(strategy="react", system="You are a concise research assistant.")

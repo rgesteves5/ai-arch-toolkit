@@ -33,7 +33,7 @@ def _sdk_message(
     text: str = "Hello!",
     tool_calls: list[dict] | None = None,
     thinking: list[str] | None = None,
-    model: str = "claude-sonnet-4-20250514",
+    model: str = "claude-sonnet-4-6",
     stop_reason: str = "end_turn",
     input_tokens: int = 10,
     output_tokens: int = 5,
@@ -254,7 +254,7 @@ class TestExtractUsage:
 class TestParseSdkResponse:
     def test_text_response(self):
         msg = _sdk_message(text="Hello!")
-        r = _parse_sdk_response(msg, "claude-sonnet-4-20250514")
+        r = _parse_sdk_response(msg, "claude-sonnet-4-6")
         assert r.text == "Hello!"
         assert r.usage.input_tokens == 10
         assert r.usage.output_tokens == 5
@@ -266,7 +266,7 @@ class TestParseSdkResponse:
             text="Let me check.",
             tool_calls=[{"id": "tc_1", "name": "get_weather", "input": {"city": "NYC"}}],
         )
-        r = _parse_sdk_response(msg, "claude-sonnet-4-20250514")
+        r = _parse_sdk_response(msg, "claude-sonnet-4-6")
         assert r.text == "Let me check."
         assert len(r.tool_calls) == 1
         assert isinstance(r.tool_calls[0], ToolCall)
@@ -275,7 +275,7 @@ class TestParseSdkResponse:
 
     def test_cost_is_computed(self):
         msg = _sdk_message(input_tokens=1000, output_tokens=500)
-        r = _parse_sdk_response(msg, "claude-sonnet-4-20250514")
+        r = _parse_sdk_response(msg, "claude-sonnet-4-6")
         assert r.cost is not None
         assert r.cost > 0
 
@@ -286,13 +286,13 @@ class TestParseSdkResponse:
 
     def test_cache_tokens(self):
         msg = _sdk_message(cache_creation_input_tokens=20, cache_read_input_tokens=10)
-        r = _parse_sdk_response(msg, "claude-sonnet-4-20250514")
+        r = _parse_sdk_response(msg, "claude-sonnet-4-6")
         assert r.usage.cache_write_tokens == 20
         assert r.usage.cache_read_tokens == 10
 
     def test_thinking_blocks(self):
         msg = _sdk_message(text="Answer", thinking=["Let me reason..."])
-        r = _parse_sdk_response(msg, "claude-sonnet-4-20250514")
+        r = _parse_sdk_response(msg, "claude-sonnet-4-6")
         assert len(r.thinking) == 1
         assert r.thinking[0].text == "Let me reason..."
 
@@ -302,19 +302,19 @@ class TestParseSdkResponse:
             text='{"name": "Alice"}',
             stop_reason="end_turn",
         )
-        r = _parse_sdk_response(msg, "claude-sonnet-4-20250514", output_schema=schema)
+        r = _parse_sdk_response(msg, "claude-sonnet-4-6", output_schema=schema)
         assert r.parsed == {"name": "Alice"}
 
     def test_structured_output_strips_markdown_fence(self):
         schema = OutputSchema(name="Person", schema={"type": "object"})
         msg = _sdk_message(text='```json\n{"name": "Alice"}\n```')
-        r = _parse_sdk_response(msg, "claude-sonnet-4-20250514", output_schema=schema)
+        r = _parse_sdk_response(msg, "claude-sonnet-4-6", output_schema=schema)
         assert r.parsed == {"name": "Alice"}
 
     def test_structured_output_invalid_json_returns_none(self):
         schema = OutputSchema(name="Person", schema={"type": "object"})
         msg = _sdk_message(text="Sorry, I cannot do that.")
-        r = _parse_sdk_response(msg, "claude-sonnet-4-20250514", output_schema=schema)
+        r = _parse_sdk_response(msg, "claude-sonnet-4-6", output_schema=schema)
         assert r.parsed is None
 
     def test_structured_output_coerces_pydantic_model(self):
@@ -328,7 +328,7 @@ class TestParseSdkResponse:
 
         schema = OutputSchema(name="Person", schema=Person.model_json_schema(), model_class=Person)
         msg = _sdk_message(text='{"name": "Alice"}')
-        r = _parse_sdk_response(msg, "claude-sonnet-4-20250514", output_schema=schema)
+        r = _parse_sdk_response(msg, "claude-sonnet-4-6", output_schema=schema)
         assert isinstance(r.parsed, Person)
         assert r.parsed.name == "Alice"
 
@@ -344,12 +344,12 @@ class TestParseSdkResponse:
 
         schema = OutputSchema(name="Person", schema=Person.model_json_schema(), model_class=Person)
         msg = _sdk_message(text='{"name": "Alice"}')  # missing required 'age'
-        r = _parse_sdk_response(msg, "claude-sonnet-4-20250514", output_schema=schema)
+        r = _parse_sdk_response(msg, "claude-sonnet-4-6", output_schema=schema)
         assert r.parsed == {"name": "Alice"}
 
     def test_raw_is_preserved(self):
         msg = _sdk_message()
-        r = _parse_sdk_response(msg, "claude-sonnet-4-20250514")
+        r = _parse_sdk_response(msg, "claude-sonnet-4-6")
         assert r.raw is msg
 
 
@@ -376,7 +376,7 @@ class TestAnthropicProviderComplete:
         mock_sdk.AsyncAnthropic.return_value = mock_client
         mock_client.messages.create.return_value = _sdk_message(text="Hello!")
 
-        provider = AnthropicProvider("claude-sonnet-4-20250514", "test-key")
+        provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
         mock_sdk.AsyncAnthropic.assert_called_once_with(api_key="test-key", max_retries=0)
         provider._client = mock_client
         result = await provider.complete([{"role": "user", "content": "Hi"}])
@@ -395,7 +395,7 @@ class TestAnthropicProviderComplete:
         )
 
         tools = [{"name": "search", "description": "Search", "parameters": {"type": "object"}}]
-        provider = AnthropicProvider("claude-sonnet-4-20250514", "test-key")
+        provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
         provider._client = mock_client
         result = await provider.complete([{"role": "user", "content": "Hi"}], tools=tools)
         assert result.has_tool_calls
@@ -409,7 +409,7 @@ class TestAnthropicProviderComplete:
         mock_sdk.AsyncAnthropic.return_value = mock_client
         mock_client.messages.create.return_value = _sdk_message(text="Ok")
 
-        provider = AnthropicProvider("claude-sonnet-4-20250514", "test-key")
+        provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
         provider._client = mock_client
         msgs = [
             {"role": "system", "content": "Be brief."},
@@ -426,7 +426,7 @@ class TestAnthropicProviderComplete:
         mock_sdk.AsyncAnthropic.return_value = mock_client
         mock_client.messages.create.return_value = _sdk_message(text="Ok")
 
-        provider = AnthropicProvider("claude-sonnet-4-20250514", "test-key")
+        provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
         provider._client = mock_client
         msgs = [
             {"role": "system", "content": "From message."},
@@ -444,7 +444,7 @@ class TestAnthropicProviderComplete:
             text="Answer", thinking=["reasoning"]
         )
 
-        provider = AnthropicProvider("claude-sonnet-4-20250514", "test-key")
+        provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
         provider._client = mock_client
         result = await provider.complete(
             [{"role": "user", "content": "Hi"}],
@@ -470,7 +470,7 @@ class TestAnthropicProviderComplete:
             name="Person",
             schema={"type": "object", "properties": {"name": {"type": "string"}}},
         )
-        provider = AnthropicProvider("claude-sonnet-4-20250514", "test-key")
+        provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
         provider._client = mock_client
         result = await provider.complete(
             [{"role": "user", "content": "Hi"}],
@@ -493,7 +493,7 @@ class TestAnthropicProviderComplete:
 
         schema = OutputSchema(name="X", schema={"type": "object"})
         tools = [{"name": "search", "description": "Search", "parameters": {"type": "object"}}]
-        provider = AnthropicProvider("claude-sonnet-4-20250514", "test-key")
+        provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
         provider._client = mock_client
         result = await provider.complete(
             [{"role": "user", "content": "Hi"}],
@@ -518,7 +518,7 @@ class TestAnthropicProviderComplete:
             name="Person",
             schema={"type": "object", "properties": {"name": {"type": "string"}}},
         )
-        provider = AnthropicProvider("claude-sonnet-4-20250514", "test-key")
+        provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
         provider._client = mock_client
         result = await provider.complete(
             [{"role": "user", "content": "Hi"}],
@@ -541,7 +541,7 @@ class TestAnthropicProviderComplete:
         mock_client.messages.create.return_value = _sdk_message()
 
         schema = OutputSchema(name="X", schema={"type": "object"})
-        provider = AnthropicProvider("claude-sonnet-4-20250514", "test-key")
+        provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
         provider._client = mock_client
         with pytest.raises(ValueError, match="structured_output_mode"):
             await provider.complete(
@@ -556,7 +556,7 @@ class TestAnthropicProviderComplete:
         mock_sdk.AsyncAnthropic.return_value = mock_client
         mock_client.messages.create.return_value = _sdk_message()
 
-        provider = AnthropicProvider("claude-sonnet-4-20250514", "test-key")
+        provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
         provider._client = mock_client
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
@@ -574,7 +574,7 @@ class TestAnthropicProviderComplete:
         mock_sdk.AsyncAnthropic.return_value = mock_client
         mock_client.messages.create.return_value = _sdk_message()
 
-        provider = AnthropicProvider("claude-sonnet-4-20250514", "test-key")
+        provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
         provider._client = mock_client
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
@@ -631,7 +631,7 @@ class TestAnthropicProviderComplete:
         mock_sdk.AsyncAnthropic.return_value = mock_client
         mock_client.messages.create.return_value = _sdk_message()
 
-        provider = AnthropicProvider("claude-sonnet-4-20250514", "test-key")
+        provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
         provider._client = mock_client
         await provider.complete([{"role": "user", "content": "Hi"}])
         call_kwargs = mock_client.messages.create.call_args[1]
@@ -650,7 +650,7 @@ class TestAnthropicProviderErrors:
             "rate limited", response=resp, body={"error": "too many requests"}
         )
 
-        provider = AnthropicProvider("claude-sonnet-4-20250514", "test-key")
+        provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
         provider._client = mock_client
         with pytest.raises(RateLimitError) as exc_info:
             await provider.complete([{"role": "user", "content": "Hi"}])
@@ -668,7 +668,7 @@ class TestAnthropicProviderErrors:
             "server error", response=resp, body="internal"
         )
 
-        provider = AnthropicProvider("claude-sonnet-4-20250514", "test-key")
+        provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
         provider._client = mock_client
         with pytest.raises(APIError) as exc_info:
             await provider.complete([{"role": "user", "content": "Hi"}])
@@ -677,11 +677,11 @@ class TestAnthropicProviderErrors:
 
 class TestAnthropicProviderLifecycle:
     async def test_close(self):
-        provider = AnthropicProvider("claude-sonnet-4-20250514", "test-key")
+        provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
         await provider.close()
 
     async def test_context_manager(self):
-        async with AnthropicProvider("claude-sonnet-4-20250514", "test-key") as provider:
+        async with AnthropicProvider("claude-sonnet-4-6", "test-key") as provider:
             assert provider._client is not None
 
 
@@ -731,7 +731,7 @@ class TestAnthropicProviderStreamEvents:
         mock_client = MagicMock()
         mock_client.messages.stream.return_value = _FakeAnthropicStream(events, final_message)
 
-        provider = AnthropicProvider("claude-sonnet-4-20250514", "test-key")
+        provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
         provider._client = mock_client
 
         event_iter, state = provider.stream_events(
