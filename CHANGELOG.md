@@ -109,6 +109,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   models the providers no longer serve: Claude 3.x and 4.0, `o1-mini`/`o3-pro`/
   `o3-deep-research`, Gemini 1.5, and `grok-2`. Stale 6x fast-mode rates were dropped
   from Opus 4.6/4.7 (fast mode was removed on those models).
+- `uv sync --extra dev` now installs `jsonschema` and `jinja2`, so the prompt-template
+  tests pass on a fresh dev environment (previously only the `prompts` extra pulled
+  them in).
 - The Anthropic adapter now drops the client-default `temperature` for every model
   family that rejects sampling parameters — Opus 4.7/4.8/5, Sonnet 5, and Fable/Mythos 5,
   matched by prefix. Previously only `claude-opus-4-7` was covered, so every call to a
