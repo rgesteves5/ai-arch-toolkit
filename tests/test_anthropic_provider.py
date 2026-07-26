@@ -585,13 +585,23 @@ class TestAnthropicProviderComplete:
             )
             assert len(w) == 0
 
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "claude-opus-4-7",
+            "claude-opus-4-8",
+            "claude-opus-5",
+            "claude-sonnet-5",
+            "claude-fable-5",
+        ],
+    )
     @patch("ai_arch_toolkit.core._providers._anthropic.anthropic")
-    async def test_deprecated_temperature_model_drops_temperature(self, mock_sdk):
+    async def test_deprecated_temperature_model_drops_temperature(self, mock_sdk, model):
         mock_client = AsyncMock()
         mock_sdk.AsyncAnthropic.return_value = mock_client
         mock_client.messages.create.return_value = _sdk_message()
 
-        provider = AnthropicProvider("claude-opus-4-7", "test-key")
+        provider = AnthropicProvider(model, "test-key")
         provider._client = mock_client
         await provider.complete(
             [{"role": "user", "content": "Hi"}],
@@ -599,6 +609,21 @@ class TestAnthropicProviderComplete:
         )
         call_kwargs = mock_client.messages.create.call_args[1]
         assert "temperature" not in call_kwargs
+
+    @patch("ai_arch_toolkit.core._providers._anthropic.anthropic")
+    async def test_older_models_keep_temperature(self, mock_sdk):
+        mock_client = AsyncMock()
+        mock_sdk.AsyncAnthropic.return_value = mock_client
+        mock_client.messages.create.return_value = _sdk_message()
+
+        provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
+        provider._client = mock_client
+        await provider.complete(
+            [{"role": "user", "content": "Hi"}],
+            temperature=0.2,
+        )
+        call_kwargs = mock_client.messages.create.call_args[1]
+        assert call_kwargs["temperature"] == 0.2
 
     @patch("ai_arch_toolkit.core._providers._anthropic.anthropic")
     async def test_does_not_inject_max_tokens(self, mock_sdk):

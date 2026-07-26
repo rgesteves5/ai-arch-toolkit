@@ -45,7 +45,17 @@ _SERVER_TOOL_TYPES: dict[str, str] = {
     "code_execution": "code_execution_20250522",
 }
 
-_TEMPERATURE_DEPRECATED_MODELS = {"claude-opus-4-7"}
+# Anthropic removed sampling parameters on Opus 4.7+ and the Claude 5 family;
+# sending ``temperature`` to these models returns a 400.
+_TEMPERATURE_DEPRECATED_PREFIXES = (
+    "claude-fable-5",
+    "claude-mythos-5",
+    "claude-mythos-preview",
+    "claude-opus-4-7",
+    "claude-opus-4-8",
+    "claude-opus-5",
+    "claude-sonnet-5",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -248,7 +258,7 @@ def _parse_structured_output(text: str, output_schema: OutputSchema) -> Any:
 
 def _uses_deprecated_temperature(model: str) -> bool:
     """Return True for Anthropic models that reject ``temperature``."""
-    return model in _TEMPERATURE_DEPRECATED_MODELS
+    return model.startswith(_TEMPERATURE_DEPRECATED_PREFIXES)
 
 
 def _extract_usage(sdk_usage: Any) -> Usage:

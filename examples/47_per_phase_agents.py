@@ -33,8 +33,8 @@ def search(query: str) -> str:
 
 
 tools = ToolGroup(search)
-llm = LLM("claude-sonnet-4-20250514")  # default for every phase
-haiku = LLM("claude-haiku-4-5-20251001")  # cheap planner
+llm = LLM("claude-sonnet-5")  # default for every phase
+haiku = LLM("claude-haiku-4-5")  # cheap planner
 
 # --- Part 1: per-phase overrides in code -----------------------------------
 # deps carry runtime objects per phase (planner_llm, executor_tools, ...);
@@ -46,7 +46,9 @@ spec = ReasoningSpec(
     strategy="plan_execute",
     knobs={
         "planner_system": (
-            "Plan in at most three numbered steps.\nOnly rely on these tools:\n{tools}"
+            "Plan in at most three numbered steps (format: 1. ...). "
+            "Output only the plan — do not call tools yourself.\n"
+            "The executor will rely on these tools:\n{tools}"
         ),
         "max_replans": 0,
     },
@@ -69,8 +71,11 @@ manifest_data = {
         "knobs": {"max_replans": 0},
         "phases": {
             "planner": {
-                "system": ("Plan in at most three numbered steps.\nTools:\n{tools}"),
-                "model": {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},
+                "system": (
+                    "Plan in at most three numbered steps (format: 1. ...). "
+                    "Output only the plan — do not call tools yourself.\nTools:\n{tools}"
+                ),
+                "model": {"provider": "anthropic", "model": "claude-haiku-4-5"},
             },
         },
     },

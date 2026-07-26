@@ -94,6 +94,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `uv lock --upgrade` brought every transitive dependency to its latest compatible version (pydantic 2.13, urllib3 2.7, requests 2.34, websockets 16, xai-sdk 1.12, ruff 0.15.13, …); resolved the four Dependabot alerts.
 
 ### Fixed
+- The Anthropic adapter now drops the client-default `temperature` for every model
+  family that rejects sampling parameters — Opus 4.7/4.8/5, Sonnet 5, and Fable/Mythos 5,
+  matched by prefix. Previously only `claude-opus-4-7` was covered, so every call to a
+  current Anthropic model failed with `400: temperature is deprecated for this model`.
 - `ReasoningSpec.llm_kwargs` now reach every phase of all multi-phase strategies
   (`plan_execute`, `rewoo`, `reflexion`, `self_discovery`, `llm_compiler`, `tot`,
   `lats`, and `generate_review`'s reviewer — where `reviewer_kwargs` merges on top,
