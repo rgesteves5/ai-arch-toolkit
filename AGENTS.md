@@ -48,7 +48,7 @@ Cross-cutting rules that no single file shows:
 - `toolkit/tools` is safe-by-default and stdlib-only. Side-effectful tools (shell, filesystem, Python eval, web fetch) live in `toolkit.tools.dangerous` and must be gated.
 - Public API only via `__init__.py` re-exports (`ai_arch_toolkit.core`, `ai_arch_toolkit.toolkit.*`); internal modules are `_`-prefixed.
 
-Deeper reading, in `docs/`: `framework-overview.md` (layer tour), `agents.md` (Agent/ReasoningSpec), `flow-architecture.md` (Flow/State/Step engine), `code-style.md` (practical style calls), `tools-catalog.md` (per-tool list), `safety.md` (governance gates), `internal/metering-plan.md` (metering design). `research/` holds standalone reference guides, separate from the package.
+Deeper reading, in `docs/`: `framework-overview.md` (layer tour), `configuring-agents.md` (end-to-end agent configuration guide), `agents.md` (Agent/ReasoningSpec), `flow-architecture.md` (Flow/State/Step engine), `code-style.md` (practical style calls), `tools-catalog.md` (per-tool list), `safety.md` (governance gates), `internal/metering-plan.md` (metering design). `research/` holds standalone reference guides, separate from the package.
 
 ## Conventions
 

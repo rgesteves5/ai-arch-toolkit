@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **[docs/configuring-agents.md](docs/configuring-agents.md)** — the end-to-end agent
+  configuration guide: the serializable-vs-runtime rule, code-first specs, knobs vs
+  deps, per-phase configuration, prompt sourcing, budgets, manifests with
+  `agent_from_manifest`, escape hatches, and a migration checklist for downstream
+  projects. Linked from the README, docs nav, and `AGENTS.md`.
 - **Per-phase configuration for `Agent`/`ReasoningSpec` and manifests.** Multi-phase
   strategies accept canonical per-phase overrides through the two existing buckets:
   runtime LLM/tools as deps (`planner_llm`, `executor_tools`, `reviewer_llm`, …) and

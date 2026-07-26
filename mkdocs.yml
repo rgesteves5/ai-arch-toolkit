@@ -9,6 +9,7 @@ nav:
   - Framework Overview: framework-overview.md
   - Code Style: code-style.md
   - Agents & Capabilities: agents-and-capabilities.md
+  - Configuring Agents: configuring-agents.md
   - Agent & ReasoningSpec: agents.md
   - Flow Architecture: flow-architecture.md
   - Concurrency & Throttling: concurrency.md

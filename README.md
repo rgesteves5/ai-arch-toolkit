@@ -137,7 +137,9 @@ print(f"Cost: ${result.cost:.4f}")
 
 Ten built-in strategies (`react`, `completion`, `rewoo`, `plan_execute`, `tot`,
 `lats`, `reflexion`, `self_discovery`, `llm_compiler`, `generate_review`), or
-register your own — see [`docs/agents.md`](docs/agents.md).
+register your own — see the end-to-end guide
+[`docs/configuring-agents.md`](docs/configuring-agents.md) and the reference
+[`docs/agents.md`](docs/agents.md).
 
 ### The same agent, one level down
 
@@ -235,6 +237,7 @@ uv run pdoc ai_arch_toolkit -o site/api
 Browse `docs/` for guides, or jump straight to:
 
 - [`docs/getting-started.md`](docs/getting-started.md)
+- [`docs/configuring-agents.md`](docs/configuring-agents.md) — how agents, configs, and prompts fit together
 - [`docs/agents.md`](docs/agents.md)
 - [`docs/prompts.md`](docs/prompts.md)
 - [`docs/context-model.md`](docs/context-model.md)

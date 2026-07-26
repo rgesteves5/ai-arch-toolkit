@@ -5,6 +5,10 @@
 an `Agent` *binds* that spec to a runtime `LLM` and `ToolGroup` and runs it. The
 spec is declarative and serializable; the LLM and tools are not.
 
+For the guided end-to-end path — code-first specs, per-phase configuration,
+prompts, budgets, and manifests — start with
+[Configuring Agents](configuring-agents.md); this page is the reference.
+
 This is the recommended entry point. The underlying `*_flow()` factories
 ([Flow Architecture](flow-architecture.md)) remain available when you want to
 build and wire a `Flow` by hand — `Agent` compiles down to exactly one of them.

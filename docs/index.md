@@ -44,6 +44,7 @@ print(response.text)
 ## Links
 
 - [Getting Started](getting-started.md) — installation, first steps, examples
+- [Configuring Agents](configuring-agents.md) — the end-to-end guide: specs, per-phase config, prompts, manifests
 - [Prompts](prompts.md) — literal prompts, files, templates, manifests, and layouts
 - [Context Model](context-model.md) — Content vs Resources vs Knowledge vs Memory
 - [Model Compatibility](model-compatibility.md) — live-probed model feature matrix
