@@ -82,6 +82,7 @@ structured output / middleware variants of ReAct.
 | 19 | [`19_lats_agent.py`](19_lats_agent.py) | LATS — Language Agent Tree Search (MCTS) | OpenAI |
 | 26 | [`26_self_discovery_agent.py`](26_self_discovery_agent.py) | Self-Discovery: select reasoning modules → adapt → solve | OpenAI |
 | 27 | [`27_llm_compiler_agent.py`](27_llm_compiler_agent.py) | LLMCompiler: plan DAG → parallel execute → join | OpenAI |
+| 47 | [`47_per_phase_agents.py`](47_per_phase_agents.py) | Per-phase models/prompts via `deps`+`knobs`, and declaratively via a manifest | Anthropic |
 
 > **Generate-Review flow** (`generate_review_flow`) is the ninth built-in agent
 > architecture. It isn't in the numbered examples yet — see
@@ -149,7 +150,8 @@ than strict numerical order:
 2. **Add structure** — 04 (structured output), 07 (thinking), 08 (async).
 3. **Bring in tools** — 06, then 24 and 25.
 4. **Step up to agents** — 09, 10, 13, 14, then any of 15–27 depending on the
-   architecture you need.
+   architecture you need; 47 shows per-phase model/prompt configuration and
+   agent manifests.
 5. **Memory** — 28 → 29 → 30.
 6. **Compose your own flows** — 31, 32, 33.
 7. **Prompts and context** — 38 → 39 → 40 → 41 → 42 → 43 (then 44 for extensions).

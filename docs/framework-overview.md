@@ -147,6 +147,12 @@ Built-in agent flow factories implemented on top of `Flow`. See [Agents and Capa
 
 Each factory has a companion `*_initial_state(task)` helper that creates the initial operational dict.
 
+The recommended way to run these is the `Agent`/`ReasoningSpec` facade
+([Agents](agents.md)), which adds per-strategy validation and per-phase
+configuration: phase LLMs/tools as canonical deps (`planner_llm`,
+`executor_tools`, …), phase prompts as knobs (`planner_system`, …), and the
+same settings declared in file-backed agent manifests under `strategy.phases`.
+
 ### Structured Prompts (`toolkit/prompts/`)
 
 - **`PromptSection`** — named prompt content with deterministic `order` and
@@ -306,7 +312,7 @@ Supporting directories:
 | **Pricing** | Per-model pricing registry with cost tracking on `Response`. |
 | **Batch** | `LLM.batch_submit()` / `batch_status()` / `batch_results()` plus `BatchRequest` / `BatchResult` types. |
 | **Flows** | Composable Step orchestration — sequential, cyclic, DAG modes with Policy and Trace. |
-| **Agent flows** | Built-in flow factories for ReAct-style loops, planners, tree search, and generate-review workflows. |
+| **Agent flows** | Built-in flow factories for ReAct-style loops, planners, tree search, and generate-review workflows — with per-phase LLM/tool/prompt overrides via `Agent`/`ReasoningSpec` and agent manifests. |
 | **Graph** | `Graph` facade with `Node[T]`/`Edge`, algorithms (BFS, DFS, PageRank, etc.), persistence. |
 | **Memory** | `GraphStore` with keyword/vector search, temporal/relational/property views, middleware. |
 | **Resources** | TXT/Markdown/JSON/YAML/TOML loading, selection, serialization, provenance. |

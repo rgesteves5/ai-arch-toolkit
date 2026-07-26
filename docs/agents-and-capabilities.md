@@ -160,7 +160,8 @@ result = await flow.run(state)
 | **Structured output** | `output_schema` on LLM call | Pydantic models as output |
 | **Extended thinking** | `thinking=True` on LLM call | Anthropic reasoning traces |
 | **Multimodal input** | `Content` accepts images, PDFs | Vision + tools agents |
-| **Per-phase models** | Factory kwargs (`planner_llm=...`) | Cheap planner, smart solver |
+| **Per-phase models** | `Agent` deps (`deps={"planner_llm": haiku}`), factory kwargs, or manifest `strategy.phases` | Cheap planner, smart solver |
+| **Per-phase prompts** | Knobs (`planner_system`, …) or manifest `strategy.phases.*.system`; `{tools}` token renders the phase's tool catalog | Custom planner instructions |
 | **Cost tracking** | Automatic on every Response + FlowResult | `result.total_cost` |
 | **Budgets** | Run-wide caps on a flow | `Flow(budget_policy=BudgetPolicy(...))` |
 | **Token counting** | `llm.count_tokens()` | Budget estimation before running |

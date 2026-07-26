@@ -8,6 +8,7 @@ A lightweight, unified LLM client and agent architecture toolkit for Python.
 - **Async-first** with convenient sync wrappers
 - **Tool system** — `@tool` decorator with auto-generated JSON Schema plus built-in tools for files, web, weather, geo, shell, Python, and knowledge lookups
 - **Agent flows** — ReAct, Reflexion, ReWOO, PlanExecute, Tree of Thoughts, LATS, Self-Discovery, LLM Compiler, and Generate-Review
+- **Configurable agents** — `Agent`/`ReasoningSpec` with per-phase models, tools, and prompts; file-backed agent manifests with inheritance, fingerprints, override governance, and `ai-arch agent validate|inspect` for CI
 - **Graph layer** — `Graph` facade with typed nodes, directed edges, algorithms (BFS, DFS, PageRank, etc.), persistence
 - **Memory system** — graph-backed agent memory with search, temporal/relational/property views, middleware
 - **Flow orchestration** — sequential, cyclic, and DAG execution over `State`, `Step`, `Policy`, and `Trace`
