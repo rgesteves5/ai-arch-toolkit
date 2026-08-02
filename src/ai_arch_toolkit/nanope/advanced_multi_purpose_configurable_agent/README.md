@@ -206,7 +206,7 @@ not be changed.
 
 - plain text input
 - multimodal input using existing `Content`
-- structured output for supported strategies (`react` currently)
+- structured output for `react` and the `generate_review` generator
 - final `AgentRunResult`
 
 Planned but not wired yet:
@@ -274,7 +274,7 @@ override_policy:
 - Track cost and token usage.
 - Save/load private memory and terminal chat sessions.
 - Inspect the last run, trace, tool set, prompt, profiles, and cost in terminal chat.
-- Support structured outputs for `react`.
+- Support structured outputs for `react` and the `generate_review` generator.
 - Support model fallback.
 - Govern dangerous tools with explicit allow, dry-run behavior, and max tool-call limits.
 - Support evaluator/reviewer loops for higher quality answers.
@@ -534,8 +534,8 @@ uv run python -m ai_arch_toolkit.nanope.advanced_multi_purpose_configurable_agen
   --output-schema answer.schema.json
 ```
 
-Structured output is currently supported for `react`. Other reasoning strategies raise
-a clear error when `output.schema` is configured.
+Structured output is supported for `react` and the generator phase of `generate_review`.
+Other reasoning strategies raise a clear error when `output.schema` is configured.
 
 Chat commands:
 

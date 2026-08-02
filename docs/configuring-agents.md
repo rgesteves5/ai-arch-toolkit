@@ -73,7 +73,7 @@ print(result.cost, result.usage)      # meter-derived spend (single source of tr
 | `plan_execute` | plan → per-step ReAct → solve | — |
 | `rewoo` | plan with evidence slots → execute → solve | — |
 | `reflexion` | attempt → evaluate → reflect retry loop | — |
-| `generate_review` | generate → review → retry loop | — |
+| `generate_review` | generate → review → retry loop | ✅ (generator only) |
 | `self_discovery` | select/adapt/plan reasoning modules → solve | — |
 | `llm_compiler` | plan a DAG → parallel execute → join | — |
 | `tot` | tree-of-thoughts search | — |
@@ -186,8 +186,9 @@ Three levels, in order of sophistication:
 ## Budgets and structured output
 
 A budget is an execution decision, **not** part of the spec — attach it per
-run. Structured output lives on the spec, but only `react` and `completion`
-support it (other strategies reject it at build time):
+run. Structured output lives on the spec and is supported by `react`, `completion`,
+and the generator phase of `generate_review` (other strategies reject it at build
+time):
 
 ```python
 from ai_arch_toolkit import BudgetPolicy
@@ -205,6 +206,10 @@ result = agent.run_sync(
 if result.report and result.report.over_budget:
     print("halted on:", result.report.breached)
 ```
+
+With `generate_review`, read the generated structured value from
+`result.response.parsed`; the reviewer still returns plain-text `ACCEPT` / `RETRY`
+control messages and never receives the output schema.
 
 Caps are enforced hard at the charge site — the call that would exceed a cap
 never runs. Nested agents share one cumulative budget.
@@ -369,7 +374,7 @@ model, these are the moves — each is independent:
 | Per-phase models, declaratively | `strategy.phases.*.model` → app `llm_factory` |
 | Budget caps | per run (`run(budget_policy=…)`) or manifest `limits` |
 | Template rendering | the application (`toolkit.prompts`) — never the framework |
-| Structured output | `spec.output_schema` (`react`/`completion` only) |
+| Structured output | `spec.output_schema` (`react`, `completion`, or the `generate_review` generator) |
 | Dangerous tools | `toolkit.tools.dangerous` + approval gates on `ToolGroup` |
 | Audit | `manifest.fingerprint` + `ai-arch agent validate` in CI |
 

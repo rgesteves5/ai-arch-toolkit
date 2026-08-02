@@ -346,6 +346,9 @@ def _build_generate_review(ctx: BuildContext) -> Flow:
     s = ctx.spec
     review_llm = _aliased_dep(ctx, "reviewer_llm", "review_llm", ctx.llm)
     review_tools = _aliased_dep(ctx, "reviewer_tools", "review_tools", ctx.tools)
+    gen_kwargs = dict(s.llm_kwargs)
+    if s.output_schema is not None:
+        gen_kwargs.setdefault("output_schema", s.output_schema)
     # Global llm_kwargs apply to every phase; reviewer_kwargs wins per key.
     review_kwargs = {**dict(s.llm_kwargs), **dict(s.knobs.get("reviewer_kwargs") or {})}
     return generate_review_flow(
@@ -354,7 +357,7 @@ def _build_generate_review(ctx: BuildContext) -> Flow:
         gen_tools=ctx.deps.get("generator_tools", ctx.tools),
         review_tools=review_tools,
         gen_system=s.system,
-        gen_kwargs=dict(s.llm_kwargs) or None,
+        gen_kwargs=gen_kwargs or None,
         max_cycles=s.knobs.get("max_cycles", 3),
         max_gen_iterations=s.max_iterations,
         max_review_iterations=s.knobs.get("max_review_iterations", 5),
@@ -558,6 +561,7 @@ register_strategy(
     FlowStrategy(
         _build_generate_review,
         generate_review_initial_state,
+        supports_output_schema=True,
         allowed_knobs=frozenset(
             {"max_cycles", "max_review_iterations", "reviewer_kwargs", "reviewer_system"}
         ),

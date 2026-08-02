@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from ai_arch_toolkit.core._llm import LLM
-from ai_arch_toolkit.core._response import Response, Usage
+from ai_arch_toolkit.core._response import OutputSchema, Response, Usage
 from ai_arch_toolkit.core._tools._group import ToolGroup
 from ai_arch_toolkit.toolkit.agents import agent_from_manifest, load_agent_manifest
 
@@ -28,9 +28,11 @@ class _RecordingProvider:
     def __init__(self, *texts: str) -> None:
         self._responses = [_make_response(text) for text in (texts or ("",))]
         self.calls = 0
+        self.call_kwargs: list[dict[str, Any]] = []
 
     async def complete(self, messages, *, system=None, tools=None, **kwargs) -> Response:
         self.calls += 1
+        self.call_kwargs.append(kwargs)
         return self._responses[min(self.calls - 1, len(self._responses) - 1)]
 
 
@@ -42,6 +44,10 @@ def _llm(*texts: str) -> LLM:
 
 def _calls(llm: LLM) -> int:
     return llm._provider.calls  # type: ignore[union-attr]
+
+
+def _call_kwargs(llm: LLM) -> list[dict[str, Any]]:
+    return llm._provider.call_kwargs  # type: ignore[union-attr]
 
 
 def _manifest_path(tmp_path: Path) -> Path:
@@ -104,18 +110,27 @@ async def test_generator_phase_model_resolves(tmp_path: Path) -> None:
     )
     manifest = load_agent_manifest(path, allowed_roots=(tmp_path,))
     generator = _llm("draft answer")
+    reviewer = _llm("ACCEPT")
+    schema = OutputSchema(name="draft", schema={"type": "object"})
     seen: list[str] = []
 
     def factory(phase: str, model_config: Any) -> LLM:
         seen.append(phase)
         return generator
 
-    agent = agent_from_manifest(manifest, _llm("ACCEPT"), llm_factory=factory)
+    agent = agent_from_manifest(
+        manifest,
+        reviewer,
+        llm_factory=factory,
+        output_schema=schema,
+    )
     result = await agent.run("task")
 
     assert seen == ["generator"]
     assert result.text == "draft answer"
     assert _calls(generator) == 1
+    assert _call_kwargs(generator)[0]["output_schema"] is schema
+    assert "output_schema" not in _call_kwargs(reviewer)[0]
 
 
 def test_invalid_spec_fails_before_factory(tmp_path: Path) -> None:

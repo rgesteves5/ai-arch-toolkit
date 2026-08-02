@@ -153,6 +153,17 @@ class TestBuildFlow:
 
         assert isinstance(flow, Flow)
 
+    def test_output_schema_allowed_on_generate_review(self) -> None:
+        schema = OutputSchema(name="out", schema={"type": "object"})
+        flow = build_flow(
+            ReasoningSpec(strategy="generate_review", output_schema=schema),
+            AsyncMock(),
+            ToolGroup(),
+        )
+
+        assert isinstance(flow, Flow)
+        assert get_strategy("generate_review").supports_output_schema is True
+
     def test_output_schema_rejected_on_unsupported_strategy(self) -> None:
         schema = OutputSchema(name="out", schema={"type": "object"})
         with pytest.raises(ValueError, match="does not support output_schema"):

@@ -76,7 +76,7 @@ object.
 | `plan_execute` | `plan_execute_flow` | — | `max_replans`, `max_iterations_per_step` |
 | `rewoo` | `rewoo_flow` | — | — |
 | `reflexion` | `reflexion_flow` | — | `threshold`, `max_retries` |
-| `generate_review` | `generate_review_flow` | — | `max_cycles`, `max_review_iterations`, `reviewer_kwargs` |
+| `generate_review` | `generate_review_flow` | ✅ (generator only) | `max_cycles`, `max_review_iterations`, `reviewer_kwargs` |
 | `self_discovery` | `self_discovery_flow` | — | `modules` |
 | `llm_compiler` | `llm_compiler_flow` | — | `max_replans` |
 | `tot` | `tot_flow` | — | `n_candidates`, `max_depth`, `search_strategy` |
@@ -88,9 +88,10 @@ Multi-phase strategies additionally accept per-phase prompt knobs
 
 `completion` is the one strategy with no flow factory of its own — a plain
 single-shot LLM call, handy as a baseline or for non-agentic steps in a larger
-composition. Only `react` and `completion` support `output_schema`; setting it on
-any other strategy raises `ValueError` at `build_flow` time, not silently at
-runtime.
+composition. `react`, `completion`, and `generate_review` support `output_schema`;
+for `generate_review`, the schema is sent only to the generator, while the reviewer
+keeps its plain-text `ACCEPT` / `RETRY` control protocol. Setting it on any other
+strategy raises `ValueError` at `build_flow` time, not silently at runtime.
 
 The registered names are discoverable at runtime:
 

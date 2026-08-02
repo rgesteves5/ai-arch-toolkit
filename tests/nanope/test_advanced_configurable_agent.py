@@ -37,12 +37,14 @@ def _response(
     text: str = "",
     tool_calls: tuple[ToolCall, ...] = (),
     cost: float = 0.001,
+    parsed: object | None = None,
 ) -> Response:
     return Response(
         text=text,
         tool_calls=tool_calls,
         usage=Usage(input_tokens=10, output_tokens=5),
         cost=cost,
+        parsed=parsed,
     )
 
 
@@ -691,19 +693,40 @@ async def test_output_schema_rejects_unsupported_strategy() -> None:
         await agent.run("hello")
 
 
-async def test_output_schema_rejects_generate_review_strategy() -> None:
+async def test_output_schema_reaches_only_generate_review_generator() -> None:
     llm = AsyncMock()
+    parsed = {"answer": "draft"}
+    llm.complete = AsyncMock(
+        side_effect=[
+            _response(text='{"answer": "draft"}', parsed=parsed),
+            _response(text="ACCEPT"),
+        ]
+    )
     agent = ConfigurableAgent(
         {
             **_base_config(),
             "reasoning": {"strategy": "generate_review"},
-            "output": {"schema": {"type": "object"}},
+            "output": {
+                "name": "structured_answer",
+                "schema": {
+                    "type": "object",
+                    "properties": {"answer": {"type": "string"}},
+                    "required": ["answer"],
+                },
+            },
         },
         llm_factory=lambda _: llm,
     )
 
-    with pytest.raises(ValueError, match="generate_review"):
-        await agent.run("hello")
+    result = await agent.run("hello")
+
+    generator_kwargs = llm.complete.call_args_list[0].kwargs
+    reviewer_kwargs = llm.complete.call_args_list[1].kwargs
+    assert generator_kwargs["output_schema"].name == "structured_answer"
+    assert "output_schema" not in reviewer_kwargs
+    assert result.final_text == '{"answer": "draft"}'
+    assert result.final_response is not None
+    assert result.final_response.parsed is parsed
 
 
 async def test_configurable_agent_react_tool_execution() -> None:

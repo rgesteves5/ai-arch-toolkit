@@ -43,6 +43,7 @@ from ai_arch_toolkit.nanope.advanced_multi_purpose_configurable_agent._tools imp
     built_in_tool_registry,
     resolve_tools_with_limits,
 )
+from ai_arch_toolkit.toolkit.agents._builders import get_strategy
 from ai_arch_toolkit.toolkit.agents._compile import build_flow, extract_text, initial_state
 from ai_arch_toolkit.toolkit.agents._spec import ReasoningSpec
 from ai_arch_toolkit.toolkit.flow._flow import FlowResult
@@ -294,24 +295,20 @@ def _validate_output_schema(config: AgentConfig) -> None:
     if not config.output.schema:
         return
     strategy = config.reasoning.strategy
-    if strategy not in {"react", "generate_review"}:
-        raise ValueError("output.schema is currently supported only for react strategy")
-    if strategy == "generate_review":
-        raise ValueError(
-            "output.schema is currently not supported for generate_review because the reviewer "
-            "uses ACCEPT/RETRY control text"
-        )
+    if not get_strategy(strategy).supports_output_schema:
+        raise ValueError(f"output.schema is not supported for strategy {strategy!r}")
 
 
 def _reasoning_spec(config: AgentConfig, *, system: str) -> ReasoningSpec:
     reasoning = config.reasoning
-    knobs: dict[str, Any] = {
-        **dict(reasoning.strategy_kwargs),
-        "parallel_tool_calls": reasoning.parallel_tool_calls,
-        "final_answer_hint": reasoning.final_answer_hint,
-        "strip_tools_on_final": reasoning.strip_tools_on_final,
-        "show_turn_counter": reasoning.show_turn_counter,
-    }
+    knobs: dict[str, Any] = dict(reasoning.strategy_kwargs)
+    if reasoning.strategy == "react":
+        knobs.update(
+            parallel_tool_calls=reasoning.parallel_tool_calls,
+            final_answer_hint=reasoning.final_answer_hint,
+            strip_tools_on_final=reasoning.strip_tools_on_final,
+            show_turn_counter=reasoning.show_turn_counter,
+        )
     output_schema = None
     if config.output.schema:
         output_schema = OutputSchema(

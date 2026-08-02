@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 
 from ai_arch_toolkit.core._llm import LLM
-from ai_arch_toolkit.core._response import Response, Usage
+from ai_arch_toolkit.core._response import OutputSchema, Response, Usage
 from ai_arch_toolkit.core._tools._group import ToolGroup
 from ai_arch_toolkit.toolkit.agents import Agent, ReasoningSpec, build_flow, get_strategy
 
@@ -276,6 +276,46 @@ class TestGenerateReviewRouting:
         assert result.text == "draft answer"
         assert not _calls(default)
         assert len(_calls(generator)) == 1
+
+    async def test_output_schema_reaches_only_generator(self) -> None:
+        generator = _llm('{"title": "draft"}')
+        reviewer = _llm("ACCEPT")
+        schema = OutputSchema(
+            name="draft",
+            schema={
+                "type": "object",
+                "properties": {"title": {"type": "string"}},
+                "required": ["title"],
+            },
+        )
+
+        result = await _run(
+            ReasoningSpec(strategy="generate_review", output_schema=schema),
+            _llm("unused"),
+            generator_llm=generator,
+            reviewer_llm=reviewer,
+        )
+
+        assert result.text == '{"title": "draft"}'
+        assert _calls(generator)[0]["kwargs"]["output_schema"] is schema
+        assert "output_schema" not in _calls(reviewer)[0]["kwargs"]
+
+    async def test_output_schema_is_preserved_across_review_retries(self) -> None:
+        generator = _llm('{"title": "first"}', '{"title": "revised"}')
+        reviewer = _llm("RETRY: revise it", "ACCEPT")
+        schema = OutputSchema(name="draft", schema={"type": "object"})
+
+        await _run(
+            ReasoningSpec(strategy="generate_review", output_schema=schema),
+            _llm("unused"),
+            generator_llm=generator,
+            reviewer_llm=reviewer,
+        )
+
+        assert len(_calls(generator)) == 2
+        assert len(_calls(reviewer)) == 2
+        assert all(call["kwargs"]["output_schema"] is schema for call in _calls(generator))
+        assert all("output_schema" not in call["kwargs"] for call in _calls(reviewer))
 
     async def test_llm_kwargs_reach_reviewer_with_precedence(self) -> None:
         default = _llm("draft")
