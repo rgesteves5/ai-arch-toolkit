@@ -71,6 +71,14 @@ class TestPricingRegistryDefaults:
         assert pricing.has("grok-4-fast-reasoning")
         assert pricing.has("grok-code-fast-1")
 
+    def test_grok_46_has_its_own_entry_not_the_grok_4_prefix(self):
+        entry = pricing.get("grok-4.6")
+        assert entry is not None
+        assert entry.input == 2.0
+        assert entry.output == 6.0
+        assert entry.cache_read == 0.50
+        assert entry != pricing.get("grok-4")
+
     def test_unknown_model(self):
         assert not pricing.has("unknown-model-v1")
         assert pricing.get("unknown-model-v1") is None
