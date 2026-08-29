@@ -185,11 +185,20 @@ class BaseProvider(ABC):
 class StreamState:
     """Per-stream metadata accumulator (one per call). Used by all providers."""
 
-    __slots__ = ("model", "raw", "stop_reason", "thinking", "tool_calls", "usage")
+    __slots__ = (
+        "model",
+        "provider_cost",
+        "raw",
+        "stop_reason",
+        "thinking",
+        "tool_calls",
+        "usage",
+    )
 
     def __init__(self) -> None:
         self.usage: Usage | None = None
         self.model: str = ""
+        self.provider_cost: float | None = None
         self.stop_reason: str = ""
         self.raw: Any = None
         self.tool_calls: list[ToolCall] = []

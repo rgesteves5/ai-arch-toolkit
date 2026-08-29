@@ -35,6 +35,7 @@ def _sdk_completion(
     completion_tokens: int = 5,
     reasoning: str | None = None,
     reasoning_field: str = "reasoning_content",
+    reasoning_tokens: int = 0,
 ) -> SimpleNamespace:
     """Build a fake openai.types.chat.ChatCompletion-like object."""
     tc_objs = None
@@ -68,6 +69,7 @@ def _sdk_completion(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         total_tokens=prompt_tokens + completion_tokens,
+        completion_tokens_details=SimpleNamespace(reasoning_tokens=reasoning_tokens),
     )
     return SimpleNamespace(
         choices=[choice],
@@ -250,6 +252,25 @@ class TestExtractUsage:
         )
         usage = _extract_usage(sdk_usage)
         assert usage.cache_read_tokens == 0
+
+    def test_completion_tokens_remain_inclusive_of_reasoning(self):
+        sdk_usage = SimpleNamespace(
+            prompt_tokens=100,
+            completion_tokens=50,
+            completion_tokens_details=SimpleNamespace(reasoning_tokens=30),
+        )
+        usage = _extract_usage(sdk_usage)
+        assert usage.output_tokens == 50
+
+    def test_compatible_api_separate_reasoning_is_recovered_from_total(self):
+        sdk_usage = SimpleNamespace(
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=180,
+            completion_tokens_details=SimpleNamespace(reasoning_tokens=30),
+        )
+        usage = _extract_usage(sdk_usage)
+        assert usage.output_tokens == 80
 
 
 class TestParseSdkResponse:

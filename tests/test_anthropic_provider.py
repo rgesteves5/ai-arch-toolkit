@@ -39,6 +39,7 @@ def _sdk_message(
     output_tokens: int = 5,
     cache_creation_input_tokens: int = 0,
     cache_read_input_tokens: int = 0,
+    thinking_tokens: int = 0,
 ) -> SimpleNamespace:
     """Build a fake anthropic.types.Message-like object."""
     content = []
@@ -62,6 +63,7 @@ def _sdk_message(
         output_tokens=output_tokens,
         cache_creation_input_tokens=cache_creation_input_tokens,
         cache_read_input_tokens=cache_read_input_tokens,
+        output_tokens_details=SimpleNamespace(thinking_tokens=thinking_tokens),
     )
     return SimpleNamespace(
         content=content,
@@ -249,6 +251,15 @@ class TestExtractUsage:
         usage = _extract_usage(sdk_usage)
         assert usage.cache_write_tokens == 0
         assert usage.cache_read_tokens == 0
+
+    def test_output_tokens_remain_inclusive_of_thinking(self):
+        sdk_usage = SimpleNamespace(
+            input_tokens=100,
+            output_tokens=50,
+            output_tokens_details=SimpleNamespace(thinking_tokens=30),
+        )
+        usage = _extract_usage(sdk_usage)
+        assert usage.output_tokens == 50
 
 
 class TestParseSdkResponse:

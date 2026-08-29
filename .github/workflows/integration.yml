@@ -26,6 +26,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.repository == 'rgesteves5/ai-arch-toolkit'
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4

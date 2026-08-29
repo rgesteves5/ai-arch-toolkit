@@ -80,6 +80,20 @@ async def test_complete_meters_one_llm_call_with_cost():
     assert snap.cost.pico > 0 and snap.unknown_cost_count == 0
 
 
+async def test_default_pricer_prefers_exact_provider_cost():
+    response = Response(
+        text="ok",
+        usage=Usage(input_tokens=100, output_tokens=50),
+        cost=0.123456,
+        provider_cost=0.123456,
+        model=MODEL,
+    )
+    llm = make_llm(FakeProvider(response=response))
+    with MeterScope() as scope:
+        await llm.complete("hi")
+    assert scope.snapshot().cost == Money.from_usd(0.123456)
+
+
 async def test_enforcing_scope_denies_over_the_call_cap():
     prov = FakeProvider(response=resp(input_tokens=10))
     llm = make_llm(prov)
@@ -107,7 +121,14 @@ async def test_runconfig_pricer_overrides_the_default():
         def price(self, request: OperationRequest, usage: Usage) -> Cost:
             return Cost.known(Money.from_usd(0.42))
 
-    llm = make_llm(FakeProvider(response=resp(input_tokens=100)))
+    response = Response(
+        text="ok",
+        usage=Usage(input_tokens=100),
+        cost=0.123456,
+        provider_cost=0.123456,
+        model=MODEL,
+    )
+    llm = make_llm(FakeProvider(response=response))
     with MeterScope(RunConfig(pricer=FixedPricer())) as scope:
         await llm.complete("hi")
     assert scope.snapshot().cost == Money.from_usd(0.42)
@@ -129,9 +150,17 @@ def test_complete_sync_is_metered_too():
 class FakeStreamProvider:
     """Yields canned chunks; fills StreamState.usage for the finalizer to settle from."""
 
-    def __init__(self, *, chunks=(), usage: Usage | None = None, error: Exception | None = None):
+    def __init__(
+        self,
+        *,
+        chunks=(),
+        usage: Usage | None = None,
+        provider_cost: float | None = None,
+        error: Exception | None = None,
+    ):
         self._chunks = list(chunks)
         self._usage = usage or Usage()
+        self._provider_cost = provider_cost
         self._error = error
 
     def stream(self, messages, *, system=None, tools=None, **kwargs):
@@ -139,6 +168,7 @@ class FakeStreamProvider:
             raise self._error
         state = StreamState()
         state.usage = self._usage
+        state.provider_cost = self._provider_cost
         chunks = self._chunks
 
         async def _aiter():
@@ -152,6 +182,7 @@ class FakeStreamProvider:
             raise self._error
         state = StreamState()
         state.usage = self._usage
+        state.provider_cost = self._provider_cost
         chunks = self._chunks
 
         async def _aiter():
@@ -183,6 +214,22 @@ async def test_stream_starts_on_build_and_settles_on_drain():
         snap = scope.snapshot()
     assert snap.llm_calls == 1 and snap.input_tokens == 30 and snap.output_tokens == 10
     assert snap.cost.pico > 0 and snap.unknown_cost_count == 0
+
+
+async def test_stream_prefers_exact_provider_cost():
+    prov = FakeStreamProvider(
+        chunks=["ok"],
+        usage=Usage(input_tokens=30, output_tokens=10),
+        provider_cost=0.234567,
+    )
+    llm = make_stream_llm(prov)
+    with MeterScope() as scope:
+        stream = llm.stream("hi")
+        await _drain(stream)
+    assert stream.response is not None
+    assert stream.response.provider_cost == 0.234567
+    assert stream.response.cost == 0.234567
+    assert scope.snapshot().cost == Money.from_usd(0.234567)
 
 
 async def test_abandoned_stream_is_incomplete_at_scope_close():

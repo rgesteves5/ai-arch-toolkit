@@ -241,11 +241,13 @@ def _build_thinking_config(
 
 def _extract_usage(usage_meta: Any) -> Usage:
     """Convert SDK usage metadata to our Usage dataclass."""
-    total_input = getattr(usage_meta, "prompt_token_count", 0) or 0
+    prompt_input = getattr(usage_meta, "prompt_token_count", 0) or 0
+    tool_input = getattr(usage_meta, "tool_use_prompt_token_count", 0) or 0
     cache_read = getattr(usage_meta, "cached_content_token_count", 0) or 0
+    reasoning = getattr(usage_meta, "thoughts_token_count", 0) or 0
     return Usage(
-        input_tokens=_uncached_input_tokens(total_input, cache_read),
-        output_tokens=getattr(usage_meta, "candidates_token_count", 0) or 0,
+        input_tokens=_uncached_input_tokens(prompt_input, cache_read) + tool_input,
+        output_tokens=(getattr(usage_meta, "candidates_token_count", 0) or 0) + reasoning,
         cache_read_tokens=cache_read,
     )
 

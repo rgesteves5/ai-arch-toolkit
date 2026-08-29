@@ -42,7 +42,8 @@ class Usage:
     """Disjoint token usage counters.
 
     ``input_tokens`` contains non-cached input only. Cache reads and writes are recorded
-    separately, so total input is the sum of all three input counters.
+    separately, so total input is the sum of all three input counters. ``output_tokens`` includes
+    billable reasoning/thinking tokens where the provider reports them separately.
     """
 
     input_tokens: int = 0
@@ -136,6 +137,7 @@ class Response:
     parsed: Any = None  # populated only when output_schema was requested
     usage: Usage = field(default_factory=Usage)
     cost: float | None = None
+    provider_cost: float | None = None  # exact per-request USD reported by the provider
     stop_reason: str = ""
     model: str = ""
     raw: Any = None

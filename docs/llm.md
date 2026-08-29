@@ -86,7 +86,8 @@ response.tool_calls     # tuple of ToolCall(id, name, input)
 response.thinking       # tuple of ThinkingBlock (extended thinking)
 response.parsed         # structured output (if output_schema used)
 response.usage          # Usage(input_tokens, output_tokens, cache_write_tokens, cache_read_tokens)
-response.cost           # estimated USD (from pricing registry)
+response.cost           # exact provider cost when reported, otherwise estimated USD
+response.provider_cost  # exact provider-reported USD, or None
 response.stop_reason    # "end_turn", "tool_use", "max_tokens", etc.
 response.model          # actual model used
 response.citations      # tuple of Citation (web search results)
@@ -97,7 +98,8 @@ response.to_message()   # convert to assistant message dict
 
 The four `Usage` counters are disjoint. `input_tokens` contains non-cached input only;
 add `cache_read_tokens` and `cache_write_tokens` to obtain total input. This keeps cache
-reads/writes from being charged again at the regular input rate.
+reads/writes from being charged again at the regular input rate. `output_tokens` includes
+billable reasoning/thinking tokens when a provider reports them separately.
 
 ---
 

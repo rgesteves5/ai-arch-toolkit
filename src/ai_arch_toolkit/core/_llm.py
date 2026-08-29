@@ -15,6 +15,7 @@ from ai_arch_toolkit.core._content import user
 from ai_arch_toolkit.core._exceptions import APIError
 from ai_arch_toolkit.core._metering._admission import AdmissionDenied, NotMeteredOperationError
 from ai_arch_toolkit.core._metering._cost import Cost
+from ai_arch_toolkit.core._metering._money import Money
 from ai_arch_toolkit.core._metering._operation import MeterOperation, OperationRequest
 from ai_arch_toolkit.core._metering._scope import current_meter, current_span_id
 from ai_arch_toolkit.core._middleware import (
@@ -60,6 +61,17 @@ def _price_or_unknown(pricer: Any, request: OperationRequest, usage: Usage) -> C
         logger.warning("pricer %r returned an estimate at settle; recording unknown", pricer)
         return Cost.unknown("pricer returned an estimate at settle")
     return cost
+
+
+def _settlement_cost(pricer: Any, request: OperationRequest, response: Response) -> Cost:
+    """Prefer an exact provider cost under the default pricer, then estimate from usage.
+
+    An explicitly configured custom pricer remains authoritative. Provider costs are actual
+    per-request charges, while the default registry is only a token-based fallback.
+    """
+    if pricer is pricing and response.provider_cost is not None:
+        return Cost.known(Money.from_usd(response.provider_cost))
+    return _price_or_unknown(pricer, request, response.usage)
 
 
 PROVIDER_ERRORS: tuple[type[Exception], ...] = (
@@ -539,7 +551,7 @@ class LLM:
                 )
                 if op is not None and scope is not None and request is not None:
                     pricer = scope.pricer or pricing
-                    cost = _price_or_unknown(pricer, request, response.usage)
+                    cost = _settlement_cost(pricer, request, response)
                     op.settle(usage=response.usage, cost=cost)
                     settled = True
                 return response
@@ -752,12 +764,18 @@ class LLM:
 
         def _finalize(text: str) -> Response:
             usage = state.usage or Usage()
+            provider_cost = state.provider_cost
             return Response(
                 text=text,
                 tool_calls=tuple(state.tool_calls),
                 thinking=tuple(state.thinking),
                 usage=usage,
-                cost=_estimate_response_cost(model, usage),
+                cost=(
+                    provider_cost
+                    if provider_cost is not None
+                    else _estimate_response_cost(model, usage)
+                ),
+                provider_cost=provider_cost,
                 stop_reason=state.stop_reason,
                 model=state.model or model,
                 raw=state.raw,
@@ -941,7 +959,7 @@ class LLM:
                 op, request, pricer = meter
                 op.settle(
                     usage=response.usage,
-                    cost=_price_or_unknown(pricer, request, response.usage),
+                    cost=_settlement_cost(pricer, request, response),
                 )
             if self._middleware and req is not None:
                 response = _run_after(self._middleware, req, response)

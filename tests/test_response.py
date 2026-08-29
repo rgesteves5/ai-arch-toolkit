@@ -38,7 +38,12 @@ class TestUsage:
         assert u.cache_read_tokens == 0
 
     def test_custom_values(self):
-        u = Usage(input_tokens=100, output_tokens=50, cache_write_tokens=10, cache_read_tokens=5)
+        u = Usage(
+            input_tokens=100,
+            output_tokens=50,
+            cache_write_tokens=10,
+            cache_read_tokens=5,
+        )
         assert u.input_tokens == 100
         assert u.output_tokens == 50
 
@@ -49,6 +54,7 @@ class TestResponse:
         assert r.text == ""
         assert r.tool_calls == ()
         assert r.cost is None
+        assert r.provider_cost is None
         assert r.stop_reason == ""
         assert r.model == ""
         assert r.raw is None
@@ -58,8 +64,9 @@ class TestResponse:
         assert r.cost is None
 
     def test_cost_float_when_known(self):
-        r = Response(cost=0.003)
+        r = Response(cost=0.003, provider_cost=0.003)
         assert r.cost == 0.003
+        assert r.provider_cost == 0.003
 
     def test_shortcut_tokens(self):
         r = Response(usage=Usage(input_tokens=100, output_tokens=50))

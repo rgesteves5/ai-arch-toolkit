@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import warnings
 from collections.abc import AsyncIterator
 from typing import Any
@@ -159,12 +160,40 @@ def _extract_usage(sdk_usage: Any) -> Usage:
     """Convert SDK SamplingUsage to our Usage dataclass."""
     total_input = getattr(sdk_usage, "input_tokens", 0) or getattr(sdk_usage, "prompt_tokens", 0)
     cache_read = getattr(sdk_usage, "cached_prompt_text_tokens", 0) or 0
+    reasoning = getattr(sdk_usage, "reasoning_tokens", 0) or 0
+    completion = getattr(sdk_usage, "completion_tokens", 0) or 0
+    # The gRPC SDK reports final-answer completion tokens and internal reasoning separately.
+    # Normalize output_tokens to the inclusive billable total used by the rest of the toolkit.
+    output = getattr(sdk_usage, "output_tokens", 0) or (completion + reasoning)
     return Usage(
         input_tokens=_uncached_input_tokens(total_input, cache_read),
-        output_tokens=getattr(sdk_usage, "output_tokens", 0)
-        or getattr(sdk_usage, "completion_tokens", 0),
+        output_tokens=output,
         cache_read_tokens=cache_read,
     )
+
+
+def _extract_provider_cost(response: Any) -> float | None:
+    """Return the exact provider-reported USD cost, or ``None`` when absent/invalid."""
+    reported = getattr(response, "cost_usd", None)
+    usage = getattr(response, "usage", None)
+    if reported is None and usage is not None:
+        ticks = getattr(usage, "cost_in_usd_ticks", None)
+        has_field = getattr(usage, "HasField", None)
+        if callable(has_field):
+            try:
+                if not has_field("cost_in_usd_ticks"):
+                    ticks = None
+            except ValueError:
+                ticks = None
+        if ticks is not None:
+            reported = ticks / 10_000_000_000
+    if reported is None:
+        return None
+    cost = float(reported)
+    if cost < 0 or not math.isfinite(cost):
+        logger.warning("Ignoring invalid xAI provider-reported cost: %r", reported)
+        return None
+    return cost
 
 
 def _parse_sdk_response(
@@ -213,7 +242,8 @@ def _parse_sdk_response(
             parsed = json.loads(text)  # fallback to raw dict
 
     usage = _extract_usage(response.usage) if response.usage else Usage()
-    cost = _estimate_response_cost(model, usage)
+    provider_cost = _extract_provider_cost(response)
+    cost = provider_cost if provider_cost is not None else _estimate_response_cost(model, usage)
 
     return Response(
         text=text.strip(),
@@ -222,6 +252,7 @@ def _parse_sdk_response(
         parsed=parsed,
         usage=usage,
         cost=cost,
+        provider_cost=provider_cost,
         stop_reason=response.finish_reason or "",
         model=model,
         raw=response,
@@ -492,6 +523,7 @@ class XAIProvider(LoopAwareClientCache, BaseProvider):
                     state.raw = final_response
                     if final_response.usage:
                         state.usage = _extract_usage(final_response.usage)
+                    state.provider_cost = _extract_provider_cost(final_response)
                     state.stop_reason = final_response.finish_reason or ""
 
             except grpc.aio.AioRpcError as exc:

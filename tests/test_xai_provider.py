@@ -11,6 +11,7 @@ import grpc
 import pytest
 
 from ai_arch_toolkit.core._exceptions import APIError, RateLimitError
+from ai_arch_toolkit.core._pricing import _estimate_response_cost
 from ai_arch_toolkit.core._providers._xai import (
     XAIProvider,
     _build_response_format,
@@ -34,12 +35,17 @@ def _sdk_tool_call(tc_id="tc_1", name="get_weather", arguments='{"city": "NYC"}'
     return SimpleNamespace(id=tc_id, type="function", function=func)
 
 
-def _sdk_usage(prompt_tokens=10, completion_tokens=5, cached_prompt_text_tokens=0):
+def _sdk_usage(
+    prompt_tokens=10,
+    completion_tokens=5,
+    cached_prompt_text_tokens=0,
+    reasoning_tokens=0,
+):
     return SimpleNamespace(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         cached_prompt_text_tokens=cached_prompt_text_tokens,
-        reasoning_tokens=0,
+        reasoning_tokens=reasoning_tokens,
     )
 
 
@@ -49,6 +55,7 @@ def _sdk_response(
     tool_calls=None,
     reasoning_content="",
     usage=None,
+    cost_usd=None,
 ):
     """Build a fake xAI SDK Response-like object."""
     return SimpleNamespace(
@@ -57,6 +64,7 @@ def _sdk_response(
         tool_calls=tool_calls or [],
         reasoning_content=reasoning_content,
         usage=usage or _sdk_usage(),
+        cost_usd=cost_usd,
     )
 
 
@@ -187,6 +195,12 @@ class TestExtractUsage:
         assert usage.output_tokens == 50
         assert usage.cache_read_tokens == 20
 
+    def test_reasoning_tokens_are_included_in_billable_output(self):
+        usage = _extract_usage(
+            _sdk_usage(prompt_tokens=100, completion_tokens=50, reasoning_tokens=200)
+        )
+        assert usage.output_tokens == 250
+
 
 # ---------------------------------------------------------------------------
 # _parse_sdk_response
@@ -236,6 +250,32 @@ class TestParseSdkResponse:
         resp = _sdk_response(finish_reason="FINISH_REASON_STOP")
         r = _parse_sdk_response(resp, "grok-3")
         assert r.stop_reason == "FINISH_REASON_STOP"
+
+    def test_provider_reported_cost_is_preferred(self):
+        resp = _sdk_response(
+            usage=_sdk_usage(completion_tokens=5, reasoning_tokens=20),
+            cost_usd=0.012345,
+        )
+        r = _parse_sdk_response(resp, "grok-4.6")
+        assert r.provider_cost == 0.012345
+        assert r.cost == 0.012345
+
+    def test_raw_provider_ticks_match_reasoning_aware_local_calculation(self):
+        usage = _sdk_usage(prompt_tokens=100, completion_tokens=50, reasoning_tokens=200)
+        usage.cost_in_usd_ticks = 17_000_000
+        resp = _sdk_response(usage=usage)
+        del resp.cost_usd
+        r = _parse_sdk_response(resp, "grok-4.6")
+        assert r.provider_cost == pytest.approx(0.0017)
+        assert _estimate_response_cost("grok-4.6", r.usage) == pytest.approx(r.provider_cost)
+
+    def test_missing_provider_cost_falls_back_to_reasoning_aware_estimate(self):
+        resp = _sdk_response(
+            usage=_sdk_usage(prompt_tokens=100, completion_tokens=50, reasoning_tokens=200)
+        )
+        r = _parse_sdk_response(resp, "grok-4.6")
+        assert r.provider_cost is None
+        assert r.cost == pytest.approx(0.0017)
 
 
 # ---------------------------------------------------------------------------
@@ -606,6 +646,30 @@ class TestXAIProviderStream:
         assert state.usage is not None
         assert state.usage.input_tokens == 25
         assert state.usage.output_tokens == 10
+
+    async def test_stream_provider_cost_and_reasoning_usage(self):
+        response = _sdk_response(
+            usage=_sdk_usage(prompt_tokens=25, completion_tokens=10, reasoning_tokens=30),
+            cost_usd=0.0042,
+        )
+        mock_chat = MagicMock()
+
+        async def _fake_stream():
+            yield response, _sdk_chunk(content="Hi")
+
+        mock_chat.stream = _fake_stream
+        mock_client = MagicMock()
+        mock_client.chat.create.return_value = mock_chat
+        provider = XAIProvider("grok-4.6", "test-key")
+        provider._client = mock_client
+
+        aiter, state = provider.stream([{"role": "user", "content": "Hi"}])
+        async for _ in aiter:
+            pass
+
+        assert state.usage is not None
+        assert state.usage.output_tokens == 40
+        assert state.provider_cost == 0.0042
 
     async def test_stream_error_mapping(self):
         error = grpc.aio.AioRpcError(

@@ -99,6 +99,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `uv lock --upgrade` brought every transitive dependency to its latest compatible version (pydantic 2.13, urllib3 2.7, requests 2.34, websockets 16, xai-sdk 1.12, ruff 0.15.13, …); resolved the four Dependabot alerts.
 
 ### Fixed
+- Provider reasoning usage is now normalized without double-counting: xAI completion plus
+  reasoning tokens and Gemini candidate plus thought tokens become inclusive billable
+  `output_tokens`, while OpenAI and Anthropic keep their already-inclusive output totals. Gemini
+  tool-use prompt tokens are also counted as input. xAI now prefers the exact per-request
+  `cost_in_usd_ticks` charge for response and meter costs, falling back to the local pricing
+  registry only when the provider omits it. OpenAI-compatible responses also recover separately
+  reported generated tokens from `total_tokens` when it exceeds prompt plus completion.
 - `generate_review` now forwards `ReasoningSpec.output_schema` to its generator while keeping the
   reviewer on its plain-text `ACCEPT` / `RETRY` protocol. Its strategy metadata and the Nanope
   configurable-agent validation now advertise the same support, and Nanope no longer injects

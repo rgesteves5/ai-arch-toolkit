@@ -44,6 +44,8 @@ def _sdk_response(
     prompt_tokens=10,
     candidates_tokens=5,
     cached_tokens=0,
+    thoughts_tokens=0,
+    tool_use_prompt_tokens=0,
     tool_calls=None,
     thinking_parts=None,
 ):
@@ -70,6 +72,8 @@ def _sdk_response(
         prompt_token_count=prompt_tokens,
         candidates_token_count=candidates_tokens,
         cached_content_token_count=cached_tokens,
+        thoughts_token_count=thoughts_tokens,
+        tool_use_prompt_token_count=tool_use_prompt_tokens,
     )
     return SimpleNamespace(candidates=[candidate], usage_metadata=usage)
 
@@ -81,6 +85,8 @@ def _sdk_stream_chunk(
     finish_reason=None,
     prompt_tokens=0,
     candidates_tokens=0,
+    thoughts_tokens=0,
+    tool_use_prompt_tokens=0,
 ):
     """Build a fake streaming chunk."""
     parts = []
@@ -96,6 +102,8 @@ def _sdk_stream_chunk(
         prompt_token_count=prompt_tokens,
         candidates_token_count=candidates_tokens,
         cached_content_token_count=0,
+        thoughts_token_count=thoughts_tokens,
+        tool_use_prompt_token_count=tool_use_prompt_tokens,
     )
     return SimpleNamespace(candidates=[candidate], usage_metadata=usage)
 
@@ -256,10 +264,25 @@ class TestExtractUsage:
             prompt_token_count=None,
             candidates_token_count=None,
             cached_content_token_count=None,
+            thoughts_token_count=None,
+            tool_use_prompt_token_count=None,
         )
         usage = _extract_usage(meta)
         assert usage.input_tokens == 0
         assert usage.output_tokens == 0
+
+    def test_thoughts_are_included_in_billable_output(self):
+        meta = SimpleNamespace(
+            prompt_token_count=100,
+            candidates_token_count=50,
+            cached_content_token_count=10,
+            thoughts_token_count=30,
+            tool_use_prompt_token_count=20,
+        )
+        usage = _extract_usage(meta)
+        assert usage.input_tokens == 110  # 90 uncached prompt + 20 tool-use input
+        assert usage.cache_read_tokens == 10
+        assert usage.output_tokens == 80  # 50 candidate + 30 thoughts
 
 
 # ---------------------------------------------------------------------------
