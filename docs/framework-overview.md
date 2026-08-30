@@ -50,7 +50,7 @@ from ai_arch_toolkit import LLM
 
 llm = LLM("claude-sonnet-5")  # Anthropic
 llm = LLM("gpt-4o")                    # OpenAI
-llm = LLM("gemini-2.0-flash")          # Gemini
+llm = LLM("gemini-3.7-flash")          # Gemini
 llm = LLM("grok-2")                    # xAI
 ```
 

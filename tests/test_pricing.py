@@ -16,6 +16,7 @@ class TestPricingRegistryDefaults:
         assert pricing.has("claude-sonnet-5")
         assert pricing.has("claude-fable-5")
         assert pricing.has("claude-opus-4-8")
+        assert not pricing.has("claude-opus-4-1")
 
     def test_has_claude_46_models(self):
         assert pricing.has("claude-opus-4-6-20260101")
@@ -44,8 +45,14 @@ class TestPricingRegistryDefaults:
         assert pricing.has("gpt-5.6-sol")
         assert pricing.has("gpt-5.6-terra")
         assert pricing.has("gpt-5.6-luna")
+        assert pricing.has("gpt-5.6")
+        assert pricing.has("gpt-5.6-cyber")
+        assert pricing.has("gpt-daybreak-blue-latest")
+        assert pricing.has("gpt-daybreak-red-latest")
+        assert pricing.has("chat-latest")
 
     def test_has_gemini_models(self):
+        assert pricing.has("gemini-3.7-flash")
         assert pricing.has("gemini-3.6-flash")
         assert pricing.has("gemini-3.5-flash")
         assert pricing.has("gemini-3.5-flash-lite")
@@ -53,7 +60,7 @@ class TestPricingRegistryDefaults:
         assert pricing.has("gemini-3-flash-preview")
         assert pricing.has("gemini-2.5-flash")
         assert pricing.has("gemini-2.5-pro")
-        assert pricing.has("gemini-2.0-flash-lite")
+        assert not pricing.has("gemini-2.0-flash-lite")
 
     def test_has_o_series_models(self):
         assert pricing.has("o3")
@@ -69,7 +76,9 @@ class TestPricingRegistryDefaults:
         assert pricing.has("grok-4")
         assert pricing.has("grok-4-1-fast-reasoning")
         assert pricing.has("grok-4-fast-reasoning")
+        assert pricing.has("grok-code-fast")
         assert pricing.has("grok-code-fast-1")
+        assert pricing.has("grok-build-latest")
 
     def test_grok_46_has_its_own_entry_not_the_grok_4_prefix(self):
         entry = pricing.get("grok-4.6")
@@ -110,7 +119,46 @@ class TestPricingRegistryGet:
         # "gpt-5.6-sol" is longer than "gpt-5"
         p = pricing.get("gpt-5.6-sol")
         assert p is not None
-        assert p.input == 5.0  # gpt-5.6-sol, not gpt-5's $1.25
+        assert p.input == 4.0  # gpt-5.6-sol, not gpt-5's $1.25
+
+    def test_gpt56_default_alias_has_sol_pricing(self):
+        p = pricing.get("gpt-5.6")
+        assert p is not None
+        assert p.input == 4.0
+        assert p.output == 20.0
+        assert p.cache_write == 5.0
+
+    def test_current_aliases_share_the_canonical_prices(self):
+        aliases = {
+            "gpt-5.6": "gpt-5.6-sol",
+            "gpt-daybreak-blue-latest": "gpt-5.6-sol",
+            "gpt-daybreak-red-latest": "gpt-5.6-cyber",
+            "grok-code-fast": "grok-build-0.1",
+            "grok-code-fast-1": "grok-build-0.1",
+            "grok-build-latest": "grok-4.5",
+        }
+        for alias, canonical in aliases.items():
+            assert pricing.get(alias) == pricing.get(canonical)
+
+    def test_gpt56_tier_prices(self):
+        expected = {
+            "gpt-5.6-sol": (4.0, 20.0, 0.40),
+            "gpt-5.6-terra": (2.0, 12.0, 0.20),
+            "gpt-5.6-luna": (0.20, 1.20, 0.020),
+            "gpt-5.6-cyber": (12.50, 75.0, 1.25),
+        }
+        for model, rates in expected.items():
+            p = pricing.get(model)
+            assert p is not None
+            assert (p.input, p.output, p.cache_read) == rates
+
+    def test_current_anthropic_pricing(self):
+        sonnet = pricing.get("claude-sonnet-5")
+        opus_48 = pricing.get("claude-opus-4-8")
+        assert sonnet is not None
+        assert opus_48 is not None
+        assert (sonnet.input, sonnet.output, sonnet.cache_read) == (2.0, 10.0, 0.20)
+        assert (opus_48.fast_input, opus_48.fast_output) == (10.0, 50.0)
 
     def test_haiku_45_specific_prefix(self):
         p = pricing.get("claude-haiku-4-5-20251001")
@@ -148,18 +196,31 @@ class TestPricingRegistryGet:
         assert p.long_context_input == 2.50
         assert p.long_context_output == 15.0
 
-    def test_gemini_20_flash_updated(self):
-        p = pricing.get("gemini-2.0-flash")
+    def test_gemini_37_promotional_pricing(self):
+        p = pricing.get("gemini-3.7-flash")
         assert p is not None
-        assert p.input == 0.15
-        assert p.output == 0.60
+        assert p.input == 0.75
+        assert p.output == 3.75
+        assert p.batch_input == 0.375
 
     def test_grok_code_fast(self):
         p = pricing.get("grok-code-fast-1")
         assert p is not None
-        assert p.input == 1.25
-        assert p.output == 2.50
+        assert p.input == 1.0
+        assert p.output == 2.0
         assert p.cache_read == 0.20
+
+    def test_xai_batch_support_and_discount(self):
+        grok_43 = pricing.get("grok-4.3")
+        grok_45 = pricing.get("grok-4.5")
+        build = pricing.get("grok-build-0.1")
+        assert grok_43 is not None
+        assert grok_45 is not None
+        assert build is not None
+        assert (grok_43.batch_input, grok_43.batch_output) == (1.0, 2.0)
+        assert grok_43.batch_cache_read == 0.16
+        assert grok_45.batch_input is None
+        assert build.batch_input is None
 
 
 class TestPricingRegistryRegister:
@@ -267,6 +328,48 @@ class TestEstimateCost:
         assert cost is not None
         assert abs(cost - expected) < 1e-10
 
+    def test_batch_cache_prices(self):
+        cost = pricing.estimate_cost(
+            "gemini-3.7-flash",
+            input_tokens=1000,
+            output_tokens=500,
+            cache_read_tokens=1000,
+            is_batch=True,
+        )
+        expected = (0.375 * 1000 + 1.875 * 500 + 0.0375 * 1000) / 1_000_000
+        assert cost is not None
+        assert abs(cost - expected) < 1e-10
+
+    def test_legacy_custom_cache_rates_remain_the_mode_fallback(self):
+        reg = PricingRegistry()
+        reg.register(
+            "legacy-custom",
+            ModelPricing(input=1.0, output=2.0, cache_read=0.1, batch_input=0.5),
+        )
+        cost = reg.estimate_cost(
+            "legacy-custom", input_tokens=1000, cache_read_tokens=1000, is_batch=True
+        )
+        assert cost is not None
+        assert abs(cost - 0.0006) < 1e-10
+
+    def test_explicit_zero_cache_rate_does_not_fall_back(self):
+        reg = PricingRegistry()
+        reg.register(
+            "free-batch-cache",
+            ModelPricing(
+                input=1.0,
+                output=2.0,
+                cache_read=0.1,
+                batch_input=0.5,
+                batch_cache_read=0.0,
+            ),
+        )
+        cost = reg.estimate_cost(
+            "free-batch-cache", input_tokens=1000, cache_read_tokens=1000, is_batch=True
+        )
+        assert cost is not None
+        assert abs(cost - 0.0005) < 1e-10
+
 
 class TestLongContextPricing:
     def test_standard_below_threshold(self):
@@ -296,12 +399,12 @@ class TestLongContextPricing:
             cache_write_tokens=60_000,
             cache_read_tokens=50_000,
         )
-        # Long context rates: input=6.0, output=22.50
+        # Long context rates also apply to cached input.
         expected = (
             6.0 * 100_000 / 1_000_000
             + 22.50 * 1000 / 1_000_000
-            + 3.75 * 60_000 / 1_000_000
-            + 0.30 * 50_000 / 1_000_000
+            + 7.50 * 60_000 / 1_000_000
+            + 0.60 * 50_000 / 1_000_000
         )
         assert cost is not None
         assert abs(cost - expected) < 1e-10
@@ -321,6 +424,32 @@ class TestLongContextPricing:
             "claude-opus-4-5-20260101", input_tokens=200_001, output_tokens=1000
         )
         expected = 10.0 * 200_001 / 1_000_000 + 37.50 * 1000 / 1_000_000
+        assert cost is not None
+        assert abs(cost - expected) < 1e-10
+
+    def test_inclusive_xai_threshold_uses_long_context_at_200k(self):
+        cost = pricing.estimate_cost(
+            "grok-4.6", input_tokens=199_000, cache_read_tokens=1000, output_tokens=1000
+        )
+        expected = 4.0 * 199_000 / 1_000_000 + 1.0 * 1000 / 1_000_000 + 12.0 / 1000
+        assert cost is not None
+        assert abs(cost - expected) < 1e-10
+
+    def test_batch_long_context_uses_combined_rates(self):
+        cost = pricing.estimate_cost(
+            "gpt-5.6-sol",
+            input_tokens=272_001,
+            output_tokens=1000,
+            cache_write_tokens=1000,
+            cache_read_tokens=1000,
+            is_batch=True,
+        )
+        expected = (
+            4.0 * 272_001 / 1_000_000
+            + 15.0 * 1000 / 1_000_000
+            + 5.0 * 1000 / 1_000_000
+            + 0.40 * 1000 / 1_000_000
+        )
         assert cost is not None
         assert abs(cost - expected) < 1e-10
 
@@ -363,8 +492,7 @@ class TestFastModePricing:
         assert abs(cost - expected) < 1e-10
 
     def test_fast_mode_takes_priority_over_long_context(self):
-        # No bundled model carries both fast and long-context rates today, so
-        # exercise the precedence with a registered synthetic entry.
+        # Legacy custom tables without combined rates retain fast-mode precedence.
         reg = PricingRegistry()
         reg.register(
             "fast-long",
@@ -383,6 +511,36 @@ class TestFastModePricing:
         )
         # Should use fast rates, not long-context
         expected = 5.0 * 300_000 / 1_000_000 + 10.0 * 1000 / 1_000_000
+        assert cost is not None
+        assert abs(cost - expected) < 1e-10
+
+    def test_codex_fast_price_includes_fast_cache_rate(self):
+        cost = pricing.estimate_cost(
+            "gpt-5.3-codex",
+            input_tokens=1000,
+            output_tokens=500,
+            cache_read_tokens=1000,
+            is_fast=True,
+        )
+        expected = (3.50 * 1000 + 28.0 * 500 + 0.35 * 1000) / 1_000_000
+        assert cost is not None
+        assert abs(cost - expected) < 1e-10
+
+    def test_fast_long_context_and_cache_rates(self):
+        cost = pricing.estimate_cost(
+            "gpt-5.6-sol",
+            input_tokens=272_001,
+            output_tokens=1000,
+            cache_write_tokens=1000,
+            cache_read_tokens=1000,
+            is_fast=True,
+        )
+        expected = (
+            16.0 * 272_001 / 1_000_000
+            + 60.0 * 1000 / 1_000_000
+            + 20.0 * 1000 / 1_000_000
+            + 1.60 * 1000 / 1_000_000
+        )
         assert cost is not None
         assert abs(cost - expected) < 1e-10
 
@@ -494,6 +652,33 @@ class TestLoad:
         assert p.fast_input == 5.0
         assert p.fast_output == 10.0
 
+    def test_load_mode_specific_cache_and_long_context_fields(self, tmp_path: Path):
+        toml_content = (
+            "[my-model]\n"
+            "input = 1.0\n"
+            "output = 2.0\n"
+            "batch_input = 0.5\n"
+            "batch_cache_read = 0.1\n"
+            "long_context_threshold = 100\n"
+            "long_context_inclusive = true\n"
+            "batch_long_context_input = 1.0\n"
+            "batch_long_context_cache_read = 0.2\n"
+            "fast_input = 3.0\n"
+            "fast_cache_read = 0.3\n"
+        )
+        toml_file = tmp_path / "pricing.toml"
+        toml_file.write_text(toml_content)
+
+        reg = PricingRegistry()
+        reg.load(toml_file)
+        p = reg.get("my-model-v1")
+        assert p is not None
+        assert p.batch_cache_read == 0.1
+        assert p.long_context_inclusive is True
+        assert p.batch_long_context_input == 1.0
+        assert p.batch_long_context_cache_read == 0.2
+        assert p.fast_cache_read == 0.3
+
 
 class TestModelPricingNone:
     def test_none_semantics(self):
@@ -504,7 +689,9 @@ class TestModelPricingNone:
         assert p.cache_read is None
         assert p.batch_input is None
         assert p.batch_output is None
+        assert p.batch_cache_read is None
         assert p.long_context_threshold is None
+        assert p.long_context_inclusive is False
         assert p.fast_input is None
 
     def test_claude_has_cache_pricing(self):

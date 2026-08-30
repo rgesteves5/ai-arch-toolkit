@@ -1,16 +1,13 @@
 # Default pricing table — USD per 1M tokens
-# Last updated: 2026-07-26 (verified against each provider's live model list)
+# Last updated: 2026-08-29 (verified against each provider's official catalog)
 # Override with: pricing.load("your_file.toml") or pricing.register(...)
 # Known simplifications: cache_write uses Anthropic's 5-min TTL tier (1.25x input) —
-# the 1-hour tier (2x input) can be overridden via pricing.register(); tiered
-# cached-input rates on long prompts (xAI, Gemini) are not modeled — cache_read
-# uses the base tier.
+# the 1-hour tier (2x input) can be overridden via pricing.register().
 
 # ═══════════════════════════════════════════════════════════════════
 # Anthropic Claude
-# Source: https://platform.claude.com/docs/en/pricing
-# Retired families (Claude 3.x, Claude 4.0) are intentionally absent — the API
-# returns 404 for them.
+# Source: https://platform.claude.com/docs/en/about-claude/pricing
+# Retired families (Claude 3.x, Claude 4.0/4.1) are intentionally absent.
 # ═══════════════════════════════════════════════════════════════════
 
 # ── Claude 5 ──
@@ -24,6 +21,8 @@ cache_write = 12.50
 cache_read = 1.0
 batch_input = 5.0
 batch_output = 25.0
+batch_cache_write = 6.25
+batch_cache_read = 0.50
 
 # Same model and pricing as Fable 5, distributed through Project Glasswing.
 [claude-mythos-5]
@@ -33,6 +32,8 @@ cache_write = 12.50
 cache_read = 1.0
 batch_input = 5.0
 batch_output = 25.0
+batch_cache_write = 6.25
+batch_cache_read = 0.50
 
 [claude-opus-5]
 input = 5.0
@@ -41,22 +42,25 @@ cache_write = 6.25
 cache_read = 0.50
 batch_input = 2.50
 batch_output = 12.50
+batch_cache_write = 3.125
+batch_cache_read = 0.25
 fast_input = 10.0
 fast_output = 50.0
+fast_cache_write = 12.50
+fast_cache_read = 1.0
 
-# List price; an introductory $2/$10 rate applies through 2026-08-31.
 [claude-sonnet-5]
-input = 3.0
-output = 15.0
-cache_write = 3.75
-cache_read = 0.30
-batch_input = 1.50
-batch_output = 7.50
+input = 2.0
+output = 10.0
+cache_write = 2.50
+cache_read = 0.20
+batch_input = 1.0
+batch_output = 5.0
+batch_cache_write = 1.25
+batch_cache_read = 0.10
 
 # ── Claude 4.8 ──
 
-# Opus 4.8 supports fast mode, but its fast rates are not published — override
-# via pricing.register() if you use it.
 [claude-opus-4-8]
 input = 5.0
 output = 25.0
@@ -64,6 +68,12 @@ cache_write = 6.25
 cache_read = 0.50
 batch_input = 2.50
 batch_output = 12.50
+batch_cache_write = 3.125
+batch_cache_read = 0.25
+fast_input = 10.0
+fast_output = 50.0
+fast_cache_write = 12.50
+fast_cache_read = 1.0
 
 # ── Claude 4.7 ──
 
@@ -76,6 +86,8 @@ cache_write = 6.25
 cache_read = 0.50
 batch_input = 2.50
 batch_output = 12.50
+batch_cache_write = 3.125
+batch_cache_read = 0.25
 
 # ── Claude 4.6 ──
 
@@ -89,6 +101,8 @@ cache_write = 6.25
 cache_read = 0.50
 batch_input = 2.50
 batch_output = 12.50
+batch_cache_write = 3.125
+batch_cache_read = 0.25
 
 [claude-sonnet-4-6]
 input = 3.0
@@ -97,6 +111,8 @@ cache_write = 3.75
 cache_read = 0.30
 batch_input = 1.50
 batch_output = 7.50
+batch_cache_write = 1.875
+batch_cache_read = 0.15
 
 # ── Claude 4.5 ──
 
@@ -107,9 +123,17 @@ cache_write = 6.25
 cache_read = 0.50
 batch_input = 2.50
 batch_output = 12.50
+batch_cache_write = 3.125
+batch_cache_read = 0.25
 long_context_threshold = 200_000
 long_context_input = 10.0
 long_context_output = 37.50
+long_context_cache_write = 12.50
+long_context_cache_read = 1.0
+batch_long_context_input = 5.0
+batch_long_context_output = 18.75
+batch_long_context_cache_write = 6.25
+batch_long_context_cache_read = 0.50
 
 [claude-sonnet-4-5]
 input = 3.0
@@ -118,9 +142,17 @@ cache_write = 3.75
 cache_read = 0.30
 batch_input = 1.50
 batch_output = 7.50
+batch_cache_write = 1.875
+batch_cache_read = 0.15
 long_context_threshold = 200_000
 long_context_input = 6.0
 long_context_output = 22.50
+long_context_cache_write = 7.50
+long_context_cache_read = 0.60
+batch_long_context_input = 3.0
+batch_long_context_output = 11.25
+batch_long_context_cache_write = 3.75
+batch_long_context_cache_read = 0.30
 
 [claude-haiku-4-5]
 input = 1.0
@@ -129,20 +161,8 @@ cache_write = 1.25
 cache_read = 0.10
 batch_input = 0.50
 batch_output = 2.50
-
-# ── Claude 4.1 ──
-
-# Deprecated — retires 2026-08-05; migrate to claude-opus-5.
-[claude-opus-4-1]
-input = 15.0
-output = 75.0
-cache_write = 18.75
-cache_read = 1.50
-batch_input = 7.50
-batch_output = 37.50
-long_context_threshold = 200_000
-long_context_input = 30.0
-long_context_output = 112.50
+batch_cache_write = 0.625
+batch_cache_read = 0.05
 
 # ═══════════════════════════════════════════════════════════════════
 # OpenAI
@@ -153,26 +173,174 @@ long_context_output = 112.50
 
 # ── GPT-5.6 family (sol > terra > luna capability tiers) ──
 
+# Sol's current promotional rate is available at least through 2026-11-21.
+# gpt-5.6 is an alias of the default Sol tier.
+["gpt-5.6"]
+input = 4.0
+output = 20.0
+cache_write = 5.0
+cache_read = 0.40
+batch_input = 2.0
+batch_output = 10.0
+batch_cache_write = 2.50
+batch_cache_read = 0.20
+long_context_threshold = 272_000
+long_context_input = 8.0
+long_context_output = 30.0
+long_context_cache_write = 10.0
+long_context_cache_read = 0.80
+batch_long_context_input = 4.0
+batch_long_context_output = 15.0
+batch_long_context_cache_write = 5.0
+batch_long_context_cache_read = 0.40
+fast_input = 8.0
+fast_output = 40.0
+fast_cache_write = 10.0
+fast_cache_read = 0.80
+fast_long_context_input = 16.0
+fast_long_context_output = 60.0
+fast_long_context_cache_write = 20.0
+fast_long_context_cache_read = 1.60
+
 ["gpt-5.6-sol"]
+input = 4.0
+output = 20.0
+cache_write = 5.0
+cache_read = 0.40
+batch_input = 2.0
+batch_output = 10.0
+batch_cache_write = 2.50
+batch_cache_read = 0.20
+long_context_threshold = 272_000
+long_context_input = 8.0
+long_context_output = 30.0
+long_context_cache_write = 10.0
+long_context_cache_read = 0.80
+batch_long_context_input = 4.0
+batch_long_context_output = 15.0
+batch_long_context_cache_write = 5.0
+batch_long_context_cache_read = 0.40
+fast_input = 8.0
+fast_output = 40.0
+fast_cache_write = 10.0
+fast_cache_read = 0.80
+fast_long_context_input = 16.0
+fast_long_context_output = 60.0
+fast_long_context_cache_write = 20.0
+fast_long_context_cache_read = 1.60
+
+["gpt-5.6-terra"]
+input = 2.0
+output = 12.0
+cache_write = 2.50
+cache_read = 0.20
+batch_input = 1.0
+batch_output = 6.0
+batch_cache_write = 1.25
+batch_cache_read = 0.10
+long_context_threshold = 272_000
+long_context_input = 4.0
+long_context_output = 18.0
+long_context_cache_write = 5.0
+long_context_cache_read = 0.40
+batch_long_context_input = 2.0
+batch_long_context_output = 9.0
+batch_long_context_cache_write = 2.50
+batch_long_context_cache_read = 0.20
+fast_input = 4.0
+fast_output = 24.0
+fast_cache_write = 5.0
+fast_cache_read = 0.40
+fast_long_context_input = 8.0
+fast_long_context_output = 36.0
+fast_long_context_cache_write = 10.0
+fast_long_context_cache_read = 0.80
+
+["gpt-5.6-luna"]
+input = 0.20
+output = 1.20
+cache_write = 0.25
+cache_read = 0.020
+batch_input = 0.10
+batch_output = 0.60
+batch_cache_write = 0.125
+batch_cache_read = 0.010
+long_context_threshold = 272_000
+long_context_input = 0.40
+long_context_output = 1.80
+long_context_cache_write = 0.50
+long_context_cache_read = 0.040
+batch_long_context_input = 0.20
+batch_long_context_output = 0.90
+batch_long_context_cache_write = 0.25
+batch_long_context_cache_read = 0.020
+fast_input = 0.40
+fast_output = 2.40
+fast_cache_write = 0.50
+fast_cache_read = 0.040
+fast_long_context_input = 0.80
+fast_long_context_output = 3.60
+fast_long_context_cache_write = 1.0
+fast_long_context_cache_read = 0.080
+
+# Cyber has no separately published Batch/Fast tariff; do not infer a discount.
+["gpt-5.6-cyber"]
+input = 12.50
+output = 75.0
+cache_write = 15.625
+cache_read = 1.25
+long_context_threshold = 272_000
+long_context_input = 25.0
+long_context_output = 112.50
+long_context_cache_write = 31.25
+long_context_cache_read = 2.50
+
+# Daybreak Blue aliases Sol; Daybreak Red aliases Cyber.
+["gpt-daybreak-blue-latest"]
+input = 4.0
+output = 20.0
+cache_write = 5.0
+cache_read = 0.40
+batch_input = 2.0
+batch_output = 10.0
+batch_cache_write = 2.50
+batch_cache_read = 0.20
+long_context_threshold = 272_000
+long_context_input = 8.0
+long_context_output = 30.0
+long_context_cache_write = 10.0
+long_context_cache_read = 0.80
+batch_long_context_input = 4.0
+batch_long_context_output = 15.0
+batch_long_context_cache_write = 5.0
+batch_long_context_cache_read = 0.40
+fast_input = 8.0
+fast_output = 40.0
+fast_cache_write = 10.0
+fast_cache_read = 0.80
+fast_long_context_input = 16.0
+fast_long_context_output = 60.0
+fast_long_context_cache_write = 20.0
+fast_long_context_cache_read = 1.60
+
+["gpt-daybreak-red-latest"]
+input = 12.50
+output = 75.0
+cache_write = 15.625
+cache_read = 1.25
+long_context_threshold = 272_000
+long_context_input = 25.0
+long_context_output = 112.50
+long_context_cache_write = 31.25
+long_context_cache_read = 2.50
+
+[chat-latest]
 input = 5.0
 output = 30.0
 cache_read = 0.50
 batch_input = 2.50
 batch_output = 15.0
-
-["gpt-5.6-terra"]
-input = 2.50
-output = 15.0
-cache_read = 0.25
-batch_input = 1.25
-batch_output = 7.50
-
-["gpt-5.6-luna"]
-input = 1.0
-output = 6.0
-cache_read = 0.10
-batch_input = 0.50
-batch_output = 3.0
+batch_cache_read = 0.25
 
 # ── GPT-5 .1–.5 ──
 
@@ -189,6 +357,14 @@ output = 30.0
 cache_read = 0.50
 batch_input = 2.50
 batch_output = 15.0
+batch_cache_read = 0.25
+long_context_threshold = 272_000
+long_context_input = 10.0
+long_context_output = 45.0
+long_context_cache_read = 1.0
+batch_long_context_input = 5.0
+batch_long_context_output = 22.50
+batch_long_context_cache_read = 0.50
 
 # gpt-5.4 family — distinct entries because nano/mini/pro have very different rates.
 ["gpt-5.4-pro"]
@@ -196,6 +372,11 @@ input = 30.0
 output = 180.0
 batch_input = 15.0
 batch_output = 90.0
+long_context_threshold = 272_000
+long_context_input = 60.0
+long_context_output = 270.0
+batch_long_context_input = 30.0
+batch_long_context_output = 135.0
 
 ["gpt-5.4-nano"]
 input = 0.20
@@ -203,6 +384,7 @@ output = 1.25
 cache_read = 0.02
 batch_input = 0.10
 batch_output = 0.625
+batch_cache_read = 0.010
 
 ["gpt-5.4-mini"]
 input = 0.75
@@ -210,6 +392,7 @@ output = 4.50
 cache_read = 0.075
 batch_input = 0.375
 batch_output = 2.25
+batch_cache_read = 0.0375
 
 ["gpt-5.4"]
 input = 2.50
@@ -217,15 +400,34 @@ output = 15.0
 cache_read = 0.25
 batch_input = 1.25
 batch_output = 7.50
+batch_cache_read = 0.125
+long_context_threshold = 272_000
+long_context_input = 5.0
+long_context_output = 22.50
+long_context_cache_read = 0.50
+batch_long_context_input = 2.50
+batch_long_context_output = 11.25
+batch_long_context_cache_read = 0.25
 
-# gpt-5.3 covers gpt-5.3-codex, gpt-5.3-codex-spark, gpt-5.3-chat-latest
-# (all share pricing with gpt-5.2 base).
+# gpt-5.3 variants share standard pricing with gpt-5.2 base.
+["gpt-5.3-codex"]
+input = 1.75
+output = 14.0
+cache_read = 0.175
+batch_input = 0.875
+batch_output = 7.0
+batch_cache_read = 0.0875
+fast_input = 3.50
+fast_output = 28.0
+fast_cache_read = 0.35
+
 ["gpt-5.3"]
 input = 1.75
 output = 14.0
 cache_read = 0.175
 batch_input = 0.875
 batch_output = 7.0
+batch_cache_read = 0.0875
 
 ["gpt-5.2-pro"]
 input = 21.0
@@ -233,6 +435,7 @@ output = 168.0
 cache_read = 2.10
 batch_input = 10.50
 batch_output = 84.0
+batch_cache_read = 1.05
 
 ["gpt-5.2"]
 input = 1.75
@@ -240,6 +443,7 @@ output = 14.0
 cache_read = 0.175
 batch_input = 0.875
 batch_output = 7.0
+batch_cache_read = 0.0875
 
 ["gpt-5-pro"]
 input = 15.0
@@ -253,6 +457,7 @@ output = 0.40
 cache_read = 0.005
 batch_input = 0.025
 batch_output = 0.20
+batch_cache_read = 0.0025
 
 ["gpt-5-mini"]
 input = 0.25
@@ -260,6 +465,7 @@ output = 2.0
 cache_read = 0.025
 batch_input = 0.125
 batch_output = 1.0
+batch_cache_read = 0.0125
 
 # gpt-5 and gpt-5.1 share the same pricing; gpt-5 prefix covers both
 ["gpt-5"]
@@ -268,6 +474,7 @@ output = 10.0
 cache_read = 0.125
 batch_input = 0.625
 batch_output = 5.0
+batch_cache_read = 0.0625
 
 # ── GPT-4.1 family ──
 
@@ -277,6 +484,7 @@ output = 0.40
 cache_read = 0.025
 batch_input = 0.05
 batch_output = 0.20
+batch_cache_read = 0.0125
 
 ["gpt-4.1-mini"]
 input = 0.40
@@ -284,6 +492,7 @@ output = 1.60
 cache_read = 0.10
 batch_input = 0.20
 batch_output = 0.80
+batch_cache_read = 0.05
 
 ["gpt-4.1"]
 input = 2.0
@@ -291,6 +500,7 @@ output = 8.0
 cache_read = 0.50
 batch_input = 1.0
 batch_output = 4.0
+batch_cache_read = 0.25
 
 # ── GPT-4o ──
 
@@ -300,6 +510,7 @@ output = 0.60
 cache_read = 0.075
 batch_input = 0.075
 batch_output = 0.30
+batch_cache_read = 0.0375
 
 [gpt-4o]
 input = 2.50
@@ -307,6 +518,7 @@ output = 10.0
 cache_read = 1.25
 batch_input = 1.25
 batch_output = 5.0
+batch_cache_read = 0.625
 
 # ── GPT legacy (still served) ──
 
@@ -332,6 +544,7 @@ output = 4.40
 cache_read = 0.55
 batch_input = 0.55
 batch_output = 2.20
+batch_cache_read = 0.275
 
 [o3]
 input = 2.0
@@ -339,6 +552,7 @@ output = 8.0
 cache_read = 0.50
 batch_input = 1.0
 batch_output = 4.0
+batch_cache_read = 0.25
 
 [o4-mini-deep-research]
 input = 2.0
@@ -346,6 +560,7 @@ output = 8.0
 cache_read = 0.20
 batch_input = 1.0
 batch_output = 4.0
+batch_cache_read = 0.10
 
 [o4-mini]
 input = 1.10
@@ -353,6 +568,7 @@ output = 4.40
 cache_read = 0.275
 batch_input = 0.55
 batch_output = 2.20
+batch_cache_read = 0.1375
 
 [o1-pro]
 input = 150.0
@@ -366,31 +582,50 @@ output = 60.0
 cache_read = 7.50
 batch_input = 7.50
 batch_output = 30.0
+batch_cache_read = 3.75
 
 # ═══════════════════════════════════════════════════════════════════
 # Google Gemini
 # Source: https://ai.google.dev/gemini-api/docs/pricing
 # Note: prices are for text input; audio input is higher on some models.
-# Gemini 1.5 is retired (absent from the live models list) and intentionally
-# absent here.
+# Gemini 1.5 and 2.0 are retired and intentionally absent here.
 # ═══════════════════════════════════════════════════════════════════
 
-# ── Gemini 3.5 / 3.6 ──
+# ── Gemini 3.5–3.7 ──
+
+# Promotional pricing through 2026-12-31; Google lists the post-promotion
+# rates separately rather than charging them today.
+["gemini-3.7-flash"]
+input = 0.75
+output = 3.75
+cache_read = 0.075
+batch_input = 0.375
+batch_output = 1.875
+batch_cache_read = 0.0375
 
 ["gemini-3.6-flash"]
-input = 1.50
-output = 7.50
-cache_read = 0.15
+input = 0.75
+output = 3.75
+cache_read = 0.075
+batch_input = 0.375
+batch_output = 1.875
+batch_cache_read = 0.0375
 
 ["gemini-3.5-flash"]
 input = 1.50
 output = 9.0
 cache_read = 0.15
+batch_input = 0.75
+batch_output = 4.50
+batch_cache_read = 0.075
 
 ["gemini-3.5-flash-lite"]
 input = 0.30
 output = 2.50
 cache_read = 0.03
+batch_input = 0.15
+batch_output = 1.25
+batch_cache_read = 0.015
 
 # ── Gemini 3.0 / 3.1 ──
 
@@ -399,27 +634,47 @@ cache_read = 0.03
 input = 2.0
 output = 12.0
 cache_read = 0.20
+batch_input = 1.0
+batch_output = 6.0
+batch_cache_read = 0.10
 long_context_threshold = 200_000
 long_context_input = 4.0
 long_context_output = 18.0
+long_context_cache_read = 0.40
+batch_long_context_input = 2.0
+batch_long_context_output = 9.0
+batch_long_context_cache_read = 0.20
 
 ["gemini-3.1-pro"]
 input = 2.0
 output = 12.0
 cache_read = 0.20
+batch_input = 1.0
+batch_output = 6.0
+batch_cache_read = 0.10
 long_context_threshold = 200_000
 long_context_input = 4.0
 long_context_output = 18.0
+long_context_cache_read = 0.40
+batch_long_context_input = 2.0
+batch_long_context_output = 9.0
+batch_long_context_cache_read = 0.20
 
 ["gemini-3.1-flash-lite"]
 input = 0.25
 output = 1.50
 cache_read = 0.025
+batch_input = 0.125
+batch_output = 0.75
+batch_cache_read = 0.0125
 
 ["gemini-3-flash"]
 input = 0.50
 output = 3.0
 cache_read = 0.05
+batch_input = 0.25
+batch_output = 1.50
+batch_cache_read = 0.025
 
 # ── Gemini 2.5 ──
 
@@ -427,31 +682,32 @@ cache_read = 0.05
 input = 1.25
 output = 10.0
 cache_read = 0.125
+batch_input = 0.625
+batch_output = 5.0
+batch_cache_read = 0.0625
 long_context_threshold = 200_000
 long_context_input = 2.50
 long_context_output = 15.0
+long_context_cache_read = 0.25
+batch_long_context_input = 1.25
+batch_long_context_output = 7.50
+batch_long_context_cache_read = 0.125
 
 ["gemini-2.5-flash"]
 input = 0.30
 output = 2.50
 cache_read = 0.030
+batch_input = 0.15
+batch_output = 1.25
+batch_cache_read = 0.015
 
 ["gemini-2.5-flash-lite"]
 input = 0.10
 output = 0.40
 cache_read = 0.010
-
-# ── Gemini 2.0 ──
-
-# Deprecation announced (shutdown was scheduled for 2026-06-01), but the API
-# still serves these ids.
-["gemini-2.0-flash"]
-input = 0.15
-output = 0.60
-
-["gemini-2.0-flash-lite"]
-input = 0.075
-output = 0.30
+batch_input = 0.05
+batch_output = 0.20
+batch_cache_read = 0.005
 
 # ═══════════════════════════════════════════════════════════════════
 # xAI Grok
@@ -466,101 +722,177 @@ input = 2.0
 output = 6.0
 cache_read = 0.50
 long_context_threshold = 200_000
+long_context_inclusive = true
 long_context_input = 4.0
 long_context_output = 12.0
+long_context_cache_read = 1.0
 
 ["grok-4.5"]
 input = 2.0
 output = 6.0
 cache_read = 0.30
-batch_input = 1.0
-batch_output = 3.0
 long_context_threshold = 200_000
+long_context_inclusive = true
 long_context_input = 4.0
 long_context_output = 12.0
+long_context_cache_read = 0.60
 
-# grok-4.20-* ids resolve through the grok-4 prefix below at these same rates.
 ["grok-4.3"]
 input = 1.25
 output = 2.50
 cache_read = 0.20
-batch_input = 0.625
-batch_output = 1.25
+batch_input = 1.0
+batch_output = 2.0
+batch_cache_read = 0.16
 long_context_threshold = 200_000
+long_context_inclusive = true
 long_context_input = 2.50
 long_context_output = 5.0
+long_context_cache_read = 0.40
+batch_long_context_input = 2.0
+batch_long_context_output = 4.0
+batch_long_context_cache_read = 0.32
+
+# grok-4.20-* ids share Grok 4.3's rates.
+["grok-4.20"]
+input = 1.25
+output = 2.50
+cache_read = 0.20
+batch_input = 1.0
+batch_output = 2.0
+batch_cache_read = 0.16
+long_context_threshold = 200_000
+long_context_inclusive = true
+long_context_input = 2.50
+long_context_output = 5.0
+long_context_cache_read = 0.40
+batch_long_context_input = 2.0
+batch_long_context_output = 4.0
+batch_long_context_cache_read = 0.32
 
 # Legacy alias ids — still callable; xAI resolves them server-side to grok-4.3
 # and bills at grok-4.3 rates (verified live: a grok-4 request answers as
 # grok-4.3). Covered by these prefix entries: grok-4, grok-4-0709,
 # grok-4-latest, grok-4-fast(-reasoning/-non-reasoning), grok-4-1-fast(-…),
-# grok-3, grok-3-fast, grok-3-mini(-fast/-high), grok-code-fast-1.
+# grok-3, grok-3-fast, and grok-3-mini(-fast/-high).
 [grok-4]
 input = 1.25
 output = 2.50
 cache_read = 0.20
-batch_input = 0.625
-batch_output = 1.25
+batch_input = 1.0
+batch_output = 2.0
+batch_cache_read = 0.16
 long_context_threshold = 200_000
+long_context_inclusive = true
 long_context_input = 2.50
 long_context_output = 5.0
+long_context_cache_read = 0.40
+batch_long_context_input = 2.0
+batch_long_context_output = 4.0
+batch_long_context_cache_read = 0.32
 
 ["grok-4-1-fast"]
 input = 1.25
 output = 2.50
 cache_read = 0.20
-batch_input = 0.625
-batch_output = 1.25
+batch_input = 1.0
+batch_output = 2.0
+batch_cache_read = 0.16
 long_context_threshold = 200_000
+long_context_inclusive = true
 long_context_input = 2.50
 long_context_output = 5.0
+long_context_cache_read = 0.40
+batch_long_context_input = 2.0
+batch_long_context_output = 4.0
+batch_long_context_cache_read = 0.32
 
 [grok-4-fast]
 input = 1.25
 output = 2.50
 cache_read = 0.20
-batch_input = 0.625
-batch_output = 1.25
+batch_input = 1.0
+batch_output = 2.0
+batch_cache_read = 0.16
 long_context_threshold = 200_000
+long_context_inclusive = true
 long_context_input = 2.50
 long_context_output = 5.0
-
-[grok-code-fast-1]
-input = 1.25
-output = 2.50
-cache_read = 0.20
-batch_input = 0.625
-batch_output = 1.25
-long_context_threshold = 200_000
-long_context_input = 2.50
-long_context_output = 5.0
+long_context_cache_read = 0.40
+batch_long_context_input = 2.0
+batch_long_context_output = 4.0
+batch_long_context_cache_read = 0.32
 
 [grok-3]
 input = 1.25
 output = 2.50
 cache_read = 0.20
-batch_input = 0.625
-batch_output = 1.25
+batch_input = 1.0
+batch_output = 2.0
+batch_cache_read = 0.16
 long_context_threshold = 200_000
+long_context_inclusive = true
 long_context_input = 2.50
 long_context_output = 5.0
+long_context_cache_read = 0.40
+batch_long_context_input = 2.0
+batch_long_context_output = 4.0
+batch_long_context_cache_read = 0.32
 
 [grok-3-mini]
 input = 1.25
 output = 2.50
 cache_read = 0.20
-batch_input = 0.625
-batch_output = 1.25
+batch_input = 1.0
+batch_output = 2.0
+batch_cache_read = 0.16
 long_context_threshold = 200_000
+long_context_inclusive = true
 long_context_input = 2.50
 long_context_output = 5.0
+long_context_cache_read = 0.40
+batch_long_context_input = 2.0
+batch_long_context_output = 4.0
+batch_long_context_cache_read = 0.32
 
 ["grok-build-0.1"]
 input = 1.0
 output = 2.0
 cache_read = 0.20
-batch_input = 0.50
-batch_output = 1.0
 long_context_threshold = 200_000
+long_context_inclusive = true
 long_context_input = 2.0
 long_context_output = 4.0
+long_context_cache_read = 0.40
+
+# grok-code-fast and grok-code-fast-1 are aliases of Grok Build 0.1.
+[grok-code-fast]
+input = 1.0
+output = 2.0
+cache_read = 0.20
+long_context_threshold = 200_000
+long_context_inclusive = true
+long_context_input = 2.0
+long_context_output = 4.0
+long_context_cache_read = 0.40
+
+[grok-code-fast-1]
+input = 1.0
+output = 2.0
+cache_read = 0.20
+long_context_threshold = 200_000
+long_context_inclusive = true
+long_context_input = 2.0
+long_context_output = 4.0
+long_context_cache_read = 0.40
+
+# Despite its name, xAI documents this alias under Grok 4.5.
+[grok-build-latest]
+input = 2.0
+output = 6.0
+cache_read = 0.30
+long_context_threshold = 200_000
+long_context_inclusive = true
+long_context_input = 4.0
+long_context_output = 12.0
+long_context_cache_read = 0.60

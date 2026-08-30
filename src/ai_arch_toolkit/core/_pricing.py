@@ -32,13 +32,33 @@ class ModelPricing:
     cache_read: float | None = None
     batch_input: float | None = None
     batch_output: float | None = None
-    # Long context pricing (exceeding threshold triggers premium rates)
+    batch_cache_write: float | None = None
+    batch_cache_read: float | None = None
+    # Long-context pricing (threshold boundary is provider-configurable)
     long_context_threshold: int | None = None
+    long_context_inclusive: bool = False
     long_context_input: float | None = None
     long_context_output: float | None = None
+    long_context_cache_write: float | None = None
+    long_context_cache_read: float | None = None
+    batch_long_context_input: float | None = None
+    batch_long_context_output: float | None = None
+    batch_long_context_cache_write: float | None = None
+    batch_long_context_cache_read: float | None = None
     # Fast mode pricing
     fast_input: float | None = None
     fast_output: float | None = None
+    fast_cache_write: float | None = None
+    fast_cache_read: float | None = None
+    fast_long_context_input: float | None = None
+    fast_long_context_output: float | None = None
+    fast_long_context_cache_write: float | None = None
+    fast_long_context_cache_read: float | None = None
+
+
+def _first_rate(*rates: float | None) -> float | None:
+    """Return the first explicitly configured rate, preserving valid zeroes."""
+    return next((rate for rate in rates if rate is not None), None)
 
 
 class PricingRegistry:
@@ -121,7 +141,8 @@ class PricingRegistry:
     ) -> float | None:
         """Estimate cost in USD.
 
-        Priority: ``is_fast`` > ``is_batch`` > long-context > standard.
+        Priority: ``is_fast`` > ``is_batch`` > standard. Long-context variants
+        combine with the selected mode when the corresponding rates are configured.
 
         Returns:
             Cost in USD, or ``None`` if no pricing data exists for the model.
@@ -133,29 +154,75 @@ class PricingRegistry:
         per_m = 1_000_000
         total_input = input_tokens + cache_write_tokens + cache_read_tokens
 
+        is_long = p.long_context_threshold is not None and (
+            total_input >= p.long_context_threshold
+            if p.long_context_inclusive
+            else total_input > p.long_context_threshold
+        )
+
         if is_fast and p.fast_input is not None:
-            inp = p.fast_input
-            out = p.fast_output if p.fast_output is not None else p.output
-        elif is_batch:
-            inp = p.batch_input if p.batch_input is not None else p.input
-            out = p.batch_output if p.batch_output is not None else p.output
-        elif (
-            p.long_context_threshold is not None
-            and total_input > p.long_context_threshold
-            and p.long_context_input is not None
-        ):
+            inp = _first_rate(
+                p.fast_long_context_input if is_long else None,
+                p.fast_input,
+                p.input,
+            )
+            out = _first_rate(
+                p.fast_long_context_output if is_long else None,
+                p.fast_output,
+                p.output,
+            )
+            cache_write = _first_rate(
+                p.fast_long_context_cache_write if is_long else None,
+                p.fast_cache_write,
+                p.cache_write,
+            )
+            cache_read = _first_rate(
+                p.fast_long_context_cache_read if is_long else None,
+                p.fast_cache_read,
+                p.cache_read,
+            )
+        elif is_batch and p.batch_input is not None:
+            inp = _first_rate(
+                p.batch_long_context_input if is_long else None,
+                p.batch_input,
+                p.input,
+            )
+            out = _first_rate(
+                p.batch_long_context_output if is_long else None,
+                p.batch_output,
+                p.output,
+            )
+            cache_write = _first_rate(
+                p.batch_long_context_cache_write if is_long else None,
+                p.batch_cache_write,
+                p.cache_write,
+            )
+            cache_read = _first_rate(
+                p.batch_long_context_cache_read if is_long else None,
+                p.batch_cache_read,
+                p.cache_read,
+            )
+        elif is_long and p.long_context_input is not None:
             inp = p.long_context_input
-            out = p.long_context_output if p.long_context_output is not None else p.output
+            out = _first_rate(p.long_context_output, p.output)
+            cache_write = _first_rate(p.long_context_cache_write, p.cache_write)
+            cache_read = _first_rate(p.long_context_cache_read, p.cache_read)
         else:
             inp = p.input
             out = p.output
+            cache_write = p.cache_write
+            cache_read = p.cache_read
+
+        # Every input/output branch above has a concrete standard-rate fallback.
+        assert inp is not None
+        assert out is not None
 
         total = inp * input_tokens / per_m + out * output_tokens / per_m
 
-        if cache_write_tokens > 0 and p.cache_write is not None:
-            total += p.cache_write * cache_write_tokens / per_m
-        if cache_read_tokens > 0 and p.cache_read is not None:
-            total += p.cache_read * cache_read_tokens / per_m
+        if cache_write_tokens > 0 and cache_write is not None:
+            total += cache_write * cache_write_tokens / per_m
+        if cache_read_tokens > 0 and cache_read is not None:
+            total += cache_read * cache_read_tokens / per_m
 
         return total
 
@@ -205,11 +272,26 @@ class PricingRegistry:
                     cache_read=values.get("cache_read"),
                     batch_input=values.get("batch_input"),
                     batch_output=values.get("batch_output"),
+                    batch_cache_write=values.get("batch_cache_write"),
+                    batch_cache_read=values.get("batch_cache_read"),
                     long_context_threshold=values.get("long_context_threshold"),
+                    long_context_inclusive=values.get("long_context_inclusive", False),
                     long_context_input=values.get("long_context_input"),
                     long_context_output=values.get("long_context_output"),
+                    long_context_cache_write=values.get("long_context_cache_write"),
+                    long_context_cache_read=values.get("long_context_cache_read"),
+                    batch_long_context_input=values.get("batch_long_context_input"),
+                    batch_long_context_output=values.get("batch_long_context_output"),
+                    batch_long_context_cache_write=values.get("batch_long_context_cache_write"),
+                    batch_long_context_cache_read=values.get("batch_long_context_cache_read"),
                     fast_input=values.get("fast_input"),
                     fast_output=values.get("fast_output"),
+                    fast_cache_write=values.get("fast_cache_write"),
+                    fast_cache_read=values.get("fast_cache_read"),
+                    fast_long_context_input=values.get("fast_long_context_input"),
+                    fast_long_context_output=values.get("fast_long_context_output"),
+                    fast_long_context_cache_write=values.get("fast_long_context_cache_write"),
+                    fast_long_context_cache_read=values.get("fast_long_context_cache_read"),
                 )
         self._cache.clear()
 

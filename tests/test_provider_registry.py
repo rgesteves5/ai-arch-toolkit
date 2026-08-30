@@ -24,6 +24,9 @@ class TestDetectProvider:
     def test_gpt(self):
         assert _detect_provider("gpt-4o") == "openai"
 
+    def test_chat_latest(self):
+        assert _detect_provider("chat-latest") == "openai"
+
     def test_o1(self):
         assert _detect_provider("o1-mini") == "openai"
 

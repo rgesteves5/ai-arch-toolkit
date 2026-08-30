@@ -39,7 +39,11 @@ pricing.register("my-model", ModelPricing(input=1.0, output=3.0))
 pricing.list_models()
 ```
 
-`ModelPricing` also supports cache, batch, long-context, and fast-mode rates (`cache_write`, `cache_read`, `batch_input`/`batch_output`, `long_context_*`, `fast_input`/`fast_output`).
+`ModelPricing` also supports cache, batch, long-context, and fast-mode rates. Mode-specific
+cache and long-context fields (`batch_cache_*`, `batch_long_context_*`, `fast_cache_*`, and
+`fast_long_context_*`) allow these tariffs to combine correctly; omitted fields fall back to
+the selected mode's base rates, then standard rates. `long_context_inclusive=True` selects the
+premium tier at the threshold itself, as required by xAI.
 
 ## Cost tracking across flows
 

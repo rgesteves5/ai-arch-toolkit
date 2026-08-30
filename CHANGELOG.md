@@ -64,6 +64,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `.env.example` documenting every provider API key; the sync-timeout configuration now validates its inputs.
 
 ### Changed
+- **Bundled model catalog and pricing refreshed from all four providers' official catalogs
+  (2026-08-29).** OpenAI gains current GPT-5.6 prices and the base/Cyber/Daybreak/
+  `chat-latest` aliases; Anthropic gains permanent Sonnet 5 pricing and published Opus 4.8
+  fast rates; Gemini gains 3.7 Flash and current 3.6 promotional pricing; xAI gains current
+  Grok aliases and correct Build/Batch prices. Retired Claude Opus 4.1 and Gemini 2.0 entries
+  were removed. The pricing engine now combines batch/fast service modes with long-context
+  and cache tariffs, including xAI's inclusive 200k boundary, instead of applying standard
+  cache prices or ignoring the long-context tier in those combinations.
 - Planner tool awareness is now an explicit `{tools}` token instead of a silent append:
   a prompt containing the token gets the phase's rendered tool catalog substituted at
   build time (`(none)` when empty), and a prompt without it is never modified. `rewoo`

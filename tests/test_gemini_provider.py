@@ -328,9 +328,8 @@ class TestParseSdkResponse:
 
     def test_cost_is_computed(self):
         resp = _sdk_response(prompt_tokens=1000, candidates_tokens=500)
-        r = _parse_sdk_response(resp, "gemini-2.0-flash")
-        assert r.cost is not None
-        assert r.cost > 0
+        r = _parse_sdk_response(resp, "gemini-3.7-flash")
+        assert r.cost == pytest.approx((0.75 * 1000 + 3.75 * 500) / 1_000_000)
 
     def test_raw_is_preserved(self):
         resp = _sdk_response()

@@ -123,7 +123,7 @@ llm = LLM("claude-sonnet-5")
 llm = LLM("gpt-4o")
 
 # Gemini
-llm = LLM("gemini-2.0-flash")
+llm = LLM("gemini-3.7-flash")
 
 # xAI
 llm = LLM("grok-2")

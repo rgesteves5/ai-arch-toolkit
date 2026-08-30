@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 _MODEL_PREFIXES: dict[str, str] = {
     "claude-": "anthropic",
     "gpt-": "openai",
+    "chat-": "openai",
     "o1-": "openai",
     "o3-": "openai",
     "o4-": "openai",
@@ -119,8 +120,8 @@ def create_provider(
     """Create a provider instance from a model string.
 
     Routing precedence: an explicit ``provider`` wins; otherwise the model
-    prefix is matched (``claude-`` → Anthropic, ``gpt-``/``o1-`` → OpenAI,
-    ``grok-`` → xAI, ``gemini-`` → Gemini); otherwise an unknown model with
+    prefix is matched (``claude-`` → Anthropic, ``gpt-``/``chat-``/``o1-`` →
+    OpenAI, ``grok-`` → xAI, ``gemini-`` → Gemini); otherwise an unknown model with
     ``base_url`` set falls back to the OpenAI-compatible adapter (Ollama, LM
     Studio, vLLM). The API key is required unless ``base_url`` points at a
     loopback host (localhost), where local servers ignore it.
