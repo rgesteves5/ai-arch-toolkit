@@ -11,6 +11,13 @@
 # OpenAI
 # ---------------------------------------------------------------------------
 
+# Astra tool calling requires Responses; this adapter uses Chat Completions.
+[[models]]
+id = "gpt-6-astra"
+provider = "openai"
+scenarios = ["plain", "structured", "json_mode", "stream", "thinking"]
+kwargs = { max_tokens = 4096, thinking_effort = "low" }
+
 [[models]]
 id = "gpt-5.5"
 provider = "openai"

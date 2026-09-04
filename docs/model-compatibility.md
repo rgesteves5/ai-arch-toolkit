@@ -44,6 +44,21 @@ Generated probe artifacts are local diagnostic files and are ignored by git.
 
 ## OpenAI
 
+### GPT-6 Astra (added 2026-09-04)
+
+`gpt-6-astra` is registered with standard, cached, batch, long-context, and fast
+pricing. The Chat Completions adapter translates `max_tokens`, removes unsupported
+sampling/logprob parameters, and accepts reasoning efforts `low`, `medium`, `high`,
+`xhigh`, and `max`. Text, structured output, and streaming probes are configured but
+have **not been run live** for this model.
+
+Tool calling requires Responses and is rejected with an explanatory error by this
+Chat Completions adapter. Astra therefore cannot run tool-using agents here yet.
+See the [official Astra guide](https://developers.openai.com/api/docs/guides/latest-model)
+and [model pricing](https://developers.openai.com/api/docs/models/gpt-6-astra).
+
+### Recorded live baseline
+
 OpenAI GPT-5-style and o-series models use `max_completion_tokens` instead of
 `max_tokens`. The provider translates `max_tokens` for these models. For GPT-5-style
 reasoning calls, the provider drops non-default `temperature` unless the caller explicitly

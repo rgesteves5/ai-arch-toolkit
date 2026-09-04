@@ -690,3 +690,40 @@ class TestOpenAIProviderLifecycle:
     async def test_context_manager(self):
         async with OpenAIProvider("gpt-4o", "test-key") as provider:
             assert provider._client is not None
+
+
+class TestAstra:
+    @pytest.mark.parametrize("thinking", [False, True])
+    async def test_request_parameters(self, thinking):
+        client = AsyncMock()
+        client.chat.completions.create.return_value = _sdk_completion()
+        provider = OpenAIProvider("gpt-6-astra", "test-key")
+        provider._client = client
+        await provider.complete(
+            [{"role": "user", "content": "Hi"}],
+            max_tokens=4096,
+            temperature=1.0,
+            top_p=1.0,
+            logprobs=True,
+            top_logprobs=5,
+            thinking=thinking,
+            thinking_effort="max",
+        )
+        params = client.chat.completions.create.call_args.kwargs
+        assert params["model"] == "gpt-6-astra"
+        assert params["max_completion_tokens"] == 4096
+        assert (
+            not {"max_tokens", "temperature", "top_p", "logprobs", "top_logprobs"} & params.keys()
+        )
+        assert params.get("reasoning_effort") == ("max" if thinking else None)
+
+    @pytest.mark.parametrize("effort", ["none", "minimal", "ultra"])
+    def test_invalid_reasoning_effort(self, effort):
+        provider = OpenAIProvider("gpt-6-astra", "test-key")
+        with pytest.raises(ValueError, match="thinking_effort"):
+            provider._build_sdk_kwargs([], thinking=True, thinking_effort=effort)
+
+    def test_tools_require_responses(self):
+        provider = OpenAIProvider("gpt-6-astra", "test-key")
+        with pytest.raises(ValueError, match="requires the Responses API"):
+            provider._build_sdk_kwargs([], tools=[{"name": "lookup"}])

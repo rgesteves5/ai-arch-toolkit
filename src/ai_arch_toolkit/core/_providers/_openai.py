@@ -49,7 +49,7 @@ _SDK_PARAMS = {
 }
 
 _MAX_COMPLETION_TOKEN_MODELS = {"o1", "o3", "o4"}
-_MAX_COMPLETION_TOKEN_PREFIXES = ("gpt-5", "o1-", "o3-", "o4-")
+_MAX_COMPLETION_TOKEN_PREFIXES = ("gpt-5", "gpt-6-astra", "o1-", "o3-", "o4-")
 
 
 # ---------------------------------------------------------------------------
@@ -365,6 +365,22 @@ class OpenAIProvider(LoopAwareClientCache, BaseProvider):
         reasoning_effort = (thinking_effort or "high") if thinking else None
         if thinking:
             _drop_temperature_for_reasoning(self._model, reasoning_effort, kwargs)
+
+        if self._model.startswith("gpt-6-astra"):
+            # Astra does not accept sampling/logprob parameters, even at defaults.
+            for param in ("temperature", "top_p", "top_logprobs"):
+                kwargs.pop(param, None)
+            logprobs_flag = False
+            if thinking and reasoning_effort not in {"low", "medium", "high", "xhigh", "max"}:
+                raise ValueError(
+                    "GPT-6 Astra thinking_effort must be low, medium, high, xhigh, or max"
+                )
+            if tools or tool_choice not in (None, "none"):
+                raise ValueError(
+                    "GPT-6 Astra tool calling requires the Responses API; "
+                    "this provider uses Chat Completions"
+                )
+            tool_choice = None
 
         filtered = {k: v for k, v in kwargs.items() if k in _SDK_PARAMS}
 

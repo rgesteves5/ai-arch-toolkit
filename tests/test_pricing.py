@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from ai_arch_toolkit.core import ModelPricing, PricingRegistry, pricing
 from ai_arch_toolkit.core._pricing import estimate_cost
 
@@ -723,3 +725,33 @@ class TestPricingCache:
         assert reg.get("temp-model-abc") is not None
         reg.reset()
         assert reg.get("temp-model-abc") is None  # reset discarded it and cleared the cache
+
+
+@pytest.mark.parametrize(
+    "is_batch,is_fast,multiplier", [(False, False, 1), (True, False, 0.5), (False, True, 2)]
+)
+@pytest.mark.parametrize("tokens", [272_000, 272_001])
+def test_astra_cost_tiers(is_batch, is_fast, multiplier, tokens):
+    long_context = tokens > 272_000
+    input_rate = 20 if long_context else 10
+    output_rate = 75 if long_context else 50
+    cost = pricing.estimate_cost(
+        "gpt-6-astra",
+        input_tokens=tokens - 2000,
+        cache_read_tokens=1000,
+        cache_write_tokens=1000,
+        output_tokens=1000,
+        is_batch=is_batch,
+        is_fast=is_fast,
+    )
+    expected = (
+        multiplier
+        * (
+            input_rate * (tokens - 2000)
+            + input_rate * 0.1 * 1000
+            + input_rate * 1.25 * 1000
+            + output_rate * 1000
+        )
+        / 1_000_000
+    )
+    assert cost == pytest.approx(expected)

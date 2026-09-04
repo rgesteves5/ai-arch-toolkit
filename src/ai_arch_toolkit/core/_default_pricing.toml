@@ -171,6 +171,36 @@ batch_cache_read = 0.05
 # they no longer appear in /v1/models.
 # ═══════════════════════════════════════════════════════════════════
 
+# GPT-6 Astra — verified 2026-09-04.
+# Source: https://developers.openai.com/api/docs/models/gpt-6-astra
+["gpt-6-astra"]
+input = 10
+output = 50
+cache_write = 12.5
+cache_read = 1
+batch_input = 5
+batch_output = 25
+batch_cache_write = 6.25
+batch_cache_read = 0.5
+long_context_threshold = 272_000
+long_context_input = 20
+long_context_output = 75
+long_context_cache_write = 25
+long_context_cache_read = 2
+batch_long_context_input = 10
+batch_long_context_output = 37.5
+batch_long_context_cache_write = 12.5
+batch_long_context_cache_read = 1
+fast_input = 20
+fast_output = 100
+fast_cache_write = 25
+fast_cache_read = 2
+fast_long_context_input = 40
+fast_long_context_output = 150
+fast_long_context_cache_write = 50
+fast_long_context_cache_read = 4
+
+
 # ── GPT-5.6 family (sol > terra > luna capability tiers) ──
 
 # Sol's current promotional rate is available at least through 2026-11-21.

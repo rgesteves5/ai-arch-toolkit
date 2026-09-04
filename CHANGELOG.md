@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- GPT-6 Astra pricing (including cache, batch, long-context, and fast rates),
+  Chat Completions parameter handling, and manual probe inventory. Unsupported
+  reasoning efforts and tool calling fail clearly; Astra tools require Responses.
 - **[docs/configuring-agents.md](docs/configuring-agents.md)** — the end-to-end agent
   configuration guide: the serializable-vs-runtime rule, code-first specs, knobs vs
   deps, per-phase configuration, prompt sourcing, budgets, manifests with
