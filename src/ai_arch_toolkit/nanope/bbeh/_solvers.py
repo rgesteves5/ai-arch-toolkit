@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
 from inspect_ai.solver import TaskState, solver
 
 from ai_arch_toolkit.core import LLM, tool
 from ai_arch_toolkit.core._content import user
 from ai_arch_toolkit.core._state import State
+from ai_arch_toolkit.core._tools._approval import ApprovalDecision, ApprovalRequest
 from ai_arch_toolkit.core._tools._group import ToolGroup
 from ai_arch_toolkit.toolkit.agents.flows._generate_review import (
     generate_review_flow,
@@ -246,6 +249,23 @@ async def _react_solve(
     return state
 
 
+def _approve_python_repl(request: ApprovalRequest) -> ApprovalDecision:
+    """Approve ``python_repl``, which the solvers give the model on purpose.
+
+    ``python_repl`` requires approval, and a group without a handler denies it, so every Python
+    call came back as an error. It evaluates a restricted AST (no imports, no file access); any
+    other tool that requires approval stays denied.
+    """
+    if request.tool_name == "python_repl":
+        return ApprovalDecision.approve(reviewer="bbeh", reason="solvers run python_repl")
+    return ApprovalDecision.deny(reviewer="bbeh", reason="only python_repl is approved")
+
+
+def _solver_tools(*fns: Callable[..., Any]) -> ToolGroup:
+    """The tool group for a solver, with ``python_repl`` approved."""
+    return ToolGroup(*fns, approval_handler=_approve_python_repl)
+
+
 @tool
 def think(thought: str) -> str:
     """Use as a scratchpad for intermediate reasoning steps.
@@ -312,7 +332,7 @@ def self_discovery_solver(
     llm = _make_llm(model)
     catalog = load_thinking_systems(thinking_systems_path)
     ts_tool = make_thinking_system_tool(catalog)
-    tools = ToolGroup(think, ts_tool, python_repl)
+    tools = _solver_tools(think, ts_tool, python_repl)
     use_thread = _is_grok(model)
 
     flow_kwargs: dict[str, object] = {}
@@ -360,7 +380,7 @@ def react_tools_solver(
     llm = _make_llm(model)
     catalog = load_thinking_systems(thinking_systems_path)
     ts_tool = make_thinking_system_tool(catalog)
-    tools = ToolGroup(think, math_eval, python_repl, ts_tool)
+    tools = _solver_tools(think, math_eval, python_repl, ts_tool)
 
     async def solve(state: TaskState, generate) -> TaskState:
         return await _react_solve(
@@ -381,7 +401,7 @@ def react_ts_only_solver(
     llm = _make_llm(model)
     catalog = load_thinking_systems(thinking_systems_path)
     ts_tool = make_thinking_system_tool(catalog)
-    tools = ToolGroup(ts_tool)
+    tools = _solver_tools(ts_tool)
 
     async def solve(state: TaskState, generate) -> TaskState:
         return await _react_solve(
@@ -399,7 +419,7 @@ def react_pyeval_only_solver(
 ):
     """ReAct loop with python_repl tool only."""
     llm = _make_llm(model)
-    tools = ToolGroup(python_repl)
+    tools = _solver_tools(python_repl)
 
     async def solve(state: TaskState, generate) -> TaskState:
         return await _react_solve(
@@ -427,7 +447,7 @@ def react_ts_pyeval_solver(
     llm = _make_llm(model)
     catalog = load_thinking_systems(thinking_systems_path)
     ts_tool = make_thinking_system_tool(catalog)
-    tools = ToolGroup(ts_tool, python_repl)
+    tools = _solver_tools(ts_tool, python_repl)
 
     async def solve(state: TaskState, generate) -> TaskState:
         return await _react_solve(
@@ -455,7 +475,7 @@ def react_full_solver(
     llm = _make_llm(model)
     catalog = load_thinking_systems(thinking_systems_path)
     ts_tool = make_thinking_system_tool(catalog)
-    tools = ToolGroup(ts_tool, python_repl, table_parse, think)
+    tools = _solver_tools(ts_tool, python_repl, table_parse, think)
 
     async def solve(state: TaskState, generate) -> TaskState:
         return await _react_solve(
@@ -494,7 +514,7 @@ def generate_review_solver(
 ):
     """Generate-Review loop: generate with python_repl, review with python_repl."""
     llm = _make_llm(model)
-    tools = ToolGroup(python_repl)
+    tools = _solver_tools(python_repl)
 
     async def solve(state: TaskState, generate) -> TaskState:
         question = state.input_text

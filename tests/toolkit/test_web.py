@@ -5,6 +5,7 @@ from __future__ import annotations
 from io import BytesIO
 from unittest.mock import MagicMock, patch
 
+from ai_arch_toolkit.core import ApprovalDecision, ApprovalRequest, ToolCall, ToolGroup
 from ai_arch_toolkit.toolkit.tools._web import http_get, scrape_text
 
 
@@ -74,3 +75,35 @@ class TestScrapeText:
         mock_urlopen.return_value = _mock_urlopen(html)
         result = scrape_text("https://example.com", max_chars=100)
         assert "Truncated" in result
+
+
+class TestHttpGetGovernance:
+    @patch("ai_arch_toolkit.toolkit.tools._web.urllib.request.urlopen")
+    def test_denied_without_approval_handler(self, mock_urlopen):
+        mock_urlopen.return_value = _mock_urlopen("Hello World")
+        call = ToolCall(id="tc_1", name="http_get", input={"url": "https://example.com"})
+
+        result = ToolGroup(http_get).execute(call)
+
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.type == "approval_denied"
+        mock_urlopen.assert_not_called()
+
+    @patch("ai_arch_toolkit.toolkit.tools._web.urllib.request.urlopen")
+    async def test_fetches_when_handler_approves(self, mock_urlopen):
+        mock_urlopen.return_value = _mock_urlopen("Hello World")
+        requests: list[ApprovalRequest] = []
+
+        async def approve(request: ApprovalRequest) -> ApprovalDecision:
+            requests.append(request)
+            return ApprovalDecision.approve()
+
+        call = ToolCall(id="tc_1", name="http_get", input={"url": "https://example.com"})
+        result = await ToolGroup(http_get, approval_handler=approve).async_execute(call)
+
+        assert result.ok is True
+        assert result.value == "Hello World"
+        assert [(r.tool_name, r.capability, r.risk_level) for r in requests] == [
+            ("http_get", "network", "high")
+        ]

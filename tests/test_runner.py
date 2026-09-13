@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import pytest
 
+from ai_arch_toolkit.core._metering._scope import MeterScope
 from ai_arch_toolkit.core._response import Response, ToolCall, Usage
+from ai_arch_toolkit.core._tools._approval import ApprovalDecision
 from ai_arch_toolkit.core._tools._decorator import tool
+from ai_arch_toolkit.core._tools._governance import DangerousToolGate
 from ai_arch_toolkit.core._tools._group import ToolGroup
 from ai_arch_toolkit.toolkit._runner import run_tools, run_tools_sync
 
@@ -127,6 +130,11 @@ class TestRunToolsSync:
         r = _make_response(ToolCall(id="tc_1", name="get_time", input={"tz": "UTC"}))
         results = run_tools_sync(r, [get_time])
         assert results[0]["content"] == '{"time": "12:00", "tz": "UTC"}'
+
+    def test_async_tool_is_awaited(self):
+        r = _make_response(ToolCall(id="tc_1", name="async_search", input={"query": "test"}))
+        results = run_tools_sync(r, [async_search])
+        assert results[0]["content"] == "Results for: test"
 
 
 # ---------------------------------------------------------------------------
@@ -269,4 +277,96 @@ class TestRunToolsGovernance:
         r = _make_response(ToolCall(id="tc_1", name="get_weather", input={"city": "NYC"}))
         with MeterScope() as scope:
             run_tools_sync(r, [get_weather])
+        assert scope.snapshot().tool_calls == 1
+
+
+# ---------------------------------------------------------------------------
+# A ToolGroup brings its own governance: gates, approval handler, max_calls
+# ---------------------------------------------------------------------------
+
+
+def _approve(_request: object) -> ApprovalDecision:
+    return ApprovalDecision.approve(reviewer="human")
+
+
+class TestRunToolsUsesGroupGovernance:
+    async def test_group_gate_blocks(self):
+        group = ToolGroup(get_weather, gates=[DangerousToolGate(blocked=["get_weather"])])
+        r = _make_response(ToolCall(id="tc_1", name="get_weather", input={"city": "NYC"}))
+        results = await run_tools(r, group)
+        assert "dangerous_tool_blocked" in results[0]["content"]
+        assert "Sunny" not in results[0]["content"]
+
+    def test_group_gate_blocks_sync(self):
+        group = ToolGroup(get_weather, gates=[DangerousToolGate(blocked=["get_weather"])])
+        r = _make_response(ToolCall(id="tc_1", name="get_weather", input={"city": "NYC"}))
+        results = run_tools_sync(r, group)
+        assert "dangerous_tool_blocked" in results[0]["content"]
+        assert "Sunny" not in results[0]["content"]
+
+    async def test_group_max_calls_blocks_the_second_call(self):
+        group = ToolGroup(get_weather, max_calls=1)
+        r = _make_response(
+            ToolCall(id="tc_1", name="get_weather", input={"city": "NYC"}),
+            ToolCall(id="tc_2", name="get_weather", input={"city": "LA"}),
+        )
+        results = await run_tools(r, group)
+        assert results[0]["content"] == "Sunny in NYC"
+        assert "max_calls_exceeded" in results[1]["content"]
+        assert results[1]["tool_use_id"] == "tc_2"
+
+    def test_group_max_calls_blocks_the_second_call_sync(self):
+        group = ToolGroup(get_weather, max_calls=1)
+        r = _make_response(
+            ToolCall(id="tc_1", name="get_weather", input={"city": "NYC"}),
+            ToolCall(id="tc_2", name="get_weather", input={"city": "LA"}),
+        )
+        results = run_tools_sync(r, group)
+        assert results[0]["content"] == "Sunny in NYC"
+        assert "max_calls_exceeded" in results[1]["content"]
+
+    async def test_group_approval_handler_is_used(self):
+        group = ToolGroup(deploy, approval_handler=_approve)
+        r = _make_response(ToolCall(id="tc_1", name="deploy", input={"target": "prod"}))
+        results = await run_tools(r, group)
+        assert results[0]["content"] == "deployed to prod"
+
+    def test_group_approval_handler_is_used_sync(self):
+        group = ToolGroup(deploy, approval_handler=_approve)
+        r = _make_response(ToolCall(id="tc_1", name="deploy", input={"target": "prod"}))
+        results = run_tools_sync(r, group)
+        assert results[0]["content"] == "deployed to prod"
+
+    @pytest.mark.parametrize(
+        "response",
+        [
+            _make_response(ToolCall(id="tc_1", name="deploy", input={"target": "prod"})),
+            Response(text="no tool calls"),  # misuse is reported even when nothing would run
+        ],
+        ids=["with_tool_calls", "without_tool_calls"],
+    )
+    async def test_approval_handler_next_to_a_group_raises(self, response: Response):
+        with pytest.raises(ValueError, match="approval_handler"):
+            await run_tools(response, ToolGroup(deploy), approval_handler=_approve)
+
+    def test_approval_handler_next_to_a_group_raises_sync(self):
+        group = ToolGroup(deploy)
+        r = _make_response(ToolCall(id="tc_1", name="deploy", input={"target": "prod"}))
+        with pytest.raises(ValueError, match="approval_handler"):
+            run_tools_sync(r, group, approval_handler=_approve)
+
+    async def test_unknown_tool_still_raises_key_error(self):
+        r = _make_response(ToolCall(id="tc_1", name="nonexistent", input={}))
+        with pytest.raises(KeyError, match="nonexistent"):
+            await run_tools(r, ToolGroup(get_weather))
+
+    def test_unknown_tool_still_raises_key_error_sync(self):
+        r = _make_response(ToolCall(id="tc_1", name="nonexistent", input={}))
+        with pytest.raises(KeyError, match="nonexistent"):
+            run_tools_sync(r, ToolGroup(get_weather))
+
+    async def test_group_calls_are_metered(self):
+        r = _make_response(ToolCall(id="tc_1", name="get_weather", input={"city": "NYC"}))
+        with MeterScope() as scope:
+            await run_tools(r, ToolGroup(get_weather))
         assert scope.snapshot().tool_calls == 1

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import replace
 from typing import Any
 
@@ -16,6 +16,7 @@ from ai_arch_toolkit.core._metering._operation import MeterOperation, OperationR
 from ai_arch_toolkit.core._metering._scope import current_meter, current_span_id
 from ai_arch_toolkit.core._redaction import Redactor
 from ai_arch_toolkit.core._response import ToolCall, Usage
+from ai_arch_toolkit.core._sync import _run_sync
 from ai_arch_toolkit.core._tools._approval import ApprovalHandler
 from ai_arch_toolkit.core._tools._definition import ToolDefinition, ToolRuntimePolicy
 from ai_arch_toolkit.core._tools._governance import (
@@ -29,6 +30,11 @@ from ai_arch_toolkit.core._tools._governance import (
 )
 from ai_arch_toolkit.core._tools._result import ToolResult, _format_value
 from ai_arch_toolkit.core._tools._schema import tool_schema
+from ai_arch_toolkit.core._tools._validation import (
+    ArgumentError,
+    bind_arguments,
+    validate_arguments,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +76,67 @@ def _resolve_definition(tool_call: ToolCall, tools: list[Callable[..., Any]]) ->
     return _definition_for(_resolve_fn(tool_call, tools))
 
 
+# --- Invocation ---------------------------------------------------------------
+
+
+async def _as_coroutine(awaitable: Awaitable[Any]) -> Any:
+    return await awaitable  # asyncio.run() on Python 3.13 accepts only coroutines
+
+
+def _call_tool_sync(
+    fn: Callable[..., Any], positional: list[Any], keywords: dict[str, Any]
+) -> Any:
+    """Call a tool from sync code, running an awaitable result to completion.
+
+    Covers ``async def`` tools and sync functions that return an awaitable. ``_run_sync`` uses a
+    fresh event loop, or a worker thread that carries the caller's context when a loop is
+    already running.
+    """
+    value = fn(*positional, **keywords)
+    if inspect.isawaitable(value):
+        return _run_sync(_as_coroutine(value))
+    return value
+
+
+async def _call_tool_async(
+    fn: Callable[..., Any], positional: list[Any], keywords: dict[str, Any]
+) -> Any:
+    """Call a tool from async code: coroutine functions on the loop, the rest in a thread.
+
+    A sync function that returns an awaitable has it awaited here.
+    """
+    if inspect.iscoroutinefunction(fn):
+        return await fn(*positional, **keywords)
+    value = await asyncio.to_thread(fn, *positional, **keywords)
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
+def _validated(definition: ToolDefinition, tool_call: ToolCall, arguments: Any) -> ToolCall:
+    """The call with its arguments validated and coerced against the tool's schema.
+
+    Raises:
+        ArgumentError: The arguments don't fit the schema.
+    """
+    coerced = validate_arguments(definition.fn, definition.schema.input_schema, arguments)
+    return replace(tool_call, input=coerced)
+
+
+def _validation_failure(
+    tool_call: ToolCall, error: ArgumentError, audit: dict[str, Any], redactor: Redactor
+) -> ToolResult:
+    details: dict[str, Any] = {"tool_name": tool_call.name}
+    if error.argument is not None:
+        details["argument"] = error.argument
+    result = ToolResult.failure(
+        "validation_error",
+        f"Tool {tool_call.name!r} {redactor.redact_text(str(error))}",
+        details=details,
+    )
+    return _with_audit(result, audit, redactor)
+
+
 # --- Result helpers -----------------------------------------------------------
 
 
@@ -88,18 +155,13 @@ def _coerce_result(value: Any) -> ToolResult:
 
 
 def _result_from_exception(tool_name: str, exc: Exception, redactor: Redactor) -> ToolResult:
-    """Convert an exception during tool execution to a structured, redacted result.
+    """Convert an exception raised by a tool to a structured, redacted result.
 
-    Exception text is *redacted* (not hidden): the agent still sees useful
-    messages like "backend down", but secret-shaped substrings are stripped.
+    Arguments were validated and bound before the call, so any exception here — ``TypeError``
+    included — comes from the tool itself. Exception text is *redacted* (not hidden): the agent
+    still sees useful messages like "backend down", but secret-shaped substrings are stripped.
     """
     message = redactor.redact_text(str(exc))
-    if isinstance(exc, TypeError):
-        return ToolResult.failure(
-            "validation_error",
-            f"Tool {tool_name!r} argument mismatch: {message}",
-            details={"tool_name": tool_name},
-        )
     return ToolResult.failure(
         "runtime_error",
         message,
@@ -199,29 +261,39 @@ def _run_tool_sync(
     max_calls: int | None,
     redactor: Redactor,
 ) -> ToolResult:
-    ctx = ExecutionContext(definition=definition, tool_call=tool_call)
-    args = dict(tool_call.input)
     audit: dict[str, Any] = {}
+    try:
+        current = _validated(definition, tool_call, tool_call.input)
+    except ArgumentError as error:
+        return _validation_failure(tool_call, error, audit, redactor)
     for gate in gates:
-        result = gate.check_sync(ctx)
+        # Each gate sees the arguments as the gates before it left them.
+        result = gate.check_sync(ExecutionContext(definition=definition, tool_call=current))
         if result is None:
             continue
         if isinstance(result, GateBlock):
-            return _block_result(result, tool_call, audit, redactor)
+            return _block_result(result, current, audit, redactor)
         if isinstance(result, GateDryRun):
-            return _dry_run_result(tool_call, {**audit, **result.audit}, redactor)
-        args = result.args
+            return _dry_run_result(current, {**audit, **result.audit}, redactor)
         audit = {**audit, **result.audit}
+        try:
+            current = _validated(definition, current, result.args)
+        except ArgumentError as error:
+            return _validation_failure(current, error, audit, redactor)
+    try:
+        positional, keywords = bind_arguments(definition.fn, current.input)
+    except ArgumentError as error:
+        return _validation_failure(current, error, audit, redactor)
 
     if max_calls is not None:
         if run_state.executed >= max_calls:
-            return _max_calls_block(tool_call, max_calls, audit, redactor)
+            return _max_calls_block(current, max_calls, audit, redactor)
         run_state.executed += 1
 
-    op, tool_cost = _meter_tool_open(tool_call)  # AdmissionDenied here is terminal (propagates)
+    op, tool_cost = _meter_tool_open(current)  # AdmissionDenied here is terminal (propagates)
     settled = False
     try:
-        result_value = _coerce_result(definition.fn(**args))
+        result_value = _coerce_result(_call_tool_sync(definition.fn, positional, keywords))
         result = _with_audit(result_value, audit, redactor)
         if op is not None:
             op.settle(usage=_NO_USAGE, cost=tool_cost)
@@ -230,7 +302,7 @@ def _run_tool_sync(
     except AdmissionDenied:
         raise  # budget denial is terminal — a tool executor never converts it to a ToolResult
     except Exception as exc:
-        return _result_from_exception(tool_call.name, exc, redactor)
+        return _result_from_exception(current.name, exc, redactor)
     finally:
         if op is not None and not settled:
             op.fail()  # error / cancellation -> keep the count, release the op
@@ -245,33 +317,40 @@ async def _arun_tool(
     max_calls: int | None,
     redactor: Redactor,
 ) -> ToolResult:
-    ctx = ExecutionContext(definition=definition, tool_call=tool_call)
-    args = dict(tool_call.input)
     audit: dict[str, Any] = {}
+    try:
+        current = _validated(definition, tool_call, tool_call.input)
+    except ArgumentError as error:
+        return _validation_failure(tool_call, error, audit, redactor)
     for gate in gates:
-        result = await gate.check(ctx)
+        # Each gate sees the arguments as the gates before it left them.
+        result = await gate.check(ExecutionContext(definition=definition, tool_call=current))
         if result is None:
             continue
         if isinstance(result, GateBlock):
-            return _block_result(result, tool_call, audit, redactor)
+            return _block_result(result, current, audit, redactor)
         if isinstance(result, GateDryRun):
-            return _dry_run_result(tool_call, {**audit, **result.audit}, redactor)
-        args = result.args
+            return _dry_run_result(current, {**audit, **result.audit}, redactor)
         audit = {**audit, **result.audit}
+        try:
+            current = _validated(definition, current, result.args)
+        except ArgumentError as error:
+            return _validation_failure(current, error, audit, redactor)
+    try:
+        positional, keywords = bind_arguments(definition.fn, current.input)
+    except ArgumentError as error:
+        return _validation_failure(current, error, audit, redactor)
 
     if max_calls is not None:
         async with run_state.lock:
             if run_state.executed >= max_calls:
-                return _max_calls_block(tool_call, max_calls, audit, redactor)
+                return _max_calls_block(current, max_calls, audit, redactor)
             run_state.executed += 1
 
-    op, tool_cost = _meter_tool_open(tool_call)  # AdmissionDenied here is terminal (propagates)
+    op, tool_cost = _meter_tool_open(current)  # AdmissionDenied here is terminal (propagates)
     settled = False
     try:
-        if inspect.iscoroutinefunction(definition.fn):
-            result_value = _coerce_result(await definition.fn(**args))
-        else:
-            result_value = _coerce_result(await asyncio.to_thread(definition.fn, **args))
+        result_value = _coerce_result(await _call_tool_async(definition.fn, positional, keywords))
         result = _with_audit(result_value, audit, redactor)
         if op is not None:
             op.settle(usage=_NO_USAGE, cost=tool_cost)
@@ -280,7 +359,7 @@ async def _arun_tool(
     except AdmissionDenied:
         raise  # budget denial is terminal — a tool executor never converts it to a ToolResult
     except Exception as exc:
-        return _result_from_exception(tool_call.name, exc, redactor)
+        return _result_from_exception(current.name, exc, redactor)
     finally:
         if op is not None and not settled:
             op.fail()  # error / cancellation -> keep the count, release the op

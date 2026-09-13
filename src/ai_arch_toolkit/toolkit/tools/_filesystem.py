@@ -10,7 +10,12 @@ _DEFAULT_MAX_LINES = 200
 _DEFAULT_MAX_RESULTS = 50
 
 
-@tool
+@tool(
+    capability="filesystem",
+    risk_level="high",
+    requires_approval=True,
+    approval_reason="Reading local files can expose secrets or private data.",
+)
 def read_file(path: str, max_lines: int = _DEFAULT_MAX_LINES) -> str:
     """Read a file and return its contents.
 
@@ -35,7 +40,12 @@ def read_file(path: str, max_lines: int = _DEFAULT_MAX_LINES) -> str:
     return text
 
 
-@tool
+@tool(
+    capability="filesystem",
+    risk_level="high",
+    requires_approval=True,
+    approval_reason="Listing local directories can reveal private file names and layout.",
+)
 def list_directory(path: str = ".", pattern: str = "*") -> str:
     """List files and directories with sizes and types.
 
@@ -73,7 +83,12 @@ def list_directory(path: str = ".", pattern: str = "*") -> str:
     return header + "\n" + "\n".join(lines)
 
 
-@tool
+@tool(
+    capability="filesystem",
+    risk_level="high",
+    requires_approval=True,
+    approval_reason="Searching local file contents can expose secrets or private data.",
+)
 def search_files(directory: str, pattern: str, max_results: int = _DEFAULT_MAX_RESULTS) -> str:
     """Search for text in files recursively (like grep -r).
 

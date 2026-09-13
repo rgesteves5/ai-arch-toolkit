@@ -6,6 +6,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from ai_arch_toolkit.core._tools._approval import ApprovalDecision, ApprovalRequest
 from ai_arch_toolkit.core._tools._governance import (
     DangerousToolGate,
     DryRunGate,
@@ -60,6 +61,22 @@ def _governance_gates(governance: ToolGovernance) -> tuple[ToolGate, ...]:
     if governance.dry_run:
         gates.append(DryRunGate(dry_run=True))
     return tuple(gates)
+
+
+def _approve_allowed_dangerous_tools(request: ApprovalRequest) -> ApprovalDecision:
+    """Approval handler for a run that opted into dangerous tools.
+
+    ``allow_dangerous`` lets these tools past ``DangerousToolGate``, but each of them also
+    requires approval, which the group denies without a handler. The opt-in is that approval.
+    Any other tool that requires approval is still denied.
+    """
+    if request.tool_name in DANGEROUS_TOOLS:
+        return ApprovalDecision.approve(
+            reviewer="allow_dangerous", reason="dangerous tools allowed for this run"
+        )
+    return ApprovalDecision.deny(
+        reviewer="allow_dangerous", reason="allow_dangerous covers only the dangerous tools"
+    )
 
 
 class ToolRegistry:
@@ -129,6 +146,7 @@ def resolve_tools_with_limits(
     governance = _tool_governance(config, max_tool_calls=max_tool_calls)
     group = ToolGroup(
         *fns,
+        approval_handler=_approve_allowed_dangerous_tools if governance.allow_dangerous else None,
         gates=_governance_gates(governance),
         max_calls=governance.max_calls,
     )

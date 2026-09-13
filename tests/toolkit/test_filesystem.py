@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ai_arch_toolkit.core import ApprovalDecision, ApprovalRequest, ToolCall, ToolGroup
 from ai_arch_toolkit.toolkit.tools._filesystem import list_directory, read_file, search_files
 
 
@@ -84,3 +85,35 @@ class TestSearchFiles:
     def test_nonexistent_dir(self):
         result = search_files("/nonexistent", "pattern")
         assert "not found" in result.lower()
+
+
+class TestReadFileGovernance:
+    def test_denied_without_approval_handler(self, tmp_path):
+        secret = tmp_path / "secret.txt"
+        secret.write_text("TOP-SECRET")
+        call = ToolCall(id="tc_1", name="read_file", input={"path": str(secret)})
+
+        result = ToolGroup(read_file).execute(call)
+
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.type == "approval_denied"
+        assert "TOP-SECRET" not in result.to_model_text()
+
+    def test_reads_file_when_handler_approves(self, tmp_path):
+        notes = tmp_path / "notes.txt"
+        notes.write_text("hello from disk")
+        requests: list[ApprovalRequest] = []
+
+        def approve(request: ApprovalRequest) -> ApprovalDecision:
+            requests.append(request)
+            return ApprovalDecision.approve()
+
+        call = ToolCall(id="tc_1", name="read_file", input={"path": str(notes)})
+        result = ToolGroup(read_file, approval_handler=approve).execute(call)
+
+        assert result.ok is True
+        assert result.value == "hello from disk"
+        assert [(r.tool_name, r.capability, r.risk_level) for r in requests] == [
+            ("read_file", "filesystem", "high")
+        ]

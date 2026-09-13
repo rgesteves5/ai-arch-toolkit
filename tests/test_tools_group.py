@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from ai_arch_toolkit.core._response import ToolCall
+from ai_arch_toolkit.core._server_tools import code_execution, web_search
 from ai_arch_toolkit.core._tools._approval import ApprovalDecision
 from ai_arch_toolkit.core._tools._decorator import tool
 from ai_arch_toolkit.core._tools._governance import DangerousToolGate, DryRunGate
@@ -94,6 +97,28 @@ class TestToolGroupBasics:
         defs = group.definitions
         assert defs[0]["name"] == "plain_function"
         assert defs[0]["description"] == "Double a number."
+
+
+class TestRejectsNonLocalTools:
+    """A group only holds locally executable callables; anything else fails loudly."""
+
+    def test_server_tool_in_constructor_raises_type_error(self):
+        with pytest.raises(TypeError, match=r"tools=\[") as excinfo:
+            ToolGroup(get_weather, web_search())  # type: ignore[arg-type]
+        message = str(excinfo.value)
+        assert "'web_search'" in message
+        assert "provider" in message
+
+    def test_server_tool_via_add_raises_and_leaves_group_unchanged(self):
+        group = ToolGroup(get_weather)
+        with pytest.raises(TypeError, match=r"tools=\["):
+            group.add(code_execution())  # type: ignore[arg-type]
+        assert len(group) == 1
+        assert group.definitions[0]["name"] == "get_weather"
+
+    def test_non_callable_raises_type_error(self):
+        with pytest.raises(TypeError, match="callable"):
+            ToolGroup(42)  # type: ignore[arg-type]
 
 
 class TestExecute:

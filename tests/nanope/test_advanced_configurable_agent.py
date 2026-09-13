@@ -581,6 +581,49 @@ def test_dangerous_tools_are_blocked_by_default() -> None:
     assert "--allow-dangerous-tools" in result.to_model_text()
 
 
+def test_allowed_dangerous_tools_run(tmp_path) -> None:
+    from ai_arch_toolkit.toolkit.tools.dangerous import read_file
+
+    notes = tmp_path / "notes.txt"
+    notes.write_text("hello", encoding="utf-8")
+    config = agent_config_from_mapping(
+        {
+            **_base_config(),
+            "tools": {"enabled": ["read_file"], "permissions": {"allow_dangerous": True}},
+        }
+    )
+
+    resolved = resolve_tools(config.tools, ToolRegistry.from_mapping({"read_file": read_file}))
+    result = resolved.group.execute(
+        ToolCall(id="tc1", name="read_file", input={"path": str(notes)})
+    )
+
+    assert result.ok, result.to_model_text()
+    assert result.value == "hello"
+
+
+def test_allow_dangerous_does_not_approve_other_tools() -> None:
+    from ai_arch_toolkit.core._tools._decorator import tool
+
+    @tool(requires_approval=True)
+    def deploy(target: str) -> str:
+        """Deploy somewhere."""
+        return target
+
+    config = agent_config_from_mapping(
+        {
+            **_base_config(),
+            "tools": {"enabled": ["deploy"], "permissions": {"allow_dangerous": True}},
+        }
+    )
+
+    resolved = resolve_tools(config.tools, ToolRegistry.from_mapping({"deploy": deploy}))
+    result = resolved.group.execute(ToolCall(id="tc1", name="deploy", input={"target": "prod"}))
+
+    assert result.error is not None
+    assert result.error.type == "approval_denied"
+
+
 def test_tool_governance_dry_run_does_not_execute() -> None:
     calls: list[str] = []
 

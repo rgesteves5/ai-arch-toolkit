@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._tools import ToolGroup
+from ai_arch_toolkit.core._tools._approval import ApprovalDecision, ApprovalRequest
 from ai_arch_toolkit.nanope.research_center._wiki import (
     wiki_analysis_tools,
     wiki_notes_tools,
@@ -21,6 +22,24 @@ from ai_arch_toolkit.toolkit.tools._wikipedia import (
     wikipedia_related,
     wikipedia_search,
 )
+
+
+_WEB_TOOLS = frozenset({"http_get", "scrape_text"})
+
+
+def _approve_web_tools(request: ApprovalRequest) -> ApprovalDecision:
+    """Approve the web tools the manager is given on purpose.
+
+    ``http_get`` and ``scrape_text`` require approval, and a group without a handler denies them,
+    so every web check came back as an error. Any other tool that requires approval stays denied.
+    """
+    if request.tool_name in _WEB_TOOLS:
+        return ApprovalDecision.approve(
+            reviewer="research_center", reason="the manager checks coverage on the web"
+        )
+    return ApprovalDecision.deny(
+        reviewer="research_center", reason="only the manager's web tools are approved"
+    )
 
 
 def researcher_agent(
@@ -191,7 +210,7 @@ def manager_agent(
         gen_tool_list.extend(notes_tools.tools)
         review_tool_list.extend(notes_tools.tools)
 
-    gen_tools = ToolGroup(*gen_tool_list)
+    gen_tools = ToolGroup(*gen_tool_list, approval_handler=_approve_web_tools)
     review_tools = ToolGroup(*review_tool_list)
 
     notes_instructions = ""

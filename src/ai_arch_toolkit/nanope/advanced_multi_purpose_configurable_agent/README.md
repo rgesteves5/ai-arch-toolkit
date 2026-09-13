@@ -423,7 +423,9 @@ Use `--tools none` for a pure chat without tools.
 
 Use `--tools all` to expose all built-in chat tools.
 
-Dangerous tools (`run_command`, `python_repl`) are blocked unless explicitly allowed:
+Dangerous tools (`run_command`, `python_repl`, `read_file`, `list_directory`, `search_files`,
+`http_get`, `scrape_text`) are blocked unless explicitly allowed. The flag also approves their
+calls, which the toolkit otherwise denies for lack of an approval handler:
 
 ```bash
 uv run python -m ai_arch_toolkit.nanope.advanced_multi_purpose_configurable_agent \

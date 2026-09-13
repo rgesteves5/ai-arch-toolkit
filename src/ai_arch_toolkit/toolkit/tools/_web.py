@@ -53,7 +53,12 @@ class _HTMLTextExtractor(html.parser.HTMLParser):
         return "\n".join(line for line in lines if line)
 
 
-@tool
+@tool(
+    capability="network",
+    risk_level="high",
+    requires_approval=True,
+    approval_reason="Fetching arbitrary URLs can reach internal services or leak data.",
+)
 def http_get(url: str, max_chars: int = _DEFAULT_MAX_CHARS) -> str:
     """Fetch a URL and return the raw response text.
 
@@ -76,7 +81,12 @@ def http_get(url: str, max_chars: int = _DEFAULT_MAX_CHARS) -> str:
     return content
 
 
-@tool
+@tool(
+    capability="network",
+    risk_level="high",
+    requires_approval=True,
+    approval_reason="Fetching arbitrary URLs can reach internal services or leak data.",
+)
 def scrape_text(url: str, max_chars: int = _DEFAULT_MAX_CHARS) -> str:
     """Fetch a web page and extract visible text (HTML tags stripped).
 

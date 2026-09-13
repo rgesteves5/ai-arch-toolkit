@@ -7,6 +7,7 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 from ai_arch_toolkit.core._response import ToolCall
+from ai_arch_toolkit.core._server_tools import ServerTool
 from ai_arch_toolkit.core._tools._approval import ApprovalHandler
 from ai_arch_toolkit.core._tools._definition import ToolDefinition
 from ai_arch_toolkit.core._tools._executor import (
@@ -61,7 +62,22 @@ class ToolGroup:
         self._redactor = default_redactor()
 
     def add(self, fn: Callable[..., Any]) -> None:
-        """Add a function to the group."""
+        """Add a function to the group.
+
+        Raises:
+            TypeError: If ``fn`` is a provider-hosted :class:`ServerTool` (pass it to the LLM
+                next to the group instead) or is not callable.
+        """
+        if isinstance(fn, ServerTool):
+            msg = (
+                f"ToolGroup cannot hold server tool {fn.type!r}: server tools are executed by "
+                "the provider, not by the group. Pass it next to the group instead, e.g. "
+                "llm.complete(..., tools=[group, web_search()])"
+            )
+            raise TypeError(msg)
+        if not callable(fn):
+            msg = f"ToolGroup tools must be callable, got {type(fn).__name__}"
+            raise TypeError(msg)
         definition = _definition_for(fn)
         name = definition.schema.name
         if name in self._defs:

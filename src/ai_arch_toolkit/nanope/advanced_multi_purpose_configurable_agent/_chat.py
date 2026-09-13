@@ -461,7 +461,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument(
         "--allow-dangerous-tools",
         action="store_true",
-        help="Allow run_command and python_repl when those tools are enabled.",
+        help=(
+            "Allow the dangerous tools (shell, Python, filesystem, web fetch) when they are "
+            "enabled; the flag approves their calls."
+        ),
     )
     parser.add_argument(
         "--dry-run-tools",

@@ -8,7 +8,6 @@ import inspect
 import logging
 import types
 import typing
-import warnings
 from collections.abc import Callable
 from typing import Any, get_type_hints
 
@@ -27,23 +26,39 @@ _PYTHON_TYPE_TO_JSON: dict[type, str] = {
 def _hint_to_json_schema(hint: Any) -> tuple[dict[str, object], bool]:
     """Convert a Python type hint to a JSON Schema dict.
 
-    Returns (schema_dict, is_optional).
+    A union of several non-``None`` types becomes ``anyOf`` (never a ``type`` list, which
+    Gemini rejects); members whose schemas are identical collapse into one. ``Any`` and
+    ``object`` become the empty schema (any JSON value); a type the generator does not know
+    becomes ``string``, as does a parameter with no annotation.
+
+    Returns:
+        ``(schema, is_optional)``, where ``is_optional`` is true only when ``None`` is a
+        member of a union.
     """
+    # PEP 695 aliases (``type Count = int``) describe their value.
+    if isinstance(hint, typing.TypeAliasType):
+        return _hint_to_json_schema(hint.__value__)
+
+    # ``Any`` and ``object`` accept every JSON value, so the schema sets no constraint.
+    if hint is typing.Any or hint is object:
+        return {}, False
+
     origin = typing.get_origin(hint)
 
-    # Handle X | None (types.UnionType) and typing.Optional[X] (typing.Union)
+    # Handle unions: X | Y (types.UnionType) and typing.Union / typing.Optional
     if origin is types.UnionType or origin is typing.Union:
         args = typing.get_args(hint)
-        non_none = [a for a in args if a is not type(None)]
-        if len(non_none) == 1:
-            schema, _ = _hint_to_json_schema(non_none[0])
-            return schema, True
-        # Multi-type union (not just Optional) — fall back to string
-        warnings.warn(
-            f"Multi-type union {hint} collapsed to string; consider using a single type",
-            stacklevel=3,
-        )
-        return {"type": "string"}, True
+        variants: list[dict[str, object]] = []
+        for arg in args:
+            if arg is type(None):
+                continue
+            variant, _ = _hint_to_json_schema(arg)
+            if variant not in variants:
+                variants.append(variant)
+        is_optional = type(None) in args
+        if len(variants) == 1:
+            return variants[0], is_optional
+        return {"anyOf": variants}, is_optional
 
     # Handle Literal["a", "b"] or Literal[1, 2]
     if origin is typing.Literal:
@@ -101,7 +116,7 @@ def _hint_to_json_schema(hint: Any) -> tuple[dict[str, object], bool]:
 
     # Handle Pydantic BaseModel (duck-typed, no import)
     if isinstance(hint, type) and hasattr(hint, "model_json_schema"):
-        return hint.model_json_schema(), False
+        return _inline_local_refs(hint.model_json_schema()), False
 
     # Primitive types
     if isinstance(hint, type):
@@ -111,6 +126,79 @@ def _hint_to_json_schema(hint: Any) -> tuple[dict[str, object], bool]:
 
     # Unknown — fallback to string
     return {"type": "string"}, False
+
+
+_LOCAL_DEFINITION = "#/$defs/"
+
+
+def _inline_local_refs(schema: dict[str, Any]) -> dict[str, object]:
+    """Resolve ``#/$defs/...`` references so the schema stands on its own.
+
+    Pydantic describes nested models as ``$ref`` pointers into a ``$defs`` table at the top of
+    the model's schema. Embedded as one tool parameter, that table no longer sits at the root
+    the pointers name, so a provider sees dangling references (Gemini rejects the tool). A
+    reference to a definition being expanded (a recursive model) is kept, together with the
+    table, which :func:`infer_schema` hoists to the tool's root.
+    """
+    definitions = schema.get("$defs")
+    if not isinstance(definitions, dict):
+        return schema
+
+    def resolve(node: Any, expanding: frozenset[str]) -> Any:
+        if isinstance(node, list):
+            return [resolve(item, expanding) for item in node]
+        if not isinstance(node, dict):
+            return node
+        ref = node.get("$ref")
+        if isinstance(ref, str) and ref.startswith(_LOCAL_DEFINITION):
+            name = ref.removeprefix(_LOCAL_DEFINITION)
+            if name in definitions and name not in expanding:
+                target = resolve(definitions[name], expanding | {name})
+                siblings = {k: resolve(v, expanding) for k, v in node.items() if k != "$ref"}
+                return {**target, **siblings}  # a field's description sits next to its $ref
+        return {key: resolve(value, expanding) for key, value in node.items()}
+
+    inlined: dict[str, object] = resolve(
+        {key: value for key, value in schema.items() if key != "$defs"}, frozenset()
+    )
+    if _mentions_local_ref(inlined):
+        inlined["$defs"] = definitions
+    return inlined
+
+
+def _mentions_local_ref(node: Any) -> bool:
+    if isinstance(node, list):
+        return any(_mentions_local_ref(item) for item in node)
+    if not isinstance(node, dict):
+        return False
+    ref = node.get("$ref")
+    if isinstance(ref, str) and ref.startswith(_LOCAL_DEFINITION):
+        return True
+    return any(_mentions_local_ref(value) for value in node.values())
+
+
+def _hoist_definitions(schema: dict[str, object]) -> dict[str, object]:
+    """Move every nested ``$defs`` table to the schema's root, where ``#/$defs/`` points."""
+    hoisted: dict[str, object] = {}
+
+    def strip(node: Any) -> Any:
+        if isinstance(node, list):
+            return [strip(item) for item in node]
+        if not isinstance(node, dict):
+            return node
+        table = node.get("$defs")
+        if isinstance(table, dict):
+            for name, definition in table.items():
+                if name in hoisted and hoisted[name] != definition:
+                    logger.warning("Tool schema defines %r twice; keeping the first", name)
+                    continue
+                hoisted[name] = definition
+        return {key: strip(value) for key, value in node.items() if key != "$defs"}
+
+    stripped: dict[str, object] = strip(schema)
+    if hoisted:
+        stripped["$defs"] = hoisted
+    return stripped
 
 
 def _is_typeddict(hint: Any) -> bool:
@@ -266,6 +354,8 @@ def infer_schema(
 ) -> dict[str, Any]:
     """Build a tool definition dict from a function's type hints and docstring.
 
+    Variadic ``*args`` / ``**kwargs`` parameters are never part of the schema.
+
     Returns ``{"name": ..., "description": ..., "input_schema": {...}}``.
     """
     tool_name = name or fn.__name__
@@ -283,6 +373,9 @@ def infer_schema(
 
     for param_name, param in sig.parameters.items():
         if param_name in ("self", "cls"):
+            continue
+        # Arguments arrive by name, which can never bind a variadic parameter itself.
+        if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
             continue
         hint = hints.get(param_name)
         if hint is not None:
@@ -318,11 +411,9 @@ def infer_schema(
             else:
                 properties[pname] = override
 
-    input_schema: dict[str, object] = {
-        "type": "object",
-        "properties": properties,
-        "required": required,
-    }
+    input_schema = _hoist_definitions(
+        {"type": "object", "properties": properties, "required": required}
+    )
 
     return {
         "name": tool_name,

@@ -72,7 +72,8 @@ async def test_tool_calling_round_trip():
 
     tc = resp.tool_calls[0]
     result = tools.execute(tc)
-    assert result == "7"
+    assert result.ok, result.to_model_text()
+    assert result.value == "7"
 
     messages = [
         {"role": "user", "content": "What is 3 + 4?"},
@@ -83,7 +84,7 @@ async def test_tool_calling_round_trip():
                 {"id": t.id, "name": t.name, "input": t.input} for t in resp.tool_calls
             ],
         },
-        tool_result(result, tool_use_id=tc.id, name=tc.name),
+        tool_result(result.to_model_text(), tool_use_id=tc.id, name=tc.name),
     ]
     final = await llm.complete(messages, tools=tools)
     assert "7" in final.text

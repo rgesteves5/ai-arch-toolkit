@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import gc
 import json
+import warnings
+from collections.abc import Generator
+from typing import Any
 
 from ai_arch_toolkit.core._response import ToolCall
 from ai_arch_toolkit.core._tools._approval import ApprovalDecision
@@ -11,6 +16,7 @@ from ai_arch_toolkit.core._tools._executor import (
     async_execute_tool,
     execute_tool,
 )
+from ai_arch_toolkit.core._tools._group import ToolGroup
 
 
 @tool
@@ -241,3 +247,187 @@ class TestAsyncExecuteTool:
         assert result.ok is True
         assert result.value == "echo ok"
         assert result.metadata["audit"]["approval"]["decision"]["reviewer"] == "async-human"
+
+
+# --- Awaitables on either path (async tools run from sync code, and vice versa) ------------
+
+
+@tool
+async def async_greet(name: str) -> str:
+    """Greet someone after yielding to the event loop."""
+    await asyncio.sleep(0)
+    return f"hello {name}"
+
+
+def deferred_lookup(key: str) -> Any:
+    """A sync function that hands back a coroutine instead of a value."""
+    return async_lookup(key)
+
+
+class _Deferred:
+    """A minimal awaitable that is not a coroutine."""
+
+    def __init__(self, value: object) -> None:
+        self._value = value
+
+    def __await__(self) -> Generator[Any, None, object]:
+        return self._resolve().__await__()
+
+    async def _resolve(self) -> object:
+        await asyncio.sleep(0)
+        return self._value
+
+
+def deferred_object(key: str) -> _Deferred:
+    """A sync function that returns a non-coroutine awaitable."""
+    return _Deferred(f"object_for_{key}")
+
+
+def _never_awaited(caught: list[warnings.WarningMessage]) -> list[str]:
+    return [str(w.message) for w in caught if "never awaited" in str(w.message)]
+
+
+class TestAsyncToolOnSyncPath:
+    def test_group_execute_awaits_async_tool(self):
+        group = ToolGroup(async_greet)
+        tc = ToolCall(id="tc_1", name="async_greet", input={"name": "ada"})
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = group.execute(tc)
+            assert result.ok is True
+            assert result.value == "hello ada"
+            assert result.to_model_text() == "hello ada"
+            del result
+            gc.collect()
+        assert _never_awaited(caught) == []
+
+    def test_execute_tool_awaits_async_tool(self):
+        tc = ToolCall(id="tc_1", name="async_lookup", input={"key": "foo"})
+        result = execute_tool(tc, [async_lookup])
+        assert result.ok is True
+        assert result.value == "value_for_foo"
+
+    async def test_group_execute_inside_a_running_loop(self):
+        # A running loop sends the sync path through _run_sync's worker thread.
+        group = ToolGroup(async_greet)
+        tc = ToolCall(id="tc_1", name="async_greet", input={"name": "bob"})
+        result = group.execute(tc)
+        assert result.ok is True
+        assert result.value == "hello bob"
+
+    def test_sync_function_returning_a_coroutine(self):
+        tc = ToolCall(id="tc_1", name="deferred_lookup", input={"key": "k"})
+        result = execute_tool(tc, [deferred_lookup])
+        assert result.ok is True
+        assert result.value == "value_for_k"
+
+    def test_sync_function_returning_a_non_coroutine_awaitable(self):
+        tc = ToolCall(id="tc_1", name="deferred_object", input={"key": "k"})
+        result = execute_tool(tc, [deferred_object])
+        assert result.ok is True
+        assert result.value == "object_for_k"
+
+    def test_async_tool_that_raises_is_a_runtime_error(self):
+        @tool
+        async def async_explode() -> str:
+            """Fail after yielding to the loop."""
+            await asyncio.sleep(0)
+            raise RuntimeError("async boom")
+
+        tc = ToolCall(id="tc_1", name="async_explode", input={})
+        result = ToolGroup(async_explode).execute(tc)
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.type == "runtime_error"
+        assert "async boom" in result.error.message
+
+
+class TestAwaitableOnAsyncPath:
+    async def test_sync_function_returning_a_coroutine(self):
+        tc = ToolCall(id="tc_1", name="deferred_lookup", input={"key": "k"})
+        result = await async_execute_tool(tc, [deferred_lookup])
+        assert result.ok is True
+        assert result.value == "value_for_k"
+
+    async def test_sync_function_returning_a_non_coroutine_awaitable(self):
+        tc = ToolCall(id="tc_1", name="deferred_object", input={"key": "k"})
+        result = await async_execute_tool(tc, [deferred_object])
+        assert result.ok is True
+        assert result.value == "object_for_k"
+
+
+# --- Positional-only parameters ------------------------------------------------------------
+
+
+@tool
+def square(x: int, /) -> int:
+    """Square a number."""
+    return x * x
+
+
+@tool
+async def async_square(x: int, /) -> int:
+    """Square a number asynchronously."""
+    return x * x
+
+
+def plain_square(x: int, /) -> int:
+    """Square a number (undecorated)."""
+    return x * x
+
+
+@tool
+def scale(value: float, /, factor: float = 2.0, *, offset: float = 0.0) -> float:
+    """Scale a value, then shift it."""
+    return value * factor + offset
+
+
+@tool
+def span(start: int = 0, stop: int = 10, /) -> int:
+    """Length of a range."""
+    return stop - start
+
+
+class TestPositionalOnlyParameters:
+    def test_decorated_tool_on_sync_path(self):
+        tc = ToolCall(id="tc_1", name="square", input={"x": 3})
+        result = ToolGroup(square).execute(tc)
+        assert result.ok is True
+        assert result.value == 9
+
+    async def test_decorated_tool_on_async_path(self):
+        tc = ToolCall(id="tc_1", name="square", input={"x": 3})
+        result = await ToolGroup(square).async_execute(tc)
+        assert result.ok is True
+        assert result.value == 9
+
+    async def test_async_tool_on_both_paths(self):
+        tc = ToolCall(id="tc_1", name="async_square", input={"x": 4})
+        group = ToolGroup(async_square)
+        assert (await group.async_execute(tc)).value == 16
+        assert group.execute(tc).value == 16
+
+    async def test_undecorated_callable_on_both_paths(self):
+        tc = ToolCall(id="tc_1", name="plain_square", input={"x": 5})
+        assert execute_tool(tc, [plain_square]).value == 25
+        assert (await async_execute_tool(tc, [plain_square])).value == 25
+
+    def test_mixed_with_keyword_parameters(self):
+        tc = ToolCall(id="tc_1", name="scale", input={"offset": 1.0, "factor": 3.0, "value": 3.0})
+        result = execute_tool(tc, [scale])
+        assert result.ok is True
+        assert result.value == 10.0
+
+    def test_omitted_positional_only_parameter_takes_its_default(self):
+        # `stop` can only be passed by position, so the omitted `start` before it is filled in.
+        tc = ToolCall(id="tc_1", name="span", input={"stop": 4})
+        result = execute_tool(tc, [span])
+        assert result.ok is True
+        assert result.value == 4
+
+    def test_missing_required_positional_only_is_a_validation_error(self):
+        tc = ToolCall(id="tc_1", name="square", input={})
+        result = execute_tool(tc, [square])
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.type == "validation_error"
