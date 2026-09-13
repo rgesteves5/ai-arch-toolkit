@@ -50,13 +50,29 @@ is a valid ReAct spec.
 | `system` | `str` | `""` | System prompt |
 | `max_iterations` | `int` | `10` | Reasoning-loop cap (meaning is per-strategy) |
 | `knobs` | `Mapping[str, Any]` | `{}` | Strategy-specific, **serializable** options |
-| `policy` | `Policy \| None` | `None` | Per-step retry/timeout/confidence ([Flow Architecture](flow-architecture.md)) |
-| `timeout` | `float \| None` | `None` | Wall-clock timeout (seconds) |
+| `policy` | `Policy \| None` | `None` | Default retry/timeout/confidence for each step of the compiled flow ([Flow Architecture](flow-architecture.md#policy-on-a-flow)) |
+| `timeout` | `float \| None` | `None` | Wall-clock limit for the whole run, in seconds |
+| `trace_capture` | `"keys" \| "full" \| "none"` | `"keys"` | What each step's trace records ([Flow Architecture](flow-architecture.md#what-a-trace-captures)) |
 | `llm_kwargs` | `Mapping[str, Any]` | `{}` | Extra kwargs forwarded to the LLM (e.g. `temperature`) |
 | `output_schema` | `OutputSchema \| type \| None` | `None` | Structured output; accepts a schema or supported model class (see table) |
 
+`policy` applies to the steps of the strategy's own flow (listed per strategy in
+[Flow Architecture](flow-architecture.md#agent-flows)). Strategies that run an inner
+ReAct loop inside one step — `reflexion`, `plan_execute`, `llm_compiler`, `lats`,
+`self_discovery`, and `generate_review` with tools — do not pass it down, so a step
+timeout there bounds that step's whole inner loop. Bound individual model calls
+with `LLM(timeout=..., retry=...)` and the whole run with `timeout`. When `timeout`
+elapses, the step in flight is cancelled, nothing else starts, and the trace ends
+with a `flow_timeout` step. Manifests set it with `strategy.timeout` or
+`limits.timeout_seconds`.
+
+`trace_capture` defaults to `"keys"`: each step's trace keeps the state keys it read and
+the artifact keys it returned, not the values. Use `"full"` to record deep copies of the
+values when debugging, or `"none"` for metadata only. Strategies with an inner ReAct
+loop pass it to that loop. Manifests set it with `strategy.trace_capture`.
+
 `knobs` vs the dedicated fields: a field is dedicated when every strategy uses it
-the same way (`system`, `timeout`, `policy`). Anything strategy-specific —
+the same way (`system`, `timeout`, `policy`, `trace_capture`). Anything strategy-specific —
 `n_candidates` for `tot`, `threshold` for `reflexion`, `max_cycles` for
 `generate_review` — lives in `knobs`, so a spec stays a flat, config-friendly
 object.
@@ -201,12 +217,20 @@ the same meter that populates `result.report`.
 
 ## Streaming
 
-`Agent.iter(task)` yields `FlowEvent`s as the run progresses (async):
+`Agent.iter(task)` yields the run's `FlowEvent`s as they happen and, once the loop
+ends, exposes the same `AgentResult` that `run()` returns:
 
 ```python
-async for event in agent.iter("Summarise the latest news on X."):
-    print(event)
+execution = agent.iter("Summarise the latest news on X.")
+async for event in execution:
+    print(event.type, event.step_name)
+print(execution.result.text)
 ```
+
+Events come from the steps of the strategy's flow ([Flow Architecture](flow-architecture.md#streaming)).
+An inner ReAct loop that runs inside one step reports through that step's
+`step_start`/`step_end`, and its steps appear in the trace as that step's
+`children`. `iter()` is not token streaming: model output arrives with `step_end`.
 
 ## Budgets
 
@@ -234,6 +258,19 @@ if result.report and result.report.over_budget:
 call that would exceed a cap never runs. See [Run-Level Budgets in the safety
 guide](safety.md#cumulative-budgets) for hard-vs-soft caps, `reserve` /
 `unpriced`, and the full model.
+
+To attach usage sinks, a custom pricer, or retained meter events to one run, pass a
+full `RunConfig` instead. It fully specifies the run's meter and takes precedence
+over `budget_policy`, so put the controller in it to keep a budget:
+
+```python
+from ai_arch_toolkit import BudgetController, RunConfig
+
+result = await agent.run(
+    task,
+    config=RunConfig(controller=BudgetController(policy), sinks=[my_sink]),
+)
+```
 
 ## From config: `ReasoningSpec.from_mapping`
 

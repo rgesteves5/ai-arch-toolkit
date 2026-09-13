@@ -74,6 +74,10 @@ for event in llm.stream_events_sync("Hello"):   # sync rich events (SyncRichStre
 
 The task/messages argument accepts `Content` — a string or a multimodal list. See [Content & Messages](content.md).
 
+`system=` never replaces the `system()` messages in `messages`, or the other way round: Anthropic, Gemini and xAI receive one system prompt with `system=` first and the `system()` messages after it, separated by a blank line, while the OpenAI adapter (and OpenAI-compatible servers) sends `system=` as a leading system message and keeps each `system()` message at its position — batch requests included.
+
+A system message's content is text: a string, or a list of strings and `cache()` parts, joined by a blank line. The Anthropic adapter keeps a `cache()` part's cache marker, sending the system prompt as text blocks, so a long system prompt can be cached; the other adapters send its text. An image or a document in a system message raises `TypeError` — send it in a user message.
+
 ---
 
 ## Response
@@ -146,8 +150,10 @@ configured instances when fallback models should retry too.
 For streaming, provider I/O starts when iteration begins. A retry or fallback is
 safe only before the first chunk/event becomes visible to the caller; after that
 boundary an error is surfaced without replay, avoiding duplicated or spliced
-output. Budget admission and the first call reservation still happen when
-`stream()` / `stream_events()` creates the stream object.
+output. Budget admission and the call reservation still happen when
+`stream()` / `stream_events()` creates the stream object; the call counts once
+the first provider attempt starts. A stream that is never iterated, or that
+middleware rejects before the provider is called, releases its reservation.
 
 Fully consuming a stream closes its provider iterator automatically. If the
 consumer may stop early, use the async context manager (or call `await

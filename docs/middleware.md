@@ -58,6 +58,12 @@ class AsyncMiddleware:
 
 The framework auto-detects async variants and falls back to the sync hooks if they're absent.
 
+The same hooks run for every call — `complete()`, `stream()`, `stream_events()`, and their sync wrappers:
+
+- **`complete()`** runs `abefore`, the provider call (with its retries and fallbacks), then `aafter`.
+- **Streams** run `abefore` when iteration starts, before the provider is called, so a middleware that raises (e.g. input moderation) stops the stream before any provider I/O. `aafter` runs once the stream has been fully consumed, on the final `Response`, before the stream reports completion; an abandoned stream skips it.
+- **Fallbacks** receive the request after the primary LLM's middleware, and the primary's `aafter` runs once on whichever response finished.
+
 ---
 
 ## Execution order
@@ -112,7 +118,7 @@ llm = LLM("claude-sonnet-5", middleware=[RateLimitMiddleware(requests_per_minute
 # burst defaults to int(requests_per_minute); override with burst=...
 ```
 
-> The limiter only acts on the **async** path (`abefore`), which `LLM.complete()` uses. `stream()` / `stream_events()` run middleware through the sync hook and **bypass** the limiter — use `complete()` when you need rate limiting.
+> The limiter acts in `abefore`, which runs for `complete()` and for every stream (before the provider is called), so streamed calls are rate limited too.
 
 ### TracingMiddleware
 

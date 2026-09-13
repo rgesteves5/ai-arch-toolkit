@@ -59,7 +59,7 @@ response = llm.complete_sync("User prompt here")  # raises ModerationError if fl
 
 `ModerationMiddleware(*, input=None, output=None, on_flagged="raise")` — supply at least one of `input` / `output`. When flagged, `"raise"` throws `ModerationError` (carrying `categories` and `explanation`); `"warn"` only logs.
 
-> Output moderation runs after stream finalization, so streamed text may reach the user before the output check completes — prefer `input` screening (or non-streaming calls) when you must block before display.
+> Input moderation runs before the provider is called, for `complete()` and streams alike. Output moderation on a stream runs once it has been fully consumed — the text has already reached the consumer by then — so screen input, or buffer the stream yourself, when output must be blocked before display.
 
 ---
 

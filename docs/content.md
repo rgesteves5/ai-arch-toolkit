@@ -35,7 +35,13 @@ messages = [user(["Summarize this:", document("report.pdf", media_type="applicat
 
 # Anthropic prompt caching
 messages = [user([cache(long_context), "Now answer my question."])]
+
+# A cached system prompt (Anthropic)
+messages = [{"role": "system", "content": [cache(long_instructions)]}, user("Hi")]
 ```
+
+A `cache()` part only changes the request on Anthropic. The other providers receive its text as
+ordinary text, so the same messages work everywhere.
 
 Helper signatures:
 

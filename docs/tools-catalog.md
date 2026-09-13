@@ -247,7 +247,7 @@ For the conceptual guide (`@tool`, `ToolGroup`, server tools), see [Tools](tools
 
 ## Dangerous (opt-in — gate these)
 
-These execute real side effects and live in the explicit `ai_arch_toolkit.toolkit.tools.dangerous` namespace. Expose them only with sandboxing, permission checks, and human approval. See [Tool Governance & Safety](safety.md#dangerous-tools).
+These execute real side effects and live in the explicit `ai_arch_toolkit.toolkit.tools.dangerous` namespace. All of them require approval — without an `approval_handler`, governed execution returns `approval_denied` — and should also run behind sandboxing and permission checks. See [Tool Governance & Safety](safety.md#dangerous-tools).
 
 **Filesystem** — `dangerous`
 

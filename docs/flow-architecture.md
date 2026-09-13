@@ -158,7 +158,28 @@ Step runs → success?
 Timeout? → halt / fallback (per on_timeout)
 ```
 
-All decisions are recorded in the Trace.
+All decisions are recorded in the Trace. A step timeout is never retried, even when `retry` is
+configured: `on_timeout` chooses between `halt` and `fallback`.
+
+### Policy on a Flow
+
+`Flow(policy=...)` is the default for every step of that flow that has no policy of its own; a
+step's own `policy` always wins. A nested flow applies its own policy when it runs, so the step that
+wraps it (`as_step()`) carries none and nothing is applied twice.
+
+`Flow(timeout=...)` bounds a whole run, in seconds. When it elapses, the steps in flight are
+cancelled, nothing else starts, and the trace ends with a `flow_timeout` step (`iter()` emits a
+`timeout` event). A nested flow's timeout is handled by that flow; an outer timeout also cancels a
+nested flow that is still running.
+
+```python
+flow = Flow(
+    Step(name="draft", fn=draft),
+    Step(name="review", fn=review),
+    policy=Policy(retry=RetryConfig(max_retries=2)),  # each step retries up to twice
+    timeout=60.0,                                     # the whole run stops after 60 s
+)
+```
 
 ### Fallback
 
@@ -216,9 +237,38 @@ For **spend**, read the run's meter — the single source of truth — not the t
 name, duration, cost, confidence, usage, attempts
 policy_decisions: ("retry", "timeout", "fallback", ...)
 error, skipped, skip_reason
-children: nested StepTraces (from sub-flows)
-input_state, output_result: serialized snapshots
+children: the steps of flows run inside this step (nested flows, inner agent loops)
+input_keys: the keys the step read, per state layer
+output_keys: the artifact keys the step returned
+input_state, output_result: the values, as trace_capture allows
 ```
+
+### What a trace captures
+
+`Flow(trace_capture=...)` sets how much of the state and of each result the trace keeps. A long
+agent loop carries its whole message history in state, so recording every value at every step
+makes a trace grow with the square of the steps.
+
+| `trace_capture` | `input_state` | `output_result` | `input_keys` / `output_keys` |
+|---|---|---|---|
+| `"keys"` (default) | empty | value, usage, cost, confidence, error, duration; no artifacts | recorded |
+| `"full"` | deep copy of every layer, taken before the step runs | everything, artifacts deep-copied | recorded |
+| `"none"` | empty | empty | empty |
+
+- **`"full"` is a faithful history.** Values are copied when the step starts and when it ends, so
+  a step that mutates a value in place (a queue it pops, a tree it expands) cannot rewrite an
+  earlier record. `world` holds shared resources and stays by reference, as in `State.fork()`,
+  and so does any value `copy.deepcopy` refuses. Memory and serialization cost grow with state
+  size times step count.
+- **`initial_state` is kept once per run.** It is copied the same way as `"full"`, except with
+  `"none"`, where it is empty.
+- **Agents set it on the spec.** Use `ReasoningSpec(trace_capture=...)` or `strategy.trace_capture`
+  in a manifest. Strategies that run an inner ReAct loop pass it to that loop.
+- **Capture is separate from redaction.** `trace_capture` decides what is recorded during the run;
+  `trace.to_dict(trace_mode=...)` decides what a serialized trace shows (see
+  [Trace redaction](safety.md#trace-redaction)).
+
+`Trace.from_dict` reads traces saved before `input_keys` and `output_keys` existed.
 
 ---
 
@@ -245,6 +295,10 @@ scope = Scope(enrich={"word_count": lambda snap: len(snap["text"].split())})
 Scope resolution: **FlowStep.scope > Step.scope > Flow.scope** (first non-None wins).
 
 Scope preserves layer structure — a Step still knows which layer data came from.
+
+`transform` runs once for each layer that holds the key. `enrich` reads the snapshot the Step will
+see — already filtered and transformed — so it can never read a key the scope hides, nor another
+enricher's output.
 
 ---
 
@@ -354,21 +408,44 @@ In DAG mode, failures cascade:
 
 ### Streaming
 
-Every flow supports event streaming:
+`flow.iter(state)` runs the flow on the same engine as `run()` — parallel waves, isolation between
+siblings, policies, and timeouts behave identically — and yields events as they happen:
 
 ```python
-async for event in flow.iter(state):
+execution = flow.iter(state)
+async for event in execution:
     match event.type:
-        case "flow_start":  print(f"Starting {event.flow_name}")
-        case "step_start":  print(f"  Running {event.step_name}")
-        case "step_end":    print(f"  Done: {event.result.value}")
+        case "step_start":   print(f"  Running {event.step_name}")
+        case "retry" | "timeout" | "fallback":
+            print(f"  {event.type} in {event.step_name}")
+        case "policy_decision":
+            print(f"  {event.policy_decision} in {event.step_name or event.flow_name}")
+        case "step_end":     print(f"  Done: {event.error or event.result.value}")
         case "step_skipped": print(f"  Skipped: {event.step_name}")
-        case "flow_end":    print(f"Cost: ${event.trace.metadata['meter']['cost']:.4f}")  # meter
+        case "flow_end":     print(f"Cost: ${event.trace.metadata['meter']['cost']:.4f}")
 
-# Or synchronously:
-for event in flow.iter_sync(state):
+result = execution.result   # the FlowResult, once the loop has finished
+
+# Or synchronously (the run happens on a background loop):
+sync_execution = flow.iter_sync(state)
+for event in sync_execution:
     ...
 ```
+
+| Event | Emitted when |
+|---|---|
+| `flow_start`, `flow_end` | The run starts; the run has finished (`flow_end.trace` is the complete trace). |
+| `step_start`, `step_end` | A step starts; a step finishes (`step_end.result` and `step_end.error` carry the outcome). |
+| `step_skipped` | A `when` condition was false, or a DAG dependency failed or was skipped. |
+| `retry`, `timeout`, `fallback` | The step engine takes that decision — while the step is still running. |
+| `policy_decision` | Any other decision: `low_confidence`, `escalate`, `halt`, `cost_exceeded`, `budget_exceeded`. |
+
+The run only moves past a step when you ask for the next event. Leaving the loop early — `break`, an
+exception, or `await execution.aclose()` — cancels any step still running and closes the run's
+meter; `async with flow.iter(state) as execution:` makes that deterministic. In a parallel wave,
+each sibling reports `step_end` as it finishes, and the wave's artifacts are merged into the state
+once every sibling has finished. A step whose `when` or `Scope` callable raises is recorded with the
+error, reported by `step_end`, and the flow stops.
 
 ### Composition — Flow as Step
 
@@ -391,9 +468,12 @@ outer = Flow(
 ```
 
 When a Flow runs as a Step:
-- It gets a forked State (world shared by reference)
+- It gets a copy of each State layer (values shared by reference)
 - Only new/changed artifacts are returned to the parent
-- Cost, usage, confidence propagate up automatically
+- Its spend is metered under the parent's run — one shared meter, read from `result.meter` — and a
+  per-step `Policy(max_cost=...)` on the wrapping step counts it
+- Its steps appear in the trace as the wrapping step's `children`, as do the steps of any flow a
+  step runs itself (e.g. an agent's inner ReAct loop); confidence propagates as the minimum
 
 ---
 

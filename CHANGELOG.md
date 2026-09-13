@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`Flow(timeout=...)`** bounds a whole run of a flow, in seconds. When it elapses, the steps in
+  flight are cancelled, nothing else starts, and the trace ends with a `flow_timeout` step.
+  `ReasoningSpec.timeout`, manifest `strategy.timeout`, and `limits.timeout_seconds` compile to it.
+- **`Flow(trace_capture="keys" | "full" | "none")`** sets what each step's trace records. Also new:
+  the `TraceCapture` type, `StepTrace.input_keys` / `output_keys`, `execute_step(capture=)`,
+  `ReasoningSpec.trace_capture`, and manifest `strategy.trace_capture`. See
+  [docs/flow-architecture.md](docs/flow-architecture.md#what-a-trace-captures).
+- **Flow and agent executions.** `Flow.iter()` and `iter_flow()` return a `FlowExecution`,
+  `Flow.iter_sync()` a `SyncFlowExecution`, and `Agent.iter()` an `AgentExecution`: iterate them as
+  before, then read `.result`. `retry`, `timeout`, `fallback`, and `policy_decision` events stream
+  while a step runs; `step_end` events carry the step's `error`; `FlowResult.meter_scope` exposes the
+  run's scope; `StepTrace.children` holds the steps of flows run inside a step.
+- `Agent.run()`, `run_sync()`, and `iter()` accept a per-run `config=RunConfig(...)`.
+- **Tool-call arguments are validated and coerced against the tool's schema before any gate runs.**
+  Numeric and boolean strings are coerced (`"3"` for an integer), `enum` and `anyOf` are checked,
+  missing or unknown arguments are refused, and an approval handler sees the coerced values. See
+  [docs/safety.md](docs/safety.md#argument-validation).
+- `ToolGate`, `ExecutionContext`, `GateBlock`, `GateModify`, `GateDryRun`, and `GateResult` are
+  exported from `ai_arch_toolkit` and `ai_arch_toolkit.core`, so custom gates no longer import
+  private modules.
 - GPT-6 Astra pricing (including cache, batch, long-context, and fast rates),
   Chat Completions parameter handling, and manual probe inventory. Unsupported
   reasoning efforts and tool calling fail clearly; Astra tools require Responses.
@@ -67,6 +87,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `.env.example` documenting every provider API key; the sync-timeout configuration now validates its inputs.
 
 ### Changed
+- **Breaking: step traces record key names, not values, by default.** `StepTrace.input_state` is
+  empty and `output_result` drops the artifacts; `input_keys` and `output_keys` list what the step
+  read and returned. A long agent loop's trace no longer grows with the square of its steps.
+  `Flow(trace_capture="full")` records deep copies of the values instead.
+- **Breaking: every tool in `toolkit.tools.dangerous` requires approval.** `read_file`,
+  `list_directory`, and `search_files` declare `capability="filesystem"`; `http_get` and
+  `scrape_text` declare `capability="network"`; all are `risk_level="high"`. Without an
+  `approval_handler`, a call returns `approval_denied`.
+- **Breaking: system prompts are merged, never replaced.** `system=` comes first, then the
+  `system()` messages in order, separated by a blank line (Anthropic, Gemini, and xAI, batch
+  included). The OpenAI adapter sends `system=` as a leading message and keeps each `system()`
+  message at its position. `system=""` no longer hides `system()` messages.
+- **Breaking: an argument of the wrong type is a `validation_error` before the tool runs.** It used
+  to reach the function (`"1" + "2"`).
+- **Breaking: `run_tools()` / `run_tools_sync()` refuse `approval_handler=` together with a
+  `ToolGroup`** (`ValueError`); set it on the group. A plain list of callables still takes it.
+- **Tool parameters typed `Any` or `object` accept any JSON value.** Their schema is now empty
+  instead of `{"type": "string"}`, so the model can send objects, lists, and numbers. Unannotated
+  parameters and types the generator does not know are still described as strings.
+- `Flow.iter()`, `iter_flow()`, and `Agent.iter()` return execution objects that still work with
+  `async for`; `Flow.iter_sync()` returns a `SyncFlowExecution`. The run's `MeterScope` is no longer
+  stored in `State.world["_meter_scope"]`.
+- `Flow.as_step()` no longer copies the flow's policy onto the wrapping step; the nested run applies
+  its own policy and timeout.
+- A stream's metering operation is reserved when the stream is created and starts with its first
+  attempt. A stream that is never iterated, or that middleware rejects, releases the reservation.
+- `configure_sync_timeouts(stream_join_timeout=)` (`AI_ARCH_STREAM_JOIN_TIMEOUT`) also bounds the
+  wait for the worker thread of an abandoned sync stream or a timed-out sync call, with a warning if
+  it is still alive. Closing a sync stream early can block for up to that long (5 s by default).
 - **Bundled model catalog and pricing refreshed from all four providers' official catalogs
   (2026-08-29).** OpenAI gains current GPT-5.6 prices and the base/Cyber/Daybreak/
   `chat-latest` aliases; Anthropic gains permanent Sonnet 5 pricing and published Opus 4.8
@@ -106,10 +155,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Memory `Node` reconciled with `core.graph.Node[T]` (zero pyright ignores).
 - Public API surface tightened: `__init__` re-exports audited so internals stop leaking.
 - Sync timeouts in `core/_sync.py` no longer expose the dead `SYNC_TIMEOUT` / `STREAM_JOIN_TIMEOUT` aliases; use `configure_sync_timeouts()` instead.
-- `RateLimitMiddleware` docstring documents the streaming-bypass limitation explicitly (previously a TODO).
 - `uv lock --upgrade` brought every transitive dependency to its latest compatible version (pydantic 2.13, urllib3 2.7, requests 2.34, websockets 16, xai-sdk 1.12, ruff 0.15.13, …); resolved the four Dependabot alerts.
 
 ### Fixed
+- **`cache()` parts reach OpenAI, Gemini, and xAI as their text.** Those adapters sent the part's
+  Python repr (`CachePart(content='…', ttl='ephemeral')`) to the model. xAI also drops document
+  parts with a warning instead of sending their repr.
+- **A system message may hold text parts.** A list of strings and `cache()` parts is joined into
+  the system prompt, and Anthropic keeps the cache marker, so a system prompt can be cached. Such a
+  list used to raise `TypeError` in the Anthropic, Gemini, and xAI adapters and failed inside the
+  OpenAI SDK. An image or document in a system message raises a `TypeError` that points to a user
+  message. On Anthropic, native blocks passed as `system=` no longer drop the text of `system()`
+  messages.
+- Sync streams (`LLM.stream_sync()`, `LLM.stream_events_sync()`, `Flow.iter_sync()`) deliver an
+  exception object that the source yields as a value, instead of raising it.
+- nanope (work in progress): `--allow-dangerous-tools` approves the dangerous tools' calls, the
+  BBEH solvers approve `python_repl`, and the research manager approves `http_get` and
+  `scrape_text`. Every call to those tools was denied, because they require approval.
+- **Anthropic streaming no longer double-counts usage.** `message_delta` usage is cumulative and now
+  replaces the `message_start` counts instead of adding to them: input and cache tokens were metered
+  twice, tripping token and cost budgets early, and a delta without `input_tokens` raised
+  `TypeError`. `complete()` and batch results also record `null` token counts as 0.
+- **`Flow(policy=...)` applies to every step without a policy of its own**, also when the flow runs
+  directly. `ReasoningSpec.policy`, `ReasoningSpec.timeout`, and manifest `limits.timeout_seconds`
+  were inert, and the flow factories dropped `timeout` when given a `policy`.
+- **Async middleware runs on streams.** `abefore` / `aafter` run for `stream()`, `stream_events()`,
+  and their sync wrappers, so moderation, memory, and rate limiting are no longer skipped when
+  streaming. Fallback models receive the messages after middleware, in `complete()` and in streams.
+- **`run_tools()` / `run_tools_sync()` apply a `ToolGroup`'s governance** (its gates, approval
+  handler, and `max_calls`), which was silently dropped. They also check every tool name in the
+  response before running any call, so an unknown name no longer leaves earlier side effects
+  without results.
+- Anthropic `batch_submit` no longer drops `system()` messages, and middleware that sets
+  `request.system` (such as `MemoryMiddleware`) no longer erases them.
+- `ToolGroup(web_search())` and `group.add(code_execution())` raise a `TypeError` explaining that
+  server tools go next to the group (`tools=[group, web_search()]`), instead of an
+  `AttributeError`; other non-callables raise `TypeError` too.
+- `ToolGroup.execute()`, `execute_tool()`, and `run_tools_sync()` run `async def` tools to
+  completion instead of returning an un-awaited coroutine as a success, and both execution paths
+  await an awaitable returned by a sync function. Tools with positional-only parameters can be
+  called.
+- **Flow engine.** `Flow.iter()` runs DAG waves in parallel and isolates siblings like `run()`. A
+  `when` condition or `Scope` callable that raises stops the flow with the error recorded on that
+  step, instead of escaping `run()` or silently skipping it. A budget denial in a parallel wave keeps
+  the finished siblings in the trace and state, and a step's `Policy(max_cost=...)` counts the spend
+  of flows that step runs.
+- `OperationRequest.provider` and `UsageEvent.provider` name the adapter that served the call,
+  fallbacks included.
+- Tool schemas: multi-type unions become a required `anyOf` (optional only with `None`), identical
+  members collapse, `*args` / `**kwargs` never enter the schema, and PEP 695 type aliases produce
+  their target type's schema.
+- A `GateModify` from one gate reaches the next gates and the approval request, and a `TypeError`
+  raised inside a tool's body is a `runtime_error` instead of a `validation_error`.
+- `Scope.enrich` reads the snapshot the step will see, already filtered and transformed, so it can
+  no longer read keys the scope excludes.
+- Sync calls made while an event loop is running (`LLM.complete_sync()`, `Flow.run_sync()`,
+  `Agent.run_sync()`, …) cancel their coroutine when the sync timeout expires, so the call no longer
+  completes, and settles its meter, after the caller has moved on. Sync streams buffer at most 256
+  items ahead of a slow consumer, and stopping early cancels the pending read.
+- With `trace_capture="full"`, and in `Trace.initial_state`, a step that mutates a value in place no
+  longer rewrites earlier records.
+- The Gemini adapter no longer fails on tools with `tuple` parameters or schemas with `$defs` /
+  `$ref`; they are sent as JSON Schema through `parameters_json_schema`.
+- **Nested Pydantic models as tool parameters produce a valid schema.** The model's `$defs`
+  table was embedded inside the parameter, so its `#/$defs/...` pointers dangled at the tool's
+  root; Gemini rejected such tools with `400 reference to undefined schema`. Nested models are
+  now inlined, and a recursive model's `$defs` table is hoisted to the root.
+- The Gemini adapter returns an empty response, instead of raising `TypeError`, when a candidate
+  cut off by `max_tokens` while thinking carries no content parts.
 - Provider reasoning usage is now normalized without double-counting: xAI completion plus
   reasoning tokens and Gemini candidate plus thought tokens become inclusive billable
   `output_tokens`, while OpenAI and Anthropic keep their already-inclusive output totals. Gemini

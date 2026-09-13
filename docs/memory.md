@@ -254,7 +254,7 @@ llm = LLM("claude-sonnet-5", middleware=[mw])
 # and each turn is recorded back into the store.
 ```
 
-> Injection happens on the **async** path (`abefore` / `aafter`); the sync hooks are no-ops.
+> Injection happens in the **async** hooks (`abefore` / `aafter`), which run for every call — `complete()`, `stream()`, `stream_events()`, and their sync wrappers; the sync hooks are no-ops.
 
 ---
 

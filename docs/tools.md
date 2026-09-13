@@ -14,6 +14,10 @@ Provider-hosted **server tools** (code execution, web search) are covered at the
 
 Decorate a typed function with a Google-style docstring. The schema (name, description, parameters) is inferred from the type hints and docstring — you don't write JSON Schema by hand.
 
+A parameter typed `Any` or `object` accepts any JSON value, so its schema sets no type. A parameter with no annotation, or with a type the generator does not know (a `Path`, a custom class), is described as a string.
+
+A Pydantic model parameter is described by its own JSON Schema, with nested models inlined, so the tool's schema stands on its own. A recursive model keeps a `$defs` table, placed at the root of the tool's schema.
+
 ```python
 from ai_arch_toolkit import tool
 
@@ -54,6 +58,8 @@ Full `@tool` signature:
 )
 ```
 
+Gemini function declarations take an OpenAPI subset of JSON Schema that has no `prefixItems` or `$defs`/`$ref`. A schema outside it (a `tuple` parameter, or a `schema=` override with references) is sent through Gemini's `parameters_json_schema` field instead, unchanged.
+
 ---
 
 ## ToolGroup
@@ -85,6 +91,8 @@ ToolGroup(
 
 Both `execute()` (sync) and `async_execute()` (async) take a `ToolCall` and return a structured **`ToolResult`** — they never raise on tool failure.
 
+`execute()` also runs `async def` tools, completing them on a private event loop — or on a worker thread when called from inside a running loop, which blocks that loop until the tool returns — so prefer `async_execute()` in async code. Both check the call's arguments against the tool's schema before any gate runs, coercing values such as `"3"` for an integer; see [Argument validation](safety.md#argument-validation).
+
 ```python
 result = await group.async_execute(tool_call)   # tool_call: ToolCall from a Response
 
@@ -110,13 +118,13 @@ results = run_tools_sync(response, group)        # list[dict] — tool_result pa
 # feed `results` back into the next llm.complete(...) call
 ```
 
-`run_tools()` accepts either a `ToolGroup` or a plain `list[Callable]`.
+`run_tools()` accepts either a `ToolGroup` or a plain `list[Callable]`. A `ToolGroup` runs every call through its own governance — its gates, `approval_handler`, and `max_calls` budget, exactly as `group.execute()` does — so `approval_handler=` is only for a plain list: passing it together with a group raises `ValueError`. Every tool name in the response is checked before any call runs: an unknown name raises `KeyError` and nothing executes, so a response never half-runs.
 
 ---
 
 ## Server tools
 
-Provider-hosted tools run on the provider's side (no local execution). Pass them alongside your own tools.
+Provider-hosted tools run on the provider's side (no local execution). Pass them in the `tools=` list next to your own tools or a `ToolGroup` (`tools=[group, web_search()]`), never inside the group: `ToolGroup(web_search())` raises `TypeError`, because a group only runs local callables.
 
 ```python
 from ai_arch_toolkit import LLM, code_execution, web_search

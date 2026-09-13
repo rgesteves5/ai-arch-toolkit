@@ -43,7 +43,13 @@ Most public types are re-exported from `ai_arch_toolkit` (top-level) or from
 | Symbol | Description |
 |--------|-------------|
 | `@tool` | Decorator: auto-generates JSON Schema from type hints + docstrings |
-| `ToolGroup` | Collection with `execute()` / `async_execute()` |
+| `ToolGroup` | Collection with `execute()` / `async_execute()`, its own gates, approval handler, and `max_calls` |
+| `ToolResult`, `ToolError` | Structured outcome of one tool call; `execute()` never raises on tool failure |
+| `execute_tool()`, `async_execute_tool()` | Run one `ToolCall` against a list of callables through the governed executor |
+| `run_tools()`, `run_tools_sync()` | Run every tool call in a `Response` and return `tool_result` messages |
+| `ToolGate`, `ExecutionContext`, `GateResult`, `GateBlock`, `GateModify`, `GateDryRun` | Protocol and results for custom pre-execution gates |
+| `ApprovalGate`, `DangerousToolGate`, `ApprovalHandler`, `ApprovalRequest`, `ApprovalDecision` | Built-in gates and the human-approval contract |
+| `ToolRuntimePolicy` | Risk metadata that `@tool(...)` attaches to a tool |
 | `infer_schema()` | Manual schema inference from a callable |
 | `prepare_tools()` | Convert tools to provider-specific format |
 
@@ -74,7 +80,7 @@ Most public types are re-exported from `ai_arch_toolkit` (top-level) or from
 | `State`, `StateSnapshot`, `MergeStrategy` | 4-layer mutable state container |
 | `Step`, `StepFn`, `Result` | Named async functions with structured output |
 | `Policy` | Retry, timeout, confidence thresholds, cost limits |
-| `Trace`, `StepTrace`, `PolicyDecision` | Full execution records |
+| `Trace`, `StepTrace`, `PolicyDecision`, `TraceCapture` | Execution records; `TraceCapture` sets what each step's record keeps |
 | `execute_step()` | Single-step execution with policy enforcement |
 
 ### Toolkit — Flow Orchestration
@@ -87,6 +93,7 @@ Most public types are re-exported from `ai_arch_toolkit` (top-level) or from
 | `FlowEvent` | Streaming events (`flow_start`, `step_start`, `step_end`, `flow_end`) |
 | `Scope` | Controls what keys a Step can see (include/exclude/transform/enrich) |
 | `execute_flow()`, `iter_flow()` | Execution and streaming entry points |
+| `FlowExecution`, `SyncFlowExecution` | What `Flow.iter()` / `iter_sync()` return: iterate the events, then read `.result` |
 
 ### Toolkit — Agent Flows
 

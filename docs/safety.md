@@ -7,7 +7,7 @@ When an LLM can call tools, you need control over *which* tools run, *whether* a
 - **Structured results** (`ToolResult` / `ToolError`) so failures are data, not exceptions, and error text is redacted.
 - **Budgets** (`BudgetPolicy`) that cap a flow's calls, tokens, cost, and wall-time.
 
-The execution pipeline for every tool call is: **resolve → gates (in order) → call-count budget → execute → redact & structure the result**.
+The execution pipeline for every tool call is: **resolve → validate & coerce arguments → gates (in order) → call-count budget → execute → redact & structure the result**.
 
 ---
 
@@ -57,7 +57,7 @@ A **`ToolError`** is structured so an agent (or your retry logic) can reason abo
 The `type` is drawn from a fixed set:
 
 - **Governance blocks** — `"dangerous_tool_blocked"`, `"approval_denied"`, `"max_calls_exceeded"`, `"budget_exceeded"`.
-- **Resolution / execution** — `"unknown_tool"` (no matching function), `"validation_error"` (argument mismatch — a `TypeError` raised by the call), `"runtime_error"` (any other exception, `retryable=True`).
+- **Resolution / execution** — `"unknown_tool"` (no matching function), `"validation_error"` (arguments that don't fit the tool's schema or signature — see [Argument validation](#argument-validation)), `"runtime_error"` (any exception raised by the tool itself, `TypeError` included; `retryable=True`).
 
 Construct results directly when writing custom executors:
 
@@ -69,6 +69,21 @@ ToolResult.failure("network_error", "backend unreachable", retryable=True)
 ```
 
 > Exceptions raised inside a tool are caught and wrapped into a `ToolResult.failure(...)` with the message **redacted** (not hidden): the agent sees `"connection failed"`, never `connection_string=postgres://user:pw@host`.
+
+### Argument validation
+
+Before any gate runs, the arguments are checked against the tool's input schema and coerced where the intent is unambiguous — local models in particular often send `"3"` for an integer. Gates and approval handlers therefore see the values that will actually run, and a call that fails validation never reaches a human, a `max_calls` budget, or the meter.
+
+| Schema | Accepted | Coerced |
+|--------|----------|---------|
+| `integer` | ints | integral floats and integer strings (`"3"`, `"3.0"`); booleans are refused |
+| `number` | ints, finite floats | numeric strings; booleans are refused |
+| `boolean` | booleans | `"true"` / `"false"`, any case |
+| `enum` | listed values | checked after coercion |
+| `anyOf` | a value that already matches a branch | otherwise the first branch that coerces it (`int \| str` keeps `"1"` a string) |
+| `string`, `array`, `object`, untyped | anything | nothing |
+
+Required arguments must be present, arguments the schema doesn't declare are refused unless the function takes `**kwargs`, and the call must bind to the function's signature. A failure returns `validation_error` naming the argument (`result.error.details["argument"]`), so the model can correct its call.
 
 ---
 
@@ -85,7 +100,18 @@ Beyond gates, `ToolGroup(max_calls=N)` caps how many tools the group runs in one
 
 ### Dangerous tools
 
-`DangerousToolGate` blocks tools by name unless explicitly allowed. The filesystem/shell/Python/web tools in `ai_arch_toolkit.toolkit.tools.dangerous` (`run_command`, `read_file`, `python_repl`, `http_get`, `scrape_text`, `list_directory`, `search_files`) execute real side effects — gate them.
+The tools in `ai_arch_toolkit.toolkit.tools.dangerous` execute real side effects, so each one declares its risk and **requires approval**:
+
+| Tool | `capability` | `risk_level` |
+|------|--------------|--------------|
+| `run_command` | `"shell"` | `"critical"` |
+| `python_repl` | `"python"` | `"high"` |
+| `read_file`, `list_directory`, `search_files` | `"filesystem"` | `"high"` |
+| `http_get`, `scrape_text` | `"network"` | `"high"` |
+
+Run through a `ToolGroup`, `execute_tool()` / `async_execute_tool()`, `run_tools()` or an agent without an `approval_handler`, every call to them returns `approval_denied`; supply a handler to let them run (see [Human approval](#human-approval)). Calling the function directly (`read_file("notes.txt")`) bypasses governance entirely.
+
+`DangerousToolGate` blocks tools by name before approval is even requested — use it to switch them off outright:
 
 ```python
 from ai_arch_toolkit import ToolGroup, DangerousToolGate
@@ -139,6 +165,34 @@ group = ToolGroup(run_command, gates=[DryRunGate(dry_run=True)])
 
 A dry-run result is `ok=True` with `value="[dry-run] would call <tool>"`, carries `metadata["governance"] == {"outcome": "dry_run", "executed": False}`, and records the arguments that *would* have run under `metadata["audit"]["arguments"]`.
 
+### Custom gates
+
+A gate is any object with `check_sync(ctx)` and `async check(ctx)` — the runtime-checkable `ToolGate` protocol. Both receive an `ExecutionContext` — `ctx.tool_call` (the `ToolCall`: `name`, `input`) and `ctx.definition` (the `ToolDefinition`: `fn`, `schema`, `policy`) — and return `None` to pass, or a `GateResult`:
+
+- `GateBlock(error_type=..., message=..., safe_to_show=True, retryable=False, audit={})` — refuse the call with a structured failure.
+- `GateModify(args=..., audit={})` — let the call run with these arguments.
+- `GateDryRun(audit={})` — report the call without running it.
+
+```python
+from ai_arch_toolkit import ExecutionContext, GateBlock, GateResult, ToolGate, ToolGroup
+
+class ReadOnlyGate:
+    """Refuse every tool tagged @tool(capability="write")."""
+
+    def check_sync(self, ctx: ExecutionContext) -> GateResult | None:
+        if ctx.definition.policy.capability == "write":
+            return GateBlock(error_type="dangerous_tool_blocked", message="Read-only mode.")
+        return None
+
+    async def check(self, ctx: ExecutionContext) -> GateResult | None:
+        return self.check_sync(ctx)
+
+assert isinstance(ReadOnlyGate(), ToolGate)
+group = ToolGroup(save_note, read_notes, gates=[ReadOnlyGate()])
+```
+
+One group's gates serve concurrent calls, so keep them stateless. Gate modifications chain: each gate — the approval gate last — sees the arguments as the gates before it left them, and every `GateModify` (including an approval handler's `modified_args`) is validated against the tool's schema again before the next gate runs.
+
 ### Executing a single tool call
 
 When you're not using a `ToolGroup`, run one call against a plain list of functions:
@@ -186,6 +240,8 @@ redact(payload, RedactionPolicy(replacement="***"))         # custom marker
 | `metadata_only` | keep only metadata, drop payloads |
 | `redacted` | **default** — keep payloads but mask secrets |
 | `full_debug` | no redaction (local debugging only) |
+
+Redaction works on what the trace recorded. What a flow records in the first place is set by `Flow(trace_capture=...)`: by default (`"keys"`) a step's trace keeps the key names it read and returned but not the state values or artifacts, so those never reach a serialized trace. `"none"` keeps only metadata; `"full"` keeps deep copies of the values, which the redactor then masks. See [What a trace captures](flow-architecture.md#what-a-trace-captures).
 
 `trace_mode` accepts the string literals above or the equivalent `RedactionMode` enum (`RedactionMode.REDACTED`, `.METADATA_ONLY`, `.FULL_DEBUG`). `Redactor(policy)` is the reusable object behind `redact()`; `redact()` / `redact_text()` are the one-shot helpers (a `None` policy uses the safe default).
 
