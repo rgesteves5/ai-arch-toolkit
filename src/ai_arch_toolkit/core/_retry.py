@@ -44,7 +44,7 @@ def _compute_delay(attempt: int, config: RetryConfig, retry_after: float | None)
     """Compute delay for the next retry attempt."""
     if retry_after is not None and retry_after > 0:
         return min(retry_after, config.max_delay)
-    delay = config.base_delay * (2**attempt)
+    delay = config.base_delay * (2 ** min(attempt, 64))  # a larger exponent overflows a float
     jitter = random.uniform(0, delay * 0.25)
     return min(delay + jitter, config.max_delay)
 

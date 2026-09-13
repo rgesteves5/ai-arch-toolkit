@@ -221,11 +221,14 @@ the same meter that populates `result.report`.
 ends, exposes the same `AgentResult` that `run()` returns:
 
 ```python
-execution = agent.iter("Summarise the latest news on X.")
-async for event in execution:
-    print(event.type, event.step_name)
+async with agent.iter("Summarise the latest news on X.") as execution:
+    async for event in execution:
+        print(event.type, event.step_name)
 print(execution.result.text)
 ```
+
+Use `async with` (or `await execution.aclose()`) when you may stop early: a `break`
+alone leaves the step in flight running while you still hold the execution.
 
 Events come from the steps of the strategy's flow ([Flow Architecture](flow-architecture.md#streaming)).
 An inner ReAct loop that runs inside one step reports through that step's

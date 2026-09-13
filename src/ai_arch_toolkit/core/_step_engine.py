@@ -241,6 +241,6 @@ async def _run_fallback(step: Step, snapshot: StateSnapshot, t0: float) -> Resul
 def _compute_backoff(attempt: int, policy: Policy) -> float:
     """Exponential backoff with jitter."""
     config = policy.retry
-    delay = config.base_delay * (2**attempt)
+    delay = config.base_delay * (2 ** min(attempt, 64))  # a larger exponent overflows a float
     jitter = random.uniform(0, delay * 0.25)
     return min(delay + jitter, config.max_delay)

@@ -215,3 +215,12 @@ class TestAdmissionDeniedIsTerminal:
 
         result, _ = await execute_step(Step(name="err", fn=fn), State().snapshot())
         assert result.is_error and result.error is not None and "boom" in result.error
+
+
+def test_the_step_backoff_stays_finite_for_very_late_attempts() -> None:
+    from ai_arch_toolkit.core._retry import RetryConfig
+    from ai_arch_toolkit.core._step_engine import _compute_backoff
+
+    policy = Policy(retry=RetryConfig(base_delay=1.0, max_delay=3.0))
+
+    assert _compute_backoff(5_000, policy) <= 3.0

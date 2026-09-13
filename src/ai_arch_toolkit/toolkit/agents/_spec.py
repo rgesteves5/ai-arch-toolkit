@@ -8,7 +8,7 @@ from typing import Any
 
 from ai_arch_toolkit.core._policy import Policy
 from ai_arch_toolkit.core._response import OutputSchema
-from ai_arch_toolkit.core._trace import TraceCapture
+from ai_arch_toolkit.core._trace import TRACE_CAPTURE_MODES, TraceCapture
 
 __all__ = ["ReasoningSpec"]
 
@@ -32,6 +32,11 @@ class ReasoningSpec:
     trace_capture: TraceCapture = "keys"
     llm_kwargs: Mapping[str, Any] = field(default_factory=dict)
     output_schema: OutputSchema | type | None = None
+
+    def __post_init__(self) -> None:
+        if self.trace_capture not in TRACE_CAPTURE_MODES:
+            msg = f"trace_capture must be 'keys', 'full' or 'none', got {self.trace_capture!r}"
+            raise ValueError(msg)
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> ReasoningSpec:

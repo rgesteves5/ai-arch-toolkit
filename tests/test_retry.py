@@ -112,3 +112,9 @@ class TestWithRetry:
         mock_sleep.assert_awaited_once()
         delay = mock_sleep.call_args[0][0]
         assert delay == 2.5
+
+
+def test_the_retry_delay_stays_finite_for_very_late_attempts() -> None:
+    from ai_arch_toolkit.core._retry import _compute_delay
+
+    assert _compute_delay(5_000, RetryConfig(base_delay=1.0, max_delay=3.0), None) <= 3.0

@@ -412,24 +412,24 @@ In DAG mode, failures cascade:
 siblings, policies, and timeouts behave identically — and yields events as they happen:
 
 ```python
-execution = flow.iter(state)
-async for event in execution:
-    match event.type:
-        case "step_start":   print(f"  Running {event.step_name}")
-        case "retry" | "timeout" | "fallback":
-            print(f"  {event.type} in {event.step_name}")
-        case "policy_decision":
-            print(f"  {event.policy_decision} in {event.step_name or event.flow_name}")
-        case "step_end":     print(f"  Done: {event.error or event.result.value}")
-        case "step_skipped": print(f"  Skipped: {event.step_name}")
-        case "flow_end":     print(f"Cost: ${event.trace.metadata['meter']['cost']:.4f}")
+async with flow.iter(state) as execution:
+    async for event in execution:
+        match event.type:
+            case "step_start":   print(f"  Running {event.step_name}")
+            case "retry" | "timeout" | "fallback":
+                print(f"  {event.type} in {event.step_name}")
+            case "policy_decision":
+                print(f"  {event.policy_decision} in {event.step_name or event.flow_name}")
+            case "step_end":     print(f"  Done: {event.error or event.result.value}")
+            case "step_skipped": print(f"  Skipped: {event.step_name}")
+            case "flow_end":     print(f"Cost: ${event.trace.metadata['meter']['cost']:.4f}")
 
 result = execution.result   # the FlowResult, once the loop has finished
 
 # Or synchronously (the run happens on a background loop):
-sync_execution = flow.iter_sync(state)
-for event in sync_execution:
-    ...
+with flow.iter_sync(state) as sync_execution:
+    for event in sync_execution:
+        ...
 ```
 
 | Event | Emitted when |
@@ -440,11 +440,13 @@ for event in sync_execution:
 | `retry`, `timeout`, `fallback` | The step engine takes that decision — while the step is still running. |
 | `policy_decision` | Any other decision: `low_confidence`, `escalate`, `halt`, `cost_exceeded`, `budget_exceeded`. |
 
-The run only moves past a step when you ask for the next event. Leaving the loop early — `break`, an
-exception, or `await execution.aclose()` — cancels any step still running and closes the run's
-meter; `async with flow.iter(state) as execution:` makes that deterministic. In a parallel wave,
-each sibling reports `step_end` as it finishes, and the wave's artifacts are merged into the state
-once every sibling has finished. A step whose `when` or `Scope` callable raises is recorded with the
+The run only moves past a step when you ask for the next event. A `break` does not stop it by
+itself: while you still hold the execution, the step in flight keeps running. Leaving the
+`async with` block, or `await execution.aclose()`, cancels the steps still running and closes the
+run's meter (for `iter_sync`, the `with` block or `close()`). When a run times out, the steps in
+flight are cancelled before the `timeout` event is delivered. In a parallel wave, each sibling
+reports `step_end` as it finishes, and the wave's artifacts are merged into the state once every
+sibling has finished; if the run times out mid-wave, the siblings that already finished are kept. A step whose `when` or `Scope` callable raises is recorded with the
 error, reported by `step_end`, and the flow stops.
 
 ### Composition — Flow as Step

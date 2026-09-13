@@ -434,3 +434,145 @@ async def test_step_max_cost_counts_spend_inside_a_nested_flow() -> None:
     wrapper = result.trace.step("wrapper")
     assert wrapper is not None
     assert wrapper.error is not None and "Cost exceeded" in wrapper.error
+
+
+def _sleeper(name: str, delay: float, log: list[str]) -> Step:
+    async def fn(snap: StateSnapshot) -> Result:
+        try:
+            await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            log.append(f"{name} cancelled")
+            raise
+        log.append(f"{name} done")
+        return Result(value=name, artifacts={name: True})
+
+    return Step(name=name, fn=fn)
+
+
+async def test_a_timeout_in_a_parallel_wave_keeps_the_siblings_that_finished() -> None:
+    log: list[str] = []
+    flow = Flow(
+        FlowStep(step=_sleeper("a", 0.01, log)),
+        FlowStep(step=_sleeper("b", 10.0, log)),
+        FlowStep(step=_sleeper("join", 0.0, log), after=("a", "b")),
+        name="dag",
+        timeout=0.3,
+    )
+    state = State()
+
+    result = await flow.run(state)
+
+    assert result.results["a"].value == "a"
+    assert state["a"] is True
+    assert [st.name for st in result.trace.steps] == ["a", "flow_timeout"]
+    assert log == ["a done", "b cancelled"]
+
+
+async def test_the_timeout_event_arrives_after_the_steps_in_flight_were_cancelled() -> None:
+    log: list[str] = []
+    flow = Flow(_sleeper("slow", 10.0, log), name="f", timeout=0.1)
+    cancelled_by_then: list[str] | None = None
+
+    async with flow.iter(State()) as execution:
+        async for event in execution:
+            if event.type == "timeout":
+                cancelled_by_then = list(log)
+                break
+
+    assert cancelled_by_then == ["slow cancelled"]
+
+
+async def test_events_after_the_deadline_do_not_postpone_the_timeout() -> None:
+    async def always_fails(snap: StateSnapshot) -> Result:
+        raise RuntimeError("again")
+
+    retries = Policy(retry=RetryConfig(max_retries=1_000, base_delay=1e-9, max_delay=1e-9))
+    flow = Flow(Step(name="busy", fn=always_fails, policy=retries), name="f", timeout=0.01)
+
+    result = await flow.run(State())
+
+    assert result.trace.steps[-1].name == "flow_timeout"
+
+
+async def test_a_cyclic_flow_with_max_iterations_zero_runs_no_pass() -> None:
+    ran: list[str] = []
+    flow = Flow(
+        FlowStep(step=_recorder("a", ran), when=lambda s: True), name="f", max_iterations=0
+    )
+
+    await flow.run(State())
+
+    assert ran == []
+
+
+async def test_a_held_execution_keeps_running_after_break_until_it_is_closed() -> None:
+    log: list[str] = []
+    flow = Flow(_sleeper("slow", 10.0, log), name="f")
+
+    async with flow.iter(State()) as execution:
+        async for event in execution:
+            if event.type == "step_start":
+                break
+        await asyncio.sleep(0.05)
+        assert log == []  # break alone does not stop a run that is still referenced
+
+    assert log == ["slow cancelled"]
+
+
+def test_a_sync_execution_used_as_a_context_manager_stops_the_run_on_exit() -> None:
+    log: list[str] = []
+    flow = Flow(_sleeper("slow", 10.0, log), name="f")
+
+    with flow.iter_sync(State()) as execution:
+        for event in execution:
+            if event.type == "step_start":
+                break
+
+    assert log == ["slow cancelled"]
+
+
+async def test_a_second_cancellation_during_cleanup_still_closes_the_meter_scope() -> None:
+    async def slow_to_cancel(snap: StateSnapshot) -> Result:
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            await asyncio.sleep(0.2)  # slow cleanup
+            raise
+        return Result()
+
+    execution = Flow(Step(name="s", fn=slow_to_cancel), name="f").iter(State())
+
+    async def drive() -> None:
+        async for _ in execution:
+            pass
+
+    driver = asyncio.create_task(drive())
+    await asyncio.sleep(0.05)
+    scope = execution.meter_scope
+    assert scope is not None
+    closed: list[bool] = []
+    original_close = scope.close
+
+    def recording_close() -> None:
+        closed.append(True)
+        original_close()
+
+    scope.close = recording_close  # type: ignore[method-assign]
+    driver.cancel()
+    await asyncio.sleep(0.05)  # the engine's cleanup is waiting for the step to finish cancelling
+    driver.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await driver
+    await asyncio.sleep(0.3)  # let the step's own cleanup finish
+
+    assert closed == [True]
+
+
+def test_sync_flow_execution_is_exported_like_flow_execution() -> None:
+    import ai_arch_toolkit
+    from ai_arch_toolkit import toolkit
+    from ai_arch_toolkit.toolkit.flow import SyncFlowExecution
+
+    for module in (ai_arch_toolkit, toolkit):
+        assert getattr(module, "SyncFlowExecution", None) is SyncFlowExecution
+        assert "SyncFlowExecution" in module.__all__

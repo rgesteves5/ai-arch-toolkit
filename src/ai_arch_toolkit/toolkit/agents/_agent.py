@@ -140,8 +140,8 @@ class AgentExecution:
     """An agent run being iterated: flow events as they happen, then its :class:`AgentResult`.
 
     Behaves like :class:`~ai_arch_toolkit.toolkit.flow.FlowExecution`: nothing runs until the first
-    event is requested, leaving the loop early stops the run, and ``result`` is ``None`` until the
-    run has finished.
+    event is requested, ``result`` is ``None`` until the run has finished, and a ``break`` does not
+    stop a run that is still referenced — :meth:`aclose` or ``async with`` does.
     """
 
     __slots__ = ("_execution", "_result")

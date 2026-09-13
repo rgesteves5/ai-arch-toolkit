@@ -93,3 +93,10 @@ def test_a_manifest_sets_trace_capture(tmp_path: Path) -> None:
 def test_a_manifest_rejects_an_unknown_trace_capture(tmp_path: Path) -> None:
     with pytest.raises(AgentManifestError, match=r"strategy\.trace_capture"):
         load_agent_manifest(_manifest(tmp_path, "everything"), allowed_roots=(tmp_path,))
+
+
+def test_an_unknown_trace_capture_is_rejected_by_the_spec() -> None:
+    with pytest.raises(ValueError, match="trace_capture"):
+        ReasoningSpec(trace_capture="everything")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="trace_capture"):
+        ReasoningSpec.from_mapping({"trace_capture": "everything"})

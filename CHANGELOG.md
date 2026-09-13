@@ -221,6 +221,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   table was embedded inside the parameter, so its `#/$defs/...` pointers dangled at the tool's
   root; Gemini rejected such tools with `400 reference to undefined schema`. Nested models are
   now inlined, and a recursive model's `$defs` table is hoisted to the root.
+- **Flow timeouts:** a timeout during a parallel DAG wave keeps the siblings that already
+  finished (results, trace and state), like a budget denial does; a steady stream of policy events
+  can no longer postpone the deadline; and the steps in flight are cancelled before the `timeout`
+  event is delivered.
+- A cyclic flow with `max_iterations=0` runs no pass again, and the run's meter scope is closed
+  even if a second cancellation interrupts the run's cleanup.
+- `ReasoningSpec` rejects an unknown `trace_capture` when it is built, and retry backoff no longer
+  raises `OverflowError` after about a thousand attempts. `SyncFlowExecution` is exported next to
+  `FlowExecution` and works as a context manager.
+- The docs no longer claim that `break` stops a flow or agent run: a held execution keeps its step
+  running until `aclose()` or the end of an `async with` block.
 - **A stream is admitted and priced on the request after async middleware.** Its reservation
   was built from the request before `abefore` ran, so a middleware that added a server tool,
   changed `max_tokens` or injected content left the budget admitting and pricing stale facts.

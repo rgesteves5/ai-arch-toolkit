@@ -100,9 +100,11 @@ class FlowExecution:
     """A flow run being iterated: an async iterator of :class:`FlowEvent`, then its result.
 
     Nothing runs until the first event is requested, and the run only moves past a step when the
-    next event is requested. ``result`` is ``None`` until the run has finished. Leaving the loop
-    early — ``break``, an exception, or :meth:`aclose` — cancels the steps still running and closes
-    the run's meter; ``async with`` closes it deterministically.
+    next event is requested. ``result`` is ``None`` until the run has finished.
+
+    A ``break`` does not stop the run by itself: the steps in flight keep running while the
+    execution is referenced. :meth:`aclose`, or leaving an ``async with`` block, cancels them and
+    closes the run's meter; so does garbage collection once nothing references the execution.
     """
 
     __slots__ = ("_events", "_run")
@@ -144,7 +146,11 @@ class FlowExecution:
 
 
 class SyncFlowExecution:
-    """Synchronous counterpart of :class:`FlowExecution`; the run happens on a background loop."""
+    """Synchronous counterpart of :class:`FlowExecution`; the run happens on a background loop.
+
+    As with the async execution, a ``break`` leaves the run going on its thread while the object
+    is referenced; :meth:`close`, or leaving a ``with`` block, cancels it.
+    """
 
     __slots__ = ("_events", "_execution")
 
@@ -168,6 +174,12 @@ class SyncFlowExecution:
         close = getattr(self._events, "close", None)
         if callable(close):
             close()
+
+    def __enter__(self) -> SyncFlowExecution:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
 
     @property
     def result(self) -> FlowResult | None:
@@ -267,14 +279,17 @@ class _FlowRun:
                 )
             except _FlowTimeout:
                 message = self._record_timeout()
+                await self._cancel_running()  # stopped before the consumer hears of the timeout
                 yield FlowEvent(type="timeout", flow_name=flow.name, error=message)
         finally:
             # Also runs when the consumer abandons the iteration (GeneratorExit/cancellation):
             # no step keeps running and no started meter operation leaks past the run.
-            await body.aclose()
-            await self._cancel_running()
-            if self.owned:
-                scope.close()
+            try:
+                await body.aclose()
+                await self._cancel_running()
+            finally:
+                if self.owned:
+                    scope.close()  # even if a second cancellation interrupts the cleanup
 
         trace = Trace(
             flow_name=flow.name,
@@ -313,6 +328,8 @@ class _FlowRun:
         cyclic = any(fs.when is not None for fs in flow.steps)
         iteration = 0
         while True:
+            if cyclic and flow.max_iterations is not None and iteration >= flow.max_iterations:
+                return
             any_executed = False
             for fs in flow.steps:
                 if (stop := self._over_budget()) is not None:
@@ -346,8 +363,6 @@ class _FlowRun:
             if not cyclic or not any_executed:
                 return
             iteration += 1
-            if flow.max_iterations is not None and iteration >= flow.max_iterations:
-                return
 
     async def _run_dag(self) -> AsyncGenerator[FlowEvent]:
         flow = self.flow
@@ -442,8 +457,20 @@ class _FlowRun:
                 self._spawn(fs, scoped, semaphore=semaphore, announce_end=True)
                 for fs, scoped in launches
             ]
-            async for event in self._wait(tasks):
-                yield event
+            try:
+                async for event in self._wait(tasks):
+                    yield event
+            except _FlowTimeout:
+                # Like a denial, a timeout keeps the siblings that finished before it.
+                on_time: list[Result] = []
+                for (fs, _), task in zip(launches, tasks, strict=True):
+                    if task.done() and not task.cancelled() and task.exception() is None:
+                        result, trace = task.result()
+                        self._record(fs, result, trace)
+                        on_time.append(result)
+                if on_time:
+                    self.state.merge(*on_time)
+                raise
 
             denial: AdmissionDenied | None = None
             finished: list[Result] = []
@@ -542,6 +569,8 @@ class _FlowRun:
                 yield self._events.popleft()
             if not pending:
                 return
+            if self.deadline is not None and loop.time() >= self.deadline:
+                raise _FlowTimeout  # a steady stream of events must not postpone the deadline
             signal.clear()  # no await since the drain above, so no event can slip past
             timeout = None if self.deadline is None else max(0.0, self.deadline - loop.time())
             waiter = asyncio.ensure_future(signal.wait())
