@@ -8,13 +8,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from ai_arch_toolkit.core._llm import LLM
-from ai_arch_toolkit.core._middleware import (
-    Request,
-    _run_aafter,
-    _run_abefore,
-    _run_after,
-    _run_before,
-)
+from ai_arch_toolkit.core._middleware import Request, _run_aafter, _run_abefore
 from ai_arch_toolkit.core._response import Response
 
 # ---------------------------------------------------------------------------
@@ -41,7 +35,7 @@ class TestRequest:
 
 
 # ---------------------------------------------------------------------------
-# Sync middleware runners
+# Sync-only middleware
 # ---------------------------------------------------------------------------
 
 
@@ -65,13 +59,10 @@ class _UpperTextMW:
         return Response(text=response.text.upper())
 
 
-class TestRunBefore:
-    def test_single_middleware(self):
-        req = Request(messages=[], system=None, tools=None, model="x")
-        result = _run_before([_AddSystemMW()], req)
-        assert result.system == "injected system"
+class TestSyncHooksThroughTheAsyncRunners:
+    """Sync-only middleware runs through the same async runners every LLM call uses."""
 
-    def test_chain_order(self):
+    async def test_before_hooks_run_in_order(self):
         class First:
             def before(self, r: Request) -> Request:
                 return replace(r, system="first")
@@ -81,16 +72,25 @@ class TestRunBefore:
                 return replace(r, system=f"{r.system}+second")
 
         req = Request(messages=[], system=None, tools=None, model="x")
-        result = _run_before([First(), Second()], req)
+        result = await _run_abefore([First(), Second()], req)
         assert result.system == "first+second"
 
-
-class TestRunAfter:
-    def test_reverse_order(self):
+    async def test_after_hook_rewrites_the_response(self):
         req = Request(messages=[], system=None, tools=None, model="x")
-        resp = Response(text="hello")
-        result = _run_after([_UpperTextMW()], req, resp)
+        result = await _run_aafter([_UpperTextMW()], req, Response(text="hello"))
         assert result.text == "HELLO"
+
+    async def test_after_hooks_run_in_reverse_order(self):
+        class Tag:
+            def __init__(self, tag: str) -> None:
+                self._tag = tag
+
+            def after(self, r: Request, response: Response) -> Response:
+                return Response(text=response.text + self._tag)
+
+        req = Request(messages=[], system=None, tools=None, model="x")
+        result = await _run_aafter([Tag("a"), Tag("b")], req, Response(text=""))
+        assert result.text == "ba"
 
 
 # ---------------------------------------------------------------------------

@@ -13,6 +13,7 @@ from ai_arch_toolkit.core._providers import (
     _match_provider,
     _resolve_key,
     create_provider,
+    resolve_provider_name,
 )
 from ai_arch_toolkit.core._providers._imports import require_sdk
 
@@ -63,6 +64,32 @@ class TestMatchProvider:
 
     def test_unknown_returns_none(self):
         assert _match_provider("gemma4:e4b") is None
+
+
+class TestResolveProviderName:
+    """The routing decision create_provider acts on, without building a provider."""
+
+    @pytest.mark.parametrize(
+        ("model", "kwargs", "expected"),
+        [
+            ("claude-sonnet-4-6", {}, "anthropic"),
+            ("o3", {}, "openai"),
+            ("grok-4", {}, "xai"),
+            ("gemini-2.5-flash", {}, "gemini"),
+            ("gemma4:e4b", {"base_url": "http://localhost:11434/v1"}, "openai"),
+            ("claude-sonnet-4-6", {"provider": "openai"}, "openai"),
+        ],
+    )
+    def test_routes_like_create_provider(self, model, kwargs, expected):
+        assert resolve_provider_name(model, **kwargs) == expected
+
+    @pytest.mark.parametrize("kwargs", [{}, {"base_url": ""}, {"provider": "nope"}])
+    def test_raises_the_same_error_as_create_provider(self, kwargs):
+        with pytest.raises(ValueError) as resolved:
+            resolve_provider_name("gemma4:e4b", **kwargs)
+        with pytest.raises(ValueError) as created:
+            create_provider("gemma4:e4b", api_key="k", **kwargs)
+        assert str(resolved.value) == str(created.value)
 
 
 class TestRequireSdk:

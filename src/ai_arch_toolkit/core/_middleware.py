@@ -27,7 +27,9 @@ class Middleware(Protocol):
     """Protocol for request/response middleware.
 
     Implement ``before`` and ``after`` for sync hooks. Optionally add
-    ``abefore`` / ``aafter`` for async-only hooks (detected via hasattr).
+    ``abefore`` / ``aafter`` for async hooks (detected via hasattr), which take
+    precedence. Every call (``complete()``, streams, and their sync wrappers)
+    runs the hooks through the async runners, which fall back to the sync ones.
     """
 
     def before(self, request: Request) -> Request:
@@ -37,22 +39,6 @@ class Middleware(Protocol):
     def after(self, request: Request, response: Response) -> Response:
         """Modify or inspect the response before it's returned to the caller."""
         ...
-
-
-def _run_before(middleware: list[Any], request: Request) -> Request:
-    """Run all ``before`` hooks in order."""
-    for mw in middleware:
-        logger.debug("middleware before: %s", type(mw).__name__)
-        request = mw.before(request)
-    return request
-
-
-def _run_after(middleware: list[Any], request: Request, response: Response) -> Response:
-    """Run all ``after`` hooks in reverse order."""
-    for mw in reversed(middleware):
-        logger.debug("middleware after: %s", type(mw).__name__)
-        response = mw.after(request, response)
-    return response
 
 
 async def _run_abefore(middleware: list[Any], request: Request) -> Request:

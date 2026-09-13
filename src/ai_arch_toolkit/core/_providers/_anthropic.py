@@ -20,7 +20,9 @@ from ai_arch_toolkit.core._providers._base import (
     StreamEvent,
     StreamState,
     _parse_retry_after,
+    merge_system_prompts,
     parse_tool_args,
+    system_content_text,
 )
 from ai_arch_toolkit.core._providers._imports import require_sdk
 from ai_arch_toolkit.core._response import (
@@ -131,14 +133,60 @@ def _tool_to_sdk(tool: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+type SystemParam = str | list[dict[str, Any]]
+
+
+def _system_blocks(content: Any) -> list[dict[str, Any]]:
+    """Text blocks for one system message; a ``cache()`` part keeps its cache marker."""
+    parts = content if isinstance(content, list | tuple) else [content]
+    blocks: list[dict[str, Any]] = []
+    for part in parts:
+        if isinstance(part, CachePart):
+            if part.content:
+                blocks.append(
+                    {"type": "text", "text": part.content, "cache_control": {"type": part.ttl}}
+                )
+        elif text := system_content_text(part):
+            blocks.append({"type": "text", "text": text})
+    return blocks
+
+
+def _as_system_blocks(system: SystemParam | None) -> list[dict[str, Any]]:
+    if not system:
+        return []
+    if isinstance(system, str):
+        return [{"type": "text", "text": system}]
+    return list(system)
+
+
+def _merge_system(
+    system: SystemParam | None, msg_system: SystemParam | None
+) -> SystemParam | None:
+    """``system=`` first, then the system messages; text blocks when either side has blocks.
+
+    Blocks carry cache markers, so they are only used when needed; plain text stays a string.
+    """
+    if isinstance(system, list) or isinstance(msg_system, list):
+        return [*_as_system_blocks(system), *_as_system_blocks(msg_system)] or None
+    return merge_system_prompts(system, msg_system)
+
+
+def _with_system_suffix(system: SystemParam | None, suffix: str) -> SystemParam:
+    """Append an instruction to the system prompt, as a text block when it is blocks."""
+    if isinstance(system, list):
+        return [*system, {"type": "text", "text": suffix}]
+    return f"{system}\n\n{suffix}" if system else suffix
+
+
 def _messages_to_sdk(
     messages: list[dict[str, Any]],
-) -> tuple[str | None, list[dict[str, Any]]]:
+) -> tuple[SystemParam | None, list[dict[str, Any]]]:
     """Extract system messages and convert the rest to SDK-compatible format.
 
-    ``tool_use_id`` is treated as the tool-result discriminator (role is ignored).
+    ``tool_use_id`` is treated as the tool-result discriminator (role is ignored). The system
+    prompt is one string, or text blocks when a ``cache()`` part asks for a cache marker.
     """
-    system_parts: list[str] = []
+    system_blocks: list[dict[str, Any]] = []
     wire: list[dict[str, Any]] = []
     for msg in messages:
         if msg.get("tool_use_id"):
@@ -155,7 +203,7 @@ def _messages_to_sdk(
                 }
             )
         elif msg.get("role") == "system":
-            system_parts.append(msg.get("content", ""))
+            system_blocks.extend(_system_blocks(msg.get("content", "")))
         elif msg.get("role") == "assistant" and msg.get("tool_calls"):
             content_blocks: list[dict[str, Any]] = []
             text = msg.get("content", "")
@@ -179,8 +227,11 @@ def _messages_to_sdk(
                     "content": _content_to_sdk(raw_content),
                 }
             )
-    system_text = "\n\n".join(system_parts) if system_parts else None
-    return system_text, wire
+    if not system_blocks:
+        return None, wire
+    if any("cache_control" in block for block in system_blocks):
+        return system_blocks, wire
+    return "\n\n".join(block["text"] for block in system_blocks), wire
 
 
 def _build_thinking_param(
@@ -263,12 +314,36 @@ def _uses_deprecated_temperature(model: str) -> bool:
 
 
 def _extract_usage(sdk_usage: Any) -> Usage:
-    """Convert SDK usage object to our Usage dataclass."""
+    """Convert SDK usage object to our Usage dataclass.
+
+    A missing or ``None`` counter counts as 0 (the SDK types the cache counters as nullable).
+    """
     return Usage(
-        input_tokens=getattr(sdk_usage, "input_tokens", 0),
-        output_tokens=getattr(sdk_usage, "output_tokens", 0),
-        cache_write_tokens=getattr(sdk_usage, "cache_creation_input_tokens", 0),
-        cache_read_tokens=getattr(sdk_usage, "cache_read_input_tokens", 0),
+        input_tokens=getattr(sdk_usage, "input_tokens", 0) or 0,
+        output_tokens=getattr(sdk_usage, "output_tokens", 0) or 0,
+        cache_write_tokens=getattr(sdk_usage, "cache_creation_input_tokens", 0) or 0,
+        cache_read_tokens=getattr(sdk_usage, "cache_read_input_tokens", 0) or 0,
+    )
+
+
+def _merge_delta_usage(prev: Usage | None, sdk_usage: Any) -> Usage:
+    """Apply a ``message_delta`` usage to a stream's running usage.
+
+    ``message_delta`` counters are cumulative totals for the whole message, so each reported
+    counter replaces the running value rather than adding to it. A missing or ``None``
+    counter (the SDK makes all but ``output_tokens`` optional) keeps the previous value,
+    normally the one from ``message_start``.
+    """
+    base = prev or Usage()
+    input_tokens = getattr(sdk_usage, "input_tokens", None)
+    output_tokens = getattr(sdk_usage, "output_tokens", None)
+    cache_write = getattr(sdk_usage, "cache_creation_input_tokens", None)
+    cache_read = getattr(sdk_usage, "cache_read_input_tokens", None)
+    return Usage(
+        input_tokens=base.input_tokens if input_tokens is None else input_tokens,
+        output_tokens=base.output_tokens if output_tokens is None else output_tokens,
+        cache_write_tokens=base.cache_write_tokens if cache_write is None else cache_write,
+        cache_read_tokens=base.cache_read_tokens if cache_read is None else cache_read,
     )
 
 
@@ -366,7 +441,7 @@ class AnthropicProvider(LoopAwareClientCache, BaseProvider):
     ) -> int:
         """Count tokens using Anthropic's count_tokens API."""
         msg_system, wire = _messages_to_sdk(messages)
-        effective_system = system if system is not None else msg_system
+        effective_system = _merge_system(system, msg_system)
         sdk_kwargs: dict[str, Any] = {"model": self._model, "messages": wire}
         if effective_system:
             sdk_kwargs["system"] = effective_system
@@ -388,7 +463,7 @@ class AnthropicProvider(LoopAwareClientCache, BaseProvider):
         self,
         wire_messages: list[dict[str, Any]],
         *,
-        system: str | None = None,
+        system: SystemParam | None = None,
         tools: list[dict[str, Any]] | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
@@ -442,10 +517,7 @@ class AnthropicProvider(LoopAwareClientCache, BaseProvider):
         if output_schema:
             if structured_output_mode == "prompt":
                 instruction = _schema_prompt_instruction(output_schema)
-                base_system = sdk_kwargs.get("system", "") or ""
-                sdk_kwargs["system"] = (
-                    f"{base_system}\n\n{instruction}" if base_system else instruction
-                )
+                sdk_kwargs["system"] = _with_system_suffix(sdk_kwargs.get("system"), instruction)
             else:
                 sdk_kwargs["output_config"] = _build_output_config(output_schema)
 
@@ -473,12 +545,9 @@ class AnthropicProvider(LoopAwareClientCache, BaseProvider):
 
         # json_mode — Anthropic has no native json_mode; append system instruction
         if json_mode:
-            existing_system = sdk_kwargs.get("system", "")
-            suffix = "Respond with valid JSON only."
-            if existing_system:
-                sdk_kwargs["system"] = f"{existing_system}\n\n{suffix}"
-            else:
-                sdk_kwargs["system"] = suffix
+            sdk_kwargs["system"] = _with_system_suffix(
+                sdk_kwargs.get("system"), "Respond with valid JSON only."
+            )
 
         return sdk_kwargs
 
@@ -495,7 +564,7 @@ class AnthropicProvider(LoopAwareClientCache, BaseProvider):
         **kwargs: Any,
     ) -> Response:
         msg_system, wire = _messages_to_sdk(messages)
-        effective_system = system if system is not None else msg_system
+        effective_system = _merge_system(system, msg_system)
         output_schema: OutputSchema | None = kwargs.get("output_schema")
 
         sdk_kwargs = self._build_sdk_kwargs(wire, system=effective_system, tools=tools, **kwargs)
@@ -535,7 +604,7 @@ class AnthropicProvider(LoopAwareClientCache, BaseProvider):
         **kwargs: Any,
     ) -> tuple[AsyncIterator[str], StreamState]:
         msg_system, wire = _messages_to_sdk(messages)
-        effective_system = system if system is not None else msg_system
+        effective_system = _merge_system(system, msg_system)
         output_schema: OutputSchema | None = kwargs.get("output_schema")
 
         sdk_kwargs = self._build_sdk_kwargs(wire, system=effective_system, tools=tools, **kwargs)
@@ -601,18 +670,7 @@ class AnthropicProvider(LoopAwareClientCache, BaseProvider):
                             ev = cast(anthropic.types.RawMessageDeltaEvent, event)
                             state.stop_reason = ev.delta.stop_reason or ""
                             if getattr(ev, "usage", None):
-                                delta_usage = _extract_usage(ev.usage)
-                                prev = state.usage or Usage()
-                                state.usage = Usage(
-                                    input_tokens=prev.input_tokens + delta_usage.input_tokens,
-                                    output_tokens=(prev.output_tokens + delta_usage.output_tokens),
-                                    cache_write_tokens=(
-                                        prev.cache_write_tokens + delta_usage.cache_write_tokens
-                                    ),
-                                    cache_read_tokens=(
-                                        prev.cache_read_tokens + delta_usage.cache_read_tokens
-                                    ),
-                                )
+                                state.usage = _merge_delta_usage(state.usage, ev.usage)
 
                     # After stream completes, extract thinking from final message
                     final = await stream.get_final_message()
@@ -646,7 +704,7 @@ class AnthropicProvider(LoopAwareClientCache, BaseProvider):
         **kwargs: Any,
     ) -> tuple[AsyncIterator[StreamEvent], StreamState]:
         msg_system, wire = _messages_to_sdk(messages)
-        effective_system = system if system is not None else msg_system
+        effective_system = _merge_system(system, msg_system)
         output_schema: OutputSchema | None = kwargs.get("output_schema")
 
         sdk_kwargs = self._build_sdk_kwargs(wire, system=effective_system, tools=tools, **kwargs)
@@ -725,18 +783,7 @@ class AnthropicProvider(LoopAwareClientCache, BaseProvider):
                             ev = cast(anthropic.types.RawMessageDeltaEvent, event)
                             state.stop_reason = ev.delta.stop_reason or ""
                             if getattr(ev, "usage", None):
-                                delta_usage = _extract_usage(ev.usage)
-                                prev = state.usage or Usage()
-                                state.usage = Usage(
-                                    input_tokens=prev.input_tokens + delta_usage.input_tokens,
-                                    output_tokens=(prev.output_tokens + delta_usage.output_tokens),
-                                    cache_write_tokens=(
-                                        prev.cache_write_tokens + delta_usage.cache_write_tokens
-                                    ),
-                                    cache_read_tokens=(
-                                        prev.cache_read_tokens + delta_usage.cache_read_tokens
-                                    ),
-                                )
+                                state.usage = _merge_delta_usage(state.usage, ev.usage)
 
                     # After stream completes, get final message for raw state
                     final = await stream.get_final_message()
@@ -772,14 +819,14 @@ class AnthropicProvider(LoopAwareClientCache, BaseProvider):
             tools = req.get("tools")
             req_kwargs = req.get("kwargs", {})
 
-            _, wire = _messages_to_sdk(messages)
+            msg_system, wire = _messages_to_sdk(messages)
             params: dict[str, Any] = {
                 "model": self._model,
                 "messages": wire,
                 "max_tokens": req_kwargs.get("max_tokens", 4096),
             }
-            if req_system:
-                params["system"] = req_system
+            if system_text := _merge_system(req_system, msg_system):
+                params["system"] = system_text
             if tools:
                 fn_tools = [t for t in tools if not t.get("_server_tool")]
                 if fn_tools:

@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 if TYPE_CHECKING:
     from ai_arch_toolkit.core._providers._base import BaseProvider
 
-__all__ = ["create_provider"]
+__all__ = ["create_provider", "resolve_provider_name"]
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +109,38 @@ def _resolve_key(
     raise ValueError(f"No API key provided. Pass api_key= or set {_format_env_var_names(names)}.")
 
 
+def resolve_provider_name(
+    model: str,
+    *,
+    provider: str | None = None,
+    base_url: str | None = None,
+) -> str:
+    """Return the name of the adapter ``create_provider`` builds for *model*.
+
+    Routing precedence: an explicit ``provider`` wins; otherwise the model ID or
+    prefix is matched; otherwise an unknown model with ``base_url`` set routes to
+    the OpenAI-compatible adapter.
+
+    Raises:
+        ValueError: ``provider`` is not a known adapter, or the model is not
+            recognized and no ``base_url`` is set.
+    """
+    if provider is not None:
+        if provider not in _PROVIDER_NAMES:
+            raise ValueError(
+                f"Unknown provider {provider!r}. Valid providers: {sorted(_PROVIDER_NAMES)}"
+            )
+        return provider
+    if matched := _match_provider(model):
+        return matched
+    if base_url:
+        logger.debug(
+            "Unknown model %r with base_url set; routing to OpenAI-compatible provider", model
+        )
+        return "openai"
+    raise _unknown_model_error(model)
+
+
 def create_provider(
     model: str,
     *,
@@ -134,22 +166,7 @@ def create_provider(
     """
     base_url = base_url or None  # normalize "" so it never masks the key check
     local = _is_local_url(base_url)
-
-    if provider is not None:
-        if provider not in _PROVIDER_NAMES:
-            raise ValueError(
-                f"Unknown provider {provider!r}. Valid providers: {sorted(_PROVIDER_NAMES)}"
-            )
-        name = provider
-    elif matched := _match_provider(model):
-        name = matched
-    elif base_url:
-        logger.debug(
-            "Unknown model %r with base_url set; routing to OpenAI-compatible provider", model
-        )
-        name = "openai"
-    else:
-        raise _unknown_model_error(model)
+    name = resolve_provider_name(model, provider=provider, base_url=base_url)
 
     if name == "anthropic":
         from ai_arch_toolkit.core._providers._anthropic import AnthropicProvider

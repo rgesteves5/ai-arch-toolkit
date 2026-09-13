@@ -22,8 +22,9 @@ class ModerationMiddleware:
     runs in ``abefore`` (before the LLM call); output moderation runs in
     ``aafter`` (after the response is finalized).
 
-    Note: for streaming, output moderation fires after stream finalization,
-    so streamed text is seen by the user before moderation completes.
+    Input moderation runs before the provider is called, for ``complete()`` and
+    streams alike. For streams, output moderation runs once the stream has been
+    fully consumed, so streamed text is seen before the output check completes.
 
     Example::
 

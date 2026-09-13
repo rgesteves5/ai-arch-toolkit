@@ -18,10 +18,23 @@ from ai_arch_toolkit.core._providers._gemini import (
     _tool_to_sdk,
 )
 from ai_arch_toolkit.core._response import OutputSchema, Response
+from ai_arch_toolkit.core._tools import prepare_tools, tool
 
 # ---------------------------------------------------------------------------
 # Helpers — build fake SDK objects
 # ---------------------------------------------------------------------------
+
+
+@tool
+def _locate(point: tuple[float, float]) -> str:
+    """Describe a coordinate pair."""
+    return str(point)
+
+
+@tool
+def _lookup(query: str, limit: int = 5) -> str:
+    """Search for something."""
+    return f"{query}:{limit}"
 
 
 def _sdk_part(*, text=None, thought=False, function_call=None, function_response=None):
@@ -209,6 +222,45 @@ class TestToolToSdk:
         fd = _tool_to_sdk(tool)
         assert fd.parameters is not None
 
+    def test_schema_in_the_openapi_subset_keeps_parameters(self):
+        fd = _tool_to_sdk(prepare_tools([_lookup])[0])
+        assert fd.parameters is not None
+        assert fd.parameters_json_schema is None
+
+    def test_tuple_parameter_goes_through_parameters_json_schema(self):
+        # The SDK refuses prefixItems in ``parameters`` before any request is sent.
+        fd = _tool_to_sdk(prepare_tools([_locate])[0])
+        assert fd.parameters is None
+        point = fd.parameters_json_schema["properties"]["point"]
+        assert point["prefixItems"] == [{"type": "number"}, {"type": "number"}]
+
+    def test_refs_go_through_parameters_json_schema(self):
+        tool = {
+            "name": "save",
+            "input_schema": {
+                "type": "object",
+                "properties": {"item": {"$ref": "#/$defs/Item"}},
+                "$defs": {"Item": {"type": "object", "properties": {"name": {"type": "string"}}}},
+            },
+        }
+        fd = _tool_to_sdk(tool)
+        assert fd.parameters is None
+        assert fd.parameters_json_schema["$defs"]["Item"]["type"] == "object"
+
+    async def test_complete_sends_a_tuple_tool(self):
+        mock_client = MagicMock()
+        mock_client.aio.models.generate_content = AsyncMock(return_value=_sdk_response())
+        provider = GeminiProvider("gemini-2.0-flash", "test-key")
+        provider._client = mock_client
+
+        await provider.complete(
+            [{"role": "user", "content": "Where?"}], tools=prepare_tools([_locate])
+        )
+
+        config = mock_client.aio.models.generate_content.call_args.kwargs["config"]
+        declaration = config.tools[0].function_declarations[0]
+        assert declaration.parameters_json_schema is not None
+
 
 # ---------------------------------------------------------------------------
 # _build_thinking_config
@@ -291,6 +343,18 @@ class TestExtractUsage:
 
 
 class TestParseSdkResponse:
+    def test_candidate_with_no_parts_is_an_empty_response(self):
+        # gemini-2.5-flash cut off by max_tokens while thinking: content exists, parts is None.
+        candidate = SimpleNamespace(
+            content=SimpleNamespace(parts=None, role="model"), finish_reason="MAX_TOKENS"
+        )
+        resp = SimpleNamespace(candidates=[candidate], usage_metadata=None, model_version=None)
+
+        r = _parse_sdk_response(resp, "gemini-2.5-flash")
+
+        assert r.text == "" and r.tool_calls == ()
+        assert r.stop_reason == "MAX_TOKENS"
+
     def test_text_response(self):
         resp = _sdk_response(text="Hello world")
         r = _parse_sdk_response(resp, "gemini-2.0-flash")
@@ -412,7 +476,7 @@ class TestGeminiProviderComplete:
         call_kwargs = mock_client.aio.models.generate_content.call_args[1]
         assert call_kwargs["config"].system_instruction == "From message."
 
-    async def test_explicit_system_overrides_message(self):
+    async def test_explicit_system_merged_before_message_system(self):
         mock_client = MagicMock()
         mock_client.aio.models.generate_content = AsyncMock(return_value=_sdk_response())
 
@@ -426,7 +490,51 @@ class TestGeminiProviderComplete:
             system="Explicit.",
         )
         call_kwargs = mock_client.aio.models.generate_content.call_args[1]
-        assert call_kwargs["config"].system_instruction == "Explicit."
+        assert call_kwargs["config"].system_instruction == "Explicit.\n\nFrom message."
+
+    async def test_stream_merges_explicit_and_message_system(self):
+        seen: dict = {}
+
+        async def _fake_stream(**kwargs):
+            seen.update(kwargs)
+            yield _sdk_stream_chunk(text="ok", finish_reason="STOP")
+
+        mock_client = MagicMock()
+        mock_client.aio.models.generate_content_stream = _wrap_as_coroutine(_fake_stream)
+
+        provider = GeminiProvider("gemini-2.0-flash", "test-key")
+        provider._client = mock_client
+        aiter, _state = provider.stream(
+            [
+                {"role": "system", "content": "A"},
+                {"role": "user", "content": "x"},
+            ],
+            system="B",
+        )
+        async for _ in aiter:
+            pass
+
+        assert seen["config"].system_instruction == "B\n\nA"
+
+    async def test_count_tokens_merges_explicit_and_message_system(self):
+        mock_client = MagicMock()
+        mock_client.aio.models.count_tokens = AsyncMock(
+            return_value=SimpleNamespace(total_tokens=9)
+        )
+
+        provider = GeminiProvider("gemini-2.0-flash", "test-key")
+        provider._client = mock_client
+        count = await provider.count_tokens(
+            [
+                {"role": "system", "content": "A"},
+                {"role": "user", "content": "x"},
+            ],
+            system="B",
+        )
+
+        assert count == 9
+        call_kwargs = mock_client.aio.models.count_tokens.call_args.kwargs
+        assert call_kwargs["config"].system_instruction == "B\n\nA"
 
     async def test_tools_forwarded(self):
         mock_client = MagicMock()

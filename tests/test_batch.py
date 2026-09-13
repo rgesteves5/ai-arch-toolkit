@@ -238,6 +238,125 @@ class TestOpenAIBatchSubmit:
         assert lines[1]["custom_id"] == "req-2"
         assert lines[1]["body"]["max_tokens"] == 4096
 
+    async def test_request_system_does_not_drop_message_system(self):
+        """The request's system leads; system() messages stay where they are."""
+        provider = _make_openai_provider()
+        provider._client.files.create.return_value = MagicMock(id="file-abc")
+        provider._client.batches.create.return_value = MagicMock(id="batch-1")
+
+        await provider.batch_submit(
+            [
+                {
+                    "custom_id": "req-1",
+                    "system": "B",
+                    "messages": [
+                        {"role": "system", "content": "A"},
+                        {"role": "user", "content": "x"},
+                    ],
+                }
+            ]
+        )
+
+        file_arg = provider._client.files.create.call_args.kwargs["file"]
+        body = json.loads(file_arg.read().decode())["body"]
+        assert body["messages"] == [
+            {"role": "system", "content": "B"},
+            {"role": "system", "content": "A"},
+            {"role": "user", "content": "x"},
+        ]
+
+
+# ---------------------------------------------------------------------------
+# Anthropic provider — batch_submit
+# ---------------------------------------------------------------------------
+
+
+def _make_anthropic_provider():
+    """Create an AnthropicProvider whose client records ``messages.batches.create``."""
+    from ai_arch_toolkit.core._providers._anthropic import AnthropicProvider
+
+    provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
+    client = MagicMock()
+    client.messages.batches.create = AsyncMock(return_value=MagicMock(id="msgbatch-1"))
+    provider._client = client
+    return provider
+
+
+def _submitted_anthropic_params(provider: Any) -> dict[str, Any]:
+    return provider._client.messages.batches.create.call_args.kwargs["requests"][0]["params"]
+
+
+class TestAnthropicBatchSubmit:
+    async def test_message_system_reaches_params(self):
+        provider = _make_anthropic_provider()
+
+        batch_id = await provider.batch_submit(
+            [
+                {
+                    "custom_id": "req-1",
+                    "messages": [
+                        {"role": "system", "content": "A"},
+                        {"role": "user", "content": "x"},
+                    ],
+                }
+            ]
+        )
+
+        assert batch_id == "msgbatch-1"
+        params = _submitted_anthropic_params(provider)
+        assert params["system"] == "A"
+        assert params["messages"] == [{"role": "user", "content": "x"}]
+
+    async def test_request_system_merged_before_message_system(self):
+        provider = _make_anthropic_provider()
+
+        await provider.batch_submit(
+            [
+                {
+                    "custom_id": "req-1",
+                    "system": "B",
+                    "messages": [
+                        {"role": "system", "content": "A"},
+                        {"role": "user", "content": "x"},
+                    ],
+                }
+            ]
+        )
+
+        assert _submitted_anthropic_params(provider)["system"] == "B\n\nA"
+
+    async def test_cached_message_system_keeps_its_cache_marker(self):
+        from ai_arch_toolkit.core._content import cache
+
+        provider = _make_anthropic_provider()
+
+        await provider.batch_submit(
+            [
+                {
+                    "custom_id": "req-1",
+                    "system": "B",
+                    "messages": [
+                        {"role": "system", "content": [cache("A")]},
+                        {"role": "user", "content": "x"},
+                    ],
+                }
+            ]
+        )
+
+        assert _submitted_anthropic_params(provider)["system"] == [
+            {"type": "text", "text": "B"},
+            {"type": "text", "text": "A", "cache_control": {"type": "ephemeral"}},
+        ]
+
+    async def test_request_without_any_system_omits_the_param(self):
+        provider = _make_anthropic_provider()
+
+        await provider.batch_submit(
+            [{"custom_id": "req-1", "messages": [{"role": "user", "content": "x"}]}]
+        )
+
+        assert "system" not in _submitted_anthropic_params(provider)
+
 
 # ---------------------------------------------------------------------------
 # OpenAI provider — batch_status

@@ -99,15 +99,46 @@ class TestMessagesToSdk:
         assert wire[0] == {"role": "system", "content": "Be helpful."}
         assert wire[1] == {"role": "user", "content": "Hi"}
 
-    def test_explicit_system_overrides_list_system(self):
+    def test_explicit_system_prepended_and_list_system_kept(self):
         msgs = [
             {"role": "system", "content": "From list."},
             {"role": "user", "content": "Hi"},
         ]
         wire = _messages_to_sdk(msgs, system="Explicit.")
-        system_msgs = [m for m in wire if m["role"] == "system"]
-        assert len(system_msgs) == 1
-        assert system_msgs[0]["content"] == "Explicit."
+        assert wire == [
+            {"role": "system", "content": "Explicit."},
+            {"role": "system", "content": "From list."},
+            {"role": "user", "content": "Hi"},
+        ]
+
+    @pytest.mark.parametrize(
+        ("explicit", "head"),
+        [(None, []), ("B", [{"role": "system", "content": "B"}])],
+    )
+    def test_mid_conversation_system_keeps_its_position(self, explicit, head):
+        msgs = [
+            {"role": "user", "content": "x"},
+            {"role": "system", "content": "A"},
+            {"role": "user", "content": "y"},
+        ]
+        wire = _messages_to_sdk(msgs, system=explicit)
+        assert wire == [
+            *head,
+            {"role": "user", "content": "x"},
+            {"role": "system", "content": "A"},
+            {"role": "user", "content": "y"},
+        ]
+
+    def test_empty_explicit_system_not_sent(self):
+        msgs = [
+            {"role": "system", "content": "From list."},
+            {"role": "user", "content": "Hi"},
+        ]
+        wire = _messages_to_sdk(msgs, system="")
+        assert wire == [
+            {"role": "system", "content": "From list."},
+            {"role": "user", "content": "Hi"},
+        ]
 
     def test_multiple_system_messages_without_explicit(self):
         msgs = [
@@ -412,7 +443,7 @@ class TestOpenAIProviderComplete:
         assert msgs[0] == {"role": "system", "content": "Be brief."}
         assert msgs[1] == {"role": "user", "content": "Hi"}
 
-    async def test_explicit_system_overrides_list_system(self):
+    async def test_explicit_system_sent_before_list_system(self):
         mock_client = AsyncMock()
         mock_client.chat.completions.create.return_value = _sdk_completion(text="Ok")
 
@@ -424,10 +455,11 @@ class TestOpenAIProviderComplete:
         ]
         await provider.complete(msgs, system="Explicit.")
         call_kwargs = mock_client.chat.completions.create.call_args[1]
-        wire = call_kwargs["messages"]
-        system_msgs = [m for m in wire if m["role"] == "system"]
-        assert len(system_msgs) == 1
-        assert system_msgs[0]["content"] == "Explicit."
+        assert call_kwargs["messages"] == [
+            {"role": "system", "content": "Explicit."},
+            {"role": "system", "content": "From list."},
+            {"role": "user", "content": "Hi"},
+        ]
 
     async def test_thinking_effort_forwarded_as_reasoning_effort(self):
         mock_client = AsyncMock()

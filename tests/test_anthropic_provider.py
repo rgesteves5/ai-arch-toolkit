@@ -7,7 +7,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from anthropic import types as sdk_types
+from anthropic.types.raw_message_delta_event import Delta
 
+from ai_arch_toolkit.core import LLM, MeterScope
 from ai_arch_toolkit.core._content import CachePart, DocumentPart, ImagePart
 from ai_arch_toolkit.core._exceptions import APIError, RateLimitError
 from ai_arch_toolkit.core._providers._anthropic import (
@@ -21,7 +24,7 @@ from ai_arch_toolkit.core._providers._anthropic import (
     _tool_to_sdk,
 )
 from ai_arch_toolkit.core._providers._base import StreamState
-from ai_arch_toolkit.core._response import OutputSchema, Response, ToolCall
+from ai_arch_toolkit.core._response import OutputSchema, Response, ToolCall, Usage
 
 # ---------------------------------------------------------------------------
 # Helpers — build fake SDK objects
@@ -70,6 +73,24 @@ def _sdk_message(
         model=model,
         stop_reason=stop_reason,
         usage=usage,
+    )
+
+
+def _real_message(
+    *,
+    text: str = "Hello!",
+    stop_reason: str | None = "end_turn",
+    usage: sdk_types.Usage | None = None,
+) -> sdk_types.Message:
+    """Build a real ``anthropic.types.Message``; the SDK model validates the API shape."""
+    return sdk_types.Message(
+        id="msg_test",
+        type="message",
+        role="assistant",
+        model="claude-sonnet-4-6",
+        content=[sdk_types.TextBlock(type="text", text=text)] if text else [],
+        stop_reason=stop_reason,
+        usage=usage or sdk_types.Usage(input_tokens=10, output_tokens=5),
     )
 
 
@@ -252,6 +273,13 @@ class TestExtractUsage:
         assert usage.cache_write_tokens == 0
         assert usage.cache_read_tokens == 0
 
+    def test_null_cache_fields_become_zero(self):
+        # The SDK types both cache counters as Optional and defaults them to None.
+        usage = _extract_usage(sdk_types.Usage(input_tokens=10, output_tokens=5))
+        assert usage == Usage(
+            input_tokens=10, output_tokens=5, cache_write_tokens=0, cache_read_tokens=0
+        )
+
     def test_output_tokens_remain_inclusive_of_thinking(self):
         sdk_usage = SimpleNamespace(
             input_tokens=100,
@@ -300,6 +328,20 @@ class TestParseSdkResponse:
         r = _parse_sdk_response(msg, "claude-sonnet-4-6")
         assert r.usage.cache_write_tokens == 20
         assert r.usage.cache_read_tokens == 10
+
+    def test_null_cache_tokens_become_zero_and_are_priced(self):
+        msg = _real_message(
+            usage=sdk_types.Usage(
+                input_tokens=10,
+                output_tokens=5,
+                cache_creation_input_tokens=None,
+                cache_read_input_tokens=None,
+            )
+        )
+        r = _parse_sdk_response(msg, "claude-sonnet-4-6")
+        assert r.usage.cache_write_tokens == 0
+        assert r.usage.cache_read_tokens == 0
+        assert r.cost is not None
 
     def test_thinking_blocks(self):
         msg = _sdk_message(text="Answer", thinking=["Let me reason..."])
@@ -380,6 +422,101 @@ class TestStreamState:
 # ---------------------------------------------------------------------------
 
 
+_SYSTEM_MERGE_MESSAGES = [
+    {"role": "system", "content": "A"},
+    {"role": "user", "content": "x"},
+]
+
+
+class TestAnthropicSystemPrompts:
+    """``system=`` is never dropped for ``system()`` messages, or the other way round."""
+
+    @pytest.mark.parametrize("method", ["stream", "stream_events"])
+    async def test_streams_send_explicit_then_message_system(self, method):
+        mock_client = MagicMock()
+        mock_client.messages.stream.return_value = _FakeAnthropicStream(
+            [], SimpleNamespace(content=[])
+        )
+        provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
+        provider._client = mock_client
+
+        iterator, _state = getattr(provider, method)(
+            _SYSTEM_MERGE_MESSAGES, system="B", max_tokens=64
+        )
+        async for _ in iterator:
+            pass
+
+        call_kwargs = mock_client.messages.stream.call_args.kwargs
+        assert call_kwargs["system"] == "B\n\nA"
+        assert all(m["role"] != "system" for m in call_kwargs["messages"])
+
+    async def test_count_tokens_sends_explicit_then_message_system(self):
+        mock_client = MagicMock()
+        mock_client.messages.count_tokens = AsyncMock(return_value=SimpleNamespace(input_tokens=7))
+        provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
+        provider._client = mock_client
+
+        assert await provider.count_tokens(_SYSTEM_MERGE_MESSAGES, system="B") == 7
+        assert mock_client.messages.count_tokens.call_args.kwargs["system"] == "B\n\nA"
+
+    async def test_empty_explicit_system_keeps_message_system(self):
+        mock_client = AsyncMock()
+        mock_client.messages.create.return_value = _sdk_message(text="Ok")
+        provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
+        provider._client = mock_client
+
+        await provider.complete(_SYSTEM_MERGE_MESSAGES, system="")
+
+        assert mock_client.messages.create.call_args.kwargs["system"] == "A"
+
+    @pytest.mark.parametrize(
+        ("messages", "extra"),
+        [
+            ([{"role": "user", "content": "x"}], []),
+            (_SYSTEM_MERGE_MESSAGES, [{"type": "text", "text": "A"}]),
+        ],
+        ids=["alone", "with-message-system"],
+    )
+    async def test_native_system_blocks_are_kept_and_message_system_follows(self, messages, extra):
+        # Native blocks (with their cache markers) pass through; system() messages are appended
+        # as text blocks instead of being dropped.
+        blocks = [{"type": "text", "text": "B", "cache_control": {"type": "ephemeral"}}]
+        mock_client = AsyncMock()
+        mock_client.messages.create.return_value = _sdk_message(text="Ok")
+        provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
+        provider._client = mock_client
+
+        await provider.complete(messages, system=blocks)  # type: ignore[arg-type]
+
+        assert mock_client.messages.create.call_args.kwargs["system"] == [*blocks, *extra]
+
+    async def test_middleware_system_does_not_erase_message_system(self):
+        # MemoryMiddleware-style hook: abefore writes request.system, which used to replace
+        # the system() message instead of joining it.
+        import dataclasses
+
+        from ai_arch_toolkit.core._llm import LLM
+
+        class _WritesSystem:
+            def before(self, request):
+                return request
+
+            def after(self, request, response):
+                return response
+
+            async def abefore(self, request):
+                return dataclasses.replace(request, system="MEM")
+
+        llm = LLM("claude-sonnet-4-6", api_key="x", middleware=[_WritesSystem()])
+        mock_client = AsyncMock()
+        mock_client.messages.create.return_value = _sdk_message(text="Ok")
+        llm._provider._client = mock_client
+
+        await llm.complete(_SYSTEM_MERGE_MESSAGES)
+
+        assert mock_client.messages.create.call_args.kwargs["system"] == "MEM\n\nA"
+
+
 class TestAnthropicProviderComplete:
     @patch("ai_arch_toolkit.core._providers._anthropic.anthropic")
     async def test_complete(self, mock_sdk):
@@ -432,7 +569,7 @@ class TestAnthropicProviderComplete:
         assert all(m["role"] != "system" for m in call_kwargs["messages"])
 
     @patch("ai_arch_toolkit.core._providers._anthropic.anthropic")
-    async def test_explicit_system_overrides(self, mock_sdk):
+    async def test_explicit_system_merged_before_message_system(self, mock_sdk):
         mock_client = AsyncMock()
         mock_sdk.AsyncAnthropic.return_value = mock_client
         mock_client.messages.create.return_value = _sdk_message(text="Ok")
@@ -445,7 +582,8 @@ class TestAnthropicProviderComplete:
         ]
         await provider.complete(msgs, system="Explicit system.")
         call_kwargs = mock_client.messages.create.call_args[1]
-        assert call_kwargs["system"] == "Explicit system."
+        assert call_kwargs["system"] == "Explicit system.\n\nFrom message."
+        assert all(m["role"] != "system" for m in call_kwargs["messages"])
 
     @patch("ai_arch_toolkit.core._providers._anthropic.anthropic")
     async def test_thinking_forwarded(self, mock_sdk):
@@ -755,6 +893,160 @@ class TestAnthropicProviderStreamEvents:
         # Deltas are buffered and emitted as a single complete block on content_block_stop
         assert [e.thinking.text for e in thinking_events if e.thinking] == ["step1 step2"]
         assert [b.text for b in state.thinking] == ["step1 step2"]
+
+
+_USAGE_COUNT_FIELDS = {
+    "input_tokens",
+    "output_tokens",
+    "cache_creation_input_tokens",
+    "cache_read_input_tokens",
+}
+
+
+def _real_text_stream(
+    start_usage: sdk_types.Usage, delta_usage: sdk_types.MessageDeltaUsage
+) -> _FakeAnthropicStream:
+    """Stream a one-block text reply as the real SDK event types, in wire order."""
+    events = [
+        sdk_types.RawMessageStartEvent(
+            type="message_start",
+            message=_real_message(text="", stop_reason=None, usage=start_usage),
+        ),
+        sdk_types.RawContentBlockStartEvent(
+            type="content_block_start",
+            index=0,
+            content_block=sdk_types.TextBlock(type="text", text=""),
+        ),
+        sdk_types.RawContentBlockDeltaEvent(
+            type="content_block_delta",
+            index=0,
+            delta=sdk_types.TextDelta(type="text_delta", text="Hello!"),
+        ),
+        sdk_types.RawContentBlockStopEvent(type="content_block_stop", index=0),
+        sdk_types.RawMessageDeltaEvent(
+            type="message_delta",
+            delta=Delta(stop_reason="end_turn"),
+            usage=delta_usage,
+        ),
+        sdk_types.RawMessageStopEvent(type="message_stop"),
+    ]
+    # Like the SDK's accumulated snapshot: each non-null delta count replaces the start count.
+    final_counts = delta_usage.model_dump(include=_USAGE_COUNT_FIELDS, exclude_none=True)
+    final = _real_message(usage=start_usage.model_copy(update=final_counts))
+    return _FakeAnthropicStream(events, final)
+
+
+def _cumulative_text_stream() -> _FakeAnthropicStream:
+    """Current API shape: ``message_delta`` repeats the input counts as running totals."""
+    return _real_text_stream(
+        sdk_types.Usage(
+            input_tokens=25,
+            output_tokens=1,
+            cache_creation_input_tokens=0,
+            cache_read_input_tokens=0,
+        ),
+        sdk_types.MessageDeltaUsage(
+            input_tokens=25,
+            output_tokens=15,
+            cache_creation_input_tokens=0,
+            cache_read_input_tokens=0,
+        ),
+    )
+
+
+async def _drain_provider_stream(stream: _FakeAnthropicStream, method: str) -> StreamState:
+    provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
+    provider._client = MagicMock()
+    provider._client.messages.stream.return_value = stream
+    iterator, state = getattr(provider, method)([{"role": "user", "content": "Hi"}])
+    async for _ in iterator:
+        pass
+    return state
+
+
+@pytest.mark.parametrize("method", ["stream", "stream_events"])
+class TestAnthropicStreamUsage:
+    """``message_delta.usage`` counts are cumulative: they replace the running usage."""
+
+    async def test_cumulative_delta_replaces_message_start_usage(self, method):
+        state = await _drain_provider_stream(_cumulative_text_stream(), method)
+        assert state.usage == Usage(
+            input_tokens=25, output_tokens=15, cache_write_tokens=0, cache_read_tokens=0
+        )
+
+    async def test_cumulative_cache_counts_are_not_added_twice(self, method):
+        stream = _real_text_stream(
+            sdk_types.Usage(
+                input_tokens=5,
+                output_tokens=1,
+                cache_creation_input_tokens=100,
+                cache_read_input_tokens=200,
+            ),
+            sdk_types.MessageDeltaUsage(
+                input_tokens=5,
+                output_tokens=15,
+                cache_creation_input_tokens=100,
+                cache_read_input_tokens=200,
+            ),
+        )
+        state = await _drain_provider_stream(stream, method)
+        assert state.usage == Usage(
+            input_tokens=5, output_tokens=15, cache_write_tokens=100, cache_read_tokens=200
+        )
+
+    async def test_delta_with_only_output_tokens_keeps_message_start_counts(self, method):
+        # Every MessageDeltaUsage count except output_tokens is Optional in the SDK.
+        stream = _real_text_stream(
+            sdk_types.Usage(
+                input_tokens=25,
+                output_tokens=1,
+                cache_creation_input_tokens=7,
+                cache_read_input_tokens=3,
+            ),
+            sdk_types.MessageDeltaUsage(output_tokens=15),
+        )
+        state = await _drain_provider_stream(stream, method)
+        assert state.usage == Usage(
+            input_tokens=25, output_tokens=15, cache_write_tokens=7, cache_read_tokens=3
+        )
+
+
+class TestAnthropicUsageMetering:
+    """The LLM charge site meters the usage the real Anthropic adapter reports."""
+
+    async def test_complete_with_null_cache_counts_is_metered(self):
+        llm = LLM("claude-sonnet-4-6", api_key="x")
+        llm._provider._client = AsyncMock()
+        llm._provider._client.messages.create.return_value = _real_message(
+            usage=sdk_types.Usage(
+                input_tokens=10,
+                output_tokens=5,
+                cache_creation_input_tokens=None,
+                cache_read_input_tokens=None,
+            )
+        )
+
+        with MeterScope() as scope:
+            response = await llm.complete("Hi")
+
+        assert response.usage == Usage(input_tokens=10, output_tokens=5)
+        assert scope.snapshot().input_tokens == 10
+
+    async def test_stream_events_meters_cumulative_input_tokens_once(self):
+        llm = LLM("claude-sonnet-4-6", api_key="x")
+        llm._provider._client = MagicMock()
+        llm._provider._client.messages.stream.return_value = _cumulative_text_stream()
+
+        with MeterScope() as scope:
+            stream = llm.stream_events("Hi")
+            async for _ in stream:
+                pass
+
+        snapshot = scope.snapshot()
+        assert snapshot.input_tokens == 25
+        assert snapshot.output_tokens == 15
+        assert stream.response is not None
+        assert stream.response.usage == Usage(input_tokens=25, output_tokens=15)
 
 
 # ---------------------------------------------------------------------------

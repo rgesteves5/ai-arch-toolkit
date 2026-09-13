@@ -142,7 +142,8 @@ async def test_iter_flow_abandonment_finalizes_the_scope():
     llm = make_llm()
 
     async def start_stream(snap: StateSnapshot) -> Result:
-        llm.stream("hi")  # opens+starts a stream op, never drained
+        stream = llm.stream("hi")
+        await stream.__anext__()  # the op starts with the first provider attempt, never drained
         return Result(value="started")
 
     state = State()
@@ -372,7 +373,7 @@ async def test_policy_max_cost_fails_closed_on_undrained_stream():
     llm = make_llm()
 
     async def call(snap: StateSnapshot) -> Result:
-        llm.stream("hi")  # opened + started eagerly, never drained/closed -> stays in flight
+        llm.stream("hi")  # reserved at creation, never iterated or closed -> stays pending
         return Result(value="leaked")
 
     step = Step(
@@ -385,7 +386,9 @@ async def test_policy_max_cost_fails_closed_on_undrained_stream():
             scope.run_span_id
         )  # the leaked op is live -> span read as unbounded
     assert result.is_error and "cost_exceeded" in trace.policy_decisions
-    assert scope.snapshot().unknown_cost_count == 1  # close() incompleted the leaked op
+    # The leaked op never reached the provider, so close() released it: no count, no unknown cost.
+    snap = scope.snapshot()
+    assert snap.llm_calls == 0 and snap.unknown_cost_count == 0
 
 
 async def test_policy_max_cost_does_not_trip_when_unmetered():

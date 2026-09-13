@@ -10,7 +10,7 @@ import warnings
 from collections.abc import AsyncIterator
 from typing import Any
 
-from ai_arch_toolkit.core._content import DocumentPart, ImagePart, _is_url
+from ai_arch_toolkit.core._content import CachePart, DocumentPart, ImagePart, _is_url
 from ai_arch_toolkit.core._exceptions import APIError, RateLimitError
 from ai_arch_toolkit.core._pricing import _estimate_response_cost
 from ai_arch_toolkit.core._providers._base import (
@@ -20,6 +20,8 @@ from ai_arch_toolkit.core._providers._base import (
     LoopAwareClientCache,
     StreamState,
     _parse_retry_after,
+    merge_system_prompts,
+    system_content_text,
 )
 from ai_arch_toolkit.core._providers._imports import require_sdk
 from ai_arch_toolkit.core._response import (
@@ -104,6 +106,8 @@ def _content_parts_to_gemini(content: Any) -> list[types.Part]:
                     )
                 )
             )
+        elif isinstance(part, CachePart):
+            parts.append(types.Part(text=part.content))
         else:
             parts.append(types.Part(text=str(part)))
     return parts
@@ -159,7 +163,7 @@ def _messages_to_sdk(
             )
             continue
         if role == "system":
-            system_parts.append(msg.get("content", ""))
+            system_parts.append(system_content_text(msg.get("content", "")))
             continue
 
         # Assistant with tool_calls → model Content with FunctionCall parts
@@ -204,13 +208,22 @@ def _messages_to_sdk(
 
 
 def _tool_to_sdk(tool: dict[str, Any]) -> types.FunctionDeclaration:
-    """Map generic tool dict to Gemini FunctionDeclaration."""
+    """Map generic tool dict to Gemini FunctionDeclaration.
+
+    ``parameters`` takes Gemini's OpenAPI subset, which the SDK validates client-side and which
+    has no ``prefixItems`` (tuples) or ``$defs``/``$ref``. A schema it refuses goes through
+    ``parameters_json_schema`` instead, which takes JSON Schema as is; the two are mutually
+    exclusive.
+    """
     schema = tool.get("input_schema", tool.get("parameters", {}))
-    return types.FunctionDeclaration(
-        name=tool["name"],
-        description=tool.get("description", ""),
-        parameters=schema,
-    )
+    name = tool["name"]
+    description = tool.get("description", "")
+    try:
+        return types.FunctionDeclaration(name=name, description=description, parameters=schema)
+    except ValueError:  # pydantic's ValidationError: outside the OpenAPI subset
+        return types.FunctionDeclaration(
+            name=name, description=description, parameters_json_schema=schema
+        )
 
 
 def _build_thinking_config(
@@ -264,7 +277,8 @@ def _parse_sdk_response(
         return Response(raw=response, model=model)
 
     candidate = candidates[0]
-    parts = candidate.content.parts if candidate.content else []
+    # A candidate cut off by max_tokens while still thinking carries content with no parts.
+    parts = (candidate.content.parts if candidate.content else None) or []
 
     text_parts: list[str] = []
     tool_calls: list[ToolCall] = []
@@ -377,7 +391,7 @@ class GeminiProvider(LoopAwareClientCache, BaseProvider):
     ) -> int:
         """Count tokens using Gemini's countTokens API."""
         msg_system, contents = _messages_to_sdk(messages)
-        effective_system = system if system is not None else msg_system
+        effective_system = merge_system_prompts(system, msg_system)
         cfg_kwargs: dict[str, Any] = {}
         if effective_system:
             cfg_kwargs["system_instruction"] = effective_system
@@ -504,7 +518,7 @@ class GeminiProvider(LoopAwareClientCache, BaseProvider):
     ) -> Response:
         output_schema: OutputSchema | None = kwargs.get("output_schema")
         msg_system, contents = _messages_to_sdk(messages)
-        effective_system = system if system is not None else msg_system
+        effective_system = merge_system_prompts(system, msg_system)
         config = self._build_config(system=effective_system, tools=tools, **kwargs)
 
         logger.debug("complete start model=%s messages=%d", self._model, len(messages))
@@ -550,7 +564,7 @@ class GeminiProvider(LoopAwareClientCache, BaseProvider):
         **kwargs: Any,
     ) -> tuple[AsyncIterator[str], StreamState]:
         msg_system, contents = _messages_to_sdk(messages)
-        effective_system = system if system is not None else msg_system
+        effective_system = merge_system_prompts(system, msg_system)
         config = self._build_config(system=effective_system, tools=tools, **kwargs)
 
         logger.debug("stream start model=%s", self._model)

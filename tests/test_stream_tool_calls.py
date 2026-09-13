@@ -5,6 +5,9 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from anthropic import types as sdk_types
+from anthropic.types.raw_message_delta_event import Delta
+
 from ai_arch_toolkit.core._providers._anthropic import AnthropicProvider
 from ai_arch_toolkit.core._providers._base import StreamState
 from ai_arch_toolkit.core._providers._openai import OpenAIProvider
@@ -42,16 +45,37 @@ def _block_stop(index: int) -> SimpleNamespace:
     return _sdk_event("content_block_stop", index=index)
 
 
-def _message_start(model: str = "claude-sonnet-4-20250514", **usage_kwargs) -> SimpleNamespace:
-    usage = SimpleNamespace(**usage_kwargs) if usage_kwargs else SimpleNamespace(input_tokens=0)
-    msg = SimpleNamespace(model=model, usage=usage)
-    return _sdk_event("message_start", message=msg)
+def _message_start(
+    model: str = "claude-sonnet-4-20250514", **usage_kwargs: int
+) -> sdk_types.RawMessageStartEvent:
+    # Usage-carrying events use the real SDK types: fakes missing the API's usage fields once
+    # hid doubled input tokens.
+    counts = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+    }
+    usage = sdk_types.Usage(**(counts | usage_kwargs))
+    msg = sdk_types.Message(
+        id="msg_test",
+        type="message",
+        role="assistant",
+        model=model,
+        content=[],
+        stop_reason=None,
+        usage=usage,
+    )
+    return sdk_types.RawMessageStartEvent(type="message_start", message=msg)
 
 
-def _message_delta(stop_reason: str = "", **usage_kwargs) -> SimpleNamespace:
-    delta = SimpleNamespace(stop_reason=stop_reason)
-    usage = SimpleNamespace(**usage_kwargs) if usage_kwargs else None
-    return _sdk_event("message_delta", delta=delta, usage=usage)
+def _message_delta(
+    stop_reason: str | None = None, **usage_kwargs: int
+) -> sdk_types.RawMessageDeltaEvent:
+    usage = sdk_types.MessageDeltaUsage(**({"output_tokens": 0} | usage_kwargs))
+    return sdk_types.RawMessageDeltaEvent(
+        type="message_delta", delta=Delta(stop_reason=stop_reason), usage=usage
+    )
 
 
 def _final_message(content=None) -> SimpleNamespace:
@@ -95,7 +119,13 @@ class TestAnthropicStreamToolCalls:
             _input_json_delta(0, '{"city"'),
             _input_json_delta(0, ': "NYC"}'),
             _block_stop(0),
-            _message_delta(stop_reason="tool_use", output_tokens=15),
+            _message_delta(
+                stop_reason="tool_use",
+                input_tokens=25,
+                output_tokens=15,
+                cache_creation_input_tokens=0,
+                cache_read_input_tokens=0,
+            ),
         ]
 
         provider = AnthropicProvider("claude-sonnet-4-20250514", "test-key")
@@ -115,6 +145,8 @@ class TestAnthropicStreamToolCalls:
         assert tc.name == "get_weather"
         assert tc.input == {"city": "NYC"}
         assert state.stop_reason == "tool_use"
+        # message_delta usage is cumulative: it replaces message_start's counts.
+        assert state.usage == Usage(input_tokens=25, output_tokens=15)
 
     async def test_text_then_tool_call(self):
         events = [

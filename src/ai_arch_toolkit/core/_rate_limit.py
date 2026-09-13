@@ -13,11 +13,10 @@ class RateLimitMiddleware:
     """Proactive rate limiter using token bucket.
 
     .. note::
-        Rate limiting is only applied via the async ``abefore`` hook, which is
-        used by ``LLM.complete()``. The sync ``before()`` hook is a
-        pass-through, so ``LLM.stream()`` and ``LLM.stream_events()`` — which
-        run middleware through the sync hook — bypass the limiter. Use
-        ``LLM.complete()`` if you need rate limiting.
+        Rate limiting happens in the async ``abefore`` hook, which runs before the
+        provider is called for ``LLM.complete()``, ``LLM.stream()``,
+        ``LLM.stream_events()``, and their sync wrappers. The sync ``before()``
+        hook is a pass-through.
 
     Args:
         requests_per_minute: Maximum sustained rate.

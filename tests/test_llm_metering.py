@@ -203,12 +203,15 @@ async def _drain(stream) -> None:
         pass
 
 
-async def test_stream_starts_on_build_and_settles_on_drain():
+async def test_stream_reserves_on_build_starts_on_iteration_and_settles_on_drain():
     prov = FakeStreamProvider(chunks=["a", "b"], usage=Usage(input_tokens=30, output_tokens=10))
     llm = make_stream_llm(prov)
     with MeterScope() as scope:
         stream = llm.stream("hi")
-        assert scope.snapshot().llm_calls == 1  # opened + started at build time
+        built = scope.snapshot()
+        assert built.out_llm_calls == 1 and built.llm_calls == 0  # admitted + reserved at build
+        await stream.__anext__()
+        assert scope.snapshot().llm_calls == 1  # started with the first provider attempt
         assert scope.snapshot().input_tokens == 0  # usage not known until drained
         await _drain(stream)
         snap = scope.snapshot()
@@ -232,13 +235,24 @@ async def test_stream_prefers_exact_provider_cost():
     assert scope.snapshot().cost == Money.from_usd(0.234567)
 
 
-async def test_abandoned_stream_is_incomplete_at_scope_close():
+async def test_never_iterated_stream_releases_its_reservation_at_scope_close():
     prov = FakeStreamProvider(chunks=["a"], usage=Usage(input_tokens=5))
     llm = make_stream_llm(prov)
     with MeterScope() as scope:
-        llm.stream("hi")  # never drained -> op stays STARTED
+        llm.stream("hi")  # never iterated -> the op stays PENDING, the provider is never called
     snap = scope.snapshot()
-    assert snap.llm_calls == 1 and snap.unknown_cost_count == 1  # incomplete llm -> Unknown
+    assert snap.llm_calls == 0 and snap.out_llm_calls == 0 and snap.unknown_cost_count == 0
+
+
+async def test_started_but_undrained_stream_is_incomplete_at_scope_close():
+    prov = FakeStreamProvider(chunks=["a", "b"], usage=Usage(input_tokens=5))
+    llm = make_stream_llm(prov)
+    with MeterScope() as scope:
+        stream = llm.stream("hi")
+        await stream.__anext__()  # started, then left undrained and unclosed
+        del stream
+    snap = scope.snapshot()
+    assert snap.llm_calls == 1 and snap.unknown_cost_count == 1  # count kept, cost unknown
     assert snap.input_tokens == 0  # never settled with usage
 
 
@@ -345,6 +359,44 @@ async def test_stream_events_is_metered_on_drain():
         await _drain(llm.stream_events("hi"))
     snap = scope.snapshot()
     assert snap.llm_calls == 1 and snap.input_tokens == 12 and snap.output_tokens == 3
+
+
+# ── provider attribution on metering events (F10) ────────────────────────────
+
+
+async def test_complete_event_names_the_provider():
+    llm = make_llm(FakeProvider(response=resp(input_tokens=10)))
+    with MeterScope(RunConfig(retain_meter_events=True)) as scope:
+        await llm.complete("hi")
+    assert [(e.model, e.provider) for e in scope.events()] == [(MODEL, "anthropic")]
+
+
+async def test_stream_event_names_the_provider():
+    llm = make_stream_llm(FakeStreamProvider(chunks=["a"], usage=Usage(input_tokens=3)))
+    with MeterScope(RunConfig(retain_meter_events=True)) as scope:
+        await _drain(llm.stream("hi"))
+    assert [(e.status, e.provider) for e in scope.events()] == [("settled", "anthropic")]
+
+
+async def test_openai_compatible_server_is_attributed_to_openai():
+    llm = LLM("gemma4:e4b", base_url="http://localhost:11434/v1")
+    llm._provider = FakeProvider(response=resp(input_tokens=1))  # type: ignore[assignment]
+    with MeterScope(RunConfig(retain_meter_events=True)) as scope:
+        await llm.complete("hi")
+    assert [e.provider for e in scope.events()] == ["openai"]
+
+
+async def test_cross_provider_fallback_attempt_names_its_own_provider():
+    fallback = LLM("gpt-4o", api_key="test")
+    fallback._provider = FakeProvider(response=resp(input_tokens=1))  # type: ignore[assignment]
+    llm = LLM(MODEL, api_key="test", fallback=fallback)
+    llm._provider = FakeProvider(error=APIError(500, "down"))  # type: ignore[assignment]
+    with MeterScope(RunConfig(retain_meter_events=True)) as scope:
+        await llm.complete("hi")
+    assert [(e.status, e.model, e.provider) for e in scope.events()] == [
+        ("failed", MODEL, "anthropic"),
+        ("settled", "gpt-4o", "openai"),
+    ]
 
 
 # ── batch fail-closed under an enforcing scope (F3) ──────────────────────────

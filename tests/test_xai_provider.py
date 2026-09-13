@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import grpc
 import pytest
+from xai_sdk import chat as xai_chat
 
 from ai_arch_toolkit.core._exceptions import APIError, RateLimitError
 from ai_arch_toolkit.core._pricing import _estimate_response_cost
@@ -324,6 +325,22 @@ def _make_mock_chat(response=None):
     return mock_chat
 
 
+_SYSTEM_MERGE_MESSAGES = [
+    {"role": "system", "content": "A"},
+    {"role": "user", "content": "x"},
+]
+_ROLE_SYSTEM = xai_chat.chat_pb2.MessageRole.ROLE_SYSTEM
+
+
+def _system_texts(sdk_messages) -> list[str]:
+    """Text of every system proto message sent to ``chat.create``."""
+    return [
+        "".join(part.text for part in msg.content)
+        for msg in sdk_messages
+        if msg.role == _ROLE_SYSTEM
+    ]
+
+
 class TestXAIProviderComplete:
     @patch("ai_arch_toolkit.core._providers._xai.xai_sdk.AsyncClient")
     def test_disables_transparent_grpc_retries(self, client_cls):
@@ -361,6 +378,18 @@ class TestXAIProviderComplete:
         # System should be first message
         msgs = call_kwargs["messages"]
         assert len(msgs) >= 2  # system + user
+
+    async def test_explicit_system_merged_before_message_system(self):
+        mock_client = MagicMock()
+        mock_client.chat.create.return_value = _make_mock_chat()
+
+        provider = XAIProvider("grok-3", "test-key")
+        provider._client = mock_client
+        await provider.complete(_SYSTEM_MERGE_MESSAGES, system="B")
+
+        msgs = mock_client.chat.create.call_args.kwargs["messages"]
+        assert _system_texts(msgs) == ["B\n\nA"]
+        assert msgs[0].role == _ROLE_SYSTEM
 
     async def test_tools_forwarded(self):
         mock_chat = _make_mock_chat()
@@ -670,6 +699,26 @@ class TestXAIProviderStream:
         assert state.usage is not None
         assert state.usage.output_tokens == 40
         assert state.provider_cost == 0.0042
+
+    async def test_stream_merges_explicit_and_message_system(self):
+        mock_chat = MagicMock()
+
+        async def _fake_stream():
+            yield _sdk_response(), _sdk_chunk(content="Hi")
+
+        mock_chat.stream = _fake_stream
+        mock_client = MagicMock()
+        mock_client.chat.create.return_value = mock_chat
+        provider = XAIProvider("grok-3", "test-key")
+        provider._client = mock_client
+
+        aiter, _state = provider.stream(_SYSTEM_MERGE_MESSAGES, system="B")
+        async for _ in aiter:
+            pass
+
+        msgs = mock_client.chat.create.call_args.kwargs["messages"]
+        assert _system_texts(msgs) == ["B\n\nA"]
+        assert msgs[0].role == _ROLE_SYSTEM
 
     async def test_stream_error_mapping(self):
         error = grpc.aio.AioRpcError(

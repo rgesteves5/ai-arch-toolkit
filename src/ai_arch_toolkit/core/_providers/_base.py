@@ -9,6 +9,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 
+from ai_arch_toolkit.core._content import CachePart
 from ai_arch_toolkit.core._response import Response, StreamEvent, ThinkingBlock, ToolCall, Usage
 
 logger = logging.getLogger(__name__)
@@ -203,6 +204,53 @@ class StreamState:
         self.raw: Any = None
         self.tool_calls: list[ToolCall] = []
         self.thinking: list[ThinkingBlock] = []
+
+
+def merge_system_prompts(*parts: str | None) -> str | None:
+    """Join system prompts in order, separated by a blank line.
+
+    Adapters call this with the ``system=`` argument first, then the text of the
+    ``system()`` messages, so neither source replaces the other. ``None`` and empty
+    parts are skipped; ``None`` is returned when nothing is left. A part that is not
+    a string (provider-native content blocks from untyped callers) cannot be joined
+    as text: the first non-empty part is then returned unchanged.
+    """
+    kept = [part for part in parts if part]
+    if not kept:
+        return None
+    if len(kept) == 1 or not all(isinstance(part, str) for part in kept):
+        return kept[0]
+    return "\n\n".join(kept)
+
+
+def system_content_text(content: Any) -> str:
+    """The text of a ``system()`` message.
+
+    A system prompt is text: its content is a string, or a list of text parts (strings and
+    ``cache()`` parts) joined by a blank line. Only the Anthropic adapter keeps a cache part's
+    marker; the others send its text.
+
+    Raises:
+        TypeError: The content holds an image, a document, or anything else that is not text.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list | tuple):
+        texts = (_system_part_text(part) for part in content)
+        return "\n\n".join(text for text in texts if text)
+    return _system_part_text(content)
+
+
+def _system_part_text(part: Any) -> str:
+    if isinstance(part, str):
+        return part
+    if isinstance(part, CachePart):
+        return part.content
+    msg = (
+        f"a system message takes text or cache() parts, not {type(part).__name__}; "
+        "send images and documents in a user message"
+    )
+    raise TypeError(msg)
 
 
 def parse_tool_args(raw_args: str | dict[str, Any]) -> dict[str, Any]:

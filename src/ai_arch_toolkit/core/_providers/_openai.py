@@ -8,7 +8,13 @@ import warnings
 from collections.abc import AsyncIterator
 from typing import Any
 
-from ai_arch_toolkit.core._content import DocumentPart, ImagePart, _encode_b64, _is_url
+from ai_arch_toolkit.core._content import (
+    CachePart,
+    DocumentPart,
+    ImagePart,
+    _encode_b64,
+    _is_url,
+)
 from ai_arch_toolkit.core._exceptions import APIError, RateLimitError
 from ai_arch_toolkit.core._pricing import _estimate_response_cost
 from ai_arch_toolkit.core._providers._base import (
@@ -17,6 +23,7 @@ from ai_arch_toolkit.core._providers._base import (
     StreamState,
     _parse_retry_after,
     parse_tool_args,
+    system_content_text,
 )
 from ai_arch_toolkit.core._providers._imports import require_sdk
 from ai_arch_toolkit.core._response import (
@@ -84,6 +91,8 @@ def _content_to_sdk(content: Any) -> list[dict[str, Any]] | str:
                         "image_url": {"url": f"data:{part.media_type};base64,{b64}"},
                     }
                 )
+        elif isinstance(part, CachePart):
+            blocks.append({"type": "text", "text": part.content})  # caching is automatic here
         elif isinstance(part, DocumentPart):
             b64 = _encode_b64(part.source)
             blocks.append(
@@ -140,10 +149,12 @@ def _messages_to_sdk(
 
     ``tool_use_id`` is the tool-result discriminator (role is ignored).
     System stays as a regular message role. tool results use role="tool".
-    If ``system`` is provided, system messages in the list are discarded.
+    A non-empty ``system`` is sent as a leading system message; system messages in
+    the list are kept at their positions (mid-conversation system messages are valid
+    for Chat Completions and OpenAI-compatible servers).
     """
     wire: list[dict[str, Any]] = []
-    if system is not None:
+    if system:
         wire.append({"role": "system", "content": system})
     for msg in messages:
         role = msg.get("role", "user")
@@ -156,8 +167,7 @@ def _messages_to_sdk(
                 }
             )
         elif role == "system":
-            if system is None:
-                wire.append({"role": "system", "content": msg.get("content", "")})
+            wire.append({"role": "system", "content": system_content_text(msg.get("content", ""))})
         elif role == "assistant" and msg.get("tool_calls"):
             wire.append(
                 {

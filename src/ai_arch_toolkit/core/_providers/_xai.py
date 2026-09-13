@@ -11,14 +11,16 @@ from typing import Any
 
 import grpc
 
-from ai_arch_toolkit.core._content import ImagePart
+from ai_arch_toolkit.core._content import CachePart, DocumentPart, ImagePart
 from ai_arch_toolkit.core._exceptions import APIError, RateLimitError
 from ai_arch_toolkit.core._pricing import _estimate_response_cost
 from ai_arch_toolkit.core._providers._base import (
     BaseProvider,
     LoopAwareClientCache,
     StreamState,
+    merge_system_prompts,
     parse_tool_args,
+    system_content_text,
 )
 from ai_arch_toolkit.core._providers._imports import require_sdk
 from ai_arch_toolkit.core._response import (
@@ -82,7 +84,7 @@ def _messages_to_sdk(
             content = msg.get("content", "")
             sdk_msgs.append(xai_chat.tool_result(str(content), tool_call_id=msg["tool_use_id"]))
         elif role == "system":
-            system_parts.append(msg.get("content", ""))
+            system_parts.append(system_content_text(msg.get("content", "")))
 
         elif role == "assistant" and msg.get("tool_calls"):
             # Assistant with tool calls — build proto Message directly
@@ -119,9 +121,16 @@ def _messages_to_sdk(
                 for part in raw_content:
                     if isinstance(part, str):
                         text_parts.append(part)
+                    elif isinstance(part, CachePart):
+                        text_parts.append(part.content)
                     elif isinstance(part, ImagePart):
                         warnings.warn(
                             "xAI does not support image input; image part dropped",
+                            stacklevel=3,
+                        )
+                    elif isinstance(part, DocumentPart):
+                        warnings.warn(
+                            "xAI does not support document input; document part dropped",
                             stacklevel=3,
                         )
                     else:
@@ -444,7 +453,7 @@ class XAIProvider(LoopAwareClientCache, BaseProvider):
     ) -> Response:
         output_schema: OutputSchema | None = kwargs.get("output_schema")
         sdk_msgs, msg_system = _messages_to_sdk(messages)
-        effective_system = system if system is not None else msg_system
+        effective_system = merge_system_prompts(system, msg_system)
 
         create_kwargs = self._build_create_kwargs(
             sdk_msgs, system=effective_system, tools=tools, **kwargs
@@ -482,7 +491,7 @@ class XAIProvider(LoopAwareClientCache, BaseProvider):
         **kwargs: Any,
     ) -> tuple[AsyncIterator[str], StreamState]:
         sdk_msgs, msg_system = _messages_to_sdk(messages)
-        effective_system = system if system is not None else msg_system
+        effective_system = merge_system_prompts(system, msg_system)
 
         create_kwargs = self._build_create_kwargs(
             sdk_msgs, system=effective_system, tools=tools, **kwargs
