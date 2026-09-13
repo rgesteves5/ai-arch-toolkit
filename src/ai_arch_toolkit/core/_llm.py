@@ -17,7 +17,7 @@ from ai_arch_toolkit.core._metering._admission import AdmissionDenied, NotMetere
 from ai_arch_toolkit.core._metering._cost import Cost
 from ai_arch_toolkit.core._metering._money import Money
 from ai_arch_toolkit.core._metering._operation import MeterOperation, OperationRequest
-from ai_arch_toolkit.core._metering._scope import current_meter, current_span_id
+from ai_arch_toolkit.core._metering._scope import MeterScope, current_meter, current_span_id
 from ai_arch_toolkit.core._middleware import (
     Request,
     _run_aafter,
@@ -127,6 +127,53 @@ def _normalize_fallbacks(
     return all_fbs, owned
 
 
+# Named call options that ``_prepare_provider_kwargs`` turns into provider kwargs, with defaults.
+_CALL_OPTIONS: dict[str, Any] = {
+    "thinking": False,
+    "thinking_effort": None,
+    "thinking_budget": None,
+    "output_schema": None,
+    "tool_choice": None,
+    "json_mode": False,
+    "logprobs": False,
+}
+
+
+def _same_value(left: Any, right: Any) -> bool:
+    try:
+        return left is right or bool(left == right)
+    except Exception:  # an object whose == raises cannot be compared: treat it as changed
+        return False
+
+
+def _fallback_arguments(
+    options: dict[str, Any],
+    extra: dict[str, Any],
+    before: dict[str, Any],
+    after: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """A fallback's named options and keyword arguments, with middleware's kwarg changes applied.
+
+    ``before``/``after`` are the provider kwargs around the primary's ``abefore`` hooks. A fallback
+    derives its own provider kwargs from its call arguments and its own defaults, so only what
+    middleware changed is carried over — never the primary LLM's defaults.
+    """
+    options, extra = dict(options), dict(extra)
+    for key in before.keys() - after.keys():
+        if key in options:
+            options[key] = _CALL_OPTIONS[key]
+        else:
+            extra.pop(key, None)
+    for key, value in after.items():
+        if key in before and _same_value(before[key], value):
+            continue
+        if key in options:
+            options[key] = value
+        else:
+            extra[key] = value
+    return options, extra
+
+
 class _StreamRun:
     """Thread-safe lifecycle for one lazily-started stream and all of its retries."""
 
@@ -137,6 +184,7 @@ class _StreamRun:
         "meter",
         "model",
         "retry_number",
+        "started",
         "started_at",
         "state",
         "terminal",
@@ -148,6 +196,7 @@ class _StreamRun:
         self.attempts: list[Attempt] = []
         self.state: StreamState | None = None
         self.meter: tuple[MeterOperation, OperationRequest, Any] | None = None
+        self.started = False
         self.started_at = 0.0
         self.retry_number = 0
         self.terminal = True
@@ -161,6 +210,7 @@ class _StreamRun:
         with self._lock:
             self.state = None
             self.meter = meter
+            self.started = False
             self.started_at = time.time()
             self.retry_number = retry_number
             self.terminal = False
@@ -176,10 +226,44 @@ class _StreamRun:
         with self._lock:
             if self.terminal:
                 return False
+            self.started = True
             self.started_at = time.time()
             if self.meter is not None:
                 self.meter[0].mark_started()
             return True
+
+    def replace_reservation(
+        self,
+        reserved: tuple[MeterOperation, OperationRequest, Any],
+        reopen: Callable[[], tuple[MeterOperation, OperationRequest, Any]],
+    ) -> None:
+        """Swap the unstarted attempt's reservation for one opened by ``reopen``.
+
+        The old reservation is released first, so a strict budget admits the new request on its
+        own. ``AdmissionDenied`` from ``reopen`` propagates and ends the stream with no attempt.
+        """
+        with self._lock:
+            if self.terminal or self.started or self.meter is not reserved:
+                return
+            reserved[0].abort()
+            self.meter = None
+            try:
+                self.meter = reopen()
+            except BaseException:
+                self.terminal = True
+                self.finalized = True
+                raise
+
+    def release(self) -> None:
+        """End a stream that never reached the provider: drop the reservation, no attempt."""
+        with self._lock:
+            if self.finalized or self.started:
+                return
+            if self.meter is not None:
+                self.meter[0].abort()
+                self.meter = None
+            self.terminal = True
+            self.finalized = True
 
     def set_state(self, state: StreamState) -> None:
         with self._lock:
@@ -268,6 +352,10 @@ class _StreamFinalizer:
     callback: Callable[[str], Response]
     _stream_abandon: Callable[[], None]
     _stream_attempts: list[Attempt]
+    # Called once async middleware rewrote the request, before the first provider attempt.
+    _stream_refresh: Callable[[], None] | None = None
+    # Called when middleware rejects the request: no provider was ever called.
+    _stream_release: Callable[[], None] | None = None
 
     def __call__(self, text: str) -> Response:
         return self.callback(text)
@@ -349,6 +437,17 @@ class _FallbackStreamRun:
             abandon = getattr(self.stream._finalizer, "_stream_abandon", None)
             if callable(abandon):
                 abandon()
+
+    def release(self) -> None:
+        """Latch abandonment before any provider was called: drop the reservation, no attempt."""
+        with self._lock:
+            self._abandoned = True
+            finalizer = self.stream._finalizer
+            release = getattr(finalizer, "_stream_release", None)
+            if not callable(release):
+                release = getattr(finalizer, "_stream_abandon", None)
+            if callable(release):
+                release()
 
 
 def _content_chars(
@@ -631,9 +730,13 @@ class LLM:
         normalized: list[dict[str, Any]],
         system: str | None,
         wire_tools: list[dict[str, Any]] | None,
+        scope: MeterScope | None = None,
     ) -> OperationRequest | None:
-        """Build the metering facts for an LLM call, or ``None`` when no scope is bound."""
-        scope = current_meter()
+        """Build the metering facts for an LLM call, or ``None`` when no scope is bound.
+
+        ``scope`` defaults to the scope bound where this runs.
+        """
+        scope = scope if scope is not None else current_meter()
         if scope is None:
             return None
         # The content-size hint is consumed ONLY by a strict-reserve estimator. Computing it
@@ -742,7 +845,9 @@ class LLM:
         )
         # Middleware before hooks
         req: Request | None = None
+        kwargs_before = provider_kwargs
         if self._middleware:
+            kwargs_before = dict(provider_kwargs)  # hooks may edit request.kwargs in place
             req = Request(
                 messages=normalized,
                 system=system,
@@ -779,20 +884,29 @@ class LLM:
                 raise  # terminal: never fall back after a budget/admission denial
             if not self._fallbacks:
                 raise
+            options = {
+                "thinking": thinking,
+                "thinking_effort": thinking_effort,
+                "thinking_budget": thinking_budget,
+                "output_schema": output_schema,
+                "tool_choice": tool_choice,
+                "json_mode": json_mode,
+                "logprobs": logprobs,
+            }
+            extra = dict(kwargs)
+            if req is not None:
+                options, extra = _fallback_arguments(
+                    options, extra, kwargs_before, provider_kwargs
+                )
+            # A fallback gets the request as middleware left it: messages, system, tools, kwargs.
             response = await self._try_fallbacks(
-                normalized,  # after middleware, like ``system`` below
+                normalized,
                 attempts=attempts,
                 last_error=primary_err,
                 system=system,
-                tools=tools,
-                thinking=thinking,
-                thinking_effort=thinking_effort,
-                thinking_budget=thinking_budget,
-                output_schema=output_schema,
-                tool_choice=tool_choice,
-                json_mode=json_mode,
-                logprobs=logprobs,
-                **kwargs,
+                tools=wire_tools if req is not None else tools,
+                **options,
+                **extra,
             )
 
         # Middleware after hooks
@@ -868,6 +982,7 @@ class LLM:
         run = _StreamRun(self._model)
         # Preserve the established stream contract: admission and call-count reservation happen
         # when the stream object is created, even though provider I/O remains lazy until iteration.
+        creation_scope = current_meter()
         first_meter = self._open_stream_op(
             prepared.provider_kwargs,
             normalized=prepared.normalized,
@@ -875,6 +990,32 @@ class LLM:
             wire_tools=prepared.wire_tools,
         )
         run.begin(0, first_meter)
+
+        def _refresh_reservation() -> None:
+            # Async middleware ran after the reservation and may have changed its facts (tools,
+            # max_tokens, injected content). Admission and pricing must see the request as sent.
+            scope = creation_scope
+            if first_meter is None or scope is None:
+                return
+            reserved_request, pricer = first_meter[1], first_meter[2]
+            built = self._meter_request(
+                "stream",
+                prepared.provider_kwargs,
+                normalized=prepared.normalized,
+                system=prepared.system,
+                wire_tools=prepared.wire_tools,
+                scope=scope,
+            )
+            if built is None:
+                return
+            request = dataclasses.replace(built, parent_span_id=reserved_request.parent_span_id)
+            if request == reserved_request:
+                return
+
+            def _reopen() -> tuple[MeterOperation, OperationRequest, Any]:
+                return scope.open(request), request, pricer
+
+            run.replace_reservation(first_meter, _reopen)
 
         async def _items() -> AsyncIterator[Any]:
             max_retries = self._retry.max_retries if self._retry is not None else 0
@@ -966,6 +1107,8 @@ class LLM:
             callback=_finalize,
             _stream_abandon=run.abandon,
             _stream_attempts=run.attempts,
+            _stream_refresh=_refresh_reservation,
+            _stream_release=run.release,
         )
         if events:
             return RichStreamResponse(_items(), finalizer)
@@ -1010,6 +1153,7 @@ class LLM:
             logprobs=logprobs,
             kwargs=kwargs,
         )
+        kwargs_before = dict(prepared.provider_kwargs)  # hooks may edit request.kwargs in place
         primary = self._single_stream(prepared, events=events)
         if not self._fallbacks and not self._middleware:
             return primary
@@ -1022,20 +1166,28 @@ class LLM:
             # Preserve the candidate LLM's complete fallback policy, middleware nesting, and
             # retry configuration. Calling _single_stream() here silently truncated A -> B -> C.
             # It receives this LLM's request after middleware, as complete() fallbacks do.
+            options = {
+                "thinking": thinking,
+                "thinking_effort": thinking_effort,
+                "thinking_budget": thinking_budget,
+                "output_schema": output_schema,
+                "tool_choice": tool_choice,
+                "json_mode": json_mode,
+                "logprobs": logprobs,
+            }
+            extra = dict(kwargs)
+            if self._middleware:
+                options, extra = _fallback_arguments(
+                    options, extra, kwargs_before, prepared.provider_kwargs
+                )
             return owner._stream_with_fallbacks(
                 prepared.normalized,
                 events=events,
                 system=prepared.system,
-                tools=tools,
-                thinking=thinking,
-                thinking_effort=thinking_effort,
-                thinking_budget=thinking_budget,
-                output_schema=output_schema,
-                tool_choice=tool_choice,
-                json_mode=json_mode,
-                logprobs=logprobs,
-                kwargs=kwargs,
+                tools=prepared.wire_tools if self._middleware else tools,
+                kwargs=extra,
                 _fallback_ancestry=fallback_ancestry,
+                **options,
             )
 
         async def _items() -> AsyncIterator[Any]:
@@ -1045,10 +1197,13 @@ class LLM:
                     request = await _run_abefore(
                         self._middleware, prepared.to_request(self._model)
                     )
+                    prepared.apply(request)
+                    refresh = getattr(primary._finalizer, "_stream_refresh", None)
+                    if callable(refresh):
+                        refresh()  # admit and price the first attempt on the rewritten request
                 except BaseException:
-                    fallback_run.abandon()  # releases the primary's reserved, unstarted op
+                    fallback_run.release()  # no provider was called: drop the reservation
                     raise
-                prepared.apply(request)
 
             last_exc: Exception | None = None
             owners = (self, *self._fallbacks)

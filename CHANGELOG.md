@@ -221,6 +221,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   table was embedded inside the parameter, so its `#/$defs/...` pointers dangled at the tool's
   root; Gemini rejected such tools with `400 reference to undefined schema`. Nested models are
   now inlined, and a recursive model's `$defs` table is hoisted to the root.
+- **A stream is admitted and priced on the request after async middleware.** Its reservation
+  was built from the request before `abefore` ran, so a middleware that added a server tool,
+  changed `max_tokens` or injected content left the budget admitting and pricing stale facts.
+  The reservation is now replaced before the first attempt when those facts change.
+- Fallbacks receive the tools and the kwargs that middleware changed, not only the messages and
+  system prompt, in `complete()` and in streams; each fallback keeps its own defaults. A stream
+  rejected by middleware records no `StreamAbandoned` attempt, since no provider was called.
 - Argument validation no longer raises for an integer string longer than Python's conversion
   limit, a `null` schema branch accepts only `null`, and a custom gate that returns non-mapping
   arguments gets a `validation_error`. `Literal[True, False]` and boolean enums are described as

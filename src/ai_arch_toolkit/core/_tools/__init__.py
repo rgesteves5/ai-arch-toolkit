@@ -110,6 +110,9 @@ def prepare_tools(
         if isinstance(item, ServerTool):
             result.append({"_server_tool": True, "type": item.type, **item.config})
         elif isinstance(item, dict):
+            if item.get("_server_tool"):  # already in wire form (e.g. a request after middleware)
+                result.append(item)
+                continue
             if "name" not in item or not item["name"]:
                 warnings.warn(
                     "Tool dict missing 'name' field; skipping",

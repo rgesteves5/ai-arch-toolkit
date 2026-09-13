@@ -61,8 +61,8 @@ The framework auto-detects async variants and falls back to the sync hooks if th
 The same hooks run for every call — `complete()`, `stream()`, `stream_events()`, and their sync wrappers:
 
 - **`complete()`** runs `abefore`, the provider call (with its retries and fallbacks), then `aafter`.
-- **Streams** run `abefore` when iteration starts, before the provider is called, so a middleware that raises (e.g. input moderation) stops the stream before any provider I/O. `aafter` runs once the stream has been fully consumed, on the final `Response`, before the stream reports completion; an abandoned stream skips it.
-- **Fallbacks** receive the request after the primary LLM's middleware, and the primary's `aafter` runs once on whichever response finished.
+- **Streams** run `abefore` when iteration starts, before the provider is called, so a middleware that raises (e.g. input moderation) stops the stream before any provider I/O. Budget admission and pricing then use the request as `abefore` left it. `aafter` runs once the stream has been fully consumed, on the final `Response`, before the stream reports completion. An abandoned stream skips it, and closing a sync stream while `aafter` runs cancels the hook.
+- **Fallbacks** receive the request after the primary LLM's middleware (messages, system, tools, and the kwargs the hooks changed; each fallback keeps its own defaults), and the primary's `aafter` runs once on whichever response finished.
 
 ---
 

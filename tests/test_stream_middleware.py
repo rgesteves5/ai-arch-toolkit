@@ -9,12 +9,19 @@ import pytest
 
 from ai_arch_toolkit.core._exceptions import APIError
 from ai_arch_toolkit.core._llm import LLM
-from ai_arch_toolkit.core._metering._scope import MeterScope
+from ai_arch_toolkit.core._metering._admission import (
+    AdmissionDecision,
+    AdmissionDenied,
+    Reservation,
+)
+from ai_arch_toolkit.core._metering._scope import MeterScope, RunConfig
 from ai_arch_toolkit.core._middleware import Request
 from ai_arch_toolkit.core._moderation import ModerationError, ModerationResult
 from ai_arch_toolkit.core._providers._base import StreamState
 from ai_arch_toolkit.core._response import Response, StreamEvent, Usage
 from ai_arch_toolkit.core._retry import RetryConfig
+from ai_arch_toolkit.core._server_tools import web_search
+from ai_arch_toolkit.core._tools import prepare_tools
 from ai_arch_toolkit.toolkit.memory import MemoryMiddleware
 from ai_arch_toolkit.toolkit.moderation import ModerationMiddleware
 
@@ -30,8 +37,10 @@ class _Provider:
         self._fail_first = fail_first
         self._error = error or APIError(500, "try again")
 
-    def _stream(self, messages: Any, system: Any, as_events: bool):
-        self.calls.append({"messages": list(messages), "system": system})
+    def _stream(self, messages: Any, system: Any, as_events: bool, tools: Any, kwargs: Any):
+        self.calls.append(
+            {"messages": list(messages), "system": system, "tools": tools, "kwargs": kwargs}
+        )
         state = StreamState()
         state.usage = _USAGE
         failing = len(self.calls) <= self._fail_first
@@ -46,13 +55,15 @@ class _Provider:
         return chunks(), state
 
     def stream(self, messages, *, system=None, tools=None, **kwargs):
-        return self._stream(messages, system, as_events=False)
+        return self._stream(messages, system, False, tools, kwargs)
 
     def stream_events(self, messages, *, system=None, tools=None, **kwargs):
-        return self._stream(messages, system, as_events=True)
+        return self._stream(messages, system, True, tools, kwargs)
 
     async def complete(self, messages, *, system=None, tools=None, **kwargs) -> Response:
-        self.calls.append({"messages": list(messages), "system": system})
+        self.calls.append(
+            {"messages": list(messages), "system": system, "tools": tools, "kwargs": kwargs}
+        )
         if len(self.calls) <= self._fail_first:
             raise self._error
         return Response(text="hello", usage=_USAGE, model=_MODEL)
@@ -239,3 +250,142 @@ async def test_a_stream_that_is_never_iterated_releases_its_reservation() -> Non
     assert snap.llm_calls == 0
     assert snap.out_llm_calls == 0
     assert snap.unknown_cost_count == 0
+
+
+_ORIGINAL_TOOL = {"name": "original_tool", "input_schema": {"type": "object", "properties": {}}}
+_ONLY_TOOL = {"name": "only_tool", "input_schema": {"type": "object", "properties": {}}}
+
+
+class _Rewrite:
+    """abefore rewrites tools and kwargs, as a guard that swaps tools or caps output would."""
+
+    def __init__(
+        self, *, tools: list[dict[str, Any]], set_kwargs: dict[str, Any], drop: str
+    ) -> None:
+        self._tools = tools
+        self._set = set_kwargs
+        self._drop = drop
+
+    async def abefore(self, request: Request) -> Request:
+        kwargs = {k: v for k, v in request.kwargs.items() if k != self._drop} | self._set
+        return Request(
+            messages=request.messages,
+            system=request.system,
+            tools=self._tools,
+            model=request.model,
+            kwargs=kwargs,
+        )
+
+    async def aafter(self, request: Request, response: Response) -> Response:
+        return response
+
+
+@pytest.mark.parametrize("method", ["complete", "stream"])
+async def test_a_fallback_receives_the_tools_and_kwargs_after_middleware(method: str) -> None:
+    rewrite = _Rewrite(
+        tools=[_ONLY_TOOL, *prepare_tools([web_search()])],
+        set_kwargs={"max_tokens": 7, "json_mode": True},
+        drop="temperature",
+    )
+    fallback_provider = _Provider()
+    llm = _llm(
+        _Provider(fail_first=1, error=ConnectionError("down")),
+        middleware=[rewrite],
+        fallback=_llm(fallback_provider),
+    )
+    call = {"tools": [_ORIGINAL_TOOL], "max_tokens": 4096, "temperature": 0.3, "top_p": 0.9}
+
+    if method == "complete":
+        await llm.complete("hi", **call)
+    else:
+        async for _ in llm.stream("hi", **call):
+            pass
+
+    sent = fallback_provider.calls[0]
+    assert [tool.get("name", tool.get("type")) for tool in sent["tools"]] == [
+        "only_tool",
+        "web_search",
+    ]
+    assert sent["kwargs"]["max_tokens"] == 7
+    assert sent["kwargs"]["json_mode"] is True
+    assert sent["kwargs"]["top_p"] == 0.9
+    assert sent["kwargs"].get("temperature") != 0.3  # dropped by middleware; the fallback's own
+
+
+class _Admissions:
+    def __init__(self) -> None:
+        self.requests: list[Any] = []
+
+    def admit(self, snapshot: Any, request: Any) -> AdmissionDecision:
+        self.requests.append(request)
+        return AdmissionDecision(admitted=True, reservation=Reservation(), limits=None)
+
+    def wants_request_size(self) -> bool:
+        return True
+
+
+async def test_a_stream_is_admitted_and_priced_on_the_request_after_middleware() -> None:
+    rewrite = _Rewrite(
+        tools=prepare_tools([web_search()]) or [], set_kwargs={"max_tokens": 50}, drop=""
+    )
+    admissions = _Admissions()
+    llm = _llm(_Provider(), middleware=[rewrite])
+
+    with MeterScope(RunConfig(controller=admissions, retain_meter_events=True)) as scope:
+        async for _ in llm.stream("hi", max_tokens=4096):
+            pass
+
+    admitted = admissions.requests[-1]
+    assert admitted.declared_max_output_tokens == 50
+    assert admitted.has_server_tools
+    settled = [event for event in scope.events() if event.status == "settled"]
+    assert len(settled) == 1
+    assert settled[0].cost.kind == "unknown"  # a server tool's cost cannot be metered
+    assert scope.snapshot().llm_calls == 1
+
+
+async def test_a_stream_rejected_by_middleware_records_no_attempt() -> None:
+    provider = _Provider()
+    llm = _llm(provider, middleware=[ModerationMiddleware(input=_AlwaysFlag())])
+
+    with MeterScope() as scope:
+        stream = llm.stream("bad input")
+        with pytest.raises(ModerationError):
+            await stream.__anext__()
+        await stream.aclose()
+
+    assert provider.calls == []
+    assert stream.response is not None
+    assert stream.response.attempts == ()
+    assert scope.snapshot().llm_calls == 0
+
+
+class _CapOutputTokens:
+    """Admits requests declaring at most ``cap`` output tokens."""
+
+    def __init__(self, cap: int) -> None:
+        self._cap = cap
+
+    def admit(self, snapshot: Any, request: Any) -> AdmissionDecision:
+        declared = request.declared_max_output_tokens or 0
+        if declared > self._cap:
+            denial = AdmissionDenied(dimension="max_tokens", limit=self._cap, attempted=declared)
+            return AdmissionDecision.deny(denial)
+        return AdmissionDecision.allow()
+
+
+async def test_a_stream_whose_rewritten_request_is_denied_never_calls_the_provider() -> None:
+    rewrite = _Rewrite(tools=[], set_kwargs={"max_tokens": 5_000}, drop="")
+    provider = _Provider()
+    llm = _llm(provider, middleware=[rewrite])
+
+    with MeterScope(RunConfig(controller=_CapOutputTokens(cap=1_000))) as scope:
+        stream = llm.stream("hi", max_tokens=100)  # admitted as created
+        with pytest.raises(AdmissionDenied):
+            await stream.__anext__()  # middleware raised max_tokens past the cap
+        await stream.aclose()
+
+    assert provider.calls == []
+    assert stream.response is not None and stream.response.attempts == ()
+    snap = scope.snapshot()
+    assert snap.llm_calls == 0 and snap.out_llm_calls == 0

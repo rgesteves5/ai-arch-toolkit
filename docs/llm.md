@@ -152,8 +152,13 @@ safe only before the first chunk/event becomes visible to the caller; after that
 boundary an error is surfaced without replay, avoiding duplicated or spliced
 output. Budget admission and the call reservation still happen when
 `stream()` / `stream_events()` creates the stream object; the call counts once
-the first provider attempt starts. A stream that is never iterated, or that
-middleware rejects before the provider is called, releases its reservation.
+the first provider attempt starts. If async middleware changes the request's
+metering facts (tools, `max_tokens`, injected content), the reservation is
+replaced before that attempt, so admission and pricing see the request as sent;
+a budget that denies the rewritten request raises `AdmissionDenied` without
+calling the provider. A stream that is never iterated, or that middleware
+rejects before the provider is called, releases its reservation and records no
+attempt.
 
 Fully consuming a stream closes its provider iterator automatically. If the
 consumer may stop early, use the async context manager (or call `await
