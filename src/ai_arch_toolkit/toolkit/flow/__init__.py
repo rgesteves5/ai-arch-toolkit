@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from ai_arch_toolkit.toolkit.flow._executor import execute_flow, iter_flow
+from ai_arch_toolkit.toolkit.flow._executor import (
+    FlowExecution,
+    SyncFlowExecution,
+    execute_flow,
+    iter_flow,
+)
 from ai_arch_toolkit.toolkit.flow._flow import (
     ConditionFn,
     Flow,
@@ -16,9 +21,11 @@ __all__ = [
     "ConditionFn",
     "Flow",
     "FlowEvent",
+    "FlowExecution",
     "FlowResult",
     "FlowStep",
     "Scope",
+    "SyncFlowExecution",
     "apply_scope",
     "execute_flow",
     "iter_flow",

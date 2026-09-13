@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ai_arch_toolkit.toolkit.agents._agent import Agent, AgentResult
+from ai_arch_toolkit.toolkit.agents._agent import Agent, AgentExecution, AgentResult
 from ai_arch_toolkit.toolkit.agents._assemble import agent_from_manifest
 from ai_arch_toolkit.toolkit.agents._builders import (
     BuildContext,
@@ -44,6 +44,7 @@ from ai_arch_toolkit.toolkit.agents.flows import (
 
 __all__ = [
     "Agent",
+    "AgentExecution",
     "AgentManifestCycleError",
     "AgentManifestError",
     "AgentOverrideError",

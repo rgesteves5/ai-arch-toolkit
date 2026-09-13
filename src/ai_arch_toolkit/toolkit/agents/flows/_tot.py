@@ -12,6 +12,7 @@ from ai_arch_toolkit.core._policy import Policy
 from ai_arch_toolkit.core._state import StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
+from ai_arch_toolkit.core._trace import TraceCapture
 from ai_arch_toolkit.toolkit.budget import BudgetPolicy
 from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowStep
 
@@ -33,6 +34,7 @@ def tot_flow(
         "Respond with a single score between 0.0 and 1.0."
     ),
     timeout: float | None = None,
+    trace_capture: TraceCapture = "keys",
     policy: Policy | None = None,
     budget_policy: BudgetPolicy | None = None,
     llm_kwargs: dict[str, Any] | None = None,
@@ -51,8 +53,9 @@ def tot_flow(
         max_iterations: Maximum search iterations.
         strategy: Search strategy — 'dfs' or 'bfs'.
         evaluator_system: System prompt for scoring thoughts.
-        timeout: Overall timeout in seconds.
-        policy: Optional execution policy.
+        timeout: Wall-clock limit for the whole run, in seconds.
+        trace_capture: What each step's trace records — see ``Flow``.
+        policy: Default policy for each step of the flow.
         budget_policy: Optional cumulative runtime budget for the flow.
         llm_kwargs: Additional kwargs passed to every phase's LLM call.
         gen_llm: Override LLM for generating candidate thoughts.
@@ -194,14 +197,12 @@ def tot_flow(
     def search_not_done(snap: StateSnapshot) -> bool:
         return not snap.get("search_done", False)
 
-    flow_policy = policy
-    if timeout is not None and flow_policy is None:
-        flow_policy = Policy(timeout=timeout)
-
     return Flow(
         FlowStep(step=Step(name="search_step", fn=search_step), when=search_not_done),
         name="tot",
-        policy=flow_policy,
+        policy=policy,
+        timeout=timeout,
+        trace_capture=trace_capture,
         budget_policy=budget_policy,
         max_iterations=max_iterations,
     )

@@ -20,6 +20,7 @@ from types import MappingProxyType
 from typing import Any
 
 from ai_arch_toolkit.core import OutputSchema, Policy
+from ai_arch_toolkit.core._trace import TRACE_CAPTURE_MODES
 from ai_arch_toolkit.toolkit.agents._spec import ReasoningSpec
 from ai_arch_toolkit.toolkit.budget import BudgetPolicy
 
@@ -66,6 +67,7 @@ _STRATEGY_FIELDS = frozenset(
         "strip_tools_on_final",
         "system",
         "timeout",
+        "trace_capture",
     }
 )
 _MODEL_FIELDS = frozenset(
@@ -202,6 +204,7 @@ class ResolvedAgentManifest:
             knobs=knobs,
             policy=policy,
             timeout=float(timeout) if timeout is not None else None,
+            trace_capture=strategy.get("trace_capture", "keys"),
             llm_kwargs=dict(_mapping(strategy.get("llm_kwargs", {}), "strategy.llm_kwargs")),
             output_schema=output_schema,
         )
@@ -475,6 +478,9 @@ def _validate_manifest(data: Mapping[str, Any], path: Path, *, resolved: bool) -
         _optional_string(strategy, "name", "strategy")
         _positive_int(strategy, "max_iterations", "strategy")
         _positive_number(strategy, "timeout", "strategy")
+        trace_capture = strategy.get("trace_capture")
+        if trace_capture is not None and trace_capture not in TRACE_CAPTURE_MODES:
+            raise AgentManifestError("strategy.trace_capture must be 'keys', 'full' or 'none'")
         for field in (
             "final_answer_hint",
             "parallel_tool_calls",

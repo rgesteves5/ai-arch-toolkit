@@ -8,6 +8,7 @@ from typing import Any
 
 from ai_arch_toolkit.core._policy import Policy
 from ai_arch_toolkit.core._response import OutputSchema
+from ai_arch_toolkit.core._trace import TraceCapture
 
 __all__ = ["ReasoningSpec"]
 
@@ -19,6 +20,7 @@ class ReasoningSpec:
     Carries only the reasoning structure — the named ``strategy``, system
     prompt, and limits — not the model or tools, which are runtime objects
     supplied to ``build_flow``. ``knobs`` holds strategy-specific options.
+    ``trace_capture`` sets what the compiled flow's trace records (see ``Flow``).
     """
 
     strategy: str = "react"
@@ -27,6 +29,7 @@ class ReasoningSpec:
     knobs: Mapping[str, Any] = field(default_factory=dict)
     policy: Policy | None = None
     timeout: float | None = None
+    trace_capture: TraceCapture = "keys"
     llm_kwargs: Mapping[str, Any] = field(default_factory=dict)
     output_schema: OutputSchema | type | None = None
 
@@ -41,6 +44,7 @@ class ReasoningSpec:
             knobs=dict(data.get("knobs") or {}),
             policy=policy if isinstance(policy, Policy) else None,
             timeout=data.get("timeout"),
+            trace_capture=data.get("trace_capture", "keys"),
             llm_kwargs=dict(data.get("llm_kwargs") or {}),
             output_schema=_coerce_output_schema(data.get("output_schema")),
         )

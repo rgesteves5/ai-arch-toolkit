@@ -2,20 +2,24 @@
 
 from __future__ import annotations
 
+import math
 from collections import deque
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from ai_arch_toolkit.core._metering._scope import MeterScope, RunConfig
 from ai_arch_toolkit.core._policy import Policy
 from ai_arch_toolkit.core._response import Usage
 from ai_arch_toolkit.core._state import State, StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
-from ai_arch_toolkit.core._sync import _run_sync, _stream_sync
-from ai_arch_toolkit.core._trace import Trace
+from ai_arch_toolkit.core._sync import _run_sync
+from ai_arch_toolkit.core._trace import TRACE_CAPTURE_MODES, Trace, TraceCapture
 from ai_arch_toolkit.toolkit.budget import BudgetController, BudgetPolicy, BudgetReport
 from ai_arch_toolkit.toolkit.flow._scope import Scope
+
+if TYPE_CHECKING:
+    from ai_arch_toolkit.toolkit.flow._executor import FlowExecution, SyncFlowExecution
 
 type ConditionFn = Callable[[StateSnapshot], bool]
 
@@ -45,6 +49,7 @@ class FlowResult:
     state: State
     trace: Trace
     results: dict[str, Result] = field(default_factory=dict)
+    meter_scope: MeterScope | None = field(default=None, repr=False, compare=False)
 
     @property
     def final_result(self) -> Result | None:
@@ -62,7 +67,7 @@ class FlowResult:
         flow run nested under an enclosing scope, this reflects the shared cumulative budget, not
         this flow alone.
         """
-        return _scope_report(self.state.get("_meter_scope"))
+        return _scope_report(self.meter_scope)
 
     @property
     def total_cost(self) -> float:
@@ -73,10 +78,9 @@ class FlowResult:
     @property
     def usage(self) -> Usage:
         """Token usage from the meter (the single source of truth). Empty if unmetered."""
-        scope = self.state.get("_meter_scope")
-        if not isinstance(scope, MeterScope):
+        if self.meter_scope is None:
             return Usage()
-        s = scope.snapshot()
+        s = self.meter_scope.snapshot()
         return Usage(
             input_tokens=s.input_tokens,
             output_tokens=s.output_tokens,
@@ -124,6 +128,8 @@ class Flow:
         "_policy",
         "_scope",
         "_steps",
+        "_timeout",
+        "_trace_capture",
     )
 
     def __init__(
@@ -135,7 +141,24 @@ class Flow:
         scope: Scope | None = None,
         max_iterations: int | None = None,
         max_parallelism: int | None = None,
+        timeout: float | None = None,
+        trace_capture: TraceCapture = "keys",
     ) -> None:
+        """Build a flow.
+
+        Args:
+            steps: Steps, flow steps, or nested flows (wrapped with ``as_step()``).
+            name: Flow name, used in traces and events.
+            policy: Default policy for every step of this flow that declares none.
+            budget_policy: Cumulative runtime budget for a run of this flow.
+            scope: Default scope for every step of this flow that declares none.
+            max_iterations: Pass limit for cyclic flows (required when ``when`` makes it cyclic).
+            max_parallelism: Max steps of this flow running at once in a DAG fan-out.
+            timeout: Wall-clock limit, in seconds, for a whole run of this flow.
+            trace_capture: What each step's trace records of the state it read and the result
+                it returned: key names (``"keys"``), deep copies (``"full"``), or neither
+                (``"none"``). See :data:`~ai_arch_toolkit.core.TraceCapture`.
+        """
         self._name = name
         self._policy = policy
         self._budget_policy = budget_policy
@@ -144,6 +167,14 @@ class Flow:
         if max_parallelism is not None and max_parallelism < 1:
             raise ValueError(f"max_parallelism must be >= 1, got {max_parallelism}")
         self._max_parallelism = max_parallelism
+        if timeout is not None and (not math.isfinite(timeout) or timeout <= 0):
+            raise ValueError(f"timeout must be positive and finite, got {timeout}")
+        self._timeout = timeout
+        if trace_capture not in TRACE_CAPTURE_MODES:
+            raise ValueError(
+                f"trace_capture must be 'keys', 'full' or 'none', got {trace_capture!r}"
+            )
+        self._trace_capture: TraceCapture = trace_capture
 
         # Normalize inputs to FlowSteps
         flow_steps: list[FlowStep] = []
@@ -201,7 +232,18 @@ class Flow:
 
     @property
     def policy(self) -> Policy | None:
+        """Default policy for each step that declares none."""
         return self._policy
+
+    @property
+    def timeout(self) -> float | None:
+        """Wall-clock limit, in seconds, for a whole run (``None`` = unbounded)."""
+        return self._timeout
+
+    @property
+    def trace_capture(self) -> TraceCapture:
+        """What each step's trace records: ``"keys"``, ``"full"`` or ``"none"``."""
+        return self._trace_capture
 
     @property
     def budget_policy(self) -> BudgetPolicy | None:
@@ -257,18 +299,21 @@ class Flow:
         """Synchronous wrapper for run()."""
         return _run_sync(self.run(state, budget_policy=budget_policy, config=config))
 
-    async def iter(
+    def iter(
         self,
         state: State,
         *,
         budget_policy: BudgetPolicy | None = None,
         config: RunConfig | None = None,
-    ) -> AsyncIterator[FlowEvent]:
-        """Stream a run; ``budget_policy``/``config`` override per run (see :meth:`run`)."""
+    ) -> FlowExecution:
+        """Iterate a run: events as they happen, then ``.result`` on the returned execution.
+
+        ``budget_policy``/``config`` override per run (see :meth:`run`). The same engine as
+        :meth:`run` executes the flow, so parallel steps, isolation, and results are identical.
+        """
         from ai_arch_toolkit.toolkit.flow._executor import iter_flow
 
-        async for event in iter_flow(self, state, budget_policy=budget_policy, config=config):
-            yield event
+        return iter_flow(self, state, budget_policy=budget_policy, config=config)
 
     def iter_sync(
         self,
@@ -276,9 +321,13 @@ class Flow:
         *,
         budget_policy: BudgetPolicy | None = None,
         config: RunConfig | None = None,
-    ) -> Iterator[FlowEvent]:
-        """Synchronous wrapper for iter()."""
-        return _stream_sync(lambda: self.iter(state, budget_policy=budget_policy, config=config))
+    ) -> SyncFlowExecution:
+        """Synchronous wrapper for :meth:`iter`; ``.result`` is set once iteration ends."""
+        from ai_arch_toolkit.toolkit.flow._executor import SyncFlowExecution
+
+        return SyncFlowExecution(
+            lambda: self.iter(state, budget_policy=budget_policy, config=config)
+        )
 
     def as_step(self) -> Step:
         """Wrap this Flow as a Step for composition."""
@@ -291,9 +340,7 @@ class Flow:
                 current=dict(snapshot.current),
                 operational=dict(snapshot.operational),
                 persistent=dict(snapshot.persistent),
-                # A mutable copy: the nested run's meter stashes its scope in the world layer,
-                # so a read-only MappingProxyType would raise on write. Shallow-copied, so shared
-                # world objects (e.g. the inherited meter scope) stay shared by reference.
+                # Mutable copies of each layer; values stay shared by reference.
                 world=dict(snapshot.world),
             )
             flow_result = await flow.run(state)
@@ -315,7 +362,9 @@ class Flow:
                 duration=flow_result.total_duration,
             )
 
-        return Step(name=self._name, fn=_run_flow, policy=self._policy, scope=self._scope)
+        # No policy on the wrapper: the nested run applies its own policy and timeout, so putting
+        # them here too would apply them twice (e.g. retries multiplying).
+        return Step(name=self._name, fn=_run_flow, scope=self._scope)
 
     @staticmethod
     def _validate_dag(steps: list[FlowStep]) -> None:

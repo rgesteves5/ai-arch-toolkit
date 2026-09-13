@@ -14,6 +14,7 @@ from ai_arch_toolkit.core._policy import Policy
 from ai_arch_toolkit.core._state import State, StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
+from ai_arch_toolkit.core._trace import TraceCapture
 from ai_arch_toolkit.toolkit.agents.flows._react import react_flow, react_initial_state
 from ai_arch_toolkit.toolkit.budget import BudgetPolicy
 from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowStep
@@ -75,6 +76,7 @@ def lats_flow(
         "Analyze why this answer scored poorly and provide specific feedback for improvement."
     ),
     timeout: float | None = None,
+    trace_capture: TraceCapture = "keys",
     policy: Policy | None = None,
     budget_policy: BudgetPolicy | None = None,
     llm_kwargs: dict[str, Any] | None = None,
@@ -97,8 +99,9 @@ def lats_flow(
         evaluator_fn: Optional external evaluator(task, answer) → score.
         evaluator_system: System prompt for LLM-based evaluation.
         reflect_system: System prompt for reflection on low scores.
-        timeout: Overall timeout in seconds.
-        policy: Optional execution policy.
+        timeout: Wall-clock limit for the whole run, in seconds.
+        trace_capture: What each step's trace records — see ``Flow``.
+        policy: Default policy for each step of the flow.
         budget_policy: Optional cumulative runtime budget for the flow.
         llm_kwargs: Additional kwargs passed to every phase's LLM call.
         rollout_llm: Override LLM for rollouts.
@@ -137,6 +140,7 @@ def lats_flow(
             system=inner_system,
             max_iterations=max_react_iterations,
             llm_kwargs=llm_kwargs,
+            trace_capture=trace_capture,
         )  # no budget_policy: a nested flow inherits the enclosing scope (one cumulative budget)
 
         inner_initial = react_initial_state(leaf.state)
@@ -246,14 +250,12 @@ def lats_flow(
     def search_not_done(snap: StateSnapshot) -> bool:
         return not snap.get("search_done", False)
 
-    flow_policy = policy
-    if timeout is not None and flow_policy is None:
-        flow_policy = Policy(timeout=timeout)
-
     return Flow(
         FlowStep(step=Step(name="mcts_rollout", fn=mcts_rollout), when=search_not_done),
         name="lats",
-        policy=flow_policy,
+        policy=policy,
+        timeout=timeout,
+        trace_capture=trace_capture,
         budget_policy=budget_policy,
         max_iterations=max_rollouts,
     )

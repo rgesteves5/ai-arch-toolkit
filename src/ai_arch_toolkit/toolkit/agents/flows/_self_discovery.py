@@ -10,6 +10,7 @@ from ai_arch_toolkit.core._policy import Policy
 from ai_arch_toolkit.core._state import State, StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
+from ai_arch_toolkit.core._trace import TraceCapture
 from ai_arch_toolkit.toolkit.agents.flows._react import react_flow, react_initial_state
 from ai_arch_toolkit.toolkit.budget import BudgetPolicy
 from ai_arch_toolkit.toolkit.flow._flow import Flow
@@ -50,6 +51,7 @@ def self_discovery_flow(
         "Follow the reasoning plan to solve the task. Apply each step of the plan systematically."
     ),
     timeout: float | None = None,
+    trace_capture: TraceCapture = "keys",
     policy: Policy | None = None,
     budget_policy: BudgetPolicy | None = None,
     llm_kwargs: dict[str, Any] | None = None,
@@ -69,8 +71,9 @@ def self_discovery_flow(
         adapt_system: System prompt for module adaptation.
         plan_system: System prompt for operationalization.
         solve_system: System prompt for the solve phase.
-        timeout: Overall timeout in seconds.
-        policy: Optional execution policy.
+        timeout: Wall-clock limit for the whole run, in seconds.
+        trace_capture: What each step's trace records — see ``Flow``.
+        policy: Default policy for each step of the flow.
         budget_policy: Optional cumulative runtime budget for the flow.
         llm_kwargs: Additional kwargs passed to every phase's LLM call.
         reasoning_llm: Override LLM for select/adapt/plan phases.
@@ -146,6 +149,7 @@ def self_discovery_flow(
             system=inner_system,
             max_iterations=max_react_iterations,
             llm_kwargs=llm_kwargs,
+            trace_capture=trace_capture,
         )
 
         state = State(operational=react_initial_state(task))
@@ -159,17 +163,15 @@ def self_discovery_flow(
             artifacts={"answer": answer, "response": response},
         )
 
-    flow_policy = policy
-    if timeout is not None and flow_policy is None:
-        flow_policy = Policy(timeout=timeout)
-
     return Flow(
         Step(name="select", fn=select),
         Step(name="adapt", fn=adapt),
         Step(name="operationalize", fn=operationalize),
         Step(name="solve", fn=solve),
         name="self_discovery",
-        policy=flow_policy,
+        policy=policy,
+        timeout=timeout,
+        trace_capture=trace_capture,
         budget_policy=budget_policy,
     )
 

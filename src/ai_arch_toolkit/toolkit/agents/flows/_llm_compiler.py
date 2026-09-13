@@ -13,6 +13,7 @@ from ai_arch_toolkit.core._policy import Policy
 from ai_arch_toolkit.core._state import State, StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
+from ai_arch_toolkit.core._trace import TraceCapture
 from ai_arch_toolkit.toolkit.agents.flows._common import substitute_tools
 from ai_arch_toolkit.toolkit.agents.flows._react import react_flow, react_initial_state
 from ai_arch_toolkit.toolkit.budget import BudgetPolicy
@@ -72,6 +73,7 @@ def llm_compiler_flow(
         "followed by what needs to change."
     ),
     timeout: float | None = None,
+    trace_capture: TraceCapture = "keys",
     policy: Policy | None = None,
     budget_policy: BudgetPolicy | None = None,
     llm_kwargs: dict[str, Any] | None = None,
@@ -155,6 +157,7 @@ def llm_compiler_flow(
                         system=inner_system,
                         max_iterations=max_react_iterations,
                         llm_kwargs=llm_kwargs,
+                        trace_capture=trace_capture,
                     )  # nested flow inherits the enclosing scope; its own budget_policy is ignored
 
                     state = State(operational=react_initial_state(task))
@@ -195,14 +198,12 @@ def llm_compiler_flow(
         # Should not reach here, but satisfy type checker
         return Result(error="Max replans exhausted")
 
-    flow_policy = policy
-    if timeout is not None and flow_policy is None:
-        flow_policy = Policy(timeout=timeout)
-
     return Flow(
         Step(name="compile", fn=compile),
         name="llm_compiler",
-        policy=flow_policy,
+        policy=policy,
+        timeout=timeout,
+        trace_capture=trace_capture,
         budget_policy=budget_policy,
     )
 

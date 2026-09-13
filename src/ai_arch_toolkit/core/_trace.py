@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -19,6 +21,27 @@ type PolicyDecision = Literal[
     "halt",
 ]
 
+type TraceCapture = Literal["keys", "full", "none"]
+"""What a trace records of the state a step reads and the result it returns.
+
+* ``"keys"`` (the default) records key names: ``StepTrace.input_keys`` per state layer and
+  ``StepTrace.output_keys`` for the artifacts. ``output_result`` keeps the step's value, usage,
+  cost, confidence, error and duration, but not the artifacts. The trace grows linearly with the
+  steps, however much state they carry.
+* ``"full"`` also records the values, deep-copied when the step starts (inputs) and ends
+  (outputs), so a later in-place mutation cannot rewrite an earlier record. ``world`` holds shared
+  resources and is kept by reference, as in ``State.fork``; a value that cannot be deep-copied is
+  kept by reference too. Expect memory and serialization cost to grow with the state size times
+  the number of steps.
+* ``"none"`` records neither: only the step's metadata (name, timing, usage, cost, decisions,
+  error, children).
+
+``Trace.initial_state`` is recorded once per run, with values copied like ``"full"``, unless
+the mode is ``"none"``.
+"""
+
+TRACE_CAPTURE_MODES: frozenset[str] = frozenset({"keys", "full", "none"})
+
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class StepTrace:
@@ -27,6 +50,8 @@ class StepTrace:
     name: str
     input_state: dict[str, Any] = field(default_factory=dict)
     output_result: dict[str, Any] = field(default_factory=dict)
+    input_keys: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    output_keys: tuple[str, ...] = ()
     duration: float = 0.0
     cost: float = 0.0
     confidence: float | None = None
@@ -58,6 +83,8 @@ class StepTrace:
             "name": self.name,
             "input_state": input_state,
             "output_result": output_result,
+            "input_keys": {layer: list(keys) for layer, keys in self.input_keys.items()},
+            "output_keys": list(self.output_keys),
             "duration": self.duration,
             "cost": self.cost,
             "confidence": self.confidence,
@@ -87,6 +114,10 @@ class StepTrace:
             name=data["name"],
             input_state=data.get("input_state", {}),
             output_result=data.get("output_result", {}),
+            input_keys={
+                layer: tuple(keys) for layer, keys in (data.get("input_keys") or {}).items()
+            },
+            output_keys=tuple(data.get("output_keys") or ()),
             duration=data.get("duration", 0.0),
             cost=data.get("cost", 0.0),
             confidence=data.get("confidence"),
@@ -207,3 +238,57 @@ class Trace:
             result.append(st)
             result.extend(Trace._iter_all(st.children))
         return result
+
+
+# --- Capture ---
+
+
+def capture_state(
+    layers: Mapping[str, Mapping[str, Any]], capture: TraceCapture
+) -> tuple[dict[str, dict[str, Any]], dict[str, tuple[str, ...]]]:
+    """``(input_state, input_keys)`` to record for state ``layers`` under ``capture``.
+
+    Layers with no keys are left out of ``input_keys``. See :data:`TraceCapture`.
+    """
+    if capture == "none":
+        return {}, {}
+    keys = {layer: tuple(values) for layer, values in layers.items() if values}
+    if capture == "keys":
+        return {}, keys
+    return copy_state(layers), keys
+
+
+def capture_result(
+    result: Mapping[str, Any], capture: TraceCapture
+) -> tuple[dict[str, Any], tuple[str, ...]]:
+    """``(output_result, output_keys)`` to record for a serialized step result.
+
+    ``result`` is ``Result.to_dict()``. See :data:`TraceCapture`.
+    """
+    if capture == "none":
+        return {}, ()
+    artifacts: Mapping[str, Any] = result.get("artifacts") or {}
+    keys = tuple(artifacts)
+    recorded = {name: value for name, value in result.items() if name != "artifacts"}
+    if capture == "full":
+        recorded = {name: _copy_value(value) for name, value in recorded.items()}
+        recorded["artifacts"] = {name: _copy_value(value) for name, value in artifacts.items()}
+    return recorded, keys
+
+
+def copy_state(layers: Mapping[str, Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Copy state layers for a trace: values deep-copied, ``world`` kept by reference."""
+    return {
+        layer: dict(values)
+        if layer == "world"
+        else {key: _copy_value(value) for key, value in values.items()}
+        for layer, values in layers.items()
+    }
+
+
+def _copy_value(value: Any) -> Any:
+    """A deep copy of ``value``, or ``value`` itself when it can't be copied (a lock, a client)."""
+    try:
+        return copy.deepcopy(value)
+    except Exception:
+        return value

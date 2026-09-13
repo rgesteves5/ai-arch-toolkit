@@ -20,7 +20,6 @@ from typing import Any, Protocol, cast, runtime_checkable
 from ai_arch_toolkit.core._content import Content, user
 from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._metering._admission import AdmissionDenied
-from ai_arch_toolkit.core._policy import Policy
 from ai_arch_toolkit.core._state import StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
@@ -245,6 +244,7 @@ def _build_react(ctx: BuildContext) -> Flow:
         max_iterations=s.max_iterations,
         parallel_tool_calls=s.knobs.get("parallel_tool_calls", True),
         timeout=s.timeout,
+        trace_capture=s.trace_capture,
         policy=s.policy,
         llm_kwargs=llm_kwargs or None,
         final_answer_hint=s.knobs.get("final_answer_hint", True),
@@ -274,10 +274,13 @@ def _build_completion(ctx: BuildContext) -> Flow:
             artifacts={"response": response, "answer": response.text},
         )
 
-    flow_policy = s.policy
-    if s.timeout is not None and flow_policy is None:
-        flow_policy = Policy(timeout=s.timeout)
-    return Flow(Step(name="complete", fn=_complete), name="completion", policy=flow_policy)
+    return Flow(
+        Step(name="complete", fn=_complete),
+        name="completion",
+        policy=s.policy,
+        timeout=s.timeout,
+        trace_capture=s.trace_capture,
+    )
 
 
 def _completion_initial_state(task: Content) -> dict[str, Any]:
@@ -293,6 +296,7 @@ def _build_plan_execute(ctx: BuildContext) -> Flow:
         max_replans=s.knobs.get("max_replans", 1),
         max_iterations_per_step=s.knobs.get("max_iterations_per_step", s.max_iterations),
         timeout=s.timeout,
+        trace_capture=s.trace_capture,
         policy=s.policy,
         llm_kwargs=dict(s.llm_kwargs) or None,
         planner_llm=ctx.deps.get("planner_llm"),
@@ -310,6 +314,7 @@ def _build_rewoo(ctx: BuildContext) -> Flow:
         ctx.tools,
         system=s.system,
         timeout=s.timeout,
+        trace_capture=s.trace_capture,
         policy=s.policy,
         llm_kwargs=dict(s.llm_kwargs) or None,
         planner_llm=ctx.deps.get("planner_llm"),
@@ -333,6 +338,7 @@ def _build_reflexion(ctx: BuildContext) -> Flow:
         system=s.system,
         max_iterations=s.max_iterations,
         timeout=s.timeout,
+        trace_capture=s.trace_capture,
         policy=s.policy,
         llm_kwargs=dict(s.llm_kwargs) or None,
         exec_llm=ctx.deps.get("executor_llm"),
@@ -362,6 +368,7 @@ def _build_generate_review(ctx: BuildContext) -> Flow:
         max_gen_iterations=s.max_iterations,
         max_review_iterations=s.knobs.get("max_review_iterations", 5),
         timeout=s.timeout,
+        trace_capture=s.trace_capture,
         policy=s.policy,
         review_kwargs=review_kwargs or None,
         **_knob_kwargs(s, {"reviewer_system": "review_system"}),
@@ -387,6 +394,7 @@ def _build_self_discovery(ctx: BuildContext) -> Flow:
         system=s.system,
         max_react_iterations=s.max_iterations,
         timeout=s.timeout,
+        trace_capture=s.trace_capture,
         policy=s.policy,
         llm_kwargs=dict(s.llm_kwargs) or None,
         reasoning_llm=ctx.deps.get("reasoning_llm"),
@@ -405,6 +413,7 @@ def _build_llm_compiler(ctx: BuildContext) -> Flow:
         max_replans=s.knobs.get("max_replans", 2),
         max_react_iterations=s.max_iterations,
         timeout=s.timeout,
+        trace_capture=s.trace_capture,
         policy=s.policy,
         llm_kwargs=dict(s.llm_kwargs) or None,
         planner_llm=ctx.deps.get("planner_llm"),
@@ -426,6 +435,7 @@ def _build_tot(ctx: BuildContext) -> Flow:
         max_iterations=s.max_iterations,
         strategy=s.knobs.get("search_strategy", "dfs"),
         timeout=s.timeout,
+        trace_capture=s.trace_capture,
         policy=s.policy,
         llm_kwargs=dict(s.llm_kwargs) or None,
         gen_llm=ctx.deps.get("generator_llm"),
@@ -451,6 +461,7 @@ def _build_lats(ctx: BuildContext) -> Flow:
         max_react_iterations=s.max_iterations,
         evaluator_fn=evaluator_fn,
         timeout=s.timeout,
+        trace_capture=s.trace_capture,
         policy=s.policy,
         llm_kwargs=dict(s.llm_kwargs) or None,
         rollout_llm=ctx.deps.get("rollout_llm"),

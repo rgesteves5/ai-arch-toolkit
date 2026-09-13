@@ -13,6 +13,7 @@ from ai_arch_toolkit.core._state import StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
 from ai_arch_toolkit.core._tools._result import ToolResult
+from ai_arch_toolkit.core._trace import TraceCapture
 from ai_arch_toolkit.toolkit.budget import BudgetPolicy
 from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowStep
 
@@ -25,6 +26,7 @@ def react_flow(
     max_iterations: int = 10,
     parallel_tool_calls: bool = True,
     timeout: float | None = None,
+    trace_capture: TraceCapture = "keys",
     policy: Policy | None = None,
     budget_policy: BudgetPolicy | None = None,
     llm_kwargs: dict[str, Any] | None = None,
@@ -40,8 +42,9 @@ def react_flow(
         system: System prompt.
         max_iterations: Maximum reasoning iterations.
         parallel_tool_calls: Whether to execute tool calls in parallel.
-        timeout: Overall timeout in seconds.
-        policy: Optional execution policy for the flow.
+        timeout: Wall-clock limit for the whole run, in seconds.
+        trace_capture: What each step's trace records — see ``Flow``.
+        policy: Default policy for each step of the flow.
         budget_policy: Optional cumulative runtime budget for the flow.
         llm_kwargs: Additional kwargs passed to llm.complete().
         final_answer_hint: On the last turn, inject a message asking the model
@@ -177,15 +180,13 @@ def react_flow(
     def has_tool_calls(snap: StateSnapshot) -> bool:
         return snap.get("has_tool_calls", False)
 
-    flow_policy = policy
-    if timeout is not None and flow_policy is None:
-        flow_policy = Policy(timeout=timeout)
-
     return Flow(
         FlowStep(step=Step(name="llm_call", fn=llm_call), when=needs_llm),
         FlowStep(step=Step(name="execute_tools", fn=execute_tools), when=has_tool_calls),
         name="react",
-        policy=flow_policy,
+        policy=policy,
+        timeout=timeout,
+        trace_capture=trace_capture,
         budget_policy=budget_policy,
         max_iterations=max_iterations,
     )

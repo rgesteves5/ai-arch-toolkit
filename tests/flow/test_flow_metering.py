@@ -118,8 +118,8 @@ async def test_parallel_dag_budget_denial_surfaces_and_does_not_hang():
 
 
 async def test_nested_flow_as_step_meters_without_crashing():
-    # Regression: the outer flow writes _meter_scope into the world layer, which as_step used to
-    # share read-only (MappingProxyType) -> TypeError swallowed -> inner flow silently failed.
+    # Regression: the meter scope used to live in the world layer, which as_step shared read-only
+    # (MappingProxyType) -> TypeError swallowed -> inner flow silently failed.
     llm = make_llm()
 
     async def call_model(snap: StateSnapshot) -> Result:
@@ -153,7 +153,8 @@ async def test_iter_flow_abandonment_finalizes_the_scope():
             break  # abandon before flow_end
     await gen.aclose()  # runs the finally -> scope.close()
 
-    snap = state.get("_meter_scope").snapshot()
+    assert gen.meter_scope is not None
+    snap = gen.meter_scope.snapshot()
     assert snap.llm_calls == 1 and snap.unknown_cost_count == 1  # close() incompleted the op
 
 

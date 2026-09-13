@@ -10,6 +10,7 @@ from ai_arch_toolkit.core._policy import Policy
 from ai_arch_toolkit.core._state import State, StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
+from ai_arch_toolkit.core._trace import TraceCapture
 from ai_arch_toolkit.toolkit.agents.flows._react import react_flow, react_initial_state
 from ai_arch_toolkit.toolkit.budget import BudgetPolicy
 from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowStep
@@ -34,6 +35,7 @@ def generate_review_flow(
     max_gen_iterations: int = 5,
     max_review_iterations: int = 5,
     timeout: float | None = None,
+    trace_capture: TraceCapture = "keys",
     policy: Policy | None = None,
     budget_policy: BudgetPolicy | None = None,
 ) -> Flow:
@@ -54,8 +56,9 @@ def generate_review_flow(
         max_cycles: Maximum generate-review cycles.
         max_gen_iterations: Max iterations for inner ReAct during generation.
         max_review_iterations: Max iterations for inner ReAct during review.
-        timeout: Overall timeout in seconds.
-        policy: Optional execution policy.
+        timeout: Wall-clock limit for the whole run, in seconds.
+        trace_capture: What each step's trace records — see ``Flow``.
+        policy: Default policy for each step of the flow.
         budget_policy: Optional cumulative runtime budget for the flow.
     """
     gen_extra = gen_kwargs or {}
@@ -77,6 +80,7 @@ def generate_review_flow(
                 system=system,
                 max_iterations=max_gen_iterations,
                 llm_kwargs=gen_extra or None,
+                trace_capture=trace_capture,
             )
             state = State(operational=react_initial_state(task))
             await inner.run(state)  # metered under the shared scope; no manual cost threading
@@ -108,6 +112,7 @@ def generate_review_flow(
                 system=review_system,
                 max_iterations=max_review_iterations,
                 llm_kwargs=review_extra or None,
+                trace_capture=trace_capture,
             )
             state = State(operational=react_initial_state(review_prompt))
             await inner.run(state)  # metered under the shared scope; no manual cost threading
@@ -137,15 +142,13 @@ def generate_review_flow(
     def not_accepted(snap: StateSnapshot) -> bool:
         return not snap.get("accepted", False)
 
-    flow_policy = policy
-    if timeout is not None and flow_policy is None:
-        flow_policy = Policy(timeout=timeout)
-
     return Flow(
         FlowStep(step=Step(name="generate", fn=generate), when=not_accepted),
         FlowStep(step=Step(name="review", fn=review), when=not_accepted),
         name="generate_review",
-        policy=flow_policy,
+        policy=policy,
+        timeout=timeout,
+        trace_capture=trace_capture,
         budget_policy=budget_policy,
         max_iterations=max_cycles,
     )

@@ -12,7 +12,14 @@ from ai_arch_toolkit.core._state import StateSnapshot
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Scope:
-    """Controls what a Step can see in the State."""
+    """Controls what a Step can see in the State.
+
+    ``include``/``exclude`` filter keys in every layer. ``transform`` rewrites a visible value and
+    runs once per layer that holds the key. ``enrich`` computes new keys into the ``current`` layer
+    from the snapshot the step will see — already filtered and transformed — so an enricher can
+    never read a key the scope hides, nor another enricher's output. Scope is not a security
+    boundary: it shapes what a step reads, it does not govern tools or resources.
+    """
 
     include: frozenset[str] = field(default_factory=frozenset)
     exclude: frozenset[str] = field(default_factory=frozenset)
@@ -47,9 +54,17 @@ def apply_scope(snapshot: StateSnapshot, scope: Scope | None) -> StateSnapshot:
     persistent = _filter_layer(snapshot.persistent)
     world = _filter_layer(snapshot.world)
 
-    # Enrich into current layer
-    for k, fn in scope.enrich.items():
-        current[k] = fn(snapshot)
+    if scope.enrich:
+        # Enrichers read exactly what the step will read (filtered + transformed), never the raw
+        # snapshot, and not each other's output (``current`` is copied for them).
+        visible = StateSnapshot(
+            current=MappingProxyType(dict(current)),
+            operational=MappingProxyType(operational),
+            persistent=MappingProxyType(persistent),
+            world=MappingProxyType(world),
+        )
+        for k, fn in scope.enrich.items():
+            current[k] = fn(visible)
 
     return StateSnapshot(
         current=MappingProxyType(current),

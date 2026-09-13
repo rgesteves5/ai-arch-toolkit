@@ -13,6 +13,7 @@ from ai_arch_toolkit.core._response import ToolCall
 from ai_arch_toolkit.core._state import StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
+from ai_arch_toolkit.core._trace import TraceCapture
 from ai_arch_toolkit.toolkit.agents.flows._common import substitute_tools
 from ai_arch_toolkit.toolkit.budget import BudgetPolicy
 from ai_arch_toolkit.toolkit.flow._flow import Flow
@@ -37,6 +38,7 @@ def rewoo_flow(
         "executed steps, provide the final answer."
     ),
     timeout: float | None = None,
+    trace_capture: TraceCapture = "keys",
     policy: Policy | None = None,
     budget_policy: BudgetPolicy | None = None,
     llm_kwargs: dict[str, Any] | None = None,
@@ -53,8 +55,9 @@ def rewoo_flow(
             is replaced with the rendered tool catalog (a prompt without the
             token is never modified).
         solver_system: System prompt for the solver phase.
-        timeout: Overall timeout in seconds.
-        policy: Optional execution policy.
+        timeout: Wall-clock limit for the whole run, in seconds.
+        trace_capture: What each step's trace records — see ``Flow``.
+        policy: Default policy for each step of the flow.
         budget_policy: Optional cumulative runtime budget for the flow.
         llm_kwargs: Additional kwargs passed to every phase's LLM call.
         planner_llm: Override LLM for planning.
@@ -154,16 +157,14 @@ def rewoo_flow(
             artifacts={"answer": response.text, "response": response},
         )
 
-    flow_policy = policy
-    if timeout is not None and flow_policy is None:
-        flow_policy = Policy(timeout=timeout)
-
     return Flow(
         Step(name="plan", fn=plan),
         Step(name="execute", fn=execute),
         Step(name="solve", fn=solve),
         name="rewoo",
-        policy=flow_policy,
+        policy=policy,
+        timeout=timeout,
+        trace_capture=trace_capture,
         budget_policy=budget_policy,
     )
 

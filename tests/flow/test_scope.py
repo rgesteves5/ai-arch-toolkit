@@ -134,3 +134,49 @@ class TestApplyScope:
         assert result["price"] == pytest.approx(110.0)
         assert result["tax"] == 10
         assert result["label"] == "processed"
+
+
+class TestEnrichSeesWhatTheStepSees:
+    def test_enrich_cannot_read_an_excluded_key(self) -> None:
+        snap = StateSnapshot.from_dict(
+            {"current": {}, "operational": {}, "persistent": {}, "world": {"api_key": "sk-SECRET"}}
+        )
+        scope = Scope(exclude=frozenset({"api_key"}), enrich={"leak": lambda s: s.get("api_key")})
+
+        result = apply_scope(snap, scope)
+
+        assert result.get("api_key") is None
+        assert result["leak"] is None
+
+    def test_enrich_cannot_read_a_key_outside_include(self) -> None:
+        snap = StateSnapshot.from_dict(
+            {"current": {}, "operational": {"x": 1, "y": 2}, "persistent": {}, "world": {}}
+        )
+        scope = Scope(include=frozenset({"x"}), enrich={"y_copy": lambda s: s.get("y")})
+
+        result = apply_scope(snap, scope)
+
+        assert result["y_copy"] is None
+
+    def test_enrich_sees_transformed_values(self) -> None:
+        snap = StateSnapshot.from_dict(
+            {"current": {}, "operational": {"n": 1}, "persistent": {}, "world": {}}
+        )
+        scope = Scope(
+            transform={"n": lambda v: v * 10}, enrich={"n_plus_one": lambda s: s["n"] + 1}
+        )
+
+        result = apply_scope(snap, scope)
+
+        assert result["n_plus_one"] == 11
+
+    def test_enrichers_do_not_see_each_other(self) -> None:
+        snap = StateSnapshot.from_dict(
+            {"current": {}, "operational": {}, "persistent": {}, "world": {}}
+        )
+        scope = Scope(enrich={"a": lambda s: 1, "b": lambda s: s.get("a")})
+
+        result = apply_scope(snap, scope)
+
+        assert result["a"] == 1
+        assert result["b"] is None

@@ -11,6 +11,7 @@ from ai_arch_toolkit.core._policy import Policy
 from ai_arch_toolkit.core._state import State, StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
+from ai_arch_toolkit.core._trace import TraceCapture
 from ai_arch_toolkit.toolkit.agents.flows._react import react_flow, react_initial_state
 from ai_arch_toolkit.toolkit.budget import BudgetPolicy
 from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowStep
@@ -30,6 +31,7 @@ def reflexion_flow(
         "and provide specific, actionable feedback for improvement."
     ),
     timeout: float | None = None,
+    trace_capture: TraceCapture = "keys",
     policy: Policy | None = None,
     budget_policy: BudgetPolicy | None = None,
     llm_kwargs: dict[str, Any] | None = None,
@@ -48,8 +50,9 @@ def reflexion_flow(
         system: Base system prompt for the inner ReAct.
         max_iterations: Max iterations for the inner ReAct per attempt.
         reflect_system: System prompt for the reflector LLM.
-        timeout: Overall timeout in seconds.
-        policy: Optional execution policy.
+        timeout: Wall-clock limit for the whole run, in seconds.
+        trace_capture: What each step's trace records — see ``Flow``.
+        policy: Default policy for each step of the flow.
         budget_policy: Optional cumulative runtime budget for the flow.
         llm_kwargs: Additional kwargs passed to every phase's LLM call.
         exec_llm: Override LLM for the executor (inner ReAct).
@@ -76,6 +79,7 @@ def reflexion_flow(
             system=inner_system,
             max_iterations=max_iterations,
             llm_kwargs=llm_kwargs,
+            trace_capture=trace_capture,
         )
 
         state = State(operational=react_initial_state(task))
@@ -137,16 +141,14 @@ def reflexion_flow(
     def not_passed(snap: StateSnapshot) -> bool:
         return not snap.get("passed", False)
 
-    flow_policy = policy
-    if timeout is not None and flow_policy is None:
-        flow_policy = Policy(timeout=timeout)
-
     return Flow(
         FlowStep(step=Step(name="attempt", fn=attempt), when=not_passed),
         FlowStep(step=Step(name="evaluate", fn=evaluate), when=not_passed),
         FlowStep(step=Step(name="reflect", fn=reflect), when=not_passed),
         name="reflexion",
-        policy=flow_policy,
+        policy=policy,
+        timeout=timeout,
+        trace_capture=trace_capture,
         budget_policy=budget_policy,
         max_iterations=max_retries,
     )

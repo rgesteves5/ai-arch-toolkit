@@ -6,6 +6,7 @@ import asyncio
 import logging
 import random
 import time
+from collections.abc import Callable
 from contextlib import nullcontext
 
 from ai_arch_toolkit.core._metering._admission import AdmissionDenied
@@ -13,20 +14,50 @@ from ai_arch_toolkit.core._metering._scope import current_meter, open_span
 from ai_arch_toolkit.core._policy import Policy
 from ai_arch_toolkit.core._state import StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
-from ai_arch_toolkit.core._trace import PolicyDecision, StepTrace
+from ai_arch_toolkit.core._trace import (
+    PolicyDecision,
+    StepTrace,
+    TraceCapture,
+    capture_result,
+    capture_state,
+)
 
 logger = logging.getLogger(__name__)
 
 
-async def execute_step(step: Step, snapshot: StateSnapshot) -> tuple[Result, StepTrace]:
+async def execute_step(
+    step: Step,
+    snapshot: StateSnapshot,
+    *,
+    policy: Policy | None = None,
+    on_decision: Callable[[PolicyDecision], None] | None = None,
+    capture: TraceCapture = "keys",
+) -> tuple[Result, StepTrace]:
     """Execute a single Step against a (possibly scoped) snapshot.
 
     The caller is responsible for applying any Scope before calling this.
     Returns the Result and a StepTrace recording what happened.
+
+    Args:
+        step: The step to run.
+        snapshot: The (already scoped) state the step reads.
+        policy: Default policy for a step that declares none — a Flow passes its own policy
+            here. The step's own ``policy`` always wins.
+        on_decision: Called with each policy decision the moment it is taken (retry, timeout,
+            fallback, ...), so a caller can stream it; the trace records the same decisions.
+        capture: What the trace records of the snapshot and the result — key names
+            (``"keys"``), deep copies (``"full"``), or neither (``"none"``). The input is
+            recorded before the step runs, so the step cannot rewrite it.
     """
-    policy = step.policy or Policy()
+    policy = step.policy or policy or Policy()
+    input_state, input_keys = capture_state(snapshot.to_dict(), capture)
     t0 = time.monotonic()
     decisions: list[PolicyDecision] = []
+
+    def record(decision: PolicyDecision) -> None:
+        decisions.append(decision)
+        if on_decision is not None:
+            on_decision(decision)
 
     # A per-step ``max_cost`` cap needs this step's OWN metered spend (its LLM/tool charges), not
     # the cumulative run total. Run it in a dedicated meter span and project that span — the span
@@ -36,14 +67,17 @@ async def execute_step(step: Step, snapshot: StateSnapshot) -> tuple[Result, Ste
     track_cost = policy.max_cost is not None and meter is not None
     span_cm = open_span("step") if track_cost else nullcontext(None)
     with span_cm as span_id:
-        result, attempts = await _run_attempts(step, snapshot, policy, t0, decisions, span_id)
+        result, attempts = await _run_attempts(step, snapshot, policy, t0, record, span_id)
 
     elapsed = time.monotonic() - t0
+    output_result, output_keys = capture_result(result.to_dict(), capture)
 
     trace = StepTrace(
         name=step.name,
-        input_state=snapshot.to_dict(),
-        output_result=result.to_dict(),
+        input_state=input_state,
+        output_result=output_result,
+        input_keys=input_keys,
+        output_keys=output_keys,
         duration=elapsed,
         cost=result.cost,
         confidence=result.confidence,
@@ -62,7 +96,7 @@ async def _run_attempts(
     snapshot: StateSnapshot,
     policy: Policy,
     t0: float,
-    decisions: list[PolicyDecision],
+    record: Callable[[PolicyDecision], None],
     span_id: str | None,
 ) -> tuple[Result, int]:
     """The retry/timeout/confidence/cost loop. ``span_id`` scopes this step's metered cost."""
@@ -78,11 +112,11 @@ async def _run_attempts(
             else:
                 result = await step.fn(snapshot)
         except TimeoutError:
-            decisions.append("timeout")
+            record("timeout")
             if policy.on_timeout == "fallback":
                 fb = step.fallback or (policy.fallback if policy else None)
                 if fb is not None:
-                    decisions.append("fallback")
+                    record("fallback")
                     result = await _run_fallback(fb, snapshot, t0)
                     break
             result = Result(error="Step timed out", duration=time.monotonic() - t0)
@@ -99,20 +133,20 @@ async def _run_attempts(
                 and result.confidence is not None
                 and result.confidence < policy.confidence_threshold
             ):
-                decisions.append("low_confidence")
+                record("low_confidence")
                 if policy.on_low_confidence == "retry" and attempt < max_attempts - 1:
-                    decisions.append("retry")
+                    record("retry")
                     await asyncio.sleep(_compute_backoff(attempt, policy))
                     result = None
                     continue
                 elif policy.on_low_confidence == "fallback":
                     fb = step.fallback or policy.fallback
                     if fb is not None:
-                        decisions.append("fallback")
+                        record("fallback")
                         result = await _run_fallback(fb, snapshot, t0)
                         break
                 elif policy.on_low_confidence == "escalate":
-                    decisions.append("escalate")
+                    record("escalate")
                     break
             # Check cost limit — the step's manual annotation plus its metered span spend. Fail
             # CLOSED if that span incurred an unbounded (unknown) cost: an unpriced model or a
@@ -121,7 +155,7 @@ async def _run_attempts(
                 span_cost, cost_unknown = _span_spend(span_id)
                 effective_cost = result.cost + span_cost
                 if cost_unknown or effective_cost > policy.max_cost:
-                    decisions.append("cost_exceeded")
+                    record("cost_exceeded")
                     detail = (
                         "a call could not be priced (fail-closed)"
                         if cost_unknown
@@ -138,7 +172,7 @@ async def _run_attempts(
         # Error path — retry or exhaust
         if result is not None and result.is_error:
             if attempt < max_attempts - 1:
-                decisions.append("retry")
+                record("retry")
                 await asyncio.sleep(_compute_backoff(attempt, policy))
                 result = None
                 continue
@@ -146,13 +180,13 @@ async def _run_attempts(
             if policy.on_exhausted == "fallback":
                 fb = step.fallback or policy.fallback
                 if fb is not None:
-                    decisions.append("fallback")
+                    record("fallback")
                     result = await _run_fallback(fb, snapshot, t0)
                     break
             elif policy.on_exhausted == "continue":
                 break
             else:
-                decisions.append("halt")
+                record("halt")
                 break
 
     if result is None:

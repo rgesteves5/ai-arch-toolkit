@@ -109,7 +109,7 @@ from ai_arch_toolkit.core._tools import (
     tool,
     tool_schema,
 )
-from ai_arch_toolkit.core._trace import PolicyDecision, StepTrace, Trace
+from ai_arch_toolkit.core._trace import PolicyDecision, StepTrace, Trace, TraceCapture
 from ai_arch_toolkit.core.graph import (
     Edge as GraphEdge,
 )
@@ -223,6 +223,7 @@ __all__ = [
     "ToolRuntimePolicy",
     "ToolSchema",
     "Trace",
+    "TraceCapture",
     "TraceMode",
     "TracingMiddleware",
     "Usage",

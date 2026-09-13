@@ -11,6 +11,7 @@ from ai_arch_toolkit.core._policy import Policy
 from ai_arch_toolkit.core._state import State, StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
+from ai_arch_toolkit.core._trace import TraceCapture
 from ai_arch_toolkit.toolkit.agents.flows._common import substitute_tools
 from ai_arch_toolkit.toolkit.agents.flows._react import react_flow, react_initial_state
 from ai_arch_toolkit.toolkit.budget import BudgetPolicy
@@ -36,6 +37,7 @@ def plan_execute_flow(
         "from each step, provide the final answer."
     ),
     timeout: float | None = None,
+    trace_capture: TraceCapture = "keys",
     policy: Policy | None = None,
     budget_policy: BudgetPolicy | None = None,
     llm_kwargs: dict[str, Any] | None = None,
@@ -94,6 +96,7 @@ def plan_execute_flow(
                     system=inner_system,
                     max_iterations=max_iterations_per_step,
                     llm_kwargs=llm_kwargs,
+                    trace_capture=trace_capture,
                 )
 
                 state = State(operational=react_initial_state(step_desc))
@@ -139,15 +142,13 @@ def plan_execute_flow(
             artifacts={"answer": response.text, "response": response},
         )
 
-    flow_policy = policy
-    if timeout is not None and flow_policy is None:
-        flow_policy = Policy(timeout=timeout)
-
     return Flow(
         Step(name="plan_and_execute", fn=plan_and_execute),
         Step(name="solve", fn=solve),
         name="plan_execute",
-        policy=flow_policy,
+        policy=policy,
+        timeout=timeout,
+        trace_capture=trace_capture,
         budget_policy=budget_policy,
     )
 
