@@ -85,3 +85,42 @@ Só acrescentar. Uma decisão revista ganha uma nova entrada que diz qual substi
 
 - **Decisão:** executa por `group.async_execute` / `group.execute`. Passar `approval_handler=` junto com
   um `ToolGroup` levanta `ValueError`, porque o handler pertence ao grupo.
+
+## D11 · Meta pela Responses API do SDK `openai`
+
+- **Contexto:** a Meta não tem SDK; manda usar o `openai` (Responses, Chat Completions) ou o
+  `anthropic` (Messages). No Chat Completions a Meta apaga o raciocínio e não há `web_search`; a
+  Messages exige bearer (o adaptador Anthropic manda `x-api-key`) e esse adaptador não reenvia o
+  raciocínio.
+- **Decisão:** `MetaProvider` próprio em `_meta.py`, sobre `client.responses.create`, com o extra
+  `meta = ["openai>=2.6.0"]` (2.6.0 trouxe `responses.input_tokens.count`).
+- **Consequência:** o adaptador OpenAI continua só com Chat Completions; a Meta não depende dele.
+
+## D12 · Pedidos sem estado; o raciocínio viaja no `_raw`
+
+- **Decisão:** `store: false` e `include: ["reasoning.encrypted_content"]` em todos os pedidos. Uma
+  mensagem de assistente cujo `_raw` é uma resposta da Responses API e ainda coincide com o texto e
+  as tool calls da mensagem é reenviada item a item (mesmo padrão do Gemini com as thought
+  signatures). Se não coincide, ou o `_raw` é de outro fornecedor, é reconstruída sem raciocínio, com
+  `phase: "commentary"` no texto que antecede tool calls. Itens de raciocínio no fim de um turno
+  incompleto não são reenviados.
+- **Consequência:** sem `previous_response_id` nem conversas guardadas na Meta; retries e
+  fallbacks do `LLM` continuam a funcionar sobre o histórico local.
+
+## D13 · Semântica exposta da Muse Spark
+
+- **Decisão:** a Muse Spark raciocina sempre: `thinking_effort` aplica-se sozinho e `thinking=True`
+  pede resumos (`reasoning.summary: "auto"`). Só existe `tool_choice="auto"`: `"none"` envia o
+  pedido sem tools; forçar uma tool levanta `ValueError` antes da chamada. `output_schema` vai com
+  `strict: false` (a Meta restringe a descodificação na mesma; `strict: true` recusa schemas
+  Pydantic simples). O texto junta as mensagens com uma linha em branco, comentário incluído
+  (como os preâmbulos do Anthropic); `parsed` vem da última mensagem que não é comentário.
+  `stop_reason` é o da API: `completed`, ou o motivo de `incomplete_details`, ou `refusal`.
+
+## D14 · Encaminhamento, chave e cabeçalhos
+
+- **Decisão:** só o prefixo `muse-spark-` vai para `meta` (o Muse Glimmer é self-hosted e tem de
+  cair no fallback de `base_url`). A chave vem só de `MODEL_API_KEY`, nunca de `OPENAI_API_KEY`;
+  `base_url` é respeitado. O cliente limpa `organization`/`project` para os cabeçalhos
+  `OpenAI-Organization`/`OpenAI-Project` lidos do ambiente não chegarem à Meta. A `temperature` passa
+  tal como vem; a documentação recomenda `temperature=1.0` (a Meta afina o modelo para 1.0).

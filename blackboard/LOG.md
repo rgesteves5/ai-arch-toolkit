@@ -45,3 +45,16 @@
   `cc83cb9` (flow), com testes que falham antes. 2956 passed; `live_api` Anthropic/OpenAI 11 passed.
   Achados não corrigidos em `FINDINGS.md`. xAI continua pendente (créditos).
 
+## 2026-09-13 · fornecedor Meta
+
+- A pedido do dono: investigação da Meta Model API (sem SDK da Meta; `openai` ou `anthropic`) e
+  integração "da melhor forma", com autorização para chamadas ao vivo com `MODEL_API_KEY`.
+- M01 feito: `MetaProvider` sobre a Responses API do SDK `openai` (D11–D14), com reenvio do
+  raciocínio encriptado. Revisão adversarial: 3 bugs de streaming confirmados e corrigidos.
+  3020 passed, 20 skipped; ruff e pyright limpos; `live_api` Meta 6 passed; matriz de probes 6/6.
+- Achados fora do âmbito em `FINDINGS.md` (chave OpenAI em `base_url` remoto, `strict` no adaptador
+  OpenAI, `APIConnectionError` sem retry, `pytest-timeout` ausente).
+- A pedido do dono: commits `9588f31` (código, testes, scripts, CI), `7967287` (docs) e o registo no
+  blackboard, com push para `main`. Falta o secret `MODEL_API_KEY` no GitHub para o CI correr os
+  testes ao vivo da Meta.
+

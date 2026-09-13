@@ -1,6 +1,16 @@
 # Quadro
 
-## Frente activa: plano de correcção do toolkit
+## Frente activa: fornecedor Meta (Muse Spark)
+
+- **Estado:** concluída em 2026-09-13, commitada e publicada em `main` a pedido do dono (`9588f31` código e testes, `7967287` docs, e o registo).
+- **Ficha:** `tasks/M01-meta-provider.md`. **Decisões:** D11–D14.
+- **Base:** `main` @ `a0807cc`. **Coordenador:** sessão principal (sem workers).
+
+| ID | Tarefa | Dono | Estado |
+|---|---|---|---|
+| M01 | `MetaProvider` sobre a Responses API do SDK `openai` | coordenador | done |
+
+## Frente anterior: plano de correcção do toolkit
 
 - **Estado:** concluída em 2026-09-13 (F01–F22 done), commitada e publicada em `main`.
 - **Plano:** `docs/internal/toolkit-fix-plan.md` — a secção 0 tem os ajustes da revisão cruzada.

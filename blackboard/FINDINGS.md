@@ -182,3 +182,29 @@ originais. Anterior ao plano.
 Uma lista de tools em que umas vão por `parameters` e outras por `parameters_json_schema` gera uma
 única `types.Tool`; não foi possível confirmar offline que a API aceita a mistura.
 
+
+## 2026-09-13 · fornecedor Meta (M01)
+
+### Chave da OpenAI enviada a um `base_url` remoto → sem tarefa
+
+`LLM("modelo", base_url="https://gateway.example/v1")` sem `api_key=` cai no adaptador OpenAI e
+`_resolve_key("OPENAI_API_KEY", ...)` envia a chave da OpenAI do ambiente para esse host. Com
+`localhost` isso já não acontece. O `MetaProvider` usa só `MODEL_API_KEY`, mas o risco continua
+para qualquer outro endpoint compatível com OpenAI. Anterior ao M01.
+
+### `output_schema` Pydantic com `strict: true` no adaptador OpenAI → por verificar ao vivo
+
+`_resolve_output_schema` gera `OutputSchema(strict=True)` com `model_json_schema()`, que não tem
+`additionalProperties: false`; o adaptador OpenAI envia-o assim. A Meta recusa exactamente este caso
+com 400 (verificado); a OpenAI documenta a mesma regra para `strict`, mas não foi confirmado ao vivo.
+
+### `openai.APIConnectionError` não dá retry nem fallback → sem tarefa
+
+Os adaptadores OpenAI e Meta deixam passar `openai.APIConnectionError`/`APITimeoutError`, que não
+são `APIError`, `ConnectionError`, `OSError` nem `TimeoutError` (`PROVIDER_ERRORS` em `_llm.py`) e
+não têm `status_code` para o `_retry.py`. Uma falha de rede não faz retry nem passa ao fallback.
+
+### `@pytest.mark.timeout` não faz nada → sem tarefa
+
+O marcador está registado no `pyproject.toml`, mas o `pytest-timeout` não está instalado; os
+timeouts dos testes `live_api` são decorativos. O job de integração passou a ter 30 minutos.
