@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import enum
 from typing import Any, Literal
 
 import pytest
@@ -69,6 +70,35 @@ def repeat(n: Count) -> int:
 def buggy(x: int) -> str:
     """A tool whose own body raises TypeError."""
     return "value: " + x  # type: ignore[operator]
+
+
+@tool
+def strict_flag(flag: Literal[True]) -> str:
+    """Only accept True."""
+    return f"flag={flag!r}"
+
+
+@tool
+def either_flag(flag: Literal[True, False]) -> str:
+    """Accept a boolean literal."""
+    return f"flag={flag!r}"
+
+
+class Switch(enum.Enum):
+    ON = True
+    OFF = False
+
+
+@tool
+def set_switch(state: Switch) -> str:
+    """Set a switch from its boolean value."""
+    return f"state={state!r}"
+
+
+@tool(schema={"limit": {"anyOf": [{"type": "integer"}, {"type": "null"}]}})
+def paged(limit: int | None = None) -> str:
+    """Page through results."""
+    return f"limit={limit!r}"
 
 
 @tool(requires_approval=True)
@@ -272,3 +302,56 @@ async def test_a_failed_validation_is_not_metered() -> None:
         await ToolGroup(add).async_execute(_call("add", a="x", b=1))
 
     assert scope.snapshot().tool_calls == 0
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("argument", ["a", "b"])
+async def test_an_integer_string_too_long_to_convert_is_a_validation_error(
+    mode: str, argument: str
+) -> None:
+    arguments = {"a": 1, "b": 2, argument: "9" * 5_000}
+
+    result = await _execute(ToolGroup(add), _call("add", **arguments), mode)
+
+    assert result.error is not None and result.error.type == "validation_error"
+    assert result.error.details["argument"] == argument
+
+
+async def test_a_number_string_too_long_to_convert_is_a_validation_error() -> None:
+    result = ToolGroup(halve).execute(_call("halve", x="9" * 5_000))
+
+    assert result.error is not None and result.error.type == "validation_error"
+
+
+async def test_boolean_literals_and_enums_accept_booleans() -> None:
+    assert ToolGroup(strict_flag).execute(_call("strict_flag", flag=True)).value == "flag=True"
+    assert ToolGroup(either_flag).execute(_call("either_flag", flag="false")).value == "flag=False"
+    refused = ToolGroup(strict_flag).execute(_call("strict_flag", flag=1))
+    assert refused.error is not None and refused.error.type == "validation_error"
+    assert ToolGroup(set_switch).execute(_call("set_switch", state=True)).ok
+
+
+async def test_a_null_branch_accepts_only_null() -> None:
+    group = ToolGroup(paged)
+
+    assert group.execute(_call("paged", limit=None)).value == "limit=None"
+    assert group.execute(_call("paged", limit="3")).value == "limit=3"
+    refused = group.execute(_call("paged", limit="lots"))
+    assert refused.error is not None and refused.error.type == "validation_error"
+
+
+class _MalformedModify:
+    def check_sync(self, ctx: ExecutionContext) -> GateResult | None:
+        return GateModify(args=[("a", 1), ("b", 2)])  # type: ignore[arg-type]
+
+    async def check(self, ctx: ExecutionContext) -> GateResult | None:
+        return self.check_sync(ctx)
+
+
+@pytest.mark.parametrize("mode", MODES)
+async def test_a_gate_returning_non_mapping_arguments_is_a_validation_error(mode: str) -> None:
+    group = ToolGroup(add, gates=[_MalformedModify()])
+
+    result = await _execute(group, _call("add", a=1, b=2), mode)
+
+    assert result.error is not None and result.error.type == "validation_error"

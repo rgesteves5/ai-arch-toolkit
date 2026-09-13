@@ -79,11 +79,12 @@ Before any gate runs, the arguments are checked against the tool's input schema 
 | `integer` | ints | integral floats and integer strings (`"3"`, `"3.0"`); booleans are refused |
 | `number` | ints, finite floats | numeric strings; booleans are refused |
 | `boolean` | booleans | `"true"` / `"false"`, any case |
+| `null` | `null` | nothing |
 | `enum` | listed values | checked after coercion |
 | `anyOf` | a value that already matches a branch | otherwise the first branch that coerces it (`int \| str` keeps `"1"` a string) |
 | `string`, `array`, `object`, untyped | anything | nothing |
 
-Required arguments must be present, arguments the schema doesn't declare are refused unless the function takes `**kwargs`, and the call must bind to the function's signature. A failure returns `validation_error` naming the argument (`result.error.details["argument"]`), so the model can correct its call.
+Required arguments must be present, arguments the schema doesn't declare are refused unless the function takes `**kwargs`, and the call must bind to the function's signature. A failure returns `validation_error` with a message the model can act on; when one argument is at fault, `result.error.details["argument"]` names it. A string too long for Python to convert to an integer is a validation error too, never an exception.
 
 ---
 

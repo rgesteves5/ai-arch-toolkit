@@ -89,6 +89,13 @@ class TestHintToJsonSchema:
         schema, _ = _hint_to_json_schema(Literal["a", "b"])
         assert schema == {"type": "string", "enum": ["a", "b"]}
 
+    def test_literal_booleans(self):
+        assert _hint_to_json_schema(Literal[True, False]) == ({"type": "boolean"}, False)
+        assert _hint_to_json_schema(Literal[True]) == (
+            {"type": "boolean", "enum": [True]},
+            False,
+        )
+
     def test_literal_ints(self):
         schema, _ = _hint_to_json_schema(Literal[1, 2, 3])
         assert schema == {"type": "integer", "enum": [1, 2, 3]}

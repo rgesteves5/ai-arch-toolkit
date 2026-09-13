@@ -99,8 +99,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `system()` messages in order, separated by a blank line (Anthropic, Gemini, and xAI, batch
   included). The OpenAI adapter sends `system=` as a leading message and keeps each `system()`
   message at its position. `system=""` no longer hides `system()` messages.
-- **Breaking: an argument of the wrong type is a `validation_error` before the tool runs.** It used
-  to reach the function (`"1" + "2"`).
+- **Breaking: an argument that cannot be coerced to its type is a `validation_error` before the
+  tool runs.** It used to reach the function (`"x"` for an `int`); `"3"` is now coerced to `3`.
 - **Breaking: `run_tools()` / `run_tools_sync()` refuse `approval_handler=` together with a
   `ToolGroup`** (`ValueError`); set it on the group. A plain list of callables still takes it.
 - **Tool parameters typed `Any` or `object` accept any JSON value.** Their schema is now empty
@@ -221,6 +221,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   table was embedded inside the parameter, so its `#/$defs/...` pointers dangled at the tool's
   root; Gemini rejected such tools with `400 reference to undefined schema`. Nested models are
   now inlined, and a recursive model's `$defs` table is hoisted to the root.
+- Argument validation no longer raises for an integer string longer than Python's conversion
+  limit, a `null` schema branch accepts only `null`, and a custom gate that returns non-mapping
+  arguments gets a `validation_error`. `Literal[True, False]` and boolean enums are described as
+  booleans, so their values are accepted.
 - The Gemini adapter returns an empty response, instead of raising `TypeError`, when a candidate
   cut off by `max_tokens` while thinking carries no content parts.
 - Provider reasoning usage is now normalized without double-counting: xAI completion plus

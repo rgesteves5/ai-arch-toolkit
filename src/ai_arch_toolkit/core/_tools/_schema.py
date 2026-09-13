@@ -62,21 +62,11 @@ def _hint_to_json_schema(hint: Any) -> tuple[dict[str, object], bool]:
 
     # Handle Literal["a", "b"] or Literal[1, 2]
     if origin is typing.Literal:
-        args = typing.get_args(hint)
-        if not args:
-            return {"type": "string"}, False
-        if args and all(isinstance(a, int) for a in args):
-            return {"type": "integer", "enum": list(args)}, False
-        return {"type": "string", "enum": list(args)}, False
+        return _enum_schema(list(typing.get_args(hint))), False
 
     # Handle enum.Enum subclasses
     if isinstance(hint, type) and issubclass(hint, enum.Enum):
-        values = [m.value for m in hint]
-        if not values:
-            return {"type": "string"}, False
-        if values and all(isinstance(v, int) for v in values):
-            return {"type": "integer", "enum": values}, False
-        return {"type": "string", "enum": values}, False
+        return _enum_schema([m.value for m in hint]), False
 
     # Handle list / list[T]
     if origin is list:
@@ -126,6 +116,19 @@ def _hint_to_json_schema(hint: Any) -> tuple[dict[str, object], bool]:
 
     # Unknown — fallback to string
     return {"type": "string"}, False
+
+
+def _enum_schema(values: list[Any]) -> dict[str, object]:
+    """Schema for a fixed set of values, typed by what they are (``bool`` is not an integer)."""
+    if not values:
+        return {"type": "string"}
+    if all(isinstance(v, bool) for v in values):
+        if set(values) == {True, False}:
+            return {"type": "boolean"}
+        return {"type": "boolean", "enum": values}
+    if all(isinstance(v, int) and not isinstance(v, bool) for v in values):
+        return {"type": "integer", "enum": values}
+    return {"type": "string", "enum": values}
 
 
 _LOCAL_DEFINITION = "#/$defs/"

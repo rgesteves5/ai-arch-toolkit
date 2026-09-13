@@ -42,6 +42,8 @@ def validate_arguments(
     fn: Callable[..., Any], schema: Mapping[str, Any], arguments: Mapping[str, Any]
 ) -> dict[str, Any]:
     """Return ``arguments`` coerced to ``schema``, or raise :class:`ArgumentError`."""
+    if not isinstance(arguments, Mapping):  # e.g. a custom gate's GateModify with a list
+        raise ArgumentError(f"arguments must be a mapping, got {type(arguments).__name__}")
     coerced = dict(arguments)
     properties = schema.get("properties")
     if not isinstance(properties, Mapping):
@@ -142,6 +144,8 @@ def _coerce(value: Any, schema: Mapping[str, Any]) -> tuple[bool, Any, str]:
         ok, coerced = _to_number(value)
     elif kind == "boolean":
         ok, coerced = _to_boolean(value)
+    elif kind == "null":
+        ok, coerced = False, value  # None already returned above
     else:
         ok, coerced = True, value
 
@@ -196,7 +200,8 @@ def _to_integer(value: Any) -> tuple[bool, Any]:
     if isinstance(value, str):
         text = value.strip()
         if _INTEGER_TEXT.match(text):
-            return True, int(text)
+            number = _parse_int(text)
+            return (True, number) if number is not None else (False, value)
         number = _parse_float(text)
         if number is not None and number.is_integer():
             return True, int(number)
@@ -213,7 +218,8 @@ def _to_number(value: Any) -> tuple[bool, Any]:
     if isinstance(value, str):
         text = value.strip()
         if _INTEGER_TEXT.match(text):
-            return True, int(text)
+            integer = _parse_int(text)
+            return (True, integer) if integer is not None else (False, value)
         number = _parse_float(text)
         if number is not None:
             return True, number
@@ -226,6 +232,13 @@ def _to_boolean(value: Any) -> tuple[bool, Any]:
     if isinstance(value, str) and value.strip().lower() in ("true", "false"):
         return True, value.strip().lower() == "true"
     return False, value
+
+
+def _parse_int(text: str) -> int | None:
+    try:
+        return int(text)
+    except ValueError:  # longer than Python's integer string conversion limit
+        return None
 
 
 def _parse_float(text: str) -> float | None:
