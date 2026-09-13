@@ -26,6 +26,7 @@ llm = LLM("claude-sonnet-5")  # → Anthropic
 llm = LLM("gpt-4o")                    # → OpenAI
 llm = LLM("gemini-3.7-flash")          # → Gemini
 llm = LLM("grok-2")                    # → xAI
+llm = LLM("muse-spark-1.3")            # → Meta
 ```
 
 See [Model Compatibility](model-compatibility.md) for per-provider support and [Framework Overview](framework-overview.md) for routing/`base_url` details (local OpenAI-compatible servers, forcing an adapter, etc.).
@@ -74,7 +75,7 @@ for event in llm.stream_events_sync("Hello"):   # sync rich events (SyncRichStre
 
 The task/messages argument accepts `Content` — a string or a multimodal list. See [Content & Messages](content.md).
 
-`system=` never replaces the `system()` messages in `messages`, or the other way round: Anthropic, Gemini and xAI receive one system prompt with `system=` first and the `system()` messages after it, separated by a blank line, while the OpenAI adapter (and OpenAI-compatible servers) sends `system=` as a leading system message and keeps each `system()` message at its position — batch requests included.
+`system=` never replaces the `system()` messages in `messages`, or the other way round: Anthropic, Gemini and xAI receive one system prompt with `system=` first and the `system()` messages after it, separated by a blank line, while the OpenAI adapter (and OpenAI-compatible servers) sends `system=` as a leading system message and keeps each `system()` message at its position — batch requests included. The Meta adapter behaves like the OpenAI one, with `system=` sent as the Responses API's `instructions`.
 
 A system message's content is text: a string, or a list of strings and `cache()` parts, joined by a blank line. The Anthropic adapter keeps a `cache()` part's cache marker, sending the system prompt as text blocks, so a long system prompt can be cached; the other adapters send its text. An image or a document in a system message raises `TypeError` — send it in a user message.
 
@@ -305,6 +306,15 @@ for block in response.thinking:
 
 print(f"Answer: {response.text}")
 ```
+
+Meta's Muse Spark always reasons, so `thinking` does not switch reasoning on:
+`thinking_effort` (`"minimal"` to `"xhigh"`, plus `"max"` on standard `muse-spark-1.3`)
+sets its depth even without `thinking=True`, and `thinking=True` asks for reasoning
+summaries, which arrive as `Response.thinking` when Meta produces one. The raw
+reasoning stays encrypted: append `response.to_message()` to the conversation and the
+next request replays it, so a tool loop keeps its chain of thought. Reasoning tokens
+count toward `max_tokens`, so keep that budget generous. See
+[Model Compatibility](model-compatibility.md#meta) for the rest of Meta's limits.
 
 ---
 

@@ -18,8 +18,8 @@ dependencies. Run `uv lock --check` before pushing when dependency metadata
 changes, and update the lockfile with `uv lock` when needed.
 
 For running the examples or integration tests, copy `.env.example` to `.env`
-and populate `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, and/or
-`XAI_API_KEY`. Load them with `set -a && source .env && set +a` or via
+and populate `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY`,
+and/or `MODEL_API_KEY` (Meta). Load them with `set -a && source .env && set +a` or via
 `direnv`.
 
 ## Day-to-day commands

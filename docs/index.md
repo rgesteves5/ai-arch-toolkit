@@ -4,7 +4,7 @@ A lightweight, unified LLM client and agent architecture toolkit for Python.
 
 ## Features
 
-- **Multi-provider LLM client** — Anthropic, OpenAI, Gemini, xAI via a single `LLM` class
+- **Multi-provider LLM client** — Anthropic, OpenAI, Gemini, xAI, Meta via a single `LLM` class
 - **Async-first** with convenient sync wrappers
 - **Tool system** — `@tool` decorator with auto-generated JSON Schema plus built-in tools for files, web, weather, geo, shell, Python, and knowledge lookups
 - **Agent flows** — ReAct, Reflexion, ReWOO, PlanExecute, Tree of Thoughts, LATS, Self-Discovery, LLM Compiler, and Generate-Review
@@ -28,7 +28,7 @@ The package is not on PyPI yet — install from the repo:
 
 ```bash
 uv add "git+https://github.com/rgesteves5/ai-arch-toolkit.git#egg=ai-arch-toolkit[openai]"
-# or substitute another extra: [anthropic], [gemini], [xai], or [all]
+# or substitute another extra: [anthropic], [gemini], [xai], [meta], or [all]
 ```
 
 ## Quick start

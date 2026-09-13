@@ -127,6 +127,50 @@ with only `{"a": 2}` where the schema required both `a` and `b`.
 | `claude-opus-4-5` | Pass | Pass | Pass | Pass | Pass | Not probed | Native structured output passed. |
 | `claude-sonnet-4-0` | Pass | Pass | Not probed | Pass | Pass | Not probed | Native structured output is disabled; JSON mode passed. |
 
+## Meta
+
+`muse-spark-*` models run on the Meta Model API (`https://api.meta.ai/v1`, key from
+`MODEL_API_KEY`). Meta ships no SDK, so the adapter drives the `openai` SDK's Responses
+API — install the `meta` extra. It is the surface Meta recommends for agents: each response
+carries the model's reasoning encrypted, and appending `response.to_message()` to the
+conversation replays it on the next call, so tool loops keep their chain of thought.
+Requests are stateless (`store: false`); nothing is kept on Meta's side.
+
+What differs from other providers:
+
+- Muse Spark always reasons. `thinking_effort` (`"minimal"`, `"low"`, `"medium"`, `"high"`,
+  `"xhigh"`, and `"max"` on standard `muse-spark-1.3`) applies without `thinking=True`;
+  `thinking=True` asks for reasoning summaries, which Meta does not produce on every call.
+- Reasoning tokens count toward `max_tokens`. A budget that is too small ends the call with
+  `stop_reason == "max_output_tokens"` and little or no text.
+- `tool_choice` accepts only `"auto"`. `"none"` sends the request without tools; forcing a
+  tool (`"required"` or a name) raises `ValueError` before any call.
+- `output_schema` is sent non-strict: Meta constrains the output to the schema either way,
+  while strict mode would reject a plain Pydantic schema. Recursive schemas are rejected.
+- `stop` and `logprobs` are not supported. Meta tunes the model for `temperature=1.0`; the
+  `LLM` default is `0.0`, so pass `temperature=1.0` unless you need otherwise.
+- Built-in `web_search` is supported (billed by Meta per query, so metering treats the cost
+  as unknown); `code_execution` is not. There is no batch API.
+- Text from several assistant messages in one response (for example a note before a web
+  search and the answer after it) is joined with a blank line.
+- The contributor tiers (`muse-spark-1.3-contributor`, `muse-spark-1.2-contributor`) are much
+  cheaper but let Meta train on your prompts and completions.
+- Meta's backend often answers `503 service_overloaded`; configure `RetryConfig` for
+  unattended runs.
+
+Recorded live on 2026-09-13 with `scripts/probe_models.py` (`20260913T040525Z`; the stream
+scenario hit a `503 service_overloaded` and passed on rerun, `20260913T040824Z`) and
+`pytest -m live_api tests/integration/test_meta_live.py` (6 passed: tool-loop reasoning replay,
+a ReAct agent, a streamed tool turn replayed into a streamed answer, structured output, JSON
+mode, `count_tokens`).
+
+| Model | Plain | Tools | Structured | JSON Mode | Stream | Thinking | Notes |
+|---|---|---|---|---|---|---|---|
+| `muse-spark-1.3` | Pass | Pass | Pass | Pass | Pass | Pass | Probes use `tool_choice="auto"`, `thinking_effort="low"`, `temperature=1.0`; no summary was returned in the thinking probe. |
+
+`muse-spark-1.2`, `muse-spark-1.1`, and the contributor tiers share the adapter and
+pricing entries but were not probed.
+
 ## Current Gaps
 
 - Add a Gemini Live API provider path before advertising `gemini-3.1-flash-live-preview`

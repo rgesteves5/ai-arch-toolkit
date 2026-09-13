@@ -8,7 +8,7 @@ This comment is stripped from Claude's context and costs no tokens.
 -->
 
 ai-arch-toolkit is a Python library with zero required dependencies: a unified LLM client
-(Anthropic, OpenAI, Gemini, xAI, and OpenAI-compatible local servers) plus Flow
+(Anthropic, OpenAI, Gemini, xAI, Meta, and OpenAI-compatible local servers) plus Flow
 orchestration, nine agent architectures, budgets/metering, ~130 stdlib-only tools,
 graph-backed memory, and a file-backed prompt/resource system.
 
@@ -26,7 +26,7 @@ uv run python examples/01_hello_world.py     # run an example (needs API keys)
 ```
 
 - After editing dependencies in `pyproject.toml`, run `uv lock` — CI fails on `uv lock --check` if the lockfile is stale.
-- Examples and `pytest -m live_api` need API keys: `set -a && source .env && set +a` (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY` — wins over `GEMINI_API_KEY` — `XAI_API_KEY`). Hermetic system tests use `pytest -m "integration and not live_api"`.
+- Examples and `pytest -m live_api` need API keys: `set -a && source .env && set +a` (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY` — wins over `GEMINI_API_KEY` — `XAI_API_KEY`, `MODEL_API_KEY` for Meta). Hermetic system tests use `pytest -m "integration and not live_api"`.
 - Docs: `uv sync --extra dev --extra docs`, then `uv run mkdocs serve`. API reference: `uv run pdoc ai_arch_toolkit -o site/api`.
 - One-time setup: `uv run pre-commit install` (ruff hooks on commit).
 
@@ -43,8 +43,8 @@ Two layers under `src/ai_arch_toolkit/`, plus the `ai-arch` CLI (`_cli.py`: `pro
 
 Cross-cutting rules that no single file shows:
 
-- Providers are thin adapters over the official SDKs (`anthropic`, `openai`, `google-genai`, gRPC `xai-sdk`), import-guarded by `require_sdk()` so core stays dependency-free — users install per-provider extras. Don't hand-roll provider HTTP calls.
-- `create_provider()` routes by model prefix (`claude-`/`gpt-`/`o1-`/`o3-`/`o4-`/`grok-`/`gemini-`). An unknown model with `base_url=` falls back to the OpenAI-compatible adapter (Ollama, LM Studio, vLLM); a loopback `base_url` needs no API key.
+- Providers are thin adapters over the official SDKs (`anthropic`, `openai`, `google-genai`, gRPC `xai-sdk`; Meta ships no SDK, so its adapter drives `openai`), import-guarded by `require_sdk()` so core stays dependency-free — users install per-provider extras. Don't hand-roll provider HTTP calls.
+- `create_provider()` routes by model prefix (`claude-`/`gpt-`/`o1-`/`o3-`/`o4-`/`grok-`/`gemini-`/`muse-spark-`). An unknown model with `base_url=` falls back to the OpenAI-compatible adapter (Ollama, LM Studio, vLLM); a loopback `base_url` needs no API key.
 - Everything is async-first; every public coroutine gets a `_sync` wrapper (helpers in `core/_sync.py`).
 - The recommended entry point is `Agent(ReasoningSpec(strategy=...), llm, tools)`, which compiles once to a `Flow`. The nine flow factories (`react`, `reflexion`, `rewoo`, `plan_execute`, `tot`, `lats`, `self_discovery`, `llm_compiler`, `generate_review`) are the level below; `completion` (single call, no tool loop) is the tenth strategy. `react`, `completion`, and `generate_review` support `output_schema` (for `generate_review`, it applies only to the generator; enforced in `agents/_compile.py`). Multi-phase strategies take per-phase overrides — LLM/tools as canonical deps (`planner_llm`, `executor_tools`, …), prompts as knobs (`planner_system`, …; a `{tools}` token is the only prompt substitution) — validated per strategy; agent manifests declare them under `strategy.phases` (see `docs/agents.md`).
 - Metering vs budget: `core/_metering` is the neutral mechanism, `toolkit/budget` the opinion layer on top. Charges happen only at `LLM.complete/stream/stream_events` and the common tool executor. Three modes: no scope = unmetered; `MeterScope` alone = measure-only; scope + controller = enforce. Nested agent flows share the enclosing scope (one cumulative budget).
@@ -79,3 +79,4 @@ Deeper reading, in `docs/`: `framework-overview.md` (layer tour), `configuring-a
 - **OpenAI**: Chat Completions API only (no Responses API). The same adapter serves OpenAI-compatible servers via `base_url=`; vendor reasoning deltas (`reasoning_content`/`reasoning`) surface as thinking events.
 - **Gemini**: `contents`/`parts` request shape (not `messages`/`content`).
 - **xAI**: separate gRPC `xai-sdk` adapter (not OpenAI-compat); key from `XAI_API_KEY`.
+- **Meta**: Responses API through the `openai` SDK at `https://api.meta.ai/v1`; key from `MODEL_API_KEY`, never `OPENAI_API_KEY`. Requests are stateless (`store: false`): the encrypted reasoning comes back in the response and is replayed from `Response.to_message()["_raw"]`. Muse Spark always reasons — `thinking_effort` applies on its own, `thinking=True` only asks for summaries. Only `tool_choice="auto"` exists (`"none"` sends no tools; forced choices raise). `output_schema` is sent non-strict: Meta constrains decoding anyway, and strict would reject plain Pydantic schemas.

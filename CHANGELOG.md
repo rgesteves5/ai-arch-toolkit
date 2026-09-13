@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Meta provider (Muse Spark).** `LLM("muse-spark-1.3")` routes to a new `MetaProvider` that
+  drives the Meta Model API's Responses API through the `openai` SDK (Meta ships no SDK), with the
+  key from `MODEL_API_KEY` and a new `meta` extra. Requests are stateless and replay the model's
+  encrypted reasoning from `Response.to_message()`, so tool loops and agents keep their chain of
+  thought across turns. Streaming, tool calls, structured output, JSON mode, reasoning summaries,
+  web search, images, PDFs, and `count_tokens` are supported; pricing covers the standard and
+  contributor tiers. Muse Spark always reasons: `thinking_effort` applies on its own and
+  `thinking=True` requests summaries. Only `tool_choice="auto"` is available (`"none"` sends no
+  tools; forced choices raise `ValueError`). `count_tokens_local` estimates Muse Spark with
+  `o200k_base`. See [docs/model-compatibility.md](docs/model-compatibility.md#meta).
+- The live probe inventory accepts a per-model `tool_choice` for providers that cannot force a call.
 - **`Flow(timeout=...)`** bounds a whole run of a flow, in seconds. When it elapses, the steps in
   flight are cancelled, nothing else starts, and the trace ends with a `flow_timeout` step.
   `ReasoningSpec.timeout`, manifest `strategy.timeout`, and `limits.timeout_seconds` compile to it.

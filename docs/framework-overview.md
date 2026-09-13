@@ -42,8 +42,8 @@ Stateless, async-first foundation. All new code should build on this.
 
 ### Providers
 
-- **`BaseProvider`** ABC → `AnthropicProvider`, `OpenAIProvider`, `XAIProvider`, `GeminiProvider`
-- Factory: `create_provider()` routes by model prefix (`claude-` → Anthropic, `gpt-`/`o1-`/`o3-`/`o4-` → OpenAI, `grok-` → xAI, `gemini-` → Gemini)
+- **`BaseProvider`** ABC → `AnthropicProvider`, `OpenAIProvider`, `XAIProvider`, `GeminiProvider`, `MetaProvider`
+- Factory: `create_provider()` routes by model prefix (`claude-` → Anthropic, `gpt-`/`o1-`/`o3-`/`o4-` → OpenAI, `grok-` → xAI, `gemini-` → Gemini, `muse-spark-` → Meta)
 
 ```python
 from ai_arch_toolkit import LLM
@@ -52,6 +52,7 @@ llm = LLM("claude-sonnet-5")  # Anthropic
 llm = LLM("gpt-4o")                    # OpenAI
 llm = LLM("gemini-3.7-flash")          # Gemini
 llm = LLM("grok-2")                    # xAI
+llm = LLM("muse-spark-1.3")            # Meta
 ```
 
 ### Content & Messages
@@ -247,7 +248,7 @@ src/ai_arch_toolkit/
 │   ├── _policy.py       # Policy (retry, timeout, confidence, cost)
 │   ├── _trace.py        # Trace, StepTrace, PolicyDecision
 │   ├── _step_engine.py  # execute_step() — policy-enforced execution
-│   ├── _providers/      # BaseProvider → Anthropic, OpenAI, xAI, Gemini
+│   ├── _providers/      # BaseProvider → Anthropic, OpenAI, xAI, Gemini, Meta
 │   ├── _tools/          # @tool decorator, ToolGroup, schema inference
 │   ├── graph/           # General-purpose graph layer
 │   │   ├── _types.py    # Node[T], Edge, NodeID, Direction
@@ -300,7 +301,7 @@ Supporting directories:
 
 | Area | Capability |
 |------|------------|
-| **Multi-provider** | One `LLM` class for Anthropic, OpenAI, xAI, Gemini. Model prefix auto-routes. |
+| **Multi-provider** | One `LLM` class for Anthropic, OpenAI, xAI, Gemini, Meta. Model prefix auto-routes. |
 | **Async-first** | `complete()` / `stream()` / `stream_events()` with `_sync()` wrappers. |
 | **Streaming** | Text chunks (`stream`), typed events (`stream_events`), rich events with fallback. |
 | **Structured output** | `OutputSchema` for constrained JSON, Pydantic model support. |

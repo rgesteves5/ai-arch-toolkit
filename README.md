@@ -4,7 +4,7 @@
 [![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-A lightweight, unified LLM client for Anthropic, OpenAI, Gemini, and xAI — plus
+A lightweight, unified LLM client for Anthropic, OpenAI, Gemini, xAI, and Meta — plus
 Flow orchestration, nine built-in agent architectures, a typed graph layer with
 agent memory, file-backed prompt templates, knowledge loading, moderation, budgets, and
 metering. Zero core
@@ -12,7 +12,7 @@ dependencies; bring your own provider SDK.
 
 ## Why
 
-- **One client, every provider.** `LLM("claude-…")`, `LLM("gpt-…")`, `LLM("gemini-…")`, `LLM("grok-…")` — same call surface, automatic routing.
+- **One client, every provider.** `LLM("claude-…")`, `LLM("gpt-…")`, `LLM("gemini-…")`, `LLM("grok-…")`, `LLM("muse-spark-…")` — same call surface, automatic routing.
 - **Local models.** Point at Ollama, LM Studio, or vLLM with `base_url=` — arbitrary model tags, no API key needed on localhost, real-time reasoning events.
 - **Async-first, sync everywhere.** Every coroutine has a `_sync` wrapper, so you never have to choose.
 - **Agent architectures as building blocks.** ReAct, Reflexion, ReWOO, Plan-Execute, Tree of Thoughts, LATS, Self-Discovery, LLM Compiler, and Generate-Review — as declarative `Agent` strategies or standalone `Flow` factories.
@@ -24,7 +24,7 @@ Install directly from this repository:
 
 ```bash
 uv add "git+https://github.com/rgesteves5/ai-arch-toolkit.git#egg=ai-arch-toolkit[openai]"
-# or substitute another extra: [anthropic], [gemini], [xai], or [all]
+# or substitute another extra: [anthropic], [gemini], [xai], [meta], or [all]
 ```
 
 Pip works the same way. Extras:
@@ -35,6 +35,7 @@ Pip works the same way. Extras:
 | `openai`    | `openai>=1.50`                                        |
 | `gemini`    | `google-genai>=1.0`                                   |
 | `xai`       | `xai-sdk>=1.7.0`                                      |
+| `meta`      | `openai>=2.6.0` (Meta ships no SDK of its own)        |
 | `graph`     | `networkx>=3.0` (required by graph + memory backends) |
 | `tokens`    | `tiktoken>=0.7` (local token counting)                |
 | `yaml`      | `pyyaml>=6.0` (YAML knowledge/config loaders)         |
@@ -49,7 +50,7 @@ Pip works the same way. Extras:
 | `dev`       | Local test, lint, type-check, and provider deps       |
 
 API keys are read from `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`
-(or `GEMINI_API_KEY`), or `XAI_API_KEY` — copy `.env.example` to `.env` and
+(or `GEMINI_API_KEY`), `XAI_API_KEY`, or `MODEL_API_KEY` (Meta) — copy `.env.example` to `.env` and
 `set -a && source .env && set +a` (or use a tool like `direnv`). If both Gemini
 keys are set, `GOOGLE_API_KEY` wins.
 
@@ -176,19 +177,19 @@ plain text, Markdown, XML, or JSON. Validate them locally with
 
 ## Provider × feature matrix
 
-|                       | Anthropic | OpenAI | Gemini | xAI |
-| --------------------- | :-------: | :----: | :----: | :-: |
-| Sync + async          | ✅        | ✅     | ✅     | ✅  |
-| Streaming             | ✅        | ✅     | ✅     | ✅  |
-| Rich stream events    | ✅        | ✅     | ✅     | ✅  |
-| Tool / function call  | ✅        | ✅     | ✅     | ✅  |
-| Structured output     | ✅ native | ✅     | ✅     | ✅  |
-| Multimodal (image)    | ✅        | ✅     | ✅     | ✅  |
-| Documents (PDF, etc.) | ✅        | ✅     | ✅     | —   |
-| Prompt caching        | ✅        | ✅     | —      | —   |
-| Extended thinking     | ✅        | ✅ effort | ✅     | ✅  |
-| Server-hosted tools   | ✅ code+web | ✅ code+web | ✅ code+web | —   |
-| Batch API             | ✅        | ✅     | —      | —   |
+|                       | Anthropic | OpenAI | Gemini | xAI | Meta |
+| --------------------- | :-------: | :----: | :----: | :-: | :--: |
+| Sync + async          | ✅        | ✅     | ✅     | ✅  | ✅   |
+| Streaming             | ✅        | ✅     | ✅     | ✅  | ✅   |
+| Rich stream events    | ✅        | ✅     | ✅     | ✅  | ✅   |
+| Tool / function call  | ✅        | ✅     | ✅     | ✅  | ✅ auto only |
+| Structured output     | ✅ native | ✅     | ✅     | ✅  | ✅   |
+| Multimodal (image)    | ✅        | ✅     | ✅     | ✅  | ✅   |
+| Documents (PDF, etc.) | ✅        | ✅     | ✅     | —   | ✅   |
+| Prompt caching        | ✅        | ✅     | —      | —   | ✅ automatic |
+| Extended thinking     | ✅        | ✅ effort | ✅     | ✅  | ✅ effort + summaries |
+| Server-hosted tools   | ✅ code+web | ✅ code+web | ✅ code+web | —   | ✅ web |
+| Batch API             | ✅        | ✅     | —      | —   | —    |
 
 ## Agent architectures
 

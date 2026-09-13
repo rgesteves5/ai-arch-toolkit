@@ -5,14 +5,14 @@
 ```bash
 # Pick the provider extra that matches the model you plan to use
 uv add "ai-arch-toolkit[openai]"
-# or: [anthropic], [gemini], [xai], [all]
+# or: [anthropic], [gemini], [xai], [meta], [all]
 ```
 
 Or with pip:
 
 ```bash
 pip install "ai-arch-toolkit[openai]"
-# or: [anthropic], [gemini], [xai], [all]
+# or: [anthropic], [gemini], [xai], [meta], [all]
 ```
 
 The base package has no provider SDK dependencies. If you want to call a model,
@@ -127,6 +127,9 @@ llm = LLM("gemini-3.7-flash")
 
 # xAI
 llm = LLM("grok-2")
+
+# Meta (Muse Spark via the Meta Model API; key from MODEL_API_KEY)
+llm = LLM("muse-spark-1.3", temperature=1.0)
 
 # Local OpenAI-compatible server (Ollama, LM Studio, vLLM) — no API key needed on localhost
 llm = LLM("gemma4:e4b", base_url="http://localhost:11434/v1")
