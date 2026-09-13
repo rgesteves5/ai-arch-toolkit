@@ -30,6 +30,10 @@ uv run python examples/01_hello_world.py     # run an example (needs API keys)
 - Docs: `uv sync --extra dev --extra docs`, then `uv run mkdocs serve`. API reference: `uv run pdoc ai_arch_toolkit -o site/api`.
 - One-time setup: `uv run pre-commit install` (ruff hooks on commit).
 
+## Coordination
+
+Work that spans several agents or sessions is coordinated in `blackboard/`: read `blackboard/README.md` (protocol) and `blackboard/BOARD.md` before picking up a task. `board/` is a frozen historical board.
+
 ## Architecture
 
 Two layers under `src/ai_arch_toolkit/`, plus the `ai-arch` CLI (`_cli.py`: `prompt validate|inspect|render`, `agent validate|inspect`) and `nanope/` (WIP Reflex app — not public API, excluded from ruff and pyright):

@@ -11,3 +11,5 @@ user-facing documentation** and intentionally excluded from `mkdocs.yml`.
 | `refactoring-plan.md` | The plan that aligned the package with the Content / Transform / Identity / Memory primitives. |
 | `first_principles_llms.md` | Design-philosophy note on what an LLM is and the small set of primitives the rest reduces to. |
 | `from_claude_chat/` | Briefing material and sketch APIs from the rewrite session — kept for traceability. |
+| `agentes-app-toolkit-review.md` | Review of the toolkit's limitations for the Agentes app, at `48a43ac` (2026-09-12, Portuguese); later sections correct earlier ones. |
+| `toolkit-fix-plan.md` | Verified findings from that review and the fix plan F01–F18 (Portuguese); implemented in 2026-09, per-fix records in `blackboard/`. |

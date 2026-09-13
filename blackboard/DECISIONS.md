@@ -1,0 +1,87 @@
+# Decisões
+
+Só acrescentar. Uma decisão revista ganha uma nova entrada que diz qual substitui.
+
+## D1 · `Flow(policy=)` é a policy por omissão de cada step; `Flow(timeout=)` limita o run
+
+- **Contexto:** a policy de um `Flow` só era aplicada quando o flow corria aninhado (`as_step()`),
+  tornando inertes `ReasoningSpec.policy`, `ReasoningSpec.timeout` e `limits.timeout_seconds`.
+  `docs/agents.md` já descrevia `policy` como "per-step" e `timeout` como "wall-clock".
+- **Decisão:** policy efectiva de um step = `step.policy or flow.policy` (também para decidir se um
+  erro pára o flow). Novo `Flow(timeout=)` limita o run inteiro. `ReasoningSpec.policy` → policy;
+  `ReasoningSpec.timeout` e `limits.timeout_seconds` → timeout.
+- **Consequência:** timeouts declarados passam a ser impostos (quebra visível para a app).
+
+## D1a · Flows internos das estratégias não herdam a policy
+
+- **Contexto:** reflexion, plan_execute, llm_compiler, lats, self_discovery e generate_review (com
+  tools) correm `react_flow(...).run()` dentro de um step, sem policy.
+- **Decisão:** não propagar. A policy aplica-se aos steps do flow da estratégia; um timeout por step
+  limita o loop interno inteiro desse step. Limites por chamada LLM: `LLM(timeout=, retry=)`.
+  Limite do run: `ReasoningSpec.timeout`.
+- **Porquê:** propagar aplicaria o mesmo timeout com dois significados e duplicaria o retry de que o
+  `LLM` já é dono. Documentado em `docs/agents.md`.
+
+## D2 · O wrapper de `Flow.as_step()` não leva a policy do flow
+
+- **Decisão:** o flow aninhado aplica a sua própria policy e timeout quando corre; o `Step` wrapper
+  fica com `policy=None`. Evita aplicar a policy duas vezes.
+
+## D3 · Prompts de sistema fundidos nos adaptadores (revisto)
+
+- **Contexto:** os adaptadores escolhiam entre `system=` e as mensagens `system()`, perdendo uma.
+  A versão inicial (fundir na camada `LLM`) moveria para o topo as mensagens `system()` a meio da
+  conversa no OpenAI, Ollama e vLLM.
+- **Decisão:** juntar sempre, dentro de cada adaptador: `system=` primeiro, depois as mensagens
+  `system()` pela ordem. Anthropic, Gemini e xAI juntam no parâmetro nativo; o OpenAI põe `system=` à
+  cabeça e mantém as mensagens `system()` na sua posição. Batch incluído.
+- **Consequência:** quem usava `system=` para substituir a mensagem passa a enviar as duas.
+
+## D4 · Tools de `toolkit.tools.dangerous` exigem aprovação
+
+- **Decisão:** as cinco sem metadados ganham `capability` (`filesystem` ou `network`),
+  `risk_level="high"` e `requires_approval=True`.
+- **Consequência:** sem `approval_handler` passam a dar `approval_denied`.
+
+## D5 · `iter()` mantém o nome e devolve um objecto de execução
+
+- **Decisão:** `Flow.iter()` e `Agent.iter()` devolvem um objecto que é `AsyncIterator[FlowEvent]` e
+  expõe `.result` (`FlowResult` / `AgentResult`) depois de drenado. Os `async for` existentes
+  continuam a funcionar.
+
+## D6 · Captura do trace por omissão: `"keys"`
+
+- **Decisão:** `Flow(trace_capture="keys" | "full" | "none")`, por omissão `"keys"` — chaves em vez de
+  valores. `"full"` faz cópias profundas.
+- **Consequência:** quem lia valores de `StepTrace.input_state` tem de pedir `"full"`.
+
+## D7 · Argumentos de tools validados e coagidos antes dos gates (revisto)
+
+- **Contexto:** os tipos não eram verificados (`"1" + "2" == "12"`). Validar depois dos gates faria um
+  humano aprovar chamadas que depois falham ou valores que depois mudam.
+- **Decisão:** antes dos gates, validar e coagir contra o schema (strings numéricas e booleanas para o
+  tipo declarado; `enum` verificado; arrays e objectos intactos); os gates vêem os valores coagidos.
+  Depois de um `GateModify`, validar outra vez.
+
+## D8 · Operação de metering de um stream: reservada na criação, iniciada na primeira tentativa
+
+- **Contexto:** hoje é iniciada logo na criação. Com o middleware async a correr antes do provider,
+  uma rejeição da moderação contaria como chamada com custo desconhecido e bloquearia um run com
+  `max_cost`.
+- **Decisão:** a admissão continua na criação; `mark_started()` só quando a primeira tentativa
+  começa. Stream rejeitado pelo middleware, ou nunca iterado, liberta a reserva.
+- **Consequência:** `tests/test_llm_metering.py` deixa de ver `llm_calls == 1` antes de iterar.
+
+## D9 · Motor de execução: um gerador, steps em tasks, avanço a pedido
+
+- **Contexto:** um motor numa `asyncio.Task` com fila sem limite continuaria a correr depois de um
+  `break` sem `aclose()`. Hoje o flow só avança quando alguém pede o evento seguinte.
+- **Decisão:** um único gerador assíncrono. Cada step corre numa task; os eventos dessas tasks saem
+  em tempo real; entre steps nada avança sem o consumidor pedir; o `finally` cancela e aguarda as
+  tasks pendentes. `run()` drena o gerador. O timeout do run usa esperas limitadas, nunca um cancel
+  scope atravessado por `yield`.
+
+## D10 · `run_tools` com `ToolGroup` usa só a governança do grupo
+
+- **Decisão:** executa por `group.async_execute` / `group.execute`. Passar `approval_handler=` junto com
+  um `ToolGroup` levanta `ValueError`, porque o handler pertence ao grupo.
