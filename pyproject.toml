@@ -17,6 +17,9 @@ ai-arch = "ai_arch_toolkit._cli:main"
 # Provider SDKs — install the one matching the model you plan to call.
 anthropic = ["anthropic>=0.40"]
 gemini = ["google-genai>=1.21.0"]
+# Meta ships no SDK: its Model API is driven through the openai SDK's Responses API
+# (2.6.0 added responses.input_tokens.count).
+meta = ["openai>=2.6.0"]
 openai = ["openai>=1.50"]
 xai = ["xai-sdk>=1.7.0"]
 
@@ -33,6 +36,7 @@ all = [
     "ai-arch-toolkit[anthropic]",
     "ai-arch-toolkit[gemini]",
     "ai-arch-toolkit[graph]",
+    "ai-arch-toolkit[meta]",
     "ai-arch-toolkit[openai]",
     "ai-arch-toolkit[prompts]",
     "ai-arch-toolkit[tokens]",
@@ -53,7 +57,7 @@ dev = [
     "jinja2>=3.1",
     "jsonschema>=4.0",
     "networkx>=3.0",
-    "openai>=1.50",
+    "openai>=2.6.0",
     "pre-commit>=4.0",
     "pyright>=1.1.390",
     "pytest>=9.0.3",

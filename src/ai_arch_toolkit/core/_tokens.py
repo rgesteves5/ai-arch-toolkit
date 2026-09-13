@@ -18,10 +18,11 @@ _CORRECTIONS: dict[str, float] = {
     "gemini-": 1.05,  # ~5% variance
     "grok-": 1.05,  # ~5% variance
     "llama": 1.02,  # Meta Llama (tiktoken-based, ~2%)
+    "muse-spark-": 1.0,  # Meta input_tokens count was 0.98x o200k_base on English prose
 }
 
-# Prefixes that use the o200k_base encoding (GPT-4o+, o-series).
-_O200K_PREFIXES = ("gpt-4o", "gpt-5", "o1", "o3", "o4")
+# Prefixes that use the o200k_base encoding (GPT-4o+, o-series, Muse Spark).
+_O200K_PREFIXES = ("gpt-4o", "gpt-5", "o1", "o3", "o4", "muse-spark-")
 
 # Average chars per token (rough cross-model approximation).
 _CHARS_PER_TOKEN = 4

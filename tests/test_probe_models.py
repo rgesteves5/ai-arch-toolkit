@@ -30,6 +30,11 @@ scenarios = ["plain", "tools_loop"]
 allow_transient = true
 require_thinking = false
 kwargs = { temperature = 0.0, max_tokens = 64 }
+
+[[models]]
+id = "muse-spark-test"
+provider = "meta"
+tool_choice = "auto"
 """.strip(),
         encoding="utf-8",
     )
@@ -43,7 +48,13 @@ kwargs = { temperature = 0.0, max_tokens = 64 }
             scenarios=("plain", "tools_loop"),
             allow_transient=True,
             kwargs={"temperature": 0.0, "max_tokens": 64},
-        )
+        ),
+        ModelProbeConfig(
+            id="muse-spark-test",
+            provider="meta",
+            scenarios=("plain", "tools_loop", "structured"),
+            tool_choice="auto",
+        ),
     ]
 
 
@@ -148,3 +159,11 @@ def test_sanitize_error_message_redacts_provider_ids() -> None:
     assert "API key ID: <redacted>" in sanitized
     assert "a64e110b" not in sanitized
     assert "d63e1574" not in sanitized
+
+
+def test_sanitize_error_message_redacts_meta_api_keys() -> None:
+    sanitized = _sanitize_error_message("API 401: invalid key LLM|111111111111111|fakeKEY.", 600)
+
+    assert "111111111111111" not in sanitized
+    assert "fakeKEY" not in sanitized
+    assert "invalid key <redacted>" in sanitized

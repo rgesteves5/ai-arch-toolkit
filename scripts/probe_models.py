@@ -62,6 +62,8 @@ class ModelProbeConfig:
     scenarios: tuple[ScenarioName, ...] = ("plain", "tools_loop", "structured")
     allow_transient: bool = False
     require_thinking: bool = False
+    # The tools_loop probe forces a call; providers that only accept "auto" set it here.
+    tool_choice: str = "required"
     kwargs: dict[str, Any] = field(default_factory=dict)
 
 
@@ -137,6 +139,7 @@ def load_model_configs(path: Path) -> list[ModelProbeConfig]:
                 scenarios=_parse_scenarios(raw.get("scenarios", SUITES["smoke"])),
                 allow_transient=bool(raw.get("allow_transient", False)),
                 require_thinking=bool(raw.get("require_thinking", False)),
+                tool_choice=str(raw.get("tool_choice", "required")),
                 kwargs=dict(kwargs),
             )
         )
@@ -298,7 +301,7 @@ async def _run_probe_success_path(
         if scenario == "plain":
             return await _probe_plain(llm)
         if scenario == "tools_loop":
-            return await _probe_tools_loop(llm)
+            return await _probe_tools_loop(llm, tool_choice=model.tool_choice)
         if scenario == "structured":
             return await _probe_structured(llm)
         if scenario == "json_mode":
@@ -317,14 +320,14 @@ async def _probe_plain(llm: LLM) -> dict[str, Any]:
     return _response_data(response, text_preview=response.text)
 
 
-async def _probe_tools_loop(llm: LLM) -> dict[str, Any]:
+async def _probe_tools_loop(llm: LLM, *, tool_choice: str = "required") -> dict[str, Any]:
     messages = [
         user(
             "Call add_numbers exactly once with arguments a=2 and b=3. "
             "After the tool result, answer with only the returned sum."
         )
     ]
-    first = await llm.complete(messages, tools=ADD_TOOLS, tool_choice="required")
+    first = await llm.complete(messages, tools=ADD_TOOLS, tool_choice=tool_choice)
     if not first.tool_calls:
         raise ProbeAssertionError("Expected at least one tool call.")
     tool_calls = tuple({"name": call.name, "input": dict(call.input)} for call in first.tool_calls)
@@ -561,6 +564,7 @@ def _truncate(text: str, limit: int) -> str:
 def _sanitize_error_message(text: str, limit: int) -> str:
     redacted = re.sub(r"(Team:\s*)[0-9a-fA-F-]+", r"\1<redacted>", text)
     redacted = re.sub(r"(API key ID:\s*)[0-9a-fA-F-]+", r"\1<redacted>", redacted)
+    redacted = re.sub(r"LLM\|\d+\|\S+", "<redacted>", redacted)  # Meta Model API key format
     return _truncate(redacted, limit)
 
 

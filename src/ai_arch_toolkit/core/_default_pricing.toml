@@ -1,5 +1,6 @@
 # Default pricing table — USD per 1M tokens
-# Last updated: 2026-08-29 (verified against each provider's official catalog)
+# Last updated: 2026-08-29 (verified against each provider's official catalog);
+# Meta Muse Spark added 2026-09-13.
 # Override with: pricing.load("your_file.toml") or pricing.register(...)
 # Known simplifications: cache_write uses Anthropic's 5-min TTL tier (1.25x input) —
 # the 1-hour tier (2x input) can be overridden via pricing.register().
@@ -926,3 +927,39 @@ long_context_inclusive = true
 long_context_input = 4.0
 long_context_output = 12.0
 long_context_cache_read = 0.60
+
+# ═══════════════════════════════════════════════════════════════════
+# Meta Muse Spark (Meta Model API)
+# Source: https://dev.meta.ai/docs/pricing-rate-limits
+# Flat rates: no long-context premium, no batch API, no cache-write charge.
+# Reasoning tokens bill at the output rate and are part of output_tokens.
+# Web search grounding ($2.50 per 1,000 queries) is not token-priced.
+# ═══════════════════════════════════════════════════════════════════
+
+# Standard tier: prompts and completions are not used for training.
+["muse-spark-1.3"]
+input = 1.25
+output = 4.25
+cache_read = 0.15
+
+["muse-spark-1.2"]
+input = 1.25
+output = 4.25
+cache_read = 0.15
+
+["muse-spark-1.1"]
+input = 1.25
+output = 4.25
+cache_read = 0.15
+
+# Contributor tier: discounted in exchange for Meta training on prompts and completions.
+# Separate entries so the longest-prefix match never prices them at the standard rate.
+["muse-spark-1.3-contributor"]
+input = 0.10
+output = 0.20
+cache_read = 0.002
+
+["muse-spark-1.2-contributor"]
+input = 0.10
+output = 0.20
+cache_read = 0.002

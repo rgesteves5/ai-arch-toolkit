@@ -21,12 +21,14 @@ jobs:
   e2e:
     name: End-to-end (OpenAI)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Meta's live tests ride out 503 service_overloaded bursts with long backoff.
+    timeout-minutes: 30
     # Skip on forks — they won't have the secret.
     if: github.event_name == 'workflow_dispatch' || github.repository == 'rgesteves5/ai-arch-toolkit'
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+      MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4

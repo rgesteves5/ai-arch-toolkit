@@ -35,6 +35,9 @@ class TestGetCorrection:
     def test_grok(self):
         assert _get_correction("grok-3") == 1.05
 
+    def test_muse_spark(self):
+        assert _get_correction("muse-spark-1.3") == 1.0
+
     def test_unknown_defaults_to_1(self):
         assert _get_correction("unknown-model") == 1.0
 
@@ -63,6 +66,16 @@ class TestCountTokensLocal:
         # Should not raise — uses o200k_base
         n = count_tokens_local("Hello world", model="gpt-5")
         assert n > 0
+
+    def test_muse_spark_counts_with_o200k(self):
+        # o200k_base and cl100k_base disagree on this text (23 vs 27 tokens).
+        text = "Olá, como estás? Este é um teste de tokenização em português, com acentuação."
+        assert count_tokens_local(text, model="muse-spark-1.3") == count_tokens_local(
+            text, model="gpt-5"
+        )
+        assert count_tokens_local(text, model="muse-spark-1.3") != count_tokens_local(
+            text, model="unknown-model"
+        )
 
 
 class TestCountTokensLocalBatch:

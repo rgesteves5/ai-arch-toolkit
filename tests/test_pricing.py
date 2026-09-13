@@ -90,6 +90,22 @@ class TestPricingRegistryDefaults:
         assert entry.cache_read == 0.50
         assert entry != pricing.get("grok-4")
 
+    def test_muse_spark_tiers(self):
+        standard = pricing.get("muse-spark-1.3")
+        assert standard is not None
+        assert (standard.input, standard.output, standard.cache_read) == (1.25, 4.25, 0.15)
+        assert pricing.get("muse-spark-1.2") == standard
+        assert pricing.get("muse-spark-1.1") == standard
+        # Without entries of its own, the contributor tier would match the standard prefix.
+        contributor = pricing.get("muse-spark-1.3-contributor")
+        assert contributor is not None
+        assert (contributor.input, contributor.output, contributor.cache_read) == (
+            0.10,
+            0.20,
+            0.002,
+        )
+        assert pricing.get("muse-spark-1.2-contributor") == contributor
+
     def test_unknown_model(self):
         assert not pricing.has("unknown-model-v1")
         assert pricing.get("unknown-model-v1") is None

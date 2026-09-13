@@ -46,6 +46,9 @@ class TestDetectProvider:
     def test_gemini(self):
         assert _detect_provider("gemini-2.5-flash") == "gemini"
 
+    def test_muse_spark(self):
+        assert _detect_provider("muse-spark-1.3-contributor") == "meta"
+
     def test_unknown_raises(self):
         with pytest.raises(ValueError, match="Cannot detect provider"):
             _detect_provider("unknown-model-v1")
@@ -76,6 +79,9 @@ class TestResolveProviderName:
             ("o3", {}, "openai"),
             ("grok-4", {}, "xai"),
             ("gemini-2.5-flash", {}, "gemini"),
+            ("muse-spark-1.3", {}, "meta"),
+            # Self-hosted Muse Glimmer is served by local OpenAI-compatible runtimes.
+            ("muse-glimmer-1.0", {"base_url": "http://localhost:8000/v1"}, "openai"),
             ("gemma4:e4b", {"base_url": "http://localhost:11434/v1"}, "openai"),
             ("claude-sonnet-4-6", {"provider": "openai"}, "openai"),
         ],
@@ -227,6 +233,27 @@ class TestCreateProvider:
             warnings.simplefilter("always")
             create_provider("gemini-2.5-flash", base_url="https://override")
             assert any("base_url is not supported" in str(w.message) for w in caught)
+
+    def test_meta_route(self, monkeypatch):
+        monkeypatch.setenv("MODEL_API_KEY", "meta-key")
+        with patch("ai_arch_toolkit.core._providers._meta.MetaProvider") as cls:
+            create_provider("muse-spark-1.3", base_url="https://gateway.example/v1", timeout=30.0)
+            cls.assert_called_once_with(
+                "muse-spark-1.3", "meta-key", base_url="https://gateway.example/v1", timeout=30.0
+            )
+
+    def test_meta_never_falls_back_to_the_openai_key(self, monkeypatch):
+        monkeypatch.delenv("MODEL_API_KEY", raising=False)
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
+        with pytest.raises(ValueError, match="MODEL_API_KEY"):
+            create_provider("muse-spark-1.3")
+
+    def test_meta_builds_a_real_provider(self, monkeypatch):
+        from ai_arch_toolkit.core._providers._meta import MetaProvider
+
+        monkeypatch.setenv("MODEL_API_KEY", "meta-key")
+        assert isinstance(create_provider("muse-spark-1.3"), MetaProvider)
+        assert isinstance(create_provider("future-muse", provider="meta"), MetaProvider)
 
     def test_unknown_model_raises(self):
         with pytest.raises(ValueError, match="Cannot detect provider"):

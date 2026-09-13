@@ -62,3 +62,19 @@ Keep entries factual: model ID, scenario, observed error, and the local action t
 - Final expanded run `20260428T015941Z`: 144 passed, 3 failed. Remaining failures are
   `gemini-3.1-flash-live-preview / plain`, `gemini-3.1-flash-live-preview / stream`, and
   `claude-opus-4-7 / tools_loop`.
+
+## 2026-09-13
+
+- Added `muse-spark-1.3` (Meta Model API through the new `meta` provider, Responses API over
+  the `openai` SDK). `tools_loop` needs `tool_choice = "auto"`: Meta rejects `"required"`,
+  `"none"`, and named choices with 400 (`only "auto" is supported for tool_choice`). The
+  inventory now takes a per-model `tool_choice`.
+- Full run `20260913T040525Z`: `plain`, `tools_loop`, `structured`, `json_mode`, and
+  `thinking` passed; `stream` failed with 503 `service_overloaded` after the probe's retries
+  (max 5 s backoff). Rerun `20260913T040824Z` passed. Meta's backend returned 503 on a large
+  share of calls that day; its docs send `Retry-After: 60` on overload.
+- The `thinking` probe returned no reasoning summary: Muse Spark always reasons, but a summary
+  is optional. Keep `require_thinking` off.
+- As a precaution, the sanitizer also redacts the Meta key format (`LLM|<digits>|...`) in
+  probe reports.
+

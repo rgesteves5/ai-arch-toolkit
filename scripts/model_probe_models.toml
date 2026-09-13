@@ -211,3 +211,18 @@ provider = "anthropic"
 scenarios = ["plain", "tools_loop", "json_mode", "stream"]
 allow_transient = true
 kwargs = { temperature = 0.0, max_tokens = 64 }
+
+# ---------------------------------------------------------------------------
+# Meta (Meta Model API, Responses API over the openai SDK)
+# ---------------------------------------------------------------------------
+
+# Muse Spark always reasons: max_tokens covers reasoning plus the answer, so the budget stays
+# generous. Meta only accepts tool_choice="auto". Its backend often answers 503
+# service_overloaded, hence allow_transient.
+[[models]]
+id = "muse-spark-1.3"
+provider = "meta"
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
+allow_transient = true
+tool_choice = "auto"
+kwargs = { temperature = 1.0, max_tokens = 4096, thinking_effort = "low" }

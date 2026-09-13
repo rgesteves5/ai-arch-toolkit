@@ -24,6 +24,9 @@ _MODEL_PREFIXES: dict[str, str] = {
     "o4-": "openai",
     "grok-": "xai",
     "gemini-": "gemini",
+    # Only the hosted Muse Spark family: self-hosted Muse Glimmer runs on local OpenAI-compatible
+    # servers and must keep reaching the base_url fallback.
+    "muse-spark-": "meta",
 }
 
 _MODEL_IDS: dict[str, str] = {
@@ -153,16 +156,17 @@ def create_provider(
 
     Routing precedence: an explicit ``provider`` wins; otherwise the model
     prefix is matched (``claude-`` → Anthropic, ``gpt-``/``chat-``/``o1-`` →
-    OpenAI, ``grok-`` → xAI, ``gemini-`` → Gemini); otherwise an unknown model with
-    ``base_url`` set falls back to the OpenAI-compatible adapter (Ollama, LM
-    Studio, vLLM). The API key is required unless ``base_url`` points at a
-    loopback host (localhost), where local servers ignore it.
+    OpenAI, ``grok-`` → xAI, ``gemini-`` → Gemini, ``muse-spark-`` → Meta);
+    otherwise an unknown model with ``base_url`` set falls back to the
+    OpenAI-compatible adapter (Ollama, LM Studio, vLLM). The API key is required
+    unless ``base_url`` points at a loopback host (localhost), where local servers
+    ignore it.
 
     Args:
         provider: Force a specific provider, bypassing prefix detection.
-            One of ``anthropic``, ``openai``, ``xai``, ``gemini``.
-        base_url: Override the endpoint. Only the Anthropic and OpenAI
-            adapters honor it; xAI and Gemini ignore it with a warning.
+            One of ``anthropic``, ``openai``, ``xai``, ``gemini``, ``meta``.
+        base_url: Override the endpoint. The Anthropic, OpenAI and Meta adapters
+            honor it; xAI and Gemini ignore it with a warning.
     """
     base_url = base_url or None  # normalize "" so it never masks the key check
     local = _is_local_url(base_url)
@@ -207,6 +211,17 @@ def create_provider(
         return GeminiProvider(
             model,
             _resolve_key(("GOOGLE_API_KEY", "GEMINI_API_KEY"), api_key),
+            timeout=timeout,
+        )
+
+    if name == "meta":
+        from ai_arch_toolkit.core._providers._meta import MetaProvider
+
+        # MODEL_API_KEY is Meta's own variable; OPENAI_API_KEY must never reach Meta.
+        return MetaProvider(
+            model,
+            _resolve_key("MODEL_API_KEY", api_key, local=local),
+            base_url=base_url,
             timeout=timeout,
         )
 
