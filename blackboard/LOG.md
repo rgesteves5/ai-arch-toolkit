@@ -38,4 +38,10 @@
   Anthropic, OpenAI e Gemini (ver F21); dois bugs encontrados ao vivo e corrigidos (`$defs` de
   pydantic aninhados; Gemini sem `parts`); teste `live_api` antigo actualizado; 7 testes `live_api`
   novos. xAI fica pendente (créditos).
+- A pedido do dono: commits por área (providers, tools, flow, docs, internal) verificados um a um em
+  worktrees temporárias, push para `main` (`48a43ac..5e29759`). Worktrees dos agentes removidas e
+  os seus branches apagados (0 commits próprios; conteúdo confirmado em `main`).
+- F22: os três revisores confirmaram bugs; corrigidos em `2411831` (tools), `7559d5e` (llm) e
+  `cc83cb9` (flow), com testes que falham antes. 2956 passed; `live_api` Anthropic/OpenAI 11 passed.
+  Achados não corrigidos em `FINDINGS.md`. xAI continua pendente (créditos).
 

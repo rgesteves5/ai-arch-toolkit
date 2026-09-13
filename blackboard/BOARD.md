@@ -2,11 +2,11 @@
 
 ## Frente activa: plano de correcção do toolkit
 
-- **Estado:** concluída em 2026-09-13 (F01–F21 done). À espera de revisão do dono; nada commitado.
+- **Estado:** concluída em 2026-09-13 (F01–F22 done), commitada e publicada em `main`.
 - **Plano:** `docs/internal/toolkit-fix-plan.md` — a secção 0 tem os ajustes da revisão cruzada.
 - **Origem:** `docs/internal/agentes-app-toolkit-review.md`.
 - **Base:** `main` @ `48a43ac`. Baseline: 2608 passed, 7 skipped; pyright e ruff limpos.
-- **Commits:** nenhum. O dono do repositório revê o diff e faz os commits.
+- **Commits:** publicados em `main` a pedido do dono (`14e623d`..`cc83cb9` e o registo).
 - **Coordenador:** sessão principal. Aplica os diffs das worktrees, corre a suite, escreve o `CHANGELOG`.
 - **Não tocar:** `.claude/worktrees/exciting-germain-a41255` é de uma sessão anterior.
 
@@ -40,6 +40,7 @@
 | F20 | `run_tools` verifica todos os nomes antes de executar | done | F04 (aplicado) |
 | F18 | Deriva de documentação e `CHANGELOG` | done | todas |
 | F21 | Achados restantes: nanope, conteúdo de sistema, `_stream_sync`, `Any`, middleware | done | F01–F20 |
+| F22 | Revisão adversarial pós-implementação: 3 revisores, correcções confirmadas | done | F21 |
 
 ## Por fazer (dono do repositório)
 

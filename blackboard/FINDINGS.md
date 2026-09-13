@@ -159,3 +159,26 @@ Em mensagens de utilizador, OpenAI, Gemini e xAI convertiam `CachePart` com `str
 recebia `CachePart(content='…', ttl='ephemeral')`. O xAI fazia o mesmo com `DocumentPart`, bytes
 incluídos. Reprodução: `_openai._messages_to_sdk([user(["a", cache("LONG")])])`.
 
+## 2026-09-13 · revisão pós-implementação (F22)
+
+### Parâmetro `Optional` sem default não pode ser omitido → sem tarefa
+
+`infer_schema` tira de `required` um parâmetro `X | None` mesmo sem default; o modelo omite-o e a
+chamada falha no binding com `validation_error "argument mismatch: missing a required argument"`.
+Anterior ao plano (antes era `TypeError` na chamada). Opções: exigir parâmetros sem default, ou passar
+`None` aos opcionais omitidos. Reprodução: `def find(q: int | None) -> str` chamado com `{}`.
+
+### `functools.partial` em `ToolGroup` → sem tarefa
+
+`ToolGroup(functools.partial(f, 1))` rebenta com `AttributeError: __name__` em `infer_schema`.
+
+### `ApprovalDecision.approve(modified_args={})` ignorado → sem tarefa
+
+`ApprovalGate._outcome` usa `decision.modified_args or ...`, logo um dict vazio mantém os argumentos
+originais. Anterior ao plano.
+
+### Gemini com declarações mistas numa `Tool` → por verificar ao vivo
+
+Uma lista de tools em que umas vão por `parameters` e outras por `parameters_json_schema` gera uma
+única `types.Tool`; não foi possível confirmar offline que a API aceita a mistura.
+
