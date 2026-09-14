@@ -55,6 +55,15 @@
 - Achados fora do âmbito em `FINDINGS.md` (chave OpenAI em `base_url` remoto, `strict` no adaptador
   OpenAI, `APIConnectionError` sem retry, `pytest-timeout` ausente).
 - A pedido do dono: commits `9588f31` (código, testes, scripts, CI), `7967287` (docs) e o registo no
-  blackboard, com push para `main`. Falta o secret `MODEL_API_KEY` no GitHub para o CI correr os
-  testes ao vivo da Meta.
+  blackboard, com push para `main`.
+- O dono não quer testes reais no CI do GitHub (não quer gastar dinheiro no CI): removido
+  `.github/workflows/integration.yml` (corria `pytest -m live_api` todos os dias às 06:17 UTC e a
+  pedido) e o job de testes do `ci.yml` passa a `-m "not live_api"`. AGENTS.md e CONTRIBUTING.md
+  dizem que os testes `live_api` só correm localmente. O secret `MODEL_API_KEY` no GitHub deixa de
+  ser preciso.
+- Auditoria do `CHANGELOG`: tudo o que foi feito nesta sessão estava lá; faltava a correcção do
+  preço do `grok-4.6` (`8b7299a`, anterior à sessão) e a linha do CI dizia que os testes ao vivo
+  corriam num cron diário. Ambas corrigidas.
+- A pedido do dono (2026-09-15): commits `c679ac3` (CI sem testes reais), `44885a3` (changelog do
+  `grok-4.6`) e o registo no blackboard, com push para `main`.
 

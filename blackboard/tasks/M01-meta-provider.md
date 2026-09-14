@@ -62,3 +62,9 @@ SDK da Meta: a documentação manda usar o SDK `openai` (Responses, Chat Complet
 ## Linhas do CHANGELOG
 
 Entrada "Meta provider (Muse Spark)" e a do `tool_choice` do inventário, em `[Unreleased]` → Added.
+
+## Seguimento
+
+- O dono não quer testes reais no CI do GitHub: `.github/workflows/integration.yml` removido e o job
+  de testes do `ci.yml` com `-m "not live_api"`. Os testes ao vivo da Meta correm só localmente
+  (`uv run pytest -m live_api -k meta`, com a `.env` carregada).

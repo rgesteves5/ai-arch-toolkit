@@ -208,3 +208,8 @@ não têm `status_code` para o `_retry.py`. Uma falha de rede não faz retry nem
 
 O marcador está registado no `pyproject.toml`, mas o `pytest-timeout` não está instalado; os
 timeouts dos testes `live_api` são decorativos. O job de integração passou a ter 30 minutos.
+
+### Seguimento (2026-09-13): sem testes reais no CI
+
+A pedido do dono, o workflow `integration.yml` foi removido e o `ci.yml` corre `pytest -m "not
+live_api"`; a nota acima sobre o job de integração com 30 minutos deixa de se aplicar.
