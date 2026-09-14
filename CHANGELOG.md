@@ -263,6 +263,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `cost_in_usd_ticks` charge for response and meter costs, falling back to the local pricing
   registry only when the provider omits it. OpenAI-compatible responses also recover separately
   reported generated tokens from `total_tokens` when it exceeds prompt plus completion.
+- **`grok-4.6` is priced at its own rates.** It matched the `grok-4` entry and was estimated at
+  $1.25/$2.50 per million input/output tokens instead of $2.00/$6.00 ($0.50 cached input; all
+  three double at or above 200k prompt tokens).
 - `generate_review` now forwards `ReasoningSpec.output_schema` to its generator while keeping the
   reviewer on its plain-text `ACCEPT` / `RETRY` protocol. Its strategy metadata and the Nanope
   configurable-agent validation now advertise the same support, and Nanope no longer injects
