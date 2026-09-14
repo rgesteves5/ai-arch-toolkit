@@ -52,4 +52,5 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: uv lock --check
       - run: uv sync --locked --extra dev
-      - run: uv run pytest --cov=ai_arch_toolkit --cov-report=term-missing
+      # live_api tests call paid provider APIs; they only run locally, never in CI.
+      - run: uv run pytest -m "not live_api" --cov=ai_arch_toolkit --cov-report=term-missing

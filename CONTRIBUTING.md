@@ -29,7 +29,7 @@ uv run pytest                                # full suite (2400+ tests)
 uv run pytest tests/test_llm.py              # one file
 uv run pytest -k "stream"                    # by pattern
 uv run pytest -m "integration and not live_api"  # deterministic system tests
-uv run pytest -m live_api                    # real APIs (needs keys; may cost money)
+uv run pytest -m live_api                    # real APIs (needs keys; costs money; never in CI)
 
 uv run ruff check src tests examples         # lint
 uv run ruff format src tests examples        # auto-format

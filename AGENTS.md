@@ -67,7 +67,7 @@ Deeper reading, in `docs/`: `framework-overview.md` (layer tour), `configuring-a
 ## Testing
 
 - pytest-asyncio with `asyncio_mode = "auto"` — no `@pytest.mark.asyncio` needed.
-- The test tree mirrors the package (`tests/agents/`, `tests/flow/`, `tests/metering/`, `tests/budget/`, `tests/prompts/`, …). Cross-component system tests live in `tests/integration/` behind `integration`; tests that call real providers also carry `live_api`.
+- The test tree mirrors the package (`tests/agents/`, `tests/flow/`, `tests/metering/`, `tests/budget/`, `tests/prompts/`, …). Cross-component system tests live in `tests/integration/` behind `integration`; tests that call real providers also carry `live_api`. `live_api` tests cost money and run only locally: CI deselects them (`-m "not live_api"`), so don't add workflows or secrets that call provider APIs.
 - Provider tests: build fake SDK objects with `SimpleNamespace` and inject a mocked client via `provider._client = AsyncMock()` (Anthropic `messages.create`, OpenAI `chat.completions.create`; streams are async iterators of fake chunk objects). Patch the SDK module where it's imported, e.g. `@patch("ai_arch_toolkit.core._providers._anthropic.anthropic")`. Helper factories: `tests/test_openai_provider.py`, `tests/test_anthropic_provider.py`.
 - Agent tests: `make_response()`/`make_tool_call()` factories in `tests/agents/conftest.py`; mock the `LLM` with `AsyncMock` and feed `complete.side_effect` prebuilt `Response` objects.
 - Metering/budget tests: use a real `LLM` with a fake `_provider` so the charge site runs — mocking `llm.complete` bypasses metering entirely.
