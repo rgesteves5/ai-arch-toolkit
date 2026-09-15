@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import functools
+
 import pytest
 
 from ai_arch_toolkit.core._metering._scope import MeterScope
@@ -33,6 +35,11 @@ def get_time(tz: str) -> dict:
 async def async_search(query: str) -> str:
     """Search for something."""
     return f"Results for: {query}"
+
+
+def scale(factor: float, value: int) -> float:
+    """Scale a value."""
+    return factor * value
 
 
 def _make_response(*tool_calls: ToolCall) -> Response:
@@ -370,3 +377,11 @@ class TestRunToolsUsesGroupGovernance:
         with MeterScope() as scope:
             await run_tools(r, ToolGroup(get_weather))
         assert scope.snapshot().tool_calls == 1
+
+
+async def test_run_tools_finds_a_partial_by_the_wrapped_function_name() -> None:
+    response = _make_response(ToolCall(id="tc_1", name="scale", input={"value": 3}))
+
+    results = await run_tools(response, [functools.partial(scale, 2.0)])
+
+    assert [r["content"] for r in results] == ["6.0"]

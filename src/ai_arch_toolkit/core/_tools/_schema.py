@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import enum
+import functools
 import inspect
 import logging
 import types
@@ -344,6 +345,20 @@ def _get_summary(fn: Callable[..., Any]) -> str:
     return "\n".join(summary_lines).strip()
 
 
+def _described_function(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """The function whose name, type hints and docstring describe ``fn``.
+
+    A ``functools.partial`` has none of its own; its signature (from ``inspect.signature``)
+    already drops the arguments it binds.
+    """
+    return fn.func if isinstance(fn, functools.partial) else fn
+
+
+def callable_name(fn: Callable[..., Any]) -> str:
+    """The tool name of an undecorated callable: its function's name, else its type's."""
+    return getattr(_described_function(fn), "__name__", None) or type(fn).__name__
+
+
 def _is_json_serializable(value: Any) -> bool:
     """Check if a value can be included as a JSON Schema default."""
     return isinstance(value, (str, int, float, bool, type(None), list, dict))
@@ -361,15 +376,16 @@ def infer_schema(
 
     Returns ``{"name": ..., "description": ..., "input_schema": {...}}``.
     """
-    tool_name = name or fn.__name__
+    described = _described_function(fn)
+    tool_name = name or callable_name(fn)
     try:
-        hints = get_type_hints(fn)
+        hints = get_type_hints(described)
     except (NameError, AttributeError, TypeError):
-        logger.warning("Could not resolve type hints for %s, using annotations", fn.__name__)
-        hints = getattr(fn, "__annotations__", {})
+        logger.warning("Could not resolve type hints for %s, using annotations", tool_name)
+        hints = getattr(described, "__annotations__", {})
 
     sig = inspect.signature(fn)
-    param_descriptions = _parse_param_descriptions(fn)
+    param_descriptions = _parse_param_descriptions(described)
 
     properties: dict[str, object] = {}
     required: list[str] = []
@@ -420,7 +436,7 @@ def infer_schema(
 
     return {
         "name": tool_name,
-        "description": _get_summary(fn),
+        "description": _get_summary(described),
         "input_schema": input_schema,
     }
 

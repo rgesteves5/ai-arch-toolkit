@@ -101,6 +101,12 @@ def paged(limit: int | None = None) -> str:
     return f"limit={limit!r}"
 
 
+@tool
+def find(query: str | None) -> str:
+    """Find something; the query may be null."""
+    return f"query={query!r}"
+
+
 @tool(requires_approval=True)
 def deploy(target: str, replicas: int) -> str:
     """Deploy a service."""
@@ -355,3 +361,12 @@ async def test_a_gate_returning_non_mapping_arguments_is_a_validation_error(mode
     result = await _execute(group, _call("add", a=1, b=2), mode)
 
     assert result.error is not None and result.error.type == "validation_error"
+
+
+@pytest.mark.parametrize("mode", MODES)
+async def test_an_omitted_optional_argument_without_a_default_is_passed_as_none(mode: str) -> None:
+    # The schema lets the model omit `query: str | None`; Python still needs the argument.
+    result = await _execute(ToolGroup(find), _call("find"), mode)
+
+    assert result.ok, result.to_model_text()
+    assert result.value == "query=None"

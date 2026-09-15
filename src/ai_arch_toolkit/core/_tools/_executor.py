@@ -29,7 +29,7 @@ from ai_arch_toolkit.core._tools._governance import (
     default_redactor,
 )
 from ai_arch_toolkit.core._tools._result import ToolResult, _format_value
-from ai_arch_toolkit.core._tools._schema import tool_schema
+from ai_arch_toolkit.core._tools._schema import callable_name, tool_schema
 from ai_arch_toolkit.core._tools._validation import (
     ArgumentError,
     bind_arguments,
@@ -44,8 +44,8 @@ logger = logging.getLogger(__name__)
 def _resolve_fn(tool_call: ToolCall, tools: list[Callable[..., Any]]) -> Callable[..., Any]:
     """Find the callable matching a tool call name.
 
-    Matches by ``__tool_definition__.schema.name`` first, then falls back to
-    ``__name__`` for plain (undecorated) callables.
+    Matches by ``__tool_definition__.schema.name`` first, then falls back to the
+    function name for plain (undecorated) callables, a ``functools.partial``'s included.
     """
     for fn in tools:
         definition = getattr(fn, "__tool_definition__", None)
@@ -54,7 +54,7 @@ def _resolve_fn(tool_call: ToolCall, tools: list[Callable[..., Any]]) -> Callabl
     for fn in tools:
         if hasattr(fn, "__tool_definition__"):
             continue
-        if getattr(fn, "__name__", None) == tool_call.name:
+        if callable_name(fn) == tool_call.name:
             return fn
     msg = f"Unknown tool: {tool_call.name!r}"
     raise KeyError(msg)

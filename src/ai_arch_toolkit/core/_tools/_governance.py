@@ -190,7 +190,9 @@ class ApprovalGate:
                 message=f"Tool {ctx.tool_call.name!r} requires approval and was denied",
                 audit=audit,
             )
+        # An empty dict is a choice too: the reviewer approved a call without arguments.
+        args = decision.modified_args
         return GateModify(
-            args=decision.modified_args or dict(ctx.tool_call.input),
+            args=dict(ctx.tool_call.input) if args is None else args,
             audit=audit,
         )

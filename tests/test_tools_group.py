@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 
 import pytest
 
@@ -41,6 +42,17 @@ def explode() -> str:
 @tool(capability="shell", risk_level="critical", requires_approval=True)
 def dangerous_echo(command: str) -> str:
     """Echo a dangerous command."""
+    return command
+
+
+def scale(factor: float, value: int) -> float:
+    """Scale a value."""
+    return factor * value
+
+
+@tool(requires_approval=True)
+def guarded(command: str = "noop") -> str:
+    """Run a command that needs approval."""
     return command
 
 
@@ -198,6 +210,18 @@ class TestApproval:
         assert result.value == "echo ok"
         assert result.metadata["audit"]["approval"]["decision"]["reviewer"] == "human"
 
+    def test_approval_with_empty_modified_args_calls_without_arguments(self):
+        group = ToolGroup(
+            guarded,
+            approval_handler=lambda _: ApprovalDecision.approve(modified_args={}),
+        )
+        tc = ToolCall(id="tc_1", name="guarded", input={"command": "rm -rf /"})
+
+        result = group.execute(tc)
+
+        assert result.ok is True
+        assert result.value == "noop"
+
     async def test_async_approved_modified_args(self):
         async def approve(_request):
             return ApprovalDecision.approve(modified_args={"command": "echo safe"})
@@ -316,3 +340,13 @@ class TestCallBudget:
         blocked = [r for r in results if not r.ok]
         assert len(executed) == limit
         assert all(r.error.type == "max_calls_exceeded" for r in blocked if r.error)
+
+
+class TestPartialTools:
+    def test_a_partial_runs_under_the_wrapped_function_name(self):
+        group = ToolGroup(functools.partial(scale, 2.0))
+
+        result = group.execute(ToolCall(id="tc_1", name="scale", input={"value": 3}))
+
+        assert result.ok is True, result.to_model_text()
+        assert result.value == 6.0

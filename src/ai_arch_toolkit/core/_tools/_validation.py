@@ -13,7 +13,9 @@ actually run and an invalid call never reaches a human:
 * ``string``, ``array``, ``object`` and untyped schemas (``Any``) are left as they are — the schema
   generator maps unknown Python types to ``string``, so rejecting non-strings would refuse valid
   calls;
-* ``None`` passes (the schema does not record whether a parameter is ``Optional``).
+* ``None`` passes (the schema does not record whether a parameter is ``Optional``);
+* a parameter the schema does not require but the function has no default for
+  (``query: str | None``) receives ``None`` when the model omits it.
 
 Required arguments must be present, and arguments the schema does not declare are refused unless
 the function takes ``**kwargs``. Finally the arguments must bind to the function's signature.
@@ -73,7 +75,23 @@ def validate_arguments(
             got = f"{type(value).__name__} {_short(value)}"
             raise ArgumentError(f"argument {name!r}: expected {expected}, got {got}", name)
         coerced[name] = value_out
+
+    for param in _parameters(fn):
+        if param.name in properties and param.name not in coerced and _needs_value(param):
+            coerced[param.name] = None  # optional in the schema, required by the signature
     return coerced
+
+
+def _parameters(fn: Callable[..., Any]) -> list[inspect.Parameter]:
+    try:
+        return list(inspect.signature(fn).parameters.values())
+    except (TypeError, ValueError):
+        return []
+
+
+def _needs_value(param: inspect.Parameter) -> bool:
+    variadic = (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+    return param.default is inspect.Parameter.empty and param.kind not in variadic
 
 
 def bind_arguments(

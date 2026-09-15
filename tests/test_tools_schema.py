@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import enum
+import functools
 import json
 import warnings
 from types import SimpleNamespace
@@ -350,6 +351,25 @@ class TestInferSchema:
         assert props["y"]["default"] == 10
         assert "x" in schema["input_schema"]["required"]
         assert "y" not in schema["input_schema"]["required"]
+
+    def test_a_partial_is_described_by_the_function_it_wraps(self):
+        def scale(factor: float, value: int) -> float:
+            """Scale a value.
+
+            Args:
+                factor: Multiplier.
+                value: The value to scale.
+            """
+            return factor * value
+
+        schema = infer_schema(functools.partial(scale, 2.0))
+
+        assert schema["name"] == "scale"
+        assert schema["description"] == "Scale a value."
+        assert schema["input_schema"]["properties"] == {
+            "value": {"type": "integer", "description": "The value to scale."}
+        }
+        assert schema["input_schema"]["required"] == ["value"]
 
     def test_optional_not_required(self):
         def fn(x: str, y: str | None = None):
