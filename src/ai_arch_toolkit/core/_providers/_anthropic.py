@@ -21,6 +21,7 @@ from ai_arch_toolkit.core._providers._base import (
     StreamState,
     _parse_retry_after,
     merge_system_prompts,
+    network_error,
     parse_tool_args,
     system_content_text,
 )
@@ -454,6 +455,9 @@ class AnthropicProvider(LoopAwareClientCache, BaseProvider):
             return result.input_tokens
         except anthropic.APIStatusError as exc:
             raise APIError(exc.response.status_code, str(exc.body)) from exc
+        except anthropic.APIConnectionError as exc:
+            timed_out = isinstance(exc, anthropic.APITimeoutError)
+            raise network_error(exc, timed_out=timed_out) from exc
 
     # ------------------------------------------------------------------
     # Internals
@@ -581,6 +585,9 @@ class AnthropicProvider(LoopAwareClientCache, BaseProvider):
             ) from exc
         except anthropic.APIStatusError as exc:
             raise APIError(exc.response.status_code, str(exc.body)) from exc
+        except anthropic.APIConnectionError as exc:
+            timed_out = isinstance(exc, anthropic.APITimeoutError)
+            raise network_error(exc, timed_out=timed_out) from exc
 
         resp = _parse_sdk_response(message, self._model, output_schema=output_schema)
         logger.debug(
@@ -692,6 +699,9 @@ class AnthropicProvider(LoopAwareClientCache, BaseProvider):
                 ) from exc
             except anthropic.APIStatusError as exc:
                 raise APIError(exc.response.status_code, str(exc.body)) from exc
+            except anthropic.APIConnectionError as exc:
+                timed_out = isinstance(exc, anthropic.APITimeoutError)
+                raise network_error(exc, timed_out=timed_out) from exc
 
         return _generate(), state
 
@@ -798,6 +808,9 @@ class AnthropicProvider(LoopAwareClientCache, BaseProvider):
                 ) from exc
             except anthropic.APIStatusError as exc:
                 raise APIError(exc.response.status_code, str(exc.body)) from exc
+            except anthropic.APIConnectionError as exc:
+                timed_out = isinstance(exc, anthropic.APITimeoutError)
+                raise network_error(exc, timed_out=timed_out) from exc
 
         return _generate(), state
 
@@ -844,6 +857,9 @@ class AnthropicProvider(LoopAwareClientCache, BaseProvider):
             return result.id
         except anthropic.APIStatusError as exc:
             raise APIError(exc.response.status_code, str(exc.body)) from exc
+        except anthropic.APIConnectionError as exc:
+            timed_out = isinstance(exc, anthropic.APITimeoutError)
+            raise network_error(exc, timed_out=timed_out) from exc
 
     async def batch_status(self, batch_id: str) -> str:
         """Check batch status."""
@@ -852,6 +868,9 @@ class AnthropicProvider(LoopAwareClientCache, BaseProvider):
             return result.processing_status
         except anthropic.APIStatusError as exc:
             raise APIError(exc.response.status_code, str(exc.body)) from exc
+        except anthropic.APIConnectionError as exc:
+            timed_out = isinstance(exc, anthropic.APITimeoutError)
+            raise network_error(exc, timed_out=timed_out) from exc
 
     async def batch_results(self, batch_id: str) -> list[Any]:
         """Retrieve completed batch results."""
@@ -871,4 +890,7 @@ class AnthropicProvider(LoopAwareClientCache, BaseProvider):
                     results.append(BatchResult(custom_id=custom_id, error=error_msg))
         except anthropic.APIStatusError as exc:
             raise APIError(exc.response.status_code, str(exc.body)) from exc
+        except anthropic.APIConnectionError as exc:
+            timed_out = isinstance(exc, anthropic.APITimeoutError)
+            raise network_error(exc, timed_out=timed_out) from exc
         return results

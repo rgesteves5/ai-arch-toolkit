@@ -21,6 +21,7 @@ from ai_arch_toolkit.core._providers._base import (
     StreamState,
     _parse_retry_after,
     merge_system_prompts,
+    network_error,
     system_content_text,
 )
 from ai_arch_toolkit.core._providers._imports import require_sdk
@@ -35,11 +36,27 @@ from ai_arch_toolkit.core._response import (
 )
 
 require_sdk("google.genai", "gemini")
+import httpx  # noqa: E402  (a google-genai dependency)
 from google import genai  # noqa: E402
 from google.genai import errors as genai_errors  # noqa: E402
 from google.genai import types  # noqa: E402
 
 logger = logging.getLogger(__name__)
+
+# Failures before any HTTP response. The SDK sends requests through httpx, or through aiohttp
+# when that is installed, whose connection errors are not all OSError.
+try:
+    import aiohttp
+except ImportError:  # pragma: no cover - aiohttp is optional for google-genai
+    _AIOHTTP_ERRORS: tuple[type[Exception], ...] = ()
+else:
+    _AIOHTTP_ERRORS = (aiohttp.ClientConnectionError,)
+_NETWORK_ERRORS: tuple[type[Exception], ...] = (httpx.TransportError, *_AIOHTTP_ERRORS)
+
+
+def _timed_out(exc: BaseException) -> bool:
+    return isinstance(exc, httpx.TimeoutException | TimeoutError)
+
 
 # Parameters safe to forward directly to the SDK config.
 _SDK_PARAMS = {
@@ -405,6 +422,8 @@ class GeminiProvider(LoopAwareClientCache, BaseProvider):
             raise APIError(exc.code, str(exc)) from exc
         except genai_errors.ServerError as exc:
             raise APIError(exc.code, str(exc)) from exc
+        except _NETWORK_ERRORS as exc:
+            raise network_error(exc, timed_out=_timed_out(exc)) from exc
 
     # ------------------------------------------------------------------
     # Internals
@@ -541,6 +560,8 @@ class GeminiProvider(LoopAwareClientCache, BaseProvider):
             raise APIError(exc.code, str(exc)) from exc
         except genai_errors.ServerError as exc:
             raise APIError(exc.code, str(exc)) from exc
+        except _NETWORK_ERRORS as exc:
+            raise network_error(exc, timed_out=_timed_out(exc)) from exc
 
         resp = _parse_sdk_response(response, self._model, output_schema=output_schema)
         logger.debug(
@@ -628,5 +649,7 @@ class GeminiProvider(LoopAwareClientCache, BaseProvider):
                 raise APIError(exc.code, str(exc)) from exc
             except genai_errors.ServerError as exc:
                 raise APIError(exc.code, str(exc)) from exc
+            except _NETWORK_ERRORS as exc:
+                raise network_error(exc, timed_out=_timed_out(exc)) from exc
 
         return _generate(), state

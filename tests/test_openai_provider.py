@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import copy
 import warnings
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from pydantic import BaseModel, Field
 
 from ai_arch_toolkit.core._exceptions import APIError, RateLimitError
 from ai_arch_toolkit.core._providers._base import StreamState, parse_tool_args
@@ -18,7 +20,13 @@ from ai_arch_toolkit.core._providers._openai import (
     _parse_sdk_response,
     _tool_to_sdk,
 )
-from ai_arch_toolkit.core._response import OutputSchema, Response, ThinkingBlock, ToolCall
+from ai_arch_toolkit.core._response import (
+    OutputSchema,
+    Response,
+    ThinkingBlock,
+    ToolCall,
+    _resolve_output_schema,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers — build fake SDK objects
@@ -245,6 +253,52 @@ class TestBuildOutputSchemaFormat:
         schema = OutputSchema(name="X", schema={"type": "object"}, strict=False)
         fmt = _build_output_schema_format(schema)
         assert fmt["json_schema"]["strict"] is False
+
+    def test_a_pydantic_schema_is_normalized_to_the_strict_subset(self):
+        # OpenAI answers 400 "'additionalProperties' is required to be supplied and to be false"
+        # for model_json_schema() as is (verified live, gpt-4.1-nano).
+        class Address(BaseModel):
+            city: str
+            country: str = "Portugal"
+
+        class Person(BaseModel):
+            name: str
+            nickname: str | None = None
+            address: Address = Field(description="Where they live.")
+
+        schema = _resolve_output_schema(Person)
+        original = copy.deepcopy(schema.schema)
+
+        sent = _build_output_schema_format(schema)["json_schema"]["schema"]
+
+        assert sent["additionalProperties"] is False
+        assert sent["required"] == ["name", "nickname", "address"]
+        assert "default" not in sent["properties"]["nickname"]
+        # A $ref with a sibling description is inlined, and strict too.
+        address = sent["properties"]["address"]
+        assert "$ref" not in address
+        assert address["description"] == "Where they live."
+        assert address["additionalProperties"] is False
+        assert address["required"] == ["city", "country"]
+        assert sent["$defs"]["Address"]["additionalProperties"] is False
+        assert schema.schema == original  # the caller's schema is left alone
+
+    def test_a_self_referencing_model_does_not_recurse_forever(self):
+        class Node(BaseModel):
+            value: int
+            parent: Node | None = Field(default=None, description="The parent node.")
+            first: Node = Field(description="Refers to itself with a sibling key.")
+
+        Node.model_rebuild()
+        sent = _build_output_schema_format(_resolve_output_schema(Node))["json_schema"]["schema"]
+
+        assert sent["additionalProperties"] is False
+        assert sent["required"] == ["value", "parent", "first"]
+
+    def test_a_non_strict_schema_is_sent_as_given(self):
+        raw = {"type": "object", "properties": {"a": {"type": "string"}}}
+        fmt = _build_output_schema_format(OutputSchema(name="X", schema=raw, strict=False))
+        assert fmt["json_schema"]["schema"] == raw
 
 
 class TestExtractUsage:
@@ -712,6 +766,49 @@ class TestOpenAIProviderErrors:
         with pytest.raises(APIError) as exc_info:
             await provider.complete([{"role": "user", "content": "Hi"}])
         assert exc_info.value.status_code == 500
+
+
+class TestOpenAIProviderNetworkErrors:
+    @pytest.mark.parametrize(
+        ("sdk_error", "expected"),
+        [("APIConnectionError", ConnectionError), ("APITimeoutError", TimeoutError)],
+    )
+    async def test_network_failures_become_builtin_errors(self, sdk_error, expected):
+        import httpx
+        import openai as openai_sdk
+
+        request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+        mock_client = AsyncMock()
+        mock_client.chat.completions.create.side_effect = getattr(openai_sdk, sdk_error)(
+            request=request
+        )
+        provider = OpenAIProvider("gpt-4o", "test-key")
+        provider._client = mock_client
+
+        with pytest.raises(expected):
+            await provider.complete([{"role": "user", "content": "Hi"}])
+        chunks, _ = provider.stream([{"role": "user", "content": "Hi"}])
+        with pytest.raises(expected):
+            _ = [chunk async for chunk in chunks]
+
+    async def test_a_dropped_connection_is_retried_by_llm(self):
+        import httpx
+        import openai as openai_sdk
+
+        from ai_arch_toolkit import LLM, RetryConfig
+
+        request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+        mock_client = AsyncMock()
+        mock_client.chat.completions.create.side_effect = [
+            openai_sdk.APIConnectionError(request=request),
+            _sdk_completion(text="recovered"),
+        ]
+        async with LLM("gpt-4o", api_key="test-key", retry=RetryConfig(base_delay=0.01)) as llm:
+            llm._provider._client = mock_client  # type: ignore[attr-defined]
+            response = await llm.complete("Hi")
+
+        assert response.text == "recovered"
+        assert mock_client.chat.completions.create.await_count == 2
 
 
 class TestOpenAIProviderLifecycle:

@@ -824,6 +824,38 @@ class TestAnthropicProviderErrors:
         assert exc_info.value.status_code == 500
 
 
+class TestAnthropicProviderNetworkErrors:
+    @pytest.mark.parametrize(
+        ("sdk_error", "expected"),
+        [("APIConnectionError", ConnectionError), ("APITimeoutError", TimeoutError)],
+    )
+    async def test_network_failures_become_builtin_errors(self, sdk_error, expected):
+        import anthropic as anthropic_sdk
+        import httpx
+
+        error = getattr(anthropic_sdk, sdk_error)(
+            request=httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        )
+        mock_client = MagicMock()
+        mock_client.messages.create = AsyncMock(side_effect=error)
+        mock_client.messages.stream.side_effect = error
+        mock_client.messages.count_tokens = AsyncMock(side_effect=error)
+        provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
+        provider._client = mock_client
+        messages = [{"role": "user", "content": "Hi"}]
+
+        with pytest.raises(expected):
+            await provider.complete(messages)
+        with pytest.raises(expected):
+            await provider.count_tokens(messages)
+        chunks, _ = provider.stream(messages)
+        with pytest.raises(expected):
+            _ = [chunk async for chunk in chunks]
+        events, _ = provider.stream_events(messages)
+        with pytest.raises(expected):
+            _ = [event async for event in events]
+
+
 class TestAnthropicProviderLifecycle:
     async def test_close(self):
         provider = AnthropicProvider("claude-sonnet-4-6", "test-key")

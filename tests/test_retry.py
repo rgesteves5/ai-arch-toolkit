@@ -37,6 +37,11 @@ class TestIsRetryable:
         exc = APIError(400, "bad request")
         assert _is_retryable(exc, RetryConfig()) is False
 
+    @pytest.mark.parametrize("exc", [ConnectionError("reset"), TimeoutError("slow")])
+    def test_network_errors_are_retryable(self, exc):
+        # Adapters turn SDK connection failures into these builtins.
+        assert _is_retryable(exc, RetryConfig()) is True
+
     def test_non_api_error_not_retryable(self):
         exc = ValueError("bad")
         assert _is_retryable(exc, RetryConfig()) is False

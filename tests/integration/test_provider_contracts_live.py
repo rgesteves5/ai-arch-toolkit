@@ -9,6 +9,7 @@ import time
 from typing import Any
 
 import pytest
+from pydantic import BaseModel
 
 from ai_arch_toolkit import LLM, ToolGroup, cache, run_tools, system, tool, user
 from tests.integration.conftest import skip_no_anthropic, skip_no_gemini, skip_no_openai
@@ -28,6 +29,29 @@ def locate(point: tuple[float, float]) -> str:
         point: Latitude and longitude.
     """
     return f"lat={point[0]} lon={point[1]}"
+
+
+@tool
+def add(a: int, b: int) -> str:
+    """Add two integers.
+
+    Args:
+        a: First number.
+        b: Second number.
+    """
+    return str(a + b)
+
+
+class Address(BaseModel):
+    city: str
+    country: str = "Portugal"
+
+
+class Person(BaseModel):
+    name: str
+    age: int
+    nickname: str | None = None
+    address: Address
 
 
 @tool
@@ -153,6 +177,31 @@ async def test_gemini_accepts_tuple_and_reference_schemas_as_json_schema() -> No
     assert [(c.name, c.input) for c in saved.tool_calls] == [
         ("save_item", {"item": {"name": "bolt", "qty": 4}})
     ]
+
+
+@skip_no_gemini
+@pytest.mark.timeout(120)
+async def test_gemini_accepts_openapi_and_json_schema_declarations_together() -> None:
+    # `add` fits Gemini's OpenAPI subset (parameters); `locate` does not (parameters_json_schema).
+    async with LLM(GEMINI) as llm:
+        response = await llm.complete(
+            "Call locate with point [38.7, -9.1] and add with a=2, b=3. Call both tools.",
+            tools=[add, locate],
+            max_tokens=400,
+        )
+
+    assert sorted(call.name for call in response.tool_calls) == ["add", "locate"]
+
+
+@skip_no_openai
+@pytest.mark.timeout(60)
+async def test_openai_structured_output_accepts_a_plain_pydantic_model() -> None:
+    # model_json_schema() has no additionalProperties: false; strict mode used to answer 400.
+    async with LLM(OPENAI) as llm:
+        response = await llm.complete("Ana, 31, lives in Lisbon.", output_schema=Person)
+
+    assert isinstance(response.parsed, Person), response.text
+    assert response.parsed.address.city == "Lisbon"
 
 
 @skip_no_openai

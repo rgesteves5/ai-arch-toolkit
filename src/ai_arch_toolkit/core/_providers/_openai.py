@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import warnings
@@ -22,6 +23,7 @@ from ai_arch_toolkit.core._providers._base import (
     LoopAwareClientCache,
     StreamState,
     _parse_retry_after,
+    network_error,
     parse_tool_args,
     system_content_text,
 )
@@ -191,15 +193,81 @@ def _messages_to_sdk(
     return wire
 
 
+def _strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of ``schema`` in OpenAI's strict subset, as the SDK's ``parse()`` helpers do.
+
+    Strict mode rejects an object without ``additionalProperties: false`` or with properties
+    missing from ``required``, which is what ``model_json_schema()`` produces for any model with
+    a default. Every object is closed and lists all its properties as required (a field with a
+    default is then always sent, and validates), ``default: null`` is dropped (the field stays
+    nullable), and a ``$ref`` with sibling keys is inlined.
+    """
+    root = copy.deepcopy(schema)
+    return _ensure_strict(root, root, frozenset())
+
+
+def _ensure_strict(
+    node: dict[str, Any], root: dict[str, Any], inlining: frozenset[str]
+) -> dict[str, Any]:
+    for key in ("$defs", "definitions"):
+        definitions = node.get(key)
+        if isinstance(definitions, dict):
+            for name, definition in definitions.items():
+                if isinstance(definition, dict):
+                    definitions[name] = _ensure_strict(definition, root, inlining)
+
+    if node.get("type") == "object" and "additionalProperties" not in node:
+        node["additionalProperties"] = False
+
+    properties = node.get("properties")
+    if isinstance(properties, dict):
+        node["required"] = list(properties)
+        for name, prop in properties.items():
+            if isinstance(prop, dict):
+                properties[name] = _ensure_strict(prop, root, inlining)
+
+    items = node.get("items")
+    if isinstance(items, dict):
+        node["items"] = _ensure_strict(items, root, inlining)
+
+    for key in ("anyOf", "allOf"):
+        variants = node.get(key)
+        if isinstance(variants, list):
+            node[key] = [
+                _ensure_strict(v, root, inlining) if isinstance(v, dict) else v for v in variants
+            ]
+    all_of = node.get("allOf")
+    if isinstance(all_of, list) and len(all_of) == 1 and isinstance(all_of[0], dict):
+        node.pop("allOf")
+        node.update(all_of[0])
+
+    if "default" in node and node["default"] is None:
+        node.pop("default")
+
+    ref = node.get("$ref")
+    # A ref already being inlined is a cycle (a model that holds itself): leave it a reference.
+    if isinstance(ref, str) and len(node) > 1 and ref.startswith("#/") and ref not in inlining:
+        resolved: Any = root
+        for part in ref[2:].split("/"):
+            resolved = resolved.get(part) if isinstance(resolved, dict) else None
+        if isinstance(resolved, dict):
+            # A copy, so the definition never ends up containing itself; the node's keys win.
+            inlined = {**copy.deepcopy(resolved), **node}
+            inlined.pop("$ref")
+            return _ensure_strict(inlined, root, inlining | {ref})
+    return node
+
+
 def _build_output_schema_format(
     output_schema: OutputSchema,
 ) -> dict[str, Any]:
     """Build OpenAI ``response_format`` for structured output."""
+    schema = output_schema.schema
     return {
         "type": "json_schema",
         "json_schema": {
             "name": output_schema.name,
-            "schema": output_schema.schema,
+            "schema": _strict_schema(schema) if output_schema.strict else schema,
             "strict": output_schema.strict,
         },
     }
@@ -477,6 +545,9 @@ class OpenAIProvider(LoopAwareClientCache, BaseProvider):
                 exc.response.status_code if exc.response else 500,
                 str(exc.body),
             ) from exc
+        except openai.APIConnectionError as exc:
+            timed_out = isinstance(exc, openai.APITimeoutError)
+            raise network_error(exc, timed_out=timed_out) from exc
 
         resp = _parse_sdk_response(completion, self._model, output_schema=output_schema)
         logger.debug(
@@ -612,6 +683,9 @@ class OpenAIProvider(LoopAwareClientCache, BaseProvider):
                     exc.response.status_code if exc.response else 500,
                     str(exc.body),
                 ) from exc
+            except openai.APIConnectionError as exc:
+                timed_out = isinstance(exc, openai.APITimeoutError)
+                raise network_error(exc, timed_out=timed_out) from exc
 
         return _generate()
 
@@ -712,6 +786,9 @@ class OpenAIProvider(LoopAwareClientCache, BaseProvider):
                 exc.response.status_code if exc.response else 500,
                 str(exc.body),
             ) from exc
+        except openai.APIConnectionError as exc:
+            timed_out = isinstance(exc, openai.APITimeoutError)
+            raise network_error(exc, timed_out=timed_out) from exc
 
     async def batch_status(self, batch_id: str) -> str:
         """Check batch status."""
@@ -723,6 +800,9 @@ class OpenAIProvider(LoopAwareClientCache, BaseProvider):
                 exc.response.status_code if exc.response else 500,
                 str(exc.body),
             ) from exc
+        except openai.APIConnectionError as exc:
+            timed_out = isinstance(exc, openai.APITimeoutError)
+            raise network_error(exc, timed_out=timed_out) from exc
 
     async def batch_results(self, batch_id: str) -> list[Any]:
         """Retrieve completed batch results."""
@@ -739,6 +819,9 @@ class OpenAIProvider(LoopAwareClientCache, BaseProvider):
                 exc.response.status_code if exc.response else 500,
                 str(exc.body),
             ) from exc
+        except openai.APIConnectionError as exc:
+            timed_out = isinstance(exc, openai.APITimeoutError)
+            raise network_error(exc, timed_out=timed_out) from exc
 
         results: list[BatchResult] = []
         for line in raw_text.strip().splitlines():

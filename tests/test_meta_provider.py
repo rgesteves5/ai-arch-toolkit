@@ -821,6 +821,27 @@ class TestStream:
         assert caught.value.status_code == 400
 
 
+class TestNetworkErrors:
+    @pytest.mark.parametrize(
+        ("sdk_error", "expected"),
+        [(openai.APIConnectionError, ConnectionError), (openai.APITimeoutError, TimeoutError)],
+    )
+    async def test_network_failures_become_builtin_errors(self, sdk_error, expected):
+        error = sdk_error(request=httpx.Request("POST", f"{DEFAULT_BASE_URL}/responses"))
+        client = AsyncMock()
+        client.responses.create.side_effect = error
+        client.responses.input_tokens.count = AsyncMock(side_effect=error)
+        provider = _provider(client)
+
+        with pytest.raises(expected):
+            await provider.complete([USER])
+        with pytest.raises(expected):
+            await provider.count_tokens([USER])
+        stream, _ = provider.stream_events([USER])
+        with pytest.raises(expected):
+            _ = [event async for event in stream]
+
+
 class TestCountTokens:
     async def test_counts_with_the_input_tokens_endpoint(self):
         client = AsyncMock()

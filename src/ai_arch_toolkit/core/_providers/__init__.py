@@ -44,6 +44,14 @@ _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
 # Local OpenAI-compatible servers (Ollama, LM Studio, vLLM) ignore Authorization.
 _PLACEHOLDER_KEY = "not-needed"
 
+# The only hosts a key read from the environment is sent to. Any other remote base_url (a gateway,
+# a proxy, another vendor's OpenAI-compatible server) must be given its key with api_key=.
+_OWN_HOSTS: dict[str, str] = {
+    "anthropic": "api.anthropic.com",
+    "openai": "api.openai.com",
+    "meta": "api.meta.ai",
+}
+
 
 def _match_provider(model: str) -> str | None:
     """Map a model string to a provider name via prefix matching, or None."""
@@ -93,19 +101,32 @@ def _format_env_var_names(names: tuple[str, ...]) -> str:
 
 
 def _resolve_key(
-    env_var: str | tuple[str, ...], api_key: str | None, *, local: bool = False
+    env_var: str | tuple[str, ...],
+    api_key: str | None,
+    *,
+    local: bool = False,
+    base_url: str | None = None,
+    own_host: str | None = None,
 ) -> str:
     """Resolve an API key, preferring an explicit one, then env vars in order.
 
     For a local (loopback) server the env var is **not** consulted — a real
     cloud key is never sent to localhost — and a placeholder is used when no
-    key is passed explicitly. Remote endpoints still require a key.
+    key is passed explicitly. Nor is it for a remote ``base_url`` whose host is
+    not ``own_host``, the provider's API: that endpoint needs ``api_key=``, so
+    a provider key never reaches a gateway or another vendor unasked.
     """
     if api_key:
         return api_key
     if local:
         return _PLACEHOLDER_KEY
     names = _env_var_names(env_var)
+    host = urlsplit(base_url).hostname if base_url else None
+    if own_host is not None and base_url and host != own_host:
+        raise ValueError(
+            f"No API key provided for base_url host {host!r}. Pass api_key= explicitly: "
+            f"{' / '.join(names)} from the environment is only sent to {own_host}."
+        )
     for name in names:
         if key := os.environ.get(name, ""):
             return key
@@ -160,7 +181,8 @@ def create_provider(
     otherwise an unknown model with ``base_url`` set falls back to the
     OpenAI-compatible adapter (Ollama, LM Studio, vLLM). The API key is required
     unless ``base_url`` points at a loopback host (localhost), where local servers
-    ignore it.
+    ignore it. A key from the environment only goes to the provider's own API
+    host; a remote ``base_url`` elsewhere needs ``api_key=``.
 
     Args:
         provider: Force a specific provider, bypassing prefix detection.
@@ -177,7 +199,13 @@ def create_provider(
 
         return AnthropicProvider(
             model,
-            _resolve_key("ANTHROPIC_API_KEY", api_key, local=local),
+            _resolve_key(
+                "ANTHROPIC_API_KEY",
+                api_key,
+                local=local,
+                base_url=base_url,
+                own_host=_OWN_HOSTS[name],
+            ),
             base_url=base_url,
             timeout=timeout,
         )
@@ -187,7 +215,13 @@ def create_provider(
 
         return OpenAIProvider(
             model,
-            _resolve_key("OPENAI_API_KEY", api_key, local=local),
+            _resolve_key(
+                "OPENAI_API_KEY",
+                api_key,
+                local=local,
+                base_url=base_url,
+                own_host=_OWN_HOSTS[name],
+            ),
             base_url=base_url,
             timeout=timeout,
         )
@@ -220,7 +254,13 @@ def create_provider(
         # MODEL_API_KEY is Meta's own variable; OPENAI_API_KEY must never reach Meta.
         return MetaProvider(
             model,
-            _resolve_key("MODEL_API_KEY", api_key, local=local),
+            _resolve_key(
+                "MODEL_API_KEY",
+                api_key,
+                local=local,
+                base_url=base_url,
+                own_host=_OWN_HOSTS[name],
+            ),
             base_url=base_url,
             timeout=timeout,
         )

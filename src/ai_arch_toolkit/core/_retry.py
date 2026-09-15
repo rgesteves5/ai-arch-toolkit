@@ -32,8 +32,12 @@ class RetryConfig:
 
 
 def _is_retryable(exc: Exception, config: RetryConfig) -> bool:
-    """Check if an exception is retryable."""
-    if isinstance(exc, RateLimitError):
+    """Check if an exception is retryable.
+
+    Rate limits, the statuses in ``retry_on_status``, and network failures (``ConnectionError``,
+    ``TimeoutError``, which adapters raise when a request gets no HTTP response) are retried.
+    """
+    if isinstance(exc, RateLimitError | ConnectionError | TimeoutError):
         return True
     if isinstance(exc, APIError):
         return exc.status_code in config.retry_on_status

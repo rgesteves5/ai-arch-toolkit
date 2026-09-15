@@ -27,6 +27,7 @@ from ai_arch_toolkit.core._providers._base import (
     LoopAwareClientCache,
     StreamState,
     _parse_retry_after,
+    network_error,
     parse_tool_args,
     system_content_text,
 )
@@ -581,6 +582,8 @@ class MetaProvider(LoopAwareClientCache, BaseProvider):
             response = await self._client.responses.create(**request)
         except openai.APIStatusError as exc:
             raise _api_error(exc) from exc
+        except openai.APIConnectionError as exc:
+            raise network_error(exc, timed_out=isinstance(exc, openai.APITimeoutError)) from exc
         if getattr(response, "status", None) == "failed":
             raise _failure(response)
 
@@ -682,8 +685,9 @@ class MetaProvider(LoopAwareClientCache, BaseProvider):
                         )
             except openai.APIStatusError as exc:
                 raise _api_error(exc) from exc
-            except openai.APIConnectionError:
-                raise  # transport failures propagate as they do from the OpenAI adapter
+            except openai.APIConnectionError as exc:
+                timed_out = isinstance(exc, openai.APITimeoutError)
+                raise network_error(exc, timed_out=timed_out) from exc
             except openai.APIError as exc:
                 raise _sdk_error(exc) from exc
 
@@ -748,4 +752,6 @@ class MetaProvider(LoopAwareClientCache, BaseProvider):
             result = await self._client.responses.input_tokens.count(**request)
         except openai.APIStatusError as exc:
             raise _api_error(exc) from exc
+        except openai.APIConnectionError as exc:
+            raise network_error(exc, timed_out=isinstance(exc, openai.APITimeoutError)) from exc
         return result.input_tokens or 0

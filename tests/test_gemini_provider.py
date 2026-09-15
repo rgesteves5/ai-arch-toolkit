@@ -6,6 +6,8 @@ import warnings
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import aiohttp
+import httpx
 import pytest
 
 from ai_arch_toolkit.core._exceptions import APIError, RateLimitError
@@ -665,6 +667,37 @@ class TestGeminiProviderErrors:
         with pytest.raises(APIError) as exc_info:
             await provider.complete([{"role": "user", "content": "Hi"}])
         assert exc_info.value.status_code == 500
+
+
+class TestGeminiProviderNetworkErrors:
+    @pytest.mark.parametrize(
+        ("error", "expected"),
+        [
+            (httpx.ConnectError("refused"), ConnectionError),
+            (httpx.ReadTimeout("slow"), TimeoutError),
+            (aiohttp.ServerDisconnectedError(), ConnectionError),
+        ],
+    )
+    async def test_network_failures_become_builtin_errors(self, error, expected):
+        async def _broken_stream(**kwargs):
+            raise error
+            yield  # makes this an async generator
+
+        mock_client = MagicMock()
+        mock_client.aio.models.generate_content = AsyncMock(side_effect=error)
+        mock_client.aio.models.count_tokens = AsyncMock(side_effect=error)
+        mock_client.aio.models.generate_content_stream = _wrap_as_coroutine(_broken_stream)
+        provider = GeminiProvider("gemini-2.0-flash", "test-key")
+        provider._client = mock_client
+        messages = [{"role": "user", "content": "Hi"}]
+
+        with pytest.raises(expected):
+            await provider.complete(messages)
+        with pytest.raises(expected):
+            await provider.count_tokens(messages)
+        chunks, _ = provider.stream(messages)
+        with pytest.raises(expected):
+            _ = [chunk async for chunk in chunks]
 
 
 # ---------------------------------------------------------------------------

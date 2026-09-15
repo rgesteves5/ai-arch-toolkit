@@ -158,18 +158,18 @@ class TestResolveKey:
 class TestCreateProvider:
     """Verify the factory routes to the right adapter and honors base_url / timeout."""
 
-    def test_anthropic_route(self, monkeypatch):
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    def test_anthropic_route(self):
         with patch("ai_arch_toolkit.core._providers._anthropic.AnthropicProvider") as cls:
-            create_provider("claude-haiku-4-5", base_url="https://x", timeout=10.0)
+            create_provider(
+                "claude-haiku-4-5", api_key="test-key", base_url="https://x", timeout=10.0
+            )
             cls.assert_called_once_with(
                 "claude-haiku-4-5", "test-key", base_url="https://x", timeout=10.0
             )
 
-    def test_openai_route(self, monkeypatch):
-        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    def test_openai_route(self):
         with patch("ai_arch_toolkit.core._providers._openai.OpenAIProvider") as cls:
-            create_provider("gpt-4.1-nano", base_url="https://x", timeout=20.0)
+            create_provider("gpt-4.1-nano", api_key="test-key", base_url="https://x", timeout=20.0)
             cls.assert_called_once_with(
                 "gpt-4.1-nano", "test-key", base_url="https://x", timeout=20.0
             )
@@ -234,10 +234,14 @@ class TestCreateProvider:
             create_provider("gemini-2.5-flash", base_url="https://override")
             assert any("base_url is not supported" in str(w.message) for w in caught)
 
-    def test_meta_route(self, monkeypatch):
-        monkeypatch.setenv("MODEL_API_KEY", "meta-key")
+    def test_meta_route(self):
         with patch("ai_arch_toolkit.core._providers._meta.MetaProvider") as cls:
-            create_provider("muse-spark-1.3", base_url="https://gateway.example/v1", timeout=30.0)
+            create_provider(
+                "muse-spark-1.3",
+                api_key="meta-key",
+                base_url="https://gateway.example/v1",
+                timeout=30.0,
+            )
             cls.assert_called_once_with(
                 "muse-spark-1.3", "meta-key", base_url="https://gateway.example/v1", timeout=30.0
             )
@@ -299,6 +303,38 @@ class TestCreateProvider:
             create_provider("gemma4:e4b", base_url="http://localhost:11434/v1")
             cls.assert_called_once_with(
                 "gemma4:e4b", "not-needed", base_url="http://localhost:11434/v1", timeout=None
+            )
+
+    @pytest.mark.parametrize(
+        ("model", "env_var", "own_base_url"),
+        [
+            ("claude-haiku-4-5", "ANTHROPIC_API_KEY", "https://api.anthropic.com"),
+            ("gpt-4o", "OPENAI_API_KEY", "https://api.openai.com/v1"),
+            ("muse-spark-1.3", "MODEL_API_KEY", "https://api.meta.ai/v1"),
+        ],
+    )
+    def test_environment_keys_only_reach_the_providers_own_host(
+        self, monkeypatch, model, env_var, own_base_url
+    ):
+        monkeypatch.setenv(env_var, "env-key")
+
+        with pytest.raises(ValueError, match=f"api_key=.*{env_var}"):
+            create_provider(model, base_url="https://gateway.example/v1")
+
+        provider = create_provider(model, base_url=own_base_url)
+        assert provider._client.api_key == "env-key"  # type: ignore[attr-defined]
+
+    def test_another_vendors_openai_compatible_server_never_gets_the_openai_key(self, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
+        base_url = "https://api.together.xyz/v1"
+
+        with pytest.raises(ValueError, match="OPENAI_API_KEY"):
+            create_provider("llama-3.3-70b", base_url=base_url)
+
+        with patch("ai_arch_toolkit.core._providers._openai.OpenAIProvider") as cls:
+            create_provider("llama-3.3-70b", base_url=base_url, api_key="together-key")
+            cls.assert_called_once_with(
+                "llama-3.3-70b", "together-key", base_url=base_url, timeout=None
             )
 
     def test_remote_base_url_missing_key_raises(self, monkeypatch):
