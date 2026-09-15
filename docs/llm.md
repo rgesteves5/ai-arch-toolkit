@@ -145,6 +145,10 @@ The adapters disable retry loops built into the provider SDKs. `RetryConfig`
 is therefore the single retry owner: every attempt is metered and appears in
 `Response.attempts`. `max_retries=N` means at most `N + 1` physical attempts
 for that `LLM`. Retries are opt-in; omitting `retry=` performs one attempt.
+Besides the statuses in `retry_on_status` and rate limits, a request that got no
+HTTP response — a refused or dropped connection, a timeout — is retried: the
+adapters raise it as `ConnectionError` or `TimeoutError`, which also trigger
+fallbacks.
 Fallbacks supplied as `LLM` objects use their own retry configuration, so pass
 configured instances when fallback models should retry too.
 

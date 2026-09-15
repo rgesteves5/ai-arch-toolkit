@@ -98,6 +98,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `.env.example` documenting every provider API key; the sync-timeout configuration now validates its inputs.
 
 ### Changed
+- **Breaking: keys from the environment only go to the provider's own API.** `OPENAI_API_KEY`,
+  `ANTHROPIC_API_KEY`, and `MODEL_API_KEY` are sent to `api.openai.com`, `api.anthropic.com`, and
+  `api.meta.ai`. A remote `base_url` on any other host — a gateway, a proxy, another vendor's
+  OpenAI-compatible server — now needs `api_key=` and raises `ValueError` without it; it used to
+  receive the environment key (the OpenAI key went to any OpenAI-compatible server).
+- **`RetryConfig` retries network failures.** A request that gets no HTTP response (refused or
+  dropped connection, timeout) is retried and falls back: the OpenAI, Meta, Anthropic, and Gemini
+  adapters raise it as `ConnectionError` or `TimeoutError` instead of the SDK's own exception,
+  which `LLM` neither retried nor treated as a provider error.
+- The `dev` extra includes `pytest-timeout`, so `@pytest.mark.timeout` limits are enforced.
 - **Breaking: step traces record key names, not values, by default.** `StepTrace.input_state` is
   empty and `output_result` drops the artifacts; `input_keys` and `output_keys` list what the step
   read and returned. A long agent loop's trace no longer grows with the square of its steps.
@@ -169,6 +179,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `uv lock --upgrade` brought every transitive dependency to its latest compatible version (pydantic 2.13, urllib3 2.7, requests 2.34, websockets 16, xai-sdk 1.12, ruff 0.15.13, …); resolved the four Dependabot alerts.
 
 ### Fixed
+- **OpenAI structured output accepts Pydantic models again.** `output_schema=Model` was sent in
+  strict mode as `model_json_schema()` produced it, and OpenAI answered 400 (`'additionalProperties'
+  is required to be supplied and to be false`). Strict schemas are now normalized as the SDK's own
+  `parse()` helpers do: every object is closed and lists all its properties as required,
+  `default: null` is dropped, and a `$ref` with sibling keys is inlined.
+- A tool parameter typed `X | None` without a default can be omitted by the model: the schema
+  already made it optional, and the call now receives `None` instead of failing with
+  `validation_error`.
+- `ToolGroup` and `run_tools()` accept a `functools.partial`: it is named and described by the
+  function it wraps and takes the arguments the partial leaves open. It used to raise
+  `AttributeError`.
+- `ApprovalDecision.approve(modified_args={})` runs the tool with no arguments; the empty dict was
+  treated as "no change" and the model's arguments ran.
 - **`cache()` parts reach OpenAI, Gemini, and xAI as their text.** Those adapters sent the part's
   Python repr (`CachePart(content='…', ttl='ephemeral')`) to the model. xAI also drops document
   parts with a warning instead of sending their repr.

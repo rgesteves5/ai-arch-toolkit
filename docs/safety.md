@@ -84,7 +84,7 @@ Before any gate runs, the arguments are checked against the tool's input schema 
 | `anyOf` | a value that already matches a branch | otherwise the first branch that coerces it (`int \| str` keeps `"1"` a string) |
 | `string`, `array`, `object`, untyped | anything | nothing |
 
-Required arguments must be present, arguments the schema doesn't declare are refused unless the function takes `**kwargs`, and the call must bind to the function's signature. A failure returns `validation_error` with a message the model can act on; when one argument is at fault, `result.error.details["argument"]` names it. A string too long for Python to convert to an integer is a validation error too, never an exception.
+Required arguments must be present, arguments the schema doesn't declare are refused unless the function takes `**kwargs`, and the call must bind to the function's signature. A parameter typed `X | None` without a default is optional in the schema; when the model omits it, the function receives `None`. A failure returns `validation_error` with a message the model can act on; when one argument is at fault, `result.error.details["argument"]` names it. A string too long for Python to convert to an integer is a validation error too, never an exception.
 
 ---
 
@@ -151,7 +151,7 @@ ApprovalDecision.approve(*, modified_args=None, reviewer=None, reason="", metada
 ApprovalDecision.deny(*, reviewer=None, reason="", metadata=None)
 ```
 
-Returning `modified_args` from `approve(...)` runs the tool with **substituted arguments** — useful for narrowing a request (e.g. forcing a safe target) before letting it through. The full request/decision is recorded under `result.metadata["audit"]["approval"]`.
+Returning `modified_args` from `approve(...)` runs the tool with **substituted arguments** — useful for narrowing a request (e.g. forcing a safe target) before letting it through. `modified_args={}` runs it with no arguments; only `None` keeps the model's. The full request/decision is recorded under `result.metadata["audit"]["approval"]`.
 
 The handler may be sync or async — with one caveat: on the **synchronous** execution path (`group.execute()`, `execute_tool()`) an async handler cannot be awaited, so it is **auto-denied** with reason `"Synchronous execution cannot await approval handler"`. Use the async path (`async_execute()` / `async_execute_tool()`) whenever your handler is a coroutine.
 

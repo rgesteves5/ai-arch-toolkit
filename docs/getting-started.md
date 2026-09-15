@@ -141,8 +141,15 @@ llm = LLM("my-model", provider="openai", base_url="http://localhost:8000/v1")
 Unknown model names with `base_url=` set route to the OpenAI-compatible adapter
 automatically. When `base_url` points at a loopback host (`localhost`, `127.x`,
 `::1`) the API key is optional — local servers ignore it, and any cloud key in
-your environment is **not** sent there. A remote endpoint (a hosted gateway or
-proxy) still requires a key, so genuine misconfigurations fail fast.
+your environment is **not** sent there. A key from the environment only goes to
+the provider's own API (`api.openai.com`, `api.anthropic.com`, `api.meta.ai`):
+any other remote endpoint — a hosted gateway, a proxy, another vendor's
+OpenAI-compatible server — needs `api_key=`, so your OpenAI key never reaches
+it by accident:
+
+```python
+llm = LLM("llama-3.3-70b", base_url="https://api.together.xyz/v1", api_key=together_key)
+```
 
 Reasoning deltas from these servers (`reasoning_content` / `reasoning`) surface
 as real-time `thinking` events in `stream_events()` (each event is a fragment —
