@@ -213,3 +213,12 @@ timeouts dos testes `live_api` são decorativos. O job de integração passou a 
 
 A pedido do dono, o workflow `integration.yml` foi removido e o `ci.yml` corre `pytest -m "not
 live_api"`; a nota acima sobre o job de integração com 30 minutos deixa de se aplicar.
+
+## 2026-09-15 · coordenador (resolução, F23)
+
+Resolvidos pela F23, todos com testes: `X | None` sem default omitido, `functools.partial` em
+`ToolGroup`, `approve(modified_args={})`, chave da OpenAI em `base_url` remoto (agora exige
+`api_key=`), `output_schema` Pydantic com `strict` no OpenAI (400 confirmado ao vivo e corrigido),
+`APIConnectionError` sem retry nem fallback (OpenAI, Meta, Anthropic e Gemini) e
+`@pytest.mark.timeout` sem efeito. Gemini com declarações mistas numa `Tool` foi verificado ao vivo
+e funciona: não precisava de correcção.

@@ -67,3 +67,11 @@
 - A pedido do dono (2026-09-15): commits `c679ac3` (CI sem testes reais), `44885a3` (changelog do
   `grok-4.6`) e o registo no blackboard, com push para `main`.
 
+## 2026-09-15 · achados em aberto
+
+- A pedido do dono: F23 corrige os oito achados que ficaram em `FINDINGS.md` (ver a ficha). Dois
+  verificados ao vivo: o OpenAI recusava `output_schema` Pydantic (corrigido e confirmado) e o Gemini
+  aceita declarações mistas (sem alteração). 3045 passed, 22 skipped; ruff, pyright e lock limpos.
+- Commits `b504998` (tools), `dfaca5c` (providers), `19a3905` (pytest-timeout), `4509bc9` (docs) e o
+  registo no blackboard; `b504998` e `dfaca5c` verificados em worktrees temporárias (3026 e 3045
+  passed). Push para `main`.

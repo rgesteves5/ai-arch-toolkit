@@ -1,6 +1,16 @@
 # Quadro
 
-## Frente activa: fornecedor Meta (Muse Spark)
+## Frente activa: achados em aberto
+
+- **Estado:** concluída em 2026-09-15 (F23 done), commitada e publicada em `main` a pedido do dono
+  (`b504998` tools, `dfaca5c` providers, `19a3905` pytest-timeout, `4509bc9` docs, e o registo).
+- **Ficha:** `tasks/F23-open-findings.md`. **Base:** `main` @ `1334fa8`.
+
+| ID | Tarefa | Dono | Estado |
+|---|---|---|---|
+| F23 | Corrigir os achados que ficaram em `FINDINGS.md` | coordenador | done |
+
+## Frente anterior: fornecedor Meta (Muse Spark)
 
 - **Estado:** concluída em 2026-09-13, commitada e publicada em `main` a pedido do dono (`9588f31` código e testes, `7967287` docs, e o registo).
 - **Regra do dono:** nada de testes reais (`live_api`) no CI do GitHub; correm só localmente. O workflow de integração foi removido.
