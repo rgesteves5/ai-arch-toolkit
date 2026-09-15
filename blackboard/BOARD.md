@@ -1,6 +1,72 @@
 # Quadro
 
-## Frente activa: achados em aberto
+## Frente activa: capacidades em falta
+
+- **Estado:** aberta em 2026-09-15. As nove fichas estão escritas; nenhuma tarefa começou.
+- **Antes de codificar:** o dono fixa as "Decisões a fixar" de cada ficha. Cada decisão tomada entra
+  em `DECISIONS.md` a partir de D15, com o número dado pelo coordenador.
+- **Origem:** o que `docs/internal/agentes-app-toolkit-review.md` pediu ao toolkit (L1, L3–L7, L9, L13
+  e o ponto D) e que `docs/internal/toolkit-fix-plan.md` §4 (itens 3 e 10) deixou de fora por ser
+  âmbito, não contrato partido.
+- **Base:** `main` @ `7ebf7ef`; baseline 3045 passed, 22 skipped. **Coordenador:** sessão principal.
+- **Fora da frente:** `agent_as_tool` (a delegação é uma tool da app); scheduler, cofre, descoberta
+  local, router `Auto` e escolha de arquitectura (app: L2, L8, L12); sandbox de código (L10).
+- **Exemplos novos:** levam o próximo número livre (hoje 48), atribuído pelo coordenador ao aplicar.
+
+| ID | Tarefa | Dono | Estado | Depende de |
+|---|---|---|---|---|
+| C01 | `Agent.stream()`: texto, thinking e tools através das estratégias | — | todo | nada |
+| C02 | API pública para tools dinâmicas (`tool_from_schema`) | — | todo | nada |
+| C03 | Cliente MCP (`toolkit.mcp`, extra `mcp`) | — | todo | C02 |
+| C04 | Checkpoint e retoma de runs | — | todo | nada; aplicar depois do C01 |
+| C05 | Server tools: config no fio e `server_tools=` nas estratégias | — | todo | nada; aplicar depois do C01 |
+| C06 | Catálogo técnico de modelos no core | — | todo | nada; C06e depois do C01 e do C05 |
+| C07 | Tools de escrita tipadas e `FilesystemPolicy` | — | todo | nada; C07c depois do C02 |
+| C08 | Pesquisa web local (Brave e Tavily) | — | todo | nada |
+| C09 | `FlowSpec` e máquinas de estados | — | blocked | C04a, C04b; formas validadas na app |
+
+### Ordem de aplicação
+
+Há poucas dependências lógicas; a ordem vem sobretudo dos ficheiros partilhados.
+
+| Vaga | Tarefas | Porquê |
+|---|---|---|
+| 1 | C02, C06a–d, C07 sem C07c, C08 | Ficheiros quase disjuntos: `core/_tools`, módulos novos, `toolkit/tools`. |
+| 2 | C01, C03, C07c | C01 mexe no motor, no `_llm.py`, nos adaptadores e nas estratégias (depois do C02a); C03 precisa do C02; C07c toca em `_definition.py` e `_decorator.py` depois do C02. |
+| 3 | C04, C05 | Ambas depois do C01: C04 no motor; C05 nos adaptadores, no `_llm.py`, nas estratégias e no `budget/_estimator.py` (depois do C08c). Partilham `_lats.py` e `_manifest.py`: o coordenador aplica em série. |
+| depois | C06e, C09 | C06e mexe nos adaptadores; C09 espera pela app. |
+
+Quase todas tocam em `core/__init__.py`, `ai_arch_toolkit/__init__.py`, `docs/tools.md`,
+`docs/safety.md`, `docs/agents.md` e `docs/api.md`; o coordenador junta-os ao aplicar.
+
+### Decisões que mudam o contrato público
+
+As primeiras a fixar. As alternativas e as razões estão nas fichas.
+
+- **C01:** os deltas nascem em `LLM.complete(on_event=)`; `FlowEvent` ganha tipos e campos;
+  `stream()` é novo e `iter()` não muda.
+- **C02:** o handler recebe um `dict`; regra de nomes portátil em `ToolSchema`; nome repetido levanta
+  `ValueError` (as duas últimas são quebras visíveis).
+- **C03:** `mcp>=2.2,<3`; a ligação vive numa task própria; sem wrappers `_sync` (excepção à regra do
+  `AGENTS.md`).
+- **C04:** checkpoints só em fronteiras do motor; journal de tools no executor governado;
+  `MeterScope(baseline=)` para o budget continuar.
+- **C05:** config tipada que falha quando o fornecedor não a aplica; `ReasoningSpec.server_tools`;
+  custo por uso na tabela de preços; o OpenAI passa a levantar (quebra visível).
+- **C06:** um facto descreve o que funciona através do adaptador; ids exactos e aliases, nunca
+  prefixo; os adaptadores não lêem o catálogo.
+- **C07:** a policy é verificada no gate e outra vez na tool; hook `@tool(preview=)` e outcome
+  `permission_denied` no core.
+- **C08:** uma factory por fornecedor, com chave explícita; `capability="web_search"`, aprovação
+  obrigatória, em `toolkit.tools`.
+
+### Achados da abertura
+
+Vinte entradas em `FINDINGS.md` (2026-09-15): catorze reproduzidas pelo coordenador, um risco medido e
+cinco confirmadas no código e na documentação oficial. Onze não têm tarefa: são correcções, não
+capacidades (ver "Por fazer").
+
+## Frente anterior: achados em aberto
 
 - **Estado:** concluída em 2026-09-15 (F23 done), commitada e publicada em `main` a pedido do dono
   (`b504998` tools, `dfaca5c` providers, `19a3905` pytest-timeout, `4509bc9` docs, e o registo).
@@ -68,4 +134,9 @@
 - **xAI:** repor créditos na conta e depois correr `uv run pytest -m live_api -k xai` (custo por
   pedido) e um probe com uma tool cujo parâmetro seja `Any` (schema sem tipo) e com `system=` +
   `system()` ao mesmo tempo — únicas mudanças desta frente que o xAI ainda não confirmou.
+- **Frente C, decisões:** fixar as da vaga 1 (C02, C06, C07, C08) antes de atribuir donos.
+- **Achados sem tarefa (2026-09-15):** decidir se abrem uma frente de correcção antes da vaga 1. Os
+  mais graves: `thinking=True` no Anthropic recusado (400) nos modelos actuais; `csv_read` lê qualquer
+  ficheiro sem aprovação; um erro do adaptador a montar o pedido envenena o budget;
+  `tool_choice="required"` recusado no Fable 5.1; preço de cache do `claude-fable-5-1`.
 

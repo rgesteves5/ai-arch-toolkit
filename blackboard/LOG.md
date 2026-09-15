@@ -75,3 +75,21 @@
 - Commits `b504998` (tools), `dfaca5c` (providers), `19a3905` (pytest-timeout), `4509bc9` (docs) e o
   registo no blackboard; `b504998` e `dfaca5c` verificados em worktrees temporárias (3026 e 3045
   passed). Push para `main`.
+
+## 2026-09-15 · frente de capacidades em falta
+
+- A pedido do dono: abrir uma frente para tudo o que a revisão da app Agentes pediu ao toolkit e o
+  plano de correcção deixou de fora (§4, itens 3 e 10). Nove fichas: C01 `Agent.stream()`, C02 tools
+  dinâmicas, C03 cliente MCP, C04 checkpoint e retoma, C05 server tools, C06 catálogo de modelos, C07
+  escrita tipada com `FilesystemPolicy`, C08 pesquisa web local, C09 `FlowSpec` (blocked até a app
+  validar as formas).
+- Sete agentes, só leitura, escreveram as fichas com evidência `ficheiro:linha`, reproduções sem rede
+  e a documentação oficial (SDK `mcp`, Anthropic, OpenAI, Gemini, Meta, xAI, Brave, Tavily). Nenhum
+  ficheiro de código, teste ou doc mudou.
+- Revisão do coordenador: números de exemplo passam a ser atribuídos ao aplicar; nota no C05 sobre os
+  tipos actuais de server tools da Anthropic; ordem por vagas e decisões que mudam contrato no quadro.
+- Achados: o coordenador voltou a correr as reproduções e confirmou no código e na doc; vinte entradas
+  em `FINDINGS.md`, onze sem tarefa. Os mais graves: `thinking=True` no Anthropic recusado nos modelos
+  actuais, `csv_read` sem aprovação, budget envenenado por erro do adaptador.
+- A seguir: o dono fixa as decisões da vaga 1 (C02, C06, C07, C08) e decide se os achados sem tarefa
+  abrem uma frente de correcção antes. Nada commitado.
