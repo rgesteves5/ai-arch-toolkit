@@ -14,21 +14,24 @@ dependencies = []
 ai-arch = "ai_arch_toolkit._cli:main"
 
 [project.optional-dependencies]
+# Floors are the lowest versions CI installs and tests (the "floors" job in ci.yml), so they stay
+# true. Each provider SDK is capped at its next major: a new major can change the wire contract the
+# adapters are written for (anthropic 1.x and openai 3.x both moved their transport to httpx2).
+
 # Provider SDKs — install the one matching the model you plan to call.
-anthropic = ["anthropic>=0.40"]
-gemini = ["google-genai>=1.21.0"]
-# Meta ships no SDK: its Model API is driven through the openai SDK's Responses API
-# (2.6.0 added responses.input_tokens.count).
-meta = ["openai>=2.6.0"]
-openai = ["openai>=1.50"]
-xai = ["xai-sdk>=1.7.0"]
+anthropic = ["anthropic>=1.0,<2"]
+gemini = ["google-genai>=2.0,<3"]
+# Meta ships no SDK: its Model API is driven through the openai SDK's Responses API.
+meta = ["openai>=3.0,<4"]
+openai = ["openai>=3.0,<4"]
+xai = ["xai-sdk>=1.7,<2"]
 
 # Optional features.
 graph = ["networkx>=3.0"]
-tokens = ["tiktoken>=0.7"]
-yaml = ["pyyaml>=6.0"]
+tokens = ["tiktoken>=0.11"]
+yaml = ["pyyaml>=6.0.2"]
 templates = ["jinja2>=3.1"]
-prompts = ["pyyaml>=6.0", "jinja2>=3.1", "jsonschema>=4.0"]
+prompts = ["pyyaml>=6.0.2", "jinja2>=3.1", "jsonschema>=4.0"]
 youtube = ["youtube-transcript-api>=1.2.4"]
 
 # Aggregate: install every provider plus every optional feature.
@@ -50,25 +53,17 @@ bench = ["inspect-ai", "inspect-evals"]
 docs = ["mkdocs>=1.6", "pdoc>=15.0"]
 telemetry = ["opentelemetry-api>=1.27"]
 
-# Local development — pulls in test runners, lint, type-check, and all providers/features.
+# Local development — every provider and feature (through `all`, so each floor is declared once)
+# plus test runners, lint, and type-check.
 dev = [
-    "anthropic>=0.40",
-    "google-genai>=1.21.0",
-    "jinja2>=3.1",
-    "jsonschema>=4.0",
-    "networkx>=3.0",
-    "openai>=2.6.0",
+    "ai-arch-toolkit[all]",
     "pre-commit>=4.0",
-    "pyright>=1.1.390",
+    "pyright>=1.1.414",
     "pytest>=9.0.3",
-    "pytest-asyncio>=0.24",
+    "pytest-asyncio>=1.3",
     "pytest-cov>=6.0",
     "pytest-timeout>=2.3",
-    "pyyaml>=6.0",
-    "ruff>=0.9",
-    "tiktoken>=0.7",
-    "xai-sdk>=1.7.0",
-    "youtube-transcript-api>=1.2.4",
+    "ruff>=0.16",
 ]
 
 [tool.pyright]

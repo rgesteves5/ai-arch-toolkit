@@ -38,10 +38,12 @@ uv run pre-commit run --all-files            # everything pre-commit will run
 uv lock --check                              # verify pyproject.toml and uv.lock agree
 ```
 
-CI runs three jobs in parallel — blocking `lint` and `typecheck` jobs, plus
-`test` across Ubuntu and macOS on Python 3.13 and 3.14. Hermetic integration
-tests run in that normal matrix. Live-provider tests run only in the scheduled
-or manually dispatched integration workflow.
+CI runs four jobs in parallel — blocking `lint` and `typecheck` jobs, `test`
+across Ubuntu and macOS on Python 3.13 and 3.14, and `floors`, which installs
+the lowest version of every direct dependency (`--resolution lowest-direct`)
+and runs the suite, so the floors in `pyproject.toml` stay true. Hermetic
+integration tests run in the normal matrix. Live-provider tests never run in
+CI; run them locally.
 
 ## Code conventions
 
@@ -70,9 +72,11 @@ docstrings/comments, and when to use classes vs functions — see
    `to_provider_messages()`. Look at `_openai.py` as the most thorough
    reference.
 2. Wire model-prefix routing in `core/_providers/__init__.py::create_provider()`.
-3. If the provider has its own SDK, declare it in `[project.optional-dependencies]`
-   in `pyproject.toml` (and the `dev` extra so CI has it) — never as a hard
-   dependency.
+3. If the provider has its own SDK, declare it as its own extra in
+   `[project.optional-dependencies]` in `pyproject.toml` and add that extra to
+   `all` (the `dev` extra installs `all`, so CI gets it) — never as a hard
+   dependency. Cap the SDK at its next major and keep the floor at a version the
+   `floors` CI job passes on.
 4. Pricing: add the model prefixes to `core/_default_pricing.toml`.
 5. Tests in `tests/test_<name>_provider.py`. Mock `urllib.request.urlopen` or
    the SDK's HTTP layer; mirror the response-shape fixtures the other

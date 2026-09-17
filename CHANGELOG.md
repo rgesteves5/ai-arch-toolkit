@@ -98,6 +98,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `.env.example` documenting every provider API key; the sync-timeout configuration now validates its inputs.
 
 ### Changed
+- **Breaking: provider SDK majors and dependency floors.** The extras now require the current SDK
+  majors, each capped at the next one: `anthropic>=1.0,<2`, `openai>=3.0,<4` (the `openai` and
+  `meta` extras), `google-genai>=2.0,<3`, `xai-sdk>=1.7,<2`. `anthropic` 1.x and `openai` 3.x moved
+  their HTTP transport to `httpx2`. Other floors rose to versions that install on Python 3.13:
+  `pyyaml>=6.0.2` and `tiktoken>=0.11`. The old floors (`anthropic>=0.40`, `openai>=1.50`,
+  `pyyaml>=6.0`) were never tested, and `pyyaml` 6.0 does not build on Python 3.13. A new CI job
+  installs the lowest version of every direct dependency and runs the suite, so the declared
+  floors are versions the tests have run against. Projects pinned to `anthropic` 0.x or `openai`
+  1.x/2.x must upgrade those SDKs to take this release.
 - **Breaking: keys from the environment only go to the provider's own API.** `OPENAI_API_KEY`,
   `ANTHROPIC_API_KEY`, and `MODEL_API_KEY` are sent to `api.openai.com`, `api.anthropic.com`, and
   `api.meta.ai`. A remote `base_url` on any other host — a gateway, a proxy, another vendor's

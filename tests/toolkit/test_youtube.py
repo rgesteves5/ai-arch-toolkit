@@ -56,7 +56,7 @@ _DEFAULT_MANUAL = object()
 
 
 class FakeTranscriptList:
-    def __init__(self, *, manual: FakeTranscript | None | object = _DEFAULT_MANUAL) -> None:
+    def __init__(self, *, manual: FakeTranscript | object | None = _DEFAULT_MANUAL) -> None:
         self.manual = FakeTranscript() if manual is _DEFAULT_MANUAL else manual
         self.generated = FakeTranscript(language="English (auto-generated)", is_generated=True)
 

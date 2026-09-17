@@ -31,14 +31,14 @@ Pip works the same way. Extras:
 
 | Extra       | Pulls in                                              |
 | ----------- | ----------------------------------------------------- |
-| `anthropic` | `anthropic>=0.40`                                     |
-| `openai`    | `openai>=1.50`                                        |
-| `gemini`    | `google-genai>=1.0`                                   |
-| `xai`       | `xai-sdk>=1.7.0`                                      |
-| `meta`      | `openai>=2.6.0` (Meta ships no SDK of its own)        |
+| `anthropic` | `anthropic>=1.0,<2`                                   |
+| `openai`    | `openai>=3.0,<4`                                      |
+| `gemini`    | `google-genai>=2.0,<3`                                |
+| `xai`       | `xai-sdk>=1.7,<2`                                     |
+| `meta`      | `openai>=3.0,<4` (Meta ships no SDK of its own)       |
 | `graph`     | `networkx>=3.0` (required by graph + memory backends) |
-| `tokens`    | `tiktoken>=0.7` (local token counting)                |
-| `yaml`      | `pyyaml>=6.0` (YAML knowledge/config loaders)         |
+| `tokens`    | `tiktoken>=0.11` (local token counting)               |
+| `yaml`      | `pyyaml>=6.0.2` (YAML knowledge/config loaders)       |
 | `templates` | `jinja2>=3.1` (optional Jinja prompt templates)       |
 | `prompts`   | YAML, Jinja, and JSON Schema prompt support            |
 | `youtube`   | `youtube-transcript-api>=1.2.4`                       |
