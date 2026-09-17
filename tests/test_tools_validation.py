@@ -370,3 +370,48 @@ async def test_an_omitted_optional_argument_without_a_default_is_passed_as_none(
 
     assert result.ok, result.to_model_text()
     assert result.value == "query=None"
+
+
+@tool
+def resize(width: int, height: int = 10, label: str | None = None) -> str:
+    """Resize something."""
+    return f"{width}x{height} {label}"
+
+
+@pytest.mark.parametrize("mode", MODES)
+async def test_null_is_rejected_for_a_parameter_that_does_not_admit_none(mode: str) -> None:
+    result = await _execute(ToolGroup(resize), _call("resize", width=None), mode)
+
+    assert not result.ok and result.error is not None
+    assert result.error.type == "validation_error"
+    assert "'width'" in result.error.message and "null" in result.error.message
+
+
+@pytest.mark.parametrize("mode", MODES)
+async def test_null_is_rejected_for_an_optional_parameter_with_a_non_none_default(
+    mode: str,
+) -> None:
+    result = await _execute(ToolGroup(resize), _call("resize", width=1, height=None), mode)
+
+    assert not result.ok and result.error is not None
+    assert result.error.type == "validation_error" and "'height'" in result.error.message
+
+
+@pytest.mark.parametrize("mode", MODES)
+async def test_null_is_accepted_where_the_annotation_or_default_admits_none(mode: str) -> None:
+    group = ToolGroup(resize, paged, find)
+
+    assert (await _execute(group, _call("resize", width=2, label=None), mode)).value == "2x10 None"
+    assert (await _execute(group, _call("paged", limit=None), mode)).ok
+    assert (await _execute(group, _call("find", query=None), mode)).ok
+
+
+async def test_null_is_accepted_for_untyped_and_any_parameters() -> None:
+    @tool
+    def loose(anything: Any, untyped=1) -> str:
+        """Loosely typed."""
+        return f"{anything!r} {untyped!r}"
+
+    result = await ToolGroup(loose).async_execute(_call("loose", anything=None, untyped=None))
+
+    assert result.ok and result.value == "None None"

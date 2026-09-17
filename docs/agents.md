@@ -289,9 +289,12 @@ spec = ReasoningSpec.from_mapping({
 })
 ```
 
-`policy` is passed through only if it is already a `Policy` instance (it is not
-coerced from a mapping). `output_schema` accepts a `{"name", "schema", "strict"}`
-mapping, an `OutputSchema`, or a supported model class such as a Pydantic model.
+`policy` accepts a `Policy` instance or a mapping of its fields
+(`{"timeout": 30, "retry": {"max_retries": 2}, "on_timeout": "fallback"}`); a
+`fallback` step has no mapping form, so set it on a `Policy` in code. `output_schema`
+accepts a `{"name", "schema", "strict"}` mapping, an `OutputSchema`, or a supported
+model class such as a Pydantic model. Nothing is dropped silently: an unknown key, or
+a value that cannot be used, raises `ValueError` naming it.
 
 ## File-backed agent manifests
 

@@ -94,7 +94,7 @@ def llm_compiler_flow(
     """
     plan_llm = planner_llm or llm
     inner_llm = exec_llm or llm
-    inner_tools = exec_tools or tools
+    inner_tools = exec_tools if exec_tools is not None else tools
     join_llm = joiner_llm or llm
     extra = llm_kwargs or {}
     plan_system = substitute_tools(planner_system, inner_tools)

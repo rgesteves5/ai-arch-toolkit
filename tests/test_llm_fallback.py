@@ -78,8 +78,31 @@ class TestFallbackConstruction:
         assert len(llm._fallbacks) == 2
         assert llm._fallbacks[0]._model == "gpt-4o"
         assert llm._fallbacks[1]._model == "gpt-4.1-nano"
-        # inner's own fallbacks should be cleared
-        assert inner._fallbacks == []
+        # the caller's LLM keeps its own chain and its ownership: nothing passed in is modified
+        assert [fb._model for fb in inner._fallbacks] == ["gpt-4.1-nano"]
+        assert len(inner._owned_fallbacks) == 1
+        assert llm._owned_fallbacks == []
+
+    @patch("ai_arch_toolkit.core._llm.create_provider")
+    def test_a_fallback_shared_by_two_parents_keeps_its_chain(self, mock_create):
+        mock_create.return_value = AsyncMock()
+        shared = LLM("gpt-4o", api_key="test", fallback="gpt-4.1-nano")
+
+        first = LLM("claude-sonnet-4-20250514", api_key="test", fallback=shared)
+        second = LLM("claude-haiku-4-5", api_key="test", fallback=shared)
+
+        assert [fb._model for fb in first._fallbacks] == ["gpt-4o", "gpt-4.1-nano"]
+        assert [fb._model for fb in second._fallbacks] == ["gpt-4o", "gpt-4.1-nano"]
+
+    @patch("ai_arch_toolkit.core._llm.create_provider")
+    def test_a_model_reachable_twice_appears_once_in_the_chain(self, mock_create):
+        mock_create.return_value = AsyncMock()
+        last = LLM("gpt-4.1-nano", api_key="test")
+        middle = LLM("gpt-4o", api_key="test", fallback=last)
+
+        llm = LLM("claude-sonnet-4-20250514", api_key="test", fallback=[middle, last])
+
+        assert llm._fallbacks == [middle, last]
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     def test_no_fallback(self, mock_create):
@@ -176,6 +199,31 @@ class TestCompleteWithFallback:
         )
         result = await llm.complete("Hi")
         assert result.text == "third"
+
+    @patch("ai_arch_toolkit.core._llm.create_provider")
+    async def test_a_nested_chain_is_walked_once_and_the_nested_llm_still_falls_back_alone(
+        self, mock_create
+    ):
+        primary, middle_p, last_p = AsyncMock(), AsyncMock(), AsyncMock()
+        primary.complete.side_effect = APIError(500, "down")
+        middle_p.complete.side_effect = APIError(503, "down too")
+        last_p.complete.return_value = _make_response("from last")
+        mock_create.side_effect = [last_p, middle_p, primary]
+
+        last = LLM("model-c", api_key="test")
+        middle = LLM("model-b", api_key="test", fallback=last)
+        llm = LLM("model-a", api_key="test", fallback=middle)
+
+        result = await llm.complete("Hi")
+
+        assert result.text == "from last"
+        assert (primary.complete.call_count, middle_p.complete.call_count) == (1, 1)
+        assert last_p.complete.call_count == 1  # reached through the parent's chain, once
+
+        # used on its own, the nested LLM still has the chain its caller gave it
+        alone = await middle.complete("Hi")
+        assert alone.text == "from last"
+        assert [a.model for a in alone.attempts] == ["model-b", "model-c"]
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_all_fail_raises_last(self, mock_create):

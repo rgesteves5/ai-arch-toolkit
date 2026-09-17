@@ -57,7 +57,7 @@ def plan_execute_flow(
     """
     plan_llm = planner_llm or llm
     inner_llm = exec_llm or llm
-    inner_tools = exec_tools or tools
+    inner_tools = exec_tools if exec_tools is not None else tools
     solve_llm = solver_llm or llm
     extra = llm_kwargs or {}
     # "{tools}" resolves against the executor's tools, so the plan matches what

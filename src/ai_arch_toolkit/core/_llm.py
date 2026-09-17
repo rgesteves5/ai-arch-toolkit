@@ -94,12 +94,12 @@ def _normalize_fallbacks(
     primary can fail over to a cloud model; a bare, unroutable tag (e.g.
     ``llama3:8b``) inherits the parent's ``api_key``/``base_url``/``provider``,
     assuming it lives on the same server. Pass ``LLM`` instances for full
-    per-fallback control. Nested fallbacks are flattened into the parent chain.
+    per-fallback control.
 
-    .. note:: Flattening **clears** the nested LLM's ``_fallbacks`` list so
-       that the parent owns the full chain. Passing the same ``LLM`` instance
-       as a nested fallback to multiple parents is not supported — only the
-       first parent will receive the nested chain.
+    A fallback that has fallbacks of its own contributes its whole chain, in order, and a model
+    reachable twice appears once. Nothing the caller passed is modified: a nested ``LLM`` keeps
+    its chain (so it still falls back when used on its own, or under another parent) and keeps
+    ownership of the fallbacks it created. ``owned`` holds only the instances created here.
     """
     if fallback is None:
         return [], []
@@ -112,18 +112,13 @@ def _normalize_fallbacks(
                 fb = LLM(item)  # recognizable model → route by its own name
             else:
                 fb = LLM(item, api_key=api_key, base_url=base_url, provider=provider)
-            all_fbs.append(fb)
             owned.append(fb)
         else:
-            all_fbs.append(item)
-        # Flatten nested fallbacks from the just-added LLM
-        fb_llm = all_fbs[-1]
-        if fb_llm._fallbacks:
-            # Copy before clearing — .extend() reads before the mutation
-            all_fbs.extend(list(fb_llm._fallbacks))
-            owned.extend(list(fb_llm._owned_fallbacks))
-            fb_llm._fallbacks = []
-            fb_llm._owned_fallbacks = []
+            fb = item
+        # ``fb._fallbacks`` is already flat: every LLM flattens its chain when it is built.
+        for candidate in (fb, *fb._fallbacks):
+            if not any(candidate is seen for seen in all_fbs):
+                all_fbs.append(candidate)
     return all_fbs, owned
 
 
@@ -795,12 +790,15 @@ class LLM:
         last_error: Exception,
         **kwargs: Any,
     ) -> Response:
-        """Walk fallback chain, delegating full complete() to each."""
+        """Walk the fallback chain: each fallback runs its own middleware, retries and metering.
+
+        The chain is flat, so a fallback does not follow its own chain here — this loop does.
+        """
         last_exc = last_error
         for i, fb in enumerate(self._fallbacks):
             logger.info("Fallback %d/%d: trying %s", i + 1, len(self._fallbacks), fb._model)
             try:
-                response = await fb.complete(messages, **kwargs)
+                response = await fb._complete(messages, follow_fallbacks=False, **kwargs)
                 # Merge fallback's tracked attempts into ours
                 attempts.extend(response.attempts)
                 return response
@@ -830,6 +828,42 @@ class LLM:
         **kwargs: Any,
     ) -> Response:
         """Send messages and return a Response."""
+        return await self._complete(
+            messages,
+            follow_fallbacks=True,
+            system=system,
+            tools=tools,
+            thinking=thinking,
+            thinking_effort=thinking_effort,
+            thinking_budget=thinking_budget,
+            output_schema=output_schema,
+            tool_choice=tool_choice,
+            json_mode=json_mode,
+            logprobs=logprobs,
+            **kwargs,
+        )
+
+    async def _complete(
+        self,
+        messages: str | list[dict[str, Any]],
+        *,
+        follow_fallbacks: bool,
+        system: str | None = None,
+        tools: list[dict[str, Any]] | ToolGroup | Callable[..., Any] | None = None,
+        thinking: bool = False,
+        thinking_effort: str | None = None,
+        thinking_budget: int | None = None,
+        output_schema: OutputSchema | type | None = None,
+        tool_choice: str | None = None,
+        json_mode: bool = False,
+        logprobs: bool = False,
+        **kwargs: Any,
+    ) -> Response:
+        """``complete``, optionally without this LLM's own fallback chain.
+
+        A parent walking its flat chain calls each fallback with ``follow_fallbacks=False``, so a
+        model that is also in the fallback's own chain is tried once.
+        """
         normalized = self._normalize(messages)
         merged = self._merge_kwargs(**kwargs)
         wire_tools = prepare_tools(tools)
@@ -882,7 +916,7 @@ class LLM:
         except self._fallback_on as primary_err:
             if isinstance(primary_err, AdmissionDenied):
                 raise  # terminal: never fall back after a budget/admission denial
-            if not self._fallbacks:
+            if not (follow_fallbacks and self._fallbacks):
                 raise
             options = {
                 "thinking": thinking,

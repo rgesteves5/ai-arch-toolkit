@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
 
 from ai_arch_toolkit.core._llm import LLM
+from ai_arch_toolkit.core._policy import Policy
 from ai_arch_toolkit.core._response import OutputSchema, Response, ToolCall, Usage
 from ai_arch_toolkit.core._state import State
 from ai_arch_toolkit.core._step import Result
@@ -104,6 +106,38 @@ class TestReasoningSpec:
         spec = ReasoningSpec.from_mapping({"output_schema": StructuredResult})
 
         assert spec.output_schema is StructuredResult
+
+    def test_from_mapping_builds_a_policy_from_a_mapping(self) -> None:
+        spec = ReasoningSpec.from_mapping(
+            {"policy": {"timeout": 1.5, "retry": {"max_retries": 2}, "on_timeout": "fallback"}}
+        )
+
+        assert spec.policy is not None
+        assert spec.policy.timeout == 1.5
+        assert spec.policy.retry.max_retries == 2
+        assert spec.policy.on_timeout == "fallback"
+
+    def test_from_mapping_keeps_a_policy_instance(self) -> None:
+        policy = Policy(timeout=3.0)
+
+        assert ReasoningSpec.from_mapping({"policy": policy}).policy is policy
+
+    @pytest.mark.parametrize(
+        ("data", "match"),
+        [
+            ({"bogus_key": 1}, "bogus_key"),
+            ({"policy": {"timeut": 1}}, "timeut"),
+            ({"policy": {"fallback": "other_step"}}, "fallback"),
+            ({"policy": 30}, "policy"),
+            ({"output_schema": 123}, "output_schema"),
+            ({"output_schema": {"name": "out"}}, "schema"),
+        ],
+    )
+    def test_from_mapping_rejects_what_it_cannot_use(
+        self, data: dict[str, Any], match: str
+    ) -> None:
+        with pytest.raises(ValueError, match=match):
+            ReasoningSpec.from_mapping(data)
 
 
 class TestRegistry:

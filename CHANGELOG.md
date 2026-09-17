@@ -188,6 +188,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `uv lock --upgrade` brought every transitive dependency to its latest compatible version (pydantic 2.13, urllib3 2.7, requests 2.34, websockets 16, xai-sdk 1.12, ruff 0.15.13, …); resolved the four Dependabot alerts.
 
 ### Fixed
+- **An empty `ToolGroup` is a value, not an absence.** `Agent(spec, llm, ToolGroup())` used to swap
+  the empty group for a new one, so tools added to it later (`group.add(...)`) were unknown to the
+  agent. An empty per-phase group (`executor_tools`, `solver_tools`, `rollout_tools`) used to fall
+  back to the agent's main tools in `plan_execute`, `reflexion`, `llm_compiler`, `self_discovery` and
+  `lats` — a phase declared without tools received all of them. Both now keep the group they were
+  given.
+- **`LLM(fallback=other)` no longer modifies `other`.** Building the parent emptied the nested
+  LLM's own fallback chain and took ownership of the fallbacks it had created, so `other` stopped
+  falling back when used on its own and could not be shared by two parents. The parent still walks
+  one flat chain (a model reachable twice is tried once); each LLM closes only the fallbacks it
+  created from strings.
+- **`null` is refused for a tool parameter that does not admit `None`.** Argument validation let
+  `None` through for every parameter, so `width: int` received `None`. It is now accepted only with a
+  `None` default, an annotation that includes `None`, or no usable annotation; otherwise the call
+  fails with `validation_error` before any gate or approval.
+- **`ReasoningSpec.from_mapping` drops nothing silently.** A `policy` given as a mapping, a
+  malformed `output_schema` and unknown keys were ignored. `policy` now builds a `Policy` from a
+  mapping of its fields (`retry` from a mapping of `RetryConfig` fields); an unknown key or an
+  unusable value raises `ValueError` naming it.
 - **OpenAI structured output accepts Pydantic models again.** `output_schema=Model` was sent in
   strict mode as `model_json_schema()` produced it, and OpenAI answered 400 (`'additionalProperties'
   is required to be supplied and to be false`). Strict schemas are now normalized as the SDK's own

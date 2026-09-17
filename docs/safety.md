@@ -84,7 +84,7 @@ Before any gate runs, the arguments are checked against the tool's input schema 
 | `anyOf` | a value that already matches a branch | otherwise the first branch that coerces it (`int \| str` keeps `"1"` a string) |
 | `string`, `array`, `object`, untyped | anything | nothing |
 
-Required arguments must be present, arguments the schema doesn't declare are refused unless the function takes `**kwargs`, and the call must bind to the function's signature. A parameter typed `X | None` without a default is optional in the schema; when the model omits it, the function receives `None`. A failure returns `validation_error` with a message the model can act on; when one argument is at fault, `result.error.details["argument"]` names it. A string too long for Python to convert to an integer is a validation error too, never an exception.
+Required arguments must be present, arguments the schema doesn't declare are refused unless the function takes `**kwargs`, and the call must bind to the function's signature. A parameter typed `X | None` without a default is optional in the schema; when the model omits it, the function receives `None`. An explicit `null` is accepted only where the parameter admits it — a `None` default, an annotation that includes `None`, or no usable annotation (`Any`, untyped); elsewhere it is a `validation_error` like any other wrong type (`width: int` refuses `null`). A failure returns `validation_error` with a message the model can act on; when one argument is at fault, `result.error.details["argument"]` names it. A string too long for Python to convert to an integer is a validation error too, never an exception.
 
 ---
 

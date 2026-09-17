@@ -60,7 +60,7 @@ def reflexion_flow(
         reflect_llm: Override LLM for the reflector.
     """
     inner_llm = exec_llm or llm
-    inner_tools = exec_tools or tools
+    inner_tools = exec_tools if exec_tools is not None else tools
     reflector_llm = reflect_llm or llm
     extra = llm_kwargs or {}
 

@@ -82,7 +82,7 @@ def self_discovery_flow(
     """
     reason_llm = reasoning_llm or llm
     solve_llm = solver_llm or llm
-    solve_tools = solver_tools or tools
+    solve_tools = solver_tools if solver_tools is not None else tools
     extra = llm_kwargs or {}
 
     modules_text = "\n".join(f"- {m}" for m in modules)

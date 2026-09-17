@@ -53,7 +53,7 @@ class Agent:
         *,
         deps: Mapping[str, Any] | None = None,
     ) -> None:
-        self._flow = build_flow(spec, llm, tools or ToolGroup(), deps=deps)
+        self._flow = build_flow(spec, llm, tools if tools is not None else ToolGroup(), deps=deps)
         self._make_state: Callable[[Content], dict[str, Any]] = lambda task: initial_state(
             spec, task
         )

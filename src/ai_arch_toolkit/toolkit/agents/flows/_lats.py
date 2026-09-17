@@ -111,7 +111,7 @@ def lats_flow(
         reflector_llm: Override LLM for reflection.
     """
     inner_llm = rollout_llm or llm
-    inner_tools = rollout_tools or tools
+    inner_tools = rollout_tools if rollout_tools is not None else tools
     evaluator_llm = eval_llm or llm
     solve_llm = solver_llm or llm
     reflect_llm = reflector_llm or llm

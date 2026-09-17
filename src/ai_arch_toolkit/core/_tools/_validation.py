@@ -13,7 +13,9 @@ actually run and an invalid call never reaches a human:
 * ``string``, ``array``, ``object`` and untyped schemas (``Any``) are left as they are — the schema
   generator maps unknown Python types to ``string``, so rejecting non-strings would refuse valid
   calls;
-* ``None`` passes (the schema does not record whether a parameter is ``Optional``);
+* ``None`` passes only where the parameter admits it — a ``None`` default, an annotation that
+  includes ``None``, or no usable annotation (``Any``, untyped). The schema does not record this,
+  so it is read from the signature; elsewhere ``null`` is refused like any other wrong type;
 * a parameter the schema does not require but the function has no default for
   (``query: str | None``) receives ``None`` when the model omits it.
 
@@ -27,7 +29,9 @@ import inspect
 import math
 import re
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any
+from typing import Any, get_type_hints
+
+from ai_arch_toolkit.core._tools._schema import _hint_to_json_schema
 
 _INTEGER_TEXT = re.compile(r"^[+-]?\d+$")
 
@@ -66,10 +70,15 @@ def validate_arguments(
                 unexpected[0],
             )
 
+    none_allowed = _none_allowed(fn)
     for name, value in arguments.items():
         declared = properties.get(name)
         if not isinstance(declared, Mapping):
             continue
+        if value is None and not none_allowed.get(name, True):
+            raise ArgumentError(
+                f"argument {name!r}: expected {_describe(declared)}, got null", name
+            )
         ok, value_out, expected = _coerce(value, declared)
         if not ok:
             got = f"{type(value).__name__} {_short(value)}"
@@ -80,6 +89,28 @@ def validate_arguments(
         if param.name in properties and param.name not in coerced and _needs_value(param):
             coerced[param.name] = None  # optional in the schema, required by the signature
     return coerced
+
+
+def _none_allowed(fn: Callable[..., Any]) -> dict[str, bool]:
+    """Per parameter, whether ``None`` is a value its default or annotation admits.
+
+    A parameter missing from the result (``**kwargs`` names, an unreadable signature, an
+    annotation that does not resolve) is treated as admitting ``None``: a valid call is never
+    refused because the answer could not be worked out.
+    """
+    try:
+        parameters = inspect.signature(fn).parameters
+        hints = get_type_hints(fn)
+    except Exception:
+        return {}
+    allowed: dict[str, bool] = {}
+    for name, param in parameters.items():
+        if param.default is None or name not in hints:
+            allowed[name] = True
+            continue
+        schema, is_optional = _hint_to_json_schema(hints[name])
+        allowed[name] = is_optional or not schema  # the empty schema is ``Any`` / ``object``
+    return allowed
 
 
 def _parameters(fn: Callable[..., Any]) -> list[inspect.Parameter]:

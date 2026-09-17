@@ -53,7 +53,7 @@ class _OkProvider:
 
 
 class _FakeFallback:
-    """Minimal fallback-LLM stand-in for the fallback loop (needs .complete / ._model)."""
+    """Minimal fallback-LLM stand-in for the fallback loop (needs ._complete / ._model)."""
 
     def __init__(
         self, model: str, *, response: Response | None = None, raises: Exception | None = None
@@ -63,7 +63,8 @@ class _FakeFallback:
         self._raises = raises
         self.called = False
 
-    async def complete(self, messages, **kwargs) -> Response:
+    async def _complete(self, messages, *, follow_fallbacks: bool, **kwargs) -> Response:
+        assert follow_fallbacks is False  # the parent walks the chain; a fallback never does
         self.called = True
         if self._raises is not None:
             raise self._raises
