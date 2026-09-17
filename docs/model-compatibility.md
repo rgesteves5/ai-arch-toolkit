@@ -98,6 +98,12 @@ with client-side custom tools and `max_tokens`.
 Gemini probes use the current Gemini generate-content provider path. Live API-only models
 need separate provider support.
 
+> **Known issue (2026-09): Gemini and tool calls.** The "Tools" column covers a single tool call.
+> Results of *parallel* tool calls are sent back as separate `user` turns without the call `id`,
+> and after `stream()` / `stream_events()` the replayed history can drop function calls and thought
+> signatures. Multi-tool agent loops on Gemini may fail with HTTP 400. Until this is fixed, use
+> another provider for tool-calling agents.
+
 | Model | Plain | Tools | Structured | JSON Mode | Stream | Thinking | Notes |
 |---|---|---|---|---|---|---|---|
 | `gemini-3.1-pro-preview` | Pass | Pass | Pass | Pass | Pass | Pass | Some calls can be slow; one plain probe took about 127 seconds. |
