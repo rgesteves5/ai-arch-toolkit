@@ -93,3 +93,69 @@
   actuais, `csv_read` sem aprovação, budget envenenado por erro do adaptador.
 - A seguir: o dono fixa as decisões da vaga 1 (C02, C06, C07, C08) e decide se os achados sem tarefa
   abrem uma frente de correcção antes. Nada commitado.
+
+## 2026-09-17 · causas dos achados e plano de robustez
+
+- O dono perguntou se algum achado era impeditivo. Um é, e é mais largo do que o registado a 15: toda
+  a chamada LLM falhada fica com custo desconhecido e, sob `max_cost`, o retry, o fallback e o resto
+  do run são negados (também o tecto por step). Registado em `FINDINGS.md` com as reproduções.
+- A pedido do dono ("corrigir a causa, não o sintoma"): cinco agentes de leitura investigaram a
+  facturação de falhas nos fornecedores (documentação oficial), a validação de pedidos contra os
+  tipos dos SDKs, as fases e o mapeamento de erros dos cinco adaptadores, os resultados de tools
+  paralelas por fornecedor e os invariantes das ~130 tools. Achados novos em `FINDINGS.md`; os que o
+  coordenador verificou estão marcados.
+- Um dos agentes fez, por engano, um pedido ao endpoint real da Google com a chave literal "dummy"
+  (400, sem credenciais, sem custo). O script não foi guardado.
+- Resultado: `docs/internal/hardening-plan.md` — seis causas, correcção estrutural de cada uma, como
+  se garante, ordem por vagas e onze decisões por fixar (R1–R11). Protótipos reutilizáveis guardados
+  em `blackboard/prototypes/2026-09-hardening/` (o scratchpad da sessão foi limpo entre dias e os
+  scripts de 15 de setembro perderam-se).
+- A seguir: o dono fixa R1–R11; depois abre-se a frente com fichas. Nada commitado.
+- Revisão do plano no mesmo dia, a pedido do dono ("remendos ou correcções estruturais?"): cinco
+  mecanismos da primeira versão eram remendos e foram substituídos por quatro costuras redesenhadas
+  (modelo de erros tipado, contrato de três fases como caminho único, pipeline de tentativa única,
+  gramática única de ids de modelo), com regras de desenho e orçamentos de qualidade no CI. Linha de
+  base medida: 35 funções em `core/` com complexidade acima de 10, 34 acima de 60 linhas.
+- Dependências: ensaio numa cópia descartável com `uv lock --upgrade` (95 pacotes; `anthropic` 0.116 →
+  1.6 e `openai` 2.45 → 3.14, ambos para `httpx2`). Tudo verde (3045 passed, pyright 0, um `RUF036`),
+  o que confirma que a suite não vê o SDK real. A actualização passa a ser a vaga 0a. O repositório
+  não foi alterado. Decisões agora R1–R14.
+- Duas revisões externas (outros modelos), verificadas pelo coordenador a pedido do dono: métricas e
+  duplicações reproduzem-se todas; uma chegou sozinha ao achado impeditivo. Quatro bugs novos em
+  `FINDINGS.md` (fallback que altera o `LLM` do utilizador, validação que aceita `None` e não vê
+  elementos de listas, `from_mapping` que descarta em silêncio, imutabilidade só à superfície). O plano
+  adopta a unificação dos caminhos de `_run_dag` e ganha as secções 9 (configuração estrita e
+  imutabilidade, R15) e 10 (dívida de manutenção confirmada, para frente própria).
+- O `uv.lock` do checkout principal aparece actualizado às 20:17 e o `.venv` já tem `anthropic` 1.6.0 e
+  `openai` 3.14.1. Não foi o coordenador (o ensaio correu numa cópia em scratch); fica como está, à
+  espera de indicação do dono. `pyproject.toml`, hooks e CI continuam por actualizar.
+
+## 2026-09-17 · dependências actualizadas
+
+- A pedido do dono ("fecha a actualização de dependências"). O `uv.lock` já estava actualizado (95
+  pacotes; `anthropic` 1.6.0 e `openai` 3.14.1, ambos sobre `httpx2`; `google-genai` 2.24.0; `xai-sdk`
+  1.19.0; `ruff` 0.16.8; `pyright` 1.1.414). Fechado agora: mínimos verdadeiros e tectos na versão
+  maior seguinte no `pyproject.toml` (`anthropic>=1.0,<2`, `openai>=3.0,<4`, `google-genai>=2.0,<3`,
+  `xai-sdk>=1.7,<2`, `pyyaml>=6.0.2`, `tiktoken>=0.11`); o extra `dev` passa a instalar `all`, para
+  cada mínimo ficar declarado uma vez; job `floors` no CI (`--resolution lowest-direct`); actions
+  (`checkout@v7`, `setup-uv@v10.1.0`, `setup-python@v7`); hooks (`ruff-pre-commit` v0.16.8,
+  `pre-commit-hooks` v6.0.0); `RUF036` corrigido; README, CONTRIBUTING e CHANGELOG.
+- Os mínimos antigos eram falsos: `uv sync --resolution lowest-direct` falhava logo no `pyyaml` 6.0,
+  que não compila em Python 3.13.
+- Verificação: 3045 passed, ruff e formatação limpos, pyright 0, `uv lock --check` OK, na versão
+  actual; nos mínimos (cópia em scratch): 3045 passed e pyright actual 0. Ensaios sem rede pelos SDKs
+  reais contra servidor em loopback, nas duas pontas: 73 cenários de falha sem erros de forma de API e
+  caminho de sucesso (`smoke_success.py`) em Anthropic, OpenAI, Meta e Gemini. Por fazer: o CI não
+  correu (só no push) e nenhuma chamada ao vivo foi feita com os SDKs novos. Nada commitado.
+
+## 2026-09-17 · contratos pequenos e correcções locais
+
+- A pedido do dono: F24 feita (grupo de tools vazio, fallback que alterava o `LLM` do utilizador,
+  `null` em parâmetros que não admitem `None`, `ReasoningSpec.from_mapping` estrito). 3070 passed;
+  ruff, formatação e pyright limpos. Nota do problema conhecido do Gemini com tools em
+  `docs/model-compatibility.md` e no `AGENTS.md`.
+- Decisões do dono registadas: D15 (dependências), D16 (modelo sem preço não corre), D17 (limites
+  por omissão para qualquer tool), D18 (ordem dos adaptadores: OpenAI, xAI, Gemini, Meta, Anthropic),
+  D19 (`null`).
+- F25 aberta: nove correcções locais independentes, prontas para um agente. Os refactors do plano de
+  robustez continuam sem fichas. Nada commitado.

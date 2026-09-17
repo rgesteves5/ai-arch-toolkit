@@ -1,6 +1,21 @@
 # Quadro
 
-## Frente activa: capacidades em falta
+## Frente activa: correcções locais
+
+- **Estado:** aberta em 2026-09-17. **Base:** `main` @ `3a4d1ec` mais o trabalho por commitar desta
+  sessão (dependências, F24). Baseline: 3070 passed, 22 deselected; ruff, formatação e pyright limpos.
+- **Pronto para agentes:** só a F25. Cada item tem o achado com reprodução em `FINDINGS.md`, a
+  correcção, os ficheiros e a prova.
+- **Ainda não está pronto para agentes:** os refactors do `docs/internal/hardening-plan.md` (pipeline
+  do `LLM`, adaptadores, tools, preços, motor) não têm fichas. Ninguém lhes pega sem ficha.
+- **Decisões do dono desta frente:** D15–D19.
+
+| ID | Tarefa | Dono | Estado |
+|---|---|---|---|
+| F24 | Quatro contratos pequenos: grupo de tools vazio, fallback que alterava o `LLM`, `null`, `from_mapping` | coordenador | done |
+| F25 | Nove correcções locais independentes | — | todo |
+
+## Frente em espera: capacidades em falta
 
 - **Estado:** aberta em 2026-09-15. As nove fichas estão escritas; nenhuma tarefa começou.
 - **Antes de codificar:** o dono fixa as "Decisões a fixar" de cada ficha. Cada decisão tomada entra
@@ -135,8 +150,8 @@ capacidades (ver "Por fazer").
   pedido) e um probe com uma tool cujo parâmetro seja `Any` (schema sem tipo) e com `system=` +
   `system()` ao mesmo tempo — únicas mudanças desta frente que o xAI ainda não confirmou.
 - **Frente C, decisões:** fixar as da vaga 1 (C02, C06, C07, C08) antes de atribuir donos.
-- **Achados sem tarefa (2026-09-15):** decidir se abrem uma frente de correcção antes da vaga 1. Os
-  mais graves: `thinking=True` no Anthropic recusado (400) nos modelos actuais; `csv_read` lê qualquer
-  ficheiro sem aprovação; um erro do adaptador a montar o pedido envenena o budget;
-  `tool_choice="required"` recusado no Fable 5.1; preço de cache do `claude-fable-5-1`.
-
+- **Plano de robustez (2026-09-17):** `docs/internal/hardening-plan.md` agrupa os achados sem tarefa
+  em seis causas e propõe corrigi-las antes da frente C. Um é impeditivo: qualquer chamada LLM falhada
+  fica com custo desconhecido e, sob `max_cost`, nega retry, fallback e o resto do run. Falta fixar as
+  decisões R1–R15 do plano; só depois se abre a frente com fichas. As dependências já estão actualizadas (2026-09-17; falta correr o CI e verificar os SDKs novos ao vivo). O plano absorve C01a, C02a, C02b,
+  C08c e a validade do fio do C05a. Protótipos em `blackboard/prototypes/2026-09-hardening/`.

@@ -1,0 +1,337 @@
+{
+ "air_quality_current": {
+  "air-quality-api.open-meteo.com": 40
+ },
+ "air_quality_forecast": {
+  "air-quality-api.open-meteo.com": 70
+ },
+ "arxiv_paper": {
+  "export.arxiv.org": 26
+ },
+ "arxiv_search": {
+  "export.arxiv.org": 58
+ },
+ "chembl_activity_search": {
+  "www.ebi.ac.uk": 42
+ },
+ "chembl_molecule": {
+  "www.ebi.ac.uk": 18
+ },
+ "chembl_molecule_search": {
+  "www.ebi.ac.uk": 36
+ },
+ "chembl_target": {
+  "www.ebi.ac.uk": 18
+ },
+ "chembl_target_search": {
+  "www.ebi.ac.uk": 36
+ },
+ "clinical_trial_study": {
+  "clinicaltrials.gov": 18
+ },
+ "clinical_trials_search": {
+  "clinicaltrials.gov": 68
+ },
+ "country_info": {
+  "restcountries.com": 42
+ },
+ "crossref_search": {
+  "api.crossref.org": 52
+ },
+ "crossref_work": {
+  "api.crossref.org": 18
+ },
+ "dailymed_label": {
+  "dailymed.nlm.nih.gov": 28
+ },
+ "dailymed_label_search": {
+  "dailymed.nlm.nih.gov": 38
+ },
+ "datacite_doi": {
+  "api.datacite.org": 18
+ },
+ "datacite_search": {
+  "api.datacite.org": 62
+ },
+ "define_word": {
+  "api.dictionaryapi.dev": 42
+ },
+ "earthquake_count": {
+  "earthquake.usgs.gov": 38
+ },
+ "earthquake_event": {
+  "earthquake.usgs.gov": 18
+ },
+ "earthquake_search": {
+  "earthquake.usgs.gov": 4
+ },
+ "eonet_categories": {
+  "eonet.gsfc.nasa.gov": 28
+ },
+ "eonet_event": {
+  "eonet.gsfc.nasa.gov": 18
+ },
+ "eonet_events": {
+  "eonet.gsfc.nasa.gov": 42
+ },
+ "europe_pmc_article": {
+  "www.ebi.ac.uk": 32
+ },
+ "europe_pmc_citations": {
+  "www.ebi.ac.uk": 40
+ },
+ "europe_pmc_search": {
+  "www.ebi.ac.uk": 56
+ },
+ "eurostat_compare": {
+  "ec.europa.eu": 32
+ },
+ "eurostat_dataset": {
+  "ec.europa.eu": 18
+ },
+ "eurostat_dataset_search": {
+  "ec.europa.eu": 36
+ },
+ "eurostat_dimensions": {
+  "ec.europa.eu": 28
+ },
+ "eurostat_series": {
+  "ec.europa.eu": 40
+ },
+ "foodon_search": {
+  "www.ebi.ac.uk": 50
+ },
+ "foodon_term": {
+  "www.ebi.ac.uk": 18
+ },
+ "gbif_occurrence_search": {
+  "api.gbif.org": 44
+ },
+ "gbif_species": {
+  "api.gbif.org": 18
+ },
+ "gbif_species_match": {
+  "api.gbif.org": 26
+ },
+ "gbif_species_search": {
+  "api.gbif.org": 40
+ },
+ "gdelt_news_search": {
+  "api.gdeltproject.org": 44
+ },
+ "gdelt_timeline": {
+  "api.gdeltproject.org": 32
+ },
+ "geocode": {
+  "geocoding-api.open-meteo.com": 42
+ },
+ "get_forecast": {
+  "geocoding-api.open-meteo.com": 52
+ },
+ "get_forecast_by_coords": {
+  "api.open-meteo.com": 58
+ },
+ "get_weather": {
+  "geocoding-api.open-meteo.com": 42
+ },
+ "get_weather_by_coords": {
+  "api.open-meteo.com": 48
+ },
+ "hacker_news": {
+  "hacker-news.firebaseio.com": 42
+ },
+ "http_get": {
+  "example.com": 28,
+  "evil.example": 4
+ },
+ "internet_archive_item": {
+  "archive.org": 22
+ },
+ "internet_archive_search": {
+  "archive.org": 76
+ },
+ "ip_lookup": {
+  "ip-api.com": 42
+ },
+ "mediawiki_page": {
+  "en.wiktionary.org": 30,
+  "evil.example": 2
+ },
+ "mediawiki_search": {
+  "en.wiktionary.org": 36,
+  "evil.example": 2
+ },
+ "mediawiki_sections": {
+  "en.wiktionary.org": 20,
+  "evil.example": 2
+ },
+ "nvd_cve": {
+  "services.nvd.nist.gov": 18
+ },
+ "nvd_cve_search": {
+  "services.nvd.nist.gov": 64
+ },
+ "open_food_facts_compare": {
+  "world.openfoodfacts.org": 20
+ },
+ "open_food_facts_nutrition": {
+  "world.openfoodfacts.org": 18
+ },
+ "open_food_facts_product": {
+  "world.openfoodfacts.org": 18
+ },
+ "open_food_facts_search": {
+  "world.openfoodfacts.org": 50
+ },
+ "open_library_isbn": {
+  "openlibrary.org": 18
+ },
+ "open_library_search": {
+  "openlibrary.org": 108
+ },
+ "open_library_work": {
+  "openlibrary.org": 18
+ },
+ "openfda_food_recall": {
+  "api.fda.gov": 18
+ },
+ "openfda_food_recall_search": {
+  "api.fda.gov": 66
+ },
+ "osm_reverse_geocode": {
+  "nominatim.openstreetmap.org": 58
+ },
+ "osm_search_place": {
+  "nominatim.openstreetmap.org": 62
+ },
+ "overpass_pois": {
+  "overpass-api.de": 64
+ },
+ "overpass_query": {
+  "overpass-api.de": 28
+ },
+ "pdb_chemical_component": {
+  "data.rcsb.org": 18
+ },
+ "pdb_entry": {
+  "data.rcsb.org": 18
+ },
+ "pdb_ligands": {
+  "data.rcsb.org": 18
+ },
+ "pdb_search": {
+  "search.rcsb.org": 36
+ },
+ "pubmed_article": {
+  "eutils.ncbi.nlm.nih.gov": 18
+ },
+ "pubmed_search": {
+  "eutils.ncbi.nlm.nih.gov": 52
+ },
+ "reverse_geocode": {
+  "nominatim.openstreetmap.org": 30
+ },
+ "ror_organization": {
+  "api.ror.org": 18
+ },
+ "ror_search": {
+  "api.ror.org": 38
+ },
+ "rxnorm_concept": {
+  "rxnav.nlm.nih.gov": 18
+ },
+ "rxnorm_drug_search": {
+  "rxnav.nlm.nih.gov": 22
+ },
+ "rxnorm_ndcs": {
+  "rxnav.nlm.nih.gov": 18
+ },
+ "rxnorm_related": {
+  "rxnav.nlm.nih.gov": 30
+ },
+ "scrape_text": {
+  "example.com": 28,
+  "evil.example": 4
+ },
+ "semantic_scholar_citations": {
+  "api.semanticscholar.org": 50
+ },
+ "semantic_scholar_paper": {
+  "api.semanticscholar.org": 38
+ },
+ "semantic_scholar_search": {
+  "api.semanticscholar.org": 78
+ },
+ "timezone_lookup": {
+  "api.open-meteo.com": 30
+ },
+ "uniprot_crossrefs": {
+  "rest.uniprot.org": 32
+ },
+ "uniprot_entry": {
+  "rest.uniprot.org": 18
+ },
+ "uniprot_features": {
+  "rest.uniprot.org": 32
+ },
+ "uniprot_search": {
+  "rest.uniprot.org": 42
+ },
+ "uniprot_sequence": {
+  "rest.uniprot.org": 18
+ },
+ "weather_units": {
+  "geocoding-api.open-meteo.com": 56
+ },
+ "who_indicator": {
+  "ghoapi.azureedge.net": 18
+ },
+ "who_indicators": {
+  "ghoapi.azureedge.net": 40
+ },
+ "who_series": {
+  "ghoapi.azureedge.net": 2
+ },
+ "wikidata_entity": {
+  "www.wikidata.org": 20
+ },
+ "wikidata_search": {
+  "www.wikidata.org": 42
+ },
+ "wikidata_sparql": {
+  "query.wikidata.org": 28
+ },
+ "wikipedia_article": {
+  "en.wikipedia.org": 52
+ },
+ "wikipedia_related": {
+  "en.wikipedia.org": 53
+ },
+ "wikipedia_search": {
+  "en.wikipedia.org": 52
+ },
+ "wiktionary_entry": {
+  "en.wiktionary.org": 30
+ },
+ "world_bank_compare": {
+  "api.worldbank.org": 62
+ },
+ "world_bank_countries": {
+  "api.worldbank.org": 92
+ },
+ "world_bank_indicator": {
+  "api.worldbank.org": 22
+ },
+ "world_bank_indicators": {
+  "api.worldbank.org": 82
+ },
+ "world_bank_series": {
+  "api.worldbank.org": 40
+ },
+ "world_bank_sources": {
+  "api.worldbank.org": 36
+ },
+ "world_bank_topics": {
+  "api.worldbank.org": 36
+ }
+}

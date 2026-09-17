@@ -124,3 +124,41 @@ Só acrescentar. Uma decisão revista ganha uma nova entrada que diz qual substi
   `base_url` é respeitado. O cliente limpa `organization`/`project` para os cabeçalhos
   `OpenAI-Organization`/`OpenAI-Project` lidos do ambiente não chegarem à Meta. A `temperature` passa
   tal como vem; a documentação recomenda `temperature=1.0` (a Meta afina o modelo para 1.0).
+
+## D15 · Dependências: mínimos testados, tecto na versão maior seguinte
+
+- **Contexto:** os mínimos declarados nunca foram testados e eram falsos (`pyyaml` 6.0 nem compila em
+  Python 3.13). `anthropic` 1.x e `openai` 3.x trocaram o transporte para `httpx2`.
+- **Decisão (2026-09-17):** cada mínimo é a versão mais baixa que o job `floors` do CI instala e
+  testa (`--resolution lowest-direct`); cada SDK de fornecedor tem tecto na versão maior seguinte. O
+  extra `dev` instala `all`, para cada mínimo ficar declarado uma vez.
+- **Consequência:** apps presas a `anthropic` 0.x ou `openai` 1.x/2.x têm de actualizar esses SDKs.
+
+## D16 · Um modelo sem preço não corre (decisão do dono, 2026-09-17)
+
+- **Decisão:** se o toolkit não tem preço para o modelo pedido, a chamada falha com um erro que manda
+  registar o preço (`pricing.register(...)`); um modelo local regista preço zero de forma explícita
+  (nunca se infere do URL: um loopback pode ser proxy de um modelo pago). O projecto mantém os preços
+  dos modelos novos dos fornecedores que suporta.
+- **Por fixar na ficha:** se a regra vale sempre ou só com um `MeterScope` ligado. A correspondência
+  passa a ser por id exacto ou sufixo de snapshot (plano de robustez, causa 3).
+
+## D17 · Limites por omissão para qualquer tool, configuráveis por tool (decisão do dono, 2026-09-17)
+
+- **Decisão:** o executor governado impõe limites de saída e de tempo a todas as tools, as do toolkit
+  e as de quem usa a framework, com valores por omissão e override por tool. A falta de limites é da
+  framework, não de cada tool. As tools perigosas que estão no namespace seguro passam para
+  `dangerous`.
+
+## D18 · Ordem dos adaptadores (decisão do dono, 2026-09-17)
+
+- **Decisão:** OpenAI → xAI → Gemini → Meta → Anthropic, porque não há créditos Anthropic para a
+  verificação ao vivo. (O dono escreveu "xai" duas vezes; assume-se que a segunda é a Meta.)
+
+## D19 · `null` só onde o parâmetro admite `None`
+
+- **Contexto:** a validação aceitava `None` em qualquer parâmetro, porque o schema não regista a
+  opcionalidade (`width: int` recebia `None`).
+- **Decisão (F24):** lê-se da assinatura: default `None`, anotação com `None`, ou sem anotação
+  utilizável. Fora disso, `null` dá `validation_error` antes dos gates, também num parâmetro opcional
+  com default diferente de `None`. Arrays e objectos continuam intactos (D7).

@@ -408,3 +408,222 @@ só o faz com `structured_output_mode="prompt"` (`_anthropic.py:520-525`). A lis
 
 `_xai.py:408-416` diz que o `xai-sdk` não tem server tools; a 1.17.0 instalada tem
 `xai_sdk.tools.web_search`, `x_search` e `code_execution`.
+
+## 2026-09-17 · coordenador
+
+### Qualquer chamada LLM falhada fica com custo desconhecido e, sob tecto de custo, mata o run → sem tarefa (impeditivo)
+
+Alarga o achado "Erro do adaptador a montar o pedido envenena o budget" (2026-09-15): não é só o erro
+do adaptador. `MeterStore.fail()` atribui `Cost.unknown("operation did not settle")` a toda a
+operação `llm` que não liquida (`core/_metering/_store.py:156-160`), seja qual for a causa: resposta
+de erro do fornecedor (429, 5xx, 4xx — não facturada), falha de rede, timeout, cancelamento ou erro
+local antes de qualquer I/O. Os dois consumidores de `unknown_cost_count` fecham a porta a seguir:
+`BudgetController._exceeds` com `unpriced="fail_closed"`, que é o valor por omissão
+(`toolkit/budget/_controller.py:102-108`), e o tecto por step (`core/_step_engine.py:212`). Como cada
+tentativa é uma operação, a tentativa seguinte do retry e o primeiro fallback já são negados.
+
+Reproduções do coordenador (provider falso, sem rede, `BudgetPolicy(max_cost=5.0)`):
+
+```
+503 e depois ok, retry=2           -> BudgetExceeded após 1 chamada ao provider (o retry é negado)
+429 e depois ok, retry=2           -> idem
+primário 503, fallback configurado -> BudgetExceeded; o fallback nunca é chamado
+ConnectionError e depois ok        -> BudgetExceeded
+timeout de quem chama, nova chamada -> BudgetExceeded
+ValueError do adaptador, nova chamada -> BudgetExceeded
+sem tecto, ou unpriced="allow"     -> o retry funciona (unknown_cost_count=1)
+Step com Policy(max_cost=1.0), 503 e retry com sucesso (custo real 0,0006 USD)
+                                   -> "Cost exceeded limit 1.0: a call could not be priced (fail-closed)"
+```
+
+O desenho original (`docs/internal/metering-plan.md:135-137`) fixou "llm falhado → Unknown" sem
+distinguir tipos de falha, e a matriz de testes prevista cruza `max_cost` × Known/Unknown ×
+fail_closed/allow, mas nunca falha × retry/fallback × tecto. Contorno: `unpriced="allow"`, que também
+deixa passar modelos sem preço e server tools. Afecta qualquer app com um tecto de custo: um 429
+passageiro termina o run com `BudgetExceeded`.
+
+## 2026-09-17 · investigação das causas (coordenador e cinco agentes de leitura)
+
+Base de `docs/internal/hardening-plan.md`, que agrupa estes achados e os de 2026-09-15 por causa.
+Os scripts estão em `blackboard/prototypes/2026-09-hardening/`. Nenhum tem tarefa ainda.
+
+**Verificados pelo coordenador (código lido ou reprodução corrida):**
+
+### Gemini nunca junta os resultados de tools e não devolve o `id`
+
+`_messages_to_sdk` chama `_flush_fn_responses()` à entrada de cada `tool_result`
+(`core/_providers/_gemini.py:156`), por isso cada resultado sai num `Content` `user` próprio, ao
+contrário da docstring (`:138-140`). A `FunctionResponse` é construída sem `id` (`:175-178`); o
+Gemini 3 dá um `id` por `functionCall` e pede o mesmo `id` na resposta. A única forma documentada é um
+`Content` com todas as respostas; o 400 "number of function response parts…" está por confirmar ao
+vivo (um pedido num modelo 2.5).
+
+### O 529 da Anthropic não é repetido
+
+`RetryConfig.retry_on_status` é `(429, 500, 502, 503, 504)` (`core/_retry.py:23`); `overloaded_error`
+(529) é o erro transitório típico da Anthropic e propaga à primeira.
+
+### `mediawiki_*` deixam o modelo escolher o host, no namespace seguro
+
+`_valid_api_url` só exige `https`, um netloc e um caminho acabado em `api.php`
+(`toolkit/tools/_mediawiki.py:276-278`). Com `ToolGroup(mediawiki_search)` sem handler,
+`api_url="https://169.254.169.254/api.php"` → o pedido é tentado; a política é a por omissão
+(`capability=None`, sem aprovação).
+
+### `ip_lookup` usa `http://` e revela o IP da máquina
+
+`ip=""` → pedido a `http://ip-api.com/json/?fields=…` (`toolkit/tools/_geo.py:192-205`): devolve IP
+público, ISP e localização do anfitrião. O `ip` é interpolado sem `quote`.
+
+### `math_eval("9**9**9")` não termina
+
+Ainda a correr ao fim de 4 s (morto pelo teste). O executor não tem timeout por tool
+(`core/_tools/_executor.py:101-113`); uma tool síncrona presa ocupa uma thread de `to_thread` sem fim.
+`regex_search` com `(a+)+$` tem o mesmo efeito (reprodução do agente).
+
+### Bloco `document` da Anthropic leva `name`; o SDK só tem `title`
+
+`core/_providers/_anthropic.py:112-113` envia `block["name"]`; `DocumentBlockParam` tem
+`cache_control, citations, context, source, title, type`. `tests/test_anthropic_provider.py:1117`
+afirma `name`: o teste fixa o erro.
+
+### O preço por prefixo dá preços errados a modelos sem entrada
+
+Não é só o Fable 5.1. `pricing.get()` casa pelo prefixo mais longo (`core/_pricing.py:107-119`):
+
+```
+o3-pro -> [o3] 2/8 USD (o publicado é 20/80)      gpt-4o-audio-preview -> [gpt-4o]
+o3-deep-research -> [o3]                          gemini-2.5-flash-image -> [gemini-2.5-flash]
+gpt-5-codex -> [gpt-5]                            grok-4.6-mini -> [grok-4.6]
+```
+
+Um custo "conhecido" errado passa por baixo do `fail_closed`.
+
+### Regras por modelo: o ramo por omissão é o antigo
+
+Anthropic `_TEMPERATURE_DEPRECATED_PREFIXES` e thinking (`_anthropic.py:54-62`, `:238-252`), OpenAI
+`_MAX_COMPLETION_TOKEN_PREFIXES` (`_openai.py:60-61`), Gemini `model.startswith("gemini-3")`
+(`_gemini.py:256`): os modelos novos entram por lista e tudo o resto recebe a forma antiga. Cada
+geração nova parte até alguém editar a lista (foi o que aconteceu ao thinking do Claude).
+
+### O Gemini muda de pilha HTTP conforme os extras instalados
+
+O `google-genai` usa `aiohttp` sempre que é importável (`_api_client.py:74-78`, `_use_aiohttp`), e o
+`xai-sdk` instala-o. Nessa pilha o SDK reenvia o pedido por conta própria em erros de ligação
+(reprodução do agente: um `complete()` → 2 pedidos), fora do `retry_options` e do meter.
+`HttpOptions.httpx_async_client` permite fixar a pilha.
+
+### O xAI ignora `timeout`, mas o SDK aceita-o
+
+`_xai.py:321-325` avisa que não é suportado; `xai_sdk.AsyncClient.__init__` tem `timeout` e o valor
+por omissão do SDK são 27 minutos.
+
+### Cancelar à espera do `inference_limit` conta como chamada iniciada
+
+`op.mark_started()` corre antes de `async with inference_slot()` (`core/_llm.py:677,682`): uma
+chamada cancelada na fila fica iniciada e com custo desconhecido sem nunca ter saído.
+
+**Reproduzidos pelos agentes (não repetidos pelo coordenador):**
+
+### Erros de transporte a meio de um stream escapam sem mapeamento
+
+Anthropic, OpenAI e Meta deixam sair `httpx.RemoteProtocolError`/`ReadError`/`ReadTimeout` crus (os
+SDKs só embrulham erros de `send()`); não são `OSError`, por isso ficam fora de `PROVIDER_ERRORS`:
+sem retry nem fallback. No OpenAI, `data: {error}` dentro do stream deixa sair `openai.APIError` cru.
+Na Anthropic, o evento `error` vira `APIError(status_code=200)`. Meta e xAI inventam 5xx depois de um
+HTTP 200: o código de estado não chega para classificar uma falha.
+
+### Validação local do SDK dentro da chamada aguardada
+
+`anthropic`: `ValueError("Streaming is required…")` com `max_tokens` grande; `anthropic`/`openai`:
+`TypeError` de JSON com um `set` no input; `google-genai`: `ValueError('contents are required.')`.
+Nada saiu para a rede, mas a operação já está iniciada. Um `ValueError` cru tanto pode querer dizer
+"nada foi enviado" como "a resposta cobrada não se leu" (HTTP 200 com corpo não-JSON).
+
+### xAI: `tool_choice` com nome de tool rebenta no SDK real
+
+O adaptador envia um dict ao estilo OpenAI; `xai_sdk…chat.create()` levanta `ValueError: Protocol
+message ToolChoice has no "type" field` (o SDK quer `required_tool(name)`). O mock dos testes esconde
+o `create()` real.
+
+### Gemini 3: `thinking_effort="xhigh"`/`"max"` só dá aviso
+
+O SDK avisa `xhigh is not a valid ThinkingLevel` e o pedido segue.
+
+### Anthropic: um `user` por `tool_result`
+
+A documentação de parallel tool use chama a esta forma "Wrong": não dá erro (a API junta turnos do
+mesmo papel), mas reduz as chamadas paralelas nos turnos seguintes.
+
+### Tools: nenhum limite central
+
+0 de 49 leituras de rede têm limite de bytes; o `urllib` segue redirects para outro host (https →
+http incluído); não há helper HTTP comum (36 helpers privados em 32 módulos, 11 `urlopen` inline);
+nenhum limite de saída no executor nem nos flows (5 MB chegam ao modelo); tectos sem grampo
+(`http_get(max_chars=-1)` → 3 MB; `wikipedia_article(max_chars=-1)` → 2 MB); 12 tools levantam com
+argumentos hostis e 90 com corpos JSON de forma inesperada; `..` chega ao caminho em `country_info`,
+`define_word` e `europe_pmc_citations`; as 125 tools seguras têm todas `capability=None`; as três
+`youtube_*` usam `youtube_transcript_api` e `requests` (não são stdlib-only).
+
+### Testes: só a Meta cobre tool calls paralelas com reenvio
+
+Nenhum teste de Anthropic, OpenAI, Gemini ou xAI reenvia um histórico com duas chamadas paralelas.
+`test_stream_retry_meters_every_physical_attempt` (`tests/test_llm_metering.py:279-319`) afirma
+`unknown_cost_count == 1` depois de um 500: fixa o comportamento do achado impeditivo.
+
+## 2026-09-17 · revisões externas verificadas pelo coordenador
+
+Duas revisões de outros modelos, pedidas pelo dono. As métricas e as duplicações que apontam
+reproduzem-se todas (174 ficheiros, 40 859 linhas, 1929 funções, radon: `_eval_expr` 84, `_run_dag`
+48, `_validate_manifest` 36, `_run_attempts` 33; 54 janelas de 8 linhas duplicadas entre
+`core/graph/_store.py` e `toolkit/memory/graph/_store.py`; 2979 testes e 89% de cobertura sem
+`nanope`). Uma delas chegou sozinha ao achado impeditivo (tecto de custo × retry). Os quatro bugs
+abaixo são novos; reprodução em `blackboard/prototypes/2026-09-hardening/external_review_probes.py`.
+A dívida de manutenção que apontam está na secção 10 de `docs/internal/hardening-plan.md`.
+
+### `LLM(fallback=outro)` esvazia a cadeia de fallbacks de `outro` → sem tarefa
+
+`_normalize_fallbacks` achata a cadeia aninhada e limpa `_fallbacks` e `_owned_fallbacks` do objecto
+recebido (`core/_llm.py:121-127`; a docstring avisa, mas o efeito é num objecto do utilizador).
+
+```
+b = LLM("claude-sonnet-4-6", fallback=c)   -> b tem 1 fallback
+a = LLM("claude-opus-5", fallback=b)       -> b passa a ter 0; usado sozinho, b já não recua para c
+```
+
+### A validação aceita `None` num parâmetro obrigatório e não valida elementos de listas → sem tarefa
+
+```
+def typed(value: int, items: list[int])
+{"value": None, "items": ["wrong"]} -> ok=True, a função recebe value=None items=['wrong']
+{"value": "x",  "items": [1]}       -> validation_error (como esperado)
+```
+
+D7 deixou arrays e objectos intactos de propósito; o `None` num `integer` não anulável não foi
+decisão (`core/_tools/_validation.py:143-173`).
+
+### `ReasoningSpec.from_mapping` descarta em silêncio o que não reconhece → sem tarefa
+
+API documentada (`docs/agents.md:284`). `{"policy": {"timeout": 1}}` → `policy=None`;
+`{"output_schema": 123}` → `None`; chave desconhecida → ignorada (`toolkit/agents/_spec.py:42-70`).
+É o mesmo género do achado G da primeira revisão: configuração declarada que fica inerte sem aviso.
+
+### Imutabilidade só à superfície → sem tarefa (decisão de contrato)
+
+`State.snapshot()` diz "Immutable copy" mas partilha os valores (`core/_state.py:159-166`): um step
+que faça `snapshot["items"].append(...)` altera o estado sem passar por `Result.artifacts` nem pelo
+merge. O mesmo step comporta-se de duas maneiras (verificado): numa vaga paralela a escrita in-place
+perde-se sem aviso, porque cada irmão corre sobre um `fork()` com deep copy; em modo sequencial e nas
+vagas de um step fica no estado e o step seguinte vê-a. `ReasoningSpec(frozen=True).knobs` é um
+`dict` mutável. Cópias profundas por
+step trariam de volta o custo quadrático medido em N7: a correcção é de contrato (vista só de
+leitura documentada, congelar à entrada onde é barato), não cópias defensivas em todo o lado.
+
+## 2026-09-17 · coordenador (F24)
+
+### Tentativas falhadas de fallbacks intermédios não ficam em `Response.attempts` → sem tarefa
+
+No caminho `complete`, `_try_fallbacks` só junta as tentativas do fallback que teve sucesso
+(`attempts.extend(response.attempts)`); as de um fallback que falhou perdem-se com a excepção. Com
+A → B (falha) → C (ok), `attempts` dá `[A, C]`. O caminho de stream regista-as. Pertence à pipeline
+de tentativa única do plano de robustez.

@@ -13,3 +13,4 @@ user-facing documentation** and intentionally excluded from `mkdocs.yml`.
 | `from_claude_chat/` | Briefing material and sketch APIs from the rewrite session — kept for traceability. |
 | `agentes-app-toolkit-review.md` | Review of the toolkit's limitations for the Agentes app, at `48a43ac` (2026-09-12, Portuguese); later sections correct earlier ones. |
 | `toolkit-fix-plan.md` | Verified findings from that review and the fix plan F01–F18 (Portuguese); implemented in 2026-09, per-fix records in `blackboard/`. |
+| `hardening-plan.md` | Root-cause grouping of the findings open on 2026-09-17 and the proposed structural fixes, verification strategy and order (Portuguese); a proposal, not yet a front. |
