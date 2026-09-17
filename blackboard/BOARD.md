@@ -1,19 +1,21 @@
 # Quadro
 
-## Frente activa: correcções locais
+## Frente activa: robustez (três fases)
 
-- **Estado:** aberta em 2026-09-17. **Base:** `main` @ `3a4d1ec` mais o trabalho por commitar desta
-  sessão (dependências, F24). Baseline: 3070 passed, 22 deselected; ruff, formatação e pyright limpos.
-- **Pronto para agentes:** só a F25. Cada item tem o achado com reprodução em `FINDINGS.md`, a
-  correcção, os ficheiros e a prova.
-- **Ainda não está pronto para agentes:** os refactors do `docs/internal/hardening-plan.md` (pipeline
-  do `LLM`, adaptadores, tools, preços, motor) não têm fichas. Ninguém lhes pega sem ficha.
-- **Decisões do dono desta frente:** D15–D19.
+- **Estado:** aberta em 2026-09-17. **Base:** `main` a partir do commit que abre esta frente.
+  Baseline: 3070 passed, 22 deselected; ruff, formatação e pyright limpos.
+- **Plano:** `docs/internal/hardening-plan.md`. **Regras comuns:** `tasks/R00-rules.md`.
+  **Decisões:** D15–D20.
+- **Como correr:** uma fase de cada vez, por ordem, cada uma num agente com contexto limpo. A fase
+  seguinte só começa depois de o dono rever e commitar a anterior. Os agentes não fazem commits nem
+  chamadas a fornecedores.
 
-| ID | Tarefa | Dono | Estado |
-|---|---|---|---|
-| F24 | Quatro contratos pequenos: grupo de tools vazio, fallback que alterava o `LLM`, `null`, `from_mapping` | coordenador | done |
-| F25 | Nove correcções locais independentes | — | todo |
+| ID | Fase | Dono | Estado | Depende de |
+|---|---|---|---|---|
+| F24 | Quatro contratos pequenos | coordenador | done | — |
+| R01 | Núcleo de chamadas: F25 (nove correcções locais), erros tipados, meter com disposições e tecto incerto, pipeline de tentativa única | — | todo | nada |
+| R02 | Fornecedores: ids e preços, contrato de três fases, um adaptador de cada vez (OpenAI, xAI, Gemini, Meta, Anthropic) | — | todo | R01 |
+| R03 | Tools, motor de flows e dívida de manutenção | — | todo | R01, R02 |
 
 ## Frente em espera: capacidades em falta
 

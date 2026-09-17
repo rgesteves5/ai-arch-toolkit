@@ -159,3 +159,12 @@
   D19 (`null`).
 - F25 aberta: nove correcções locais independentes, prontas para um agente. Os refactors do plano de
   robustez continuam sem fichas. Nada commitado.
+
+## 2026-09-17 · frente de robustez em três fases
+
+- A pedido do dono: commits por área do que havia (`7c9973b` dependências, `7bdfad3` F24, `5a210ba`
+  nota do Gemini, `538fcd0` plano, achados, protótipos e quadro), sem push.
+- Tudo o que ficou combinado (correcções, refactors e dívida de manutenção) dividido em três fases
+  para agentes com contexto limpo: `R01` núcleo de chamadas (começa pela F25), `R02` fornecedores,
+  `R03` tools, motor e manutenção. Regras comuns em `R00-rules.md`. D20 fixa as recomendações R1–R15
+  como decididas, com os acertos do dono. A frente C fica em espera até ao fim da R03.

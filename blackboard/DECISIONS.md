@@ -162,3 +162,16 @@ Só acrescentar. Uma decisão revista ganha uma nova entrada que diz qual substi
 - **Decisão (F24):** lê-se da assinatura: default `None`, anotação com `None`, ou sem anotação
   utilizável. Fora disso, `null` dá `validation_error` antes dos gates, também num parâmetro opcional
   com default diferente de `None`. Arrays e objectos continuam intactos (D7).
+
+## D20 · As recomendações R1–R15 do plano de robustez valem como decididas
+
+- **Contexto:** o dono aprovou a lista de refactors e pediu as três fases para agentes com contexto
+  limpo; decisões em aberto seriam improviso garantido. O dono pode rever qualquer uma.
+- **Decisão (2026-09-17):** valem as recomendações de `docs/internal/hardening-plan.md` §8, com estes
+  acertos: R2 — 429 é `unbilled` em todos os fornecedores, as outras respostas de erro só onde o
+  fornecedor o documenta, o resto fica incerto com tecto; R6 é a D16, e o erro por falta de preço só
+  vale com um `MeterScope` ligado (sem scope a chamada corre e `Response.cost` fica `None`); R7 —
+  somar (`max_tokens = budget + max_tokens`); R9 é a D17, com `max_output_chars=200_000` e
+  `timeout_s=120` por omissão; R10 — os agentes nunca chamam fornecedores, o dono corre a verificação
+  ao vivo; R11 — as tags são do dono; R14 — em vez de desenho aprovado antes do código, cada passo
+  leva uma nota de desenho na ficha, sem esperar aprovação.
