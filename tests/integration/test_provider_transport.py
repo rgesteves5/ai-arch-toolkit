@@ -165,6 +165,7 @@ async def test_openai_a_refused_connection_was_never_sent() -> None:
     await provider.close()
 
 
+@pytest.mark.wire_contract(tolerate=[r"^OpenAIProvider: stop\."])  # the set, on purpose
 async def test_openai_a_request_the_sdk_cannot_serialize_was_never_sent() -> None:
     # The SDK serializes the body before handing it to the transport: a set is not JSON.
     server, port, stats = await fakeserver.start("status", body=OPENAI_OK)
@@ -349,6 +350,7 @@ async def test_gemini_a_refused_connection_was_never_sent() -> None:
     await provider.close()
 
 
+@pytest.mark.wire_contract(tolerate=[r"^GeminiProvider: ValueError \| contents are required\.$"])
 async def test_gemini_a_request_the_sdk_refuses_was_never_sent() -> None:
     # The SDK checks the contents before handing the request to the transport.
     server, port, stats = await fakeserver.start("status", body=GEMINI_OK)
@@ -533,6 +535,7 @@ async def test_meta_a_refused_connection_was_never_sent() -> None:
     await provider.close()
 
 
+@pytest.mark.wire_contract(tolerate=[r"^MetaProvider: prompt_cache_key \| "])  # the set
 async def test_meta_a_request_the_sdk_cannot_serialize_was_never_sent() -> None:
     server, port, stats = await fakeserver.start("status", body=META_OK)
     async with server:
