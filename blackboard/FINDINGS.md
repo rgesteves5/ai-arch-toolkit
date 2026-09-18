@@ -746,3 +746,55 @@ vivo (comandos no relatório final da ficha).
   de conversa (`tests/test_provider_conversations.py`) e testes ao vivo preparados.
 - Continua aberto: "Um tecto por step sem `BudgetPolicy` continua a falhar depois de um 5xx" espera
   a decisão do dono; a ficha da R02 não o incluía e não foi tocado.
+
+## 2026-09-18 · R03 (Claude)
+
+### `regex_search`: o backtracking polinomial continua possível → decisão do dono
+
+Um match de regex corre em C com o GIL preso: nem o timeout do executor nem o `pytest-timeout`
+o param (medido em `scratchpad/gil_probe.py`: `re.search("(a+)+$", "a"*32+"!")` numa thread
+congelou o event loop 60 s sem um tick). A R03 recusa à entrada as formas exponenciais (grupo
+repetido com quantificador ou alternativa lá dentro, referências para trás), o padrão acima de 500
+caracteres e o texto acima de 20 000. Fica o custo polinomial: um quantificador sem limite é
+quadrático (`\w+x` em 20 000 caracteres: 0,83 s) e dois seguidos que apanham os mesmos caracteres
+são cúbicos (`.*.*x`: 1000 caracteres 0,15 s, 2000 caracteres 1,07 s; em 20 000, por extrapolação,
+cerca de 18 min com o processo parado). Reprodução: `regex_search("a" * 20_000, ".*.*x")`. Com o
+`re` da stdlib não há regra estática simples que o evite sem recusar padrões comuns
+(`\w+@\w+\.\w+`). Opções: passar a tool para `dangerous` (aprovação), baixar o texto para uns 2000
+caracteres, ou um motor linear (dependência nova). A ficha pedia guardas de tamanho; ficou isso e o
+risco fica aqui para o dono decidir.
+
+### `pdb_ligands` faz um pedido por entidade, sem tecto → sem tarefa
+
+`pdb_ligands` pede a entrada e depois um `nonpolymer_entity` por cada id que ela lista
+(`toolkit/tools/_pdb.py:84-88`), em série e sem limite: uma entrada com cem ligandos são cento e um
+pedidos (cada um com prazo de 20 s; o executor corta a chamada aos 120 s). Já era assim antes da
+migração para `_http`; o agente que migrou o módulo assinalou-o. Correcção provável: um tecto de
+entidades, com nota no texto.
+
+### arXiv: o intervalo de 3 s que a API pede não é respeitado → sem tarefa
+
+Os termos de uso pedem "no more than one request every three seconds", numa só ligação de cada
+vez (https://info.arxiv.org/help/api/tou.html, 2026-09-18). O módulo
+`_arxiv` nunca teve throttle; com `_http` basta `min_interval_s=3.0` no seu `Api`. Não mudado na
+R03 para não alargar o âmbito (a ficha pedia migrar os throttles que existiam).
+
+### `uniprot_search` talvez peça um caminho que não é o de pesquisa → por verificar ao vivo
+
+A pesquisa vai para `https://rest.uniprot.org/uniprotkb?query=…` (já antes da R03; a migração
+manteve o fio). O agente que migrou o módulo lembra que o endpoint documentado é
+`/uniprotkb/search?query=…`. Não confirmado: as páginas de ajuda e o Swagger da UniProt só
+carregam com JavaScript e a R03 não faz pedidos à API. Verificação do dono:
+`curl -s "https://rest.uniprot.org/uniprotkb?query=insulin&size=1" | head -c 300` contra o mesmo
+pedido com `/uniprotkb/search`.
+
+### `python_repl` só limita o expoente de `**`; o tamanho do resultado fica livre → sem tarefa
+
+O avaliador recusa um expoente acima de 1000, mas não o tamanho do que calcula: `(10**1000)**1000`
+passa o guarda e calcula um inteiro de 3,3 milhões de bits; mais um `**1000` e são 3,3 mil milhões,
+com o GIL preso (o timeout do executor não o pára, D30 e D32). `'x' * 10**9` reserva 1 GB. Medido
+em escala pequena: `(10**1000)**100` calcula-se num instante e depois esbarra no limite de 4300
+dígitos do `str()`; `'x' * 10**7` também é instantâneo. Os casos grandes não se correram, porque
+prenderiam a máquina. A tool está em `dangerous` e pede aprovação, por isso fica para o dono. O
+`math_eval` já tem o guarda certo (a estimativa do tamanho do resultado, D32); partilhá-lo aqui
+fecha a porta para `**` e `*`.

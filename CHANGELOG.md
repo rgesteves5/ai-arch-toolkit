@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrade notes
+
+Code written against the `main` before the hardening front (provider errors and metering, tools,
+flows, manifests) needs these changes; each one is detailed below.
+
+- **Provider errors.** Catch `ProviderError`, or one of `RequestError`, `TransportError`,
+  `ProviderTimeout` and `ResponseError`: SDK and HTTP-library exceptions no longer leave the
+  adapters (`APIError` handlers keep working). `fallback_on` defaults to `(ProviderError,)`;
+  pass the old tuple to keep falling back on `ConnectionError`, `TimeoutError` or `OSError`.
+- **Requests a model does not take.** A thinking effort, `thinking=True`, sampling parameter,
+  forced `tool_choice`, server-tool config or message role that the model's documentation does not
+  allow raises `RequestError` before anything is sent, instead of reaching the API or being
+  dropped.
+- **Prices.** A model id is priced by its own entry: register the variants you call
+  (`pricing.register("o3-pro", ...)`), or keep a family with `match="prefix"`;
+  `PricingRegistry.register()` takes `model` as its first parameter. Under a `MeterScope`, a model
+  without a price raises `UnpricedModelError`: register one (`ModelPricing()` for a local model).
+  `Response.cost` is `None`, not `0`, when the provider reported no usage.
+- **Custom meters.** `MeterOperation.fail(...)` requires a delivery disposition, and
+  `unknown_cost_count` counts only unbounded costs.
+- **Streams.** A finished stream carries the same `Response` as `complete()`, and
+  `stream_events()` emits the tool-call events after the text, in the response's order.
+- **Tools.**
+  - `csv_read` is in `toolkit.tools.dangerous` and needs approval.
+  - Every tool call has a 120-second deadline and a 200,000-character output cap: set
+    `timeout_s`/`max_output_chars` (or `None`) on a tool that needs more.
+  - On the sync path a synchronous tool runs in a thread of its own: open thread-bound resources
+    inside the tool.
+  - `ip_lookup` queries ipwho.is over HTTPS; the MediaWiki tools accept only HTTPS Wikimedia
+    hosts.
+- **Flows and agents.**
+  - The steps of a parallel DAG wave read the wave's snapshot: return changes as artifacts, since
+    a value mutated in place now changes the state in every mode. The trace records a wave's steps
+    as they finish.
+  - `ReasoningSpec.knobs` and `llm_kwargs` are read-only: build a new spec with
+    `dataclasses.replace`. A spec no longer deep-copies or pickles.
+  - An agent's answer is its flow's `"answer"` or, without one, its last step's value: a flow
+    wrapped with `Agent.from_flow` writes `"answer"` (and `"response"`) to keep its text.
+- **Manifests.** Shape errors changed wording (they name the field's path). These values are now
+  refused:
+  - a `strategy.system` that is not text;
+  - `version: true`;
+  - a boolean `order`;
+  - a `metadata_attributes` that is not a list;
+  - `select` or `serialize_as` on an inline template.
+
 ### Added
 - `UnpricedModelError`, and prices for `gpt-4o-2024-05-13` and `gpt-3.5-turbo-1106` (snapshots
   with a tariff of their own), `gpt-5.5-cyber`, and `gpt-5.1` (at `gpt-5`'s rates), from
@@ -100,6 +146,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `.pre-commit-config.yaml` with ruff-check / ruff-format and standard hygiene hooks (trailing whitespace, EOF newline, yaml/toml validity, merge-conflict + large-file guards).
 - `CONTRIBUTING.md` covering setup, conventions, and how to add a provider / tool / agent flow.
 - `.env.example` documenting every provider API key; the sync-timeout configuration now validates its inputs.
+
+- **Output and time limits for every tool.** `ToolRuntimePolicy.max_output_chars` (default
+  200,000) and `timeout_s` (default 120 seconds), set per tool with
+  `@tool(max_output_chars=..., timeout_s=...)` (`None` switches one off).
+  `ToolGroup(max_output_chars=..., timeout_s=...)` sets a ceiling for all its tools: the stricter
+  value applies. A longer result is cut and marked, in its text and in
+  `ToolResult.metadata["truncated"]`; a call past its deadline returns a `timeout` failure. See
+  [docs/safety.md](docs/safety.md#output-and-time-limits).
+- `FlowOptions` (`ai_arch_toolkit.toolkit.agents.flows`): the four options every flow factory
+  hands to its `Flow` (`timeout`, `trace_capture`, `policy`, `budget_policy`), declared once, so a
+  wrapper can forward them with their types (`**options: Unpack[FlowOptions]`). See
+  [docs/flow-architecture.md](docs/flow-architecture.md#flow-options).
+- Agent manifests have a packaged JSON Schema,
+  `ai_arch_toolkit/toolkit/agents/schemas/agent-manifest-v1.schema.json`, for editors and other
+  tools. Like the prompt manifest's, it is generated from the declaration the loader enforces. See
+  [docs/agents.md](docs/agents.md#file-backed-agent-manifests).
 
 ### Changed
 - **Breaking: prices match a model id exactly.** A model id is priced by its own entry or as a
@@ -309,6 +371,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Public API surface tightened: `__init__` re-exports audited so internals stop leaking.
 - Sync timeouts in `core/_sync.py` no longer expose the dead `SYNC_TIMEOUT` / `STREAM_JOIN_TIMEOUT` aliases; use `configure_sync_timeouts()` instead.
 - `uv lock --upgrade` brought every transitive dependency to its latest compatible version (pydantic 2.13, urllib3 2.7, requests 2.34, websockets 16, xai-sdk 1.12, ruff 0.15.13, …); resolved the four Dependabot alerts.
+
+- **Breaking:** tools time out after 120 seconds and their results are cut at 200,000 characters
+  by default. Declare `timeout_s=None` or `max_output_chars=None` on a tool that needs more.
+- **Breaking:** on the sync path (`ToolGroup.execute`, `execute_tool`, `run_tools_sync`) a
+  synchronous tool runs in a worker thread of its own, as on the async path, so its timeout holds.
+  A tool that relies on the caller's thread (thread-local state, a SQLite connection opened there)
+  must open those resources itself.
+- **Breaking:** `ip_lookup` queries ipwho.is over HTTPS instead of ip-api.com over HTTP, whose free
+  endpoint has no HTTPS and forbids commercial use. The output lines are the same.
+- The network tools go only over HTTPS to their module's hosts, follow a redirect only on the same
+  host (never down to HTTP), read at most 10 MB within their deadline, send one User-Agent
+  (`ai-arch-toolkit/1.0 (https://github.com/ai-arch-toolkit)`), and report a 429 as "rate limited
+  by <API> (HTTP 429). Try again later.". Where a tool built its query by hand, spaces are now sent
+  as `+`.
+- `http_get` and `scrape_text` refuse URLs with credentials, stop at a redirect to another host
+  (the message names the target, so the model can ask for it under a new approval), and clamp
+  `max_chars` to 1–100,000; `http_get` reads no more of the body than it can return.
+- `regex_search` refuses back-references, groups that repeat while holding a quantifier or an
+  alternation, patterns over 500 characters and texts over 20,000, and lists at most 1,000
+  matches. `math_eval` refuses expressions over 1,000 characters, and results too large to print
+  (`factorial(3000)`, `7**9000`) before computing them.
+- The filesystem tools read at most 100,000 characters (`read_file`) or 1,000,000 (per file in
+  `search_files`, and `csv_read`), and clamp their size arguments; `search_files` cuts matching
+  lines at 300 characters and `list_directory` lists at most 1,000 entries. `run_command` clamps
+  `timeout` to 1–600 seconds and `max_output` to 1–100,000.
+- Every toolkit tool declares its `capability` (`network` or `compute`; the dangerous tools keep
+  theirs).
+- `reverse_geocode` shares Nominatim's one-request-per-second clock with the `osm_*` tools; it had
+  none.
+
+- **Breaking:** the steps of a parallel DAG wave read the snapshot taken when the wave starts,
+  instead of a deep copy of the state each. Siblings still never see each other's artifacts. A step
+  that mutates a value it read in place (instead of returning an artifact) now changes the state in
+  every mode; in a parallel wave the change used to be lost. Long DAG runs no longer deep-copy the
+  state for every parallel step.
+- In a parallel wave, the trace records each step when it finishes, in the order of the
+  `step_end` events, instead of in declaration order. The wave's artifacts are merged, in
+  declaration order, before the last step's `step_end`.
+
+- **Breaking:** `ReasoningSpec.knobs` and `llm_kwargs` are copied and frozen at construction
+  (read-only mappings). Writing to them raises `TypeError`, a change to the dict passed in no longer
+  reaches the spec, and a spec can no longer be deep-copied or pickled (use
+  `dataclasses.replace`).
+- `StateSnapshot` is documented as what it is: a read-only view whose layers are copied and whose
+  values are shared with the state. A step returns changes as artifacts; one that mutates a value
+  it read changes the state for every step after it. See
+  [docs/flow-architecture.md](docs/flow-architecture.md#statesnapshot).
+- The nine flow factories take `timeout`, `trace_capture`, `policy`, and `budget_policy` as
+  `**options: Unpack[FlowOptions]`. Calls are unchanged, and type checkers still check each name
+  and type; `inspect.signature` shows `**options` in place of the four parameters.
+- **Breaking:** an agent's answer (`AgentResult.text`, `extract_text`) is the text its flow leaves
+  under `"answer"`; a flow that leaves none answers with its last step's value, as a nested flow
+  does. The answer no longer falls back to `"response"`, `"last_response"` or `"last_answer"`, and
+  `AgentResult.response` comes from the same place: `"response"` next to an answer, otherwise the
+  last step's value when it is a `Response` (was `None`). Every built-in strategy leaves both keys,
+  also when it runs out of turns: ReAct writes `"answer"` each turn, Reflexion writes both after
+  every evaluation, and Generate-Review writes `"response"` when it rejects a draft too. An empty
+  answer is now the answer: before, a Reflexion that passed with an empty answer answered with its
+  score, and a ReAct run that ended on a tool turn answered with the tool results. See
+  [docs/agents.md](docs/agents.md#escape-hatch-agentfrom_flow).
+- **Breaking:** agent and prompt manifests are checked against one declared shape each, and the
+  packaged prompt JSON Schema is generated from it. It is now as strict as the loader: it used to
+  leave the fields of `source`, `template`, `layout`, and the selectors open. Shape errors name
+  the field's path, and an unknown field gets a suggestion (`strategy.max_iterations must be a
+  positive integer`, `unknown fields: 'stratgey' (did you mean 'strategy'?)`), so their wording
+  changed. A few values that used to pass are refused:
+  - a `strategy.system` that is not text (it became its `str()`);
+  - `version: true`;
+  - a boolean as a section's `order`;
+  - an XML layout's `metadata_attributes` that is not a list;
+  - `select` or `serialize_as` on an inline template (they were ignored).
 
 ### Fixed
 - Failed calls no longer poison enforcing scopes when their cost can be bounded. Rate-limit failures are unbilled; indeterminate failures consume a separate cap allowance, so retries, fallbacks and later steps can proceed within the remaining budget.
@@ -523,6 +656,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Structured output: parsed JSON is now validated against the Pydantic model before being returned.
 - Gemini API key resolution: `GOOGLE_API_KEY` now takes precedence over `GEMINI_API_KEY` when both are set.
 - Lint fixes: ternary form in `toolkit/tools/_datetime.py`; unused `pytest` import in `tests/test_python_eval.py`; misc `ruff format` across toolkit tools.
+
+- The network tools no longer raise on a response of an unexpected shape (a JSON array or `null`
+  where an object was expected, a `null` field, undecodable bytes): they return "…: could not parse
+  API response: …". 93 of them raised before.
+- Tools no longer raise on hostile arguments: very long paths in the filesystem tools, dates past
+  the year 9999 in `date_add` and `timezone_convert`, deeply nested JSON in `json_extract`, an empty
+  or absolute glob in `list_directory`, a null byte in `run_command`, network errors in the
+  `youtube_*` tools.
+- `math_eval("9**9**9")`, `factorial(10**7)`, `round(5, -10**9)` and `regex_search` with
+  `(a+)+$` return an error at once instead of holding the process.
+- An argument can no longer climb out of an API's path: `..` in `country_info`, `define_word`,
+  `europe_pmc_citations` and every other path segment is refused.
+- Rate-limit throttles are safe with parallel tool calls, which could skip the wait.
+- A `null` field in an agent manifest means "not set" everywhere, as the loader already let it.
+  Before:
+  - `strategy: null` failed in `reasoning_spec()`;
+  - `strategy.name: null` asked for a strategy named `"None"`;
+  - `strategy.max_iterations: null` raised `TypeError`;
+  - `strategy.system: null` became the prompt `"None"`;
+  - `limits.reserve: null` failed in `budget_policy()`;
+  - `override_policy: null` failed at load.
+- A list or an object as an agent manifest's `strategy.trace_capture` fails with
+  `AgentManifestError` instead of `TypeError`.
+- `python_repl` refuses what it used to get wrong in silence:
+  - `{**a}` (it evaluated to `{None: a}`);
+  - `f(**d)` (`d` was dropped);
+  - `del x.attr` (ignored).
+- `python_repl`'s `and`/`or` stop at the operand that decides, as Python's do.
+- `python_repl`'s `x **= n` has the same exponent limit as `x ** n`.
 
 ### Removed
 - **The legacy `core._budget` module** (`BudgetState`, its cooperative `BudgetPolicy`). Budgets now live in `toolkit.budget` and enforce hard at the charge site rather than by cooperative counter-checking as steps record usage. `BudgetPolicy.max_wall_time` is now `max_wall_s`; the `strict_cost` / `allow_unpriced` flags are now the `reserve` / `unpriced` knobs. `BudgetExceeded` keeps its `.limit` / `.maximum` / `.to_dict()` surface.

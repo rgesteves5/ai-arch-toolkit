@@ -45,31 +45,37 @@ state.set("user_id", 42, layer="persistent")
 
 ### StateSnapshot
 
-Steps never see the mutable State. They receive a **StateSnapshot** — a frozen, immutable view:
+Steps never see the mutable State. They receive a **StateSnapshot** — a read-only view of every
+layer as it was when the step's wave started:
 
 ```python
-snapshot = state.snapshot()  # MappingProxyType per layer
+snapshot = state.snapshot()  # the layers are copied (MappingProxyType per layer)
 snapshot["task"]             # reads work
-snapshot["task"] = "x"       # TypeError — immutable
+snapshot.operational["task"] = "x"  # TypeError — read-only
 ```
 
 Steps return Results. The executor merges Result artifacts back into State.
 
-### Fork and Merge
+The layers are copied, the values in them are not: a list or dict a step reads is the State's own.
+A step must not mutate it in place (append to it, set a key on it); it returns what changes as
+`Result.artifacts`. A value mutated in place changes the State for every step after it — siblings
+in the same parallel wave included — in every mode. Copying every value for every step would make
+long runs quadratic, so the engine does not.
 
-When parallel steps run (DAG mode), each gets an isolated copy:
+### Merge
 
-```python
-forked = state.fork()
-# Deep copies: current, operational, persistent
-# Shared by reference: world
-```
-
-After parallel steps finish, their Results merge back:
+Every step of a wave — one step in a sequential flow, every ready step in DAG mode — reads the
+snapshot taken when the wave starts, so parallel siblings never see each other's artifacts. When
+the wave's last step finishes, the wave's Results merge back into the State in the order the steps
+were declared:
 
 ```python
 state.merge(result_a, result_b, strategy="last_wins")
 ```
+
+`State.fork()` still gives an independent deep copy (current, operational and persistent copied,
+world shared by reference) when you want one — to run a flow on a copy of the state, say. The
+engine does not fork per step: deep copies on every step would make long runs quadratic.
 
 | Strategy | Behavior |
 |----------|----------|
@@ -377,7 +383,7 @@ fetch_news   ──┘
 
 #### Bounding the fan-out width
 
-By default all ready steps run at once. Pass `Flow(..., max_parallelism=n)` to cap how many of *this flow's* steps run concurrently — useful to bound forked-state memory or to throttle parallel non-LLM work (tool/HTTP calls). It is **per-flow** (a nested flow has its own limit, so it never deadlocks), which is a different axis from the global, run-wide `inference_limit(n)` that caps concurrent LLM calls. See [Concurrency & Throttling](concurrency.md).
+By default all ready steps run at once. Pass `Flow(..., max_parallelism=n)` to cap how many of *this flow's* steps run concurrently — useful to throttle parallel non-LLM work (tool/HTTP calls). It is **per-flow** (a nested flow has its own limit, so it never deadlocks), which is a different axis from the global, run-wide `inference_limit(n)` that caps concurrent LLM calls. See [Concurrency & Throttling](concurrency.md).
 
 ```python
 flow = Flow(*many_steps, summarize, max_parallelism=5)  # ≤ 5 steps live at once
@@ -385,17 +391,20 @@ flow = Flow(*many_steps, summarize, max_parallelism=5)  # ≤ 5 steps live at on
 
 #### How parallel state works
 
-1. Independent steps get **forked** State (deep copy of current/operational/persistent, world shared)
-2. They run concurrently — **they cannot see each other's writes**
-3. After all finish, Results are **merged** back into State
+1. Independent steps read the **snapshot** taken when their wave starts
+2. They run concurrently — **they cannot see each other's artifacts**
+3. Each reports `step_end` as it finishes; when the last one does, the wave's Results are
+   **merged** back into State (in declaration order), before that last `step_end`
 
 ```
-State ──fork──▶ State_A (fetch_weather writes here)
-       ╲
-        fork──▶ State_B (fetch_news writes here)
-
-After gather: State.merge(result_A, result_B)
+State ──snapshot──▶ fetch_weather ──Result A──┐
+      ╲                                        ├──▶ State.merge(result_A, result_B)
+       ─snapshot──▶ fetch_news    ──Result B──┘
 ```
+
+The snapshot is a read-only view whose values are shared with the State (see
+[StateSnapshot](#statesnapshot)): a step that mutates a list or dict it read, instead of returning
+an artifact, changes the State for every step after it and for its siblings too.
 
 **The rule**: if step B needs what step A produces, use `after=("A",)`. If they're truly independent, DAG parallel is safe. The executor enforces `after` deps, but cannot detect implicit State dependencies you forgot to declare.
 
@@ -538,6 +547,26 @@ flow = plan_execute_flow(
     solver_llm=LLM("claude-opus-5"),      # expensive model for final answer
 )
 ```
+
+### Flow options
+
+Every factory takes the four options of the `Flow` it builds as keyword arguments (`timeout`,
+`trace_capture`, `policy`, `budget_policy`) and hands them to the `Flow` unchanged. They are
+declared once, as `FlowOptions`, so a wrapper forwards them with their types:
+
+```python
+from typing import Unpack
+
+from ai_arch_toolkit.toolkit.agents.flows import FlowOptions, react_flow
+
+
+def brief_react(llm: LLM, tools: ToolGroup, **options: Unpack[FlowOptions]) -> Flow:
+    return react_flow(llm, tools, system="Answer in one sentence.", **options)
+```
+
+A strategy that runs a ReAct loop inside one of its steps passes that loop only its
+`trace_capture`, so the inner steps are recorded like the outer ones. The outer run's deadline and
+budget already cover the inner loop, and the outer `policy` applies to the outer steps only.
 
 ### ReAct
 

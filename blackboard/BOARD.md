@@ -1,31 +1,12 @@
 # Quadro
 
-## Frente activa: robustez (três fases)
+## Frente activa: capacidades em falta
 
-- **Estado:** aberta em 2026-09-17. **Base:** `main` a partir do commit que abre esta frente.
-  Baseline: 3070 passed, 22 deselected; ruff, formatação e pyright limpos.
-- **Plano:** `docs/internal/hardening-plan.md`. **Regras comuns:** `tasks/R00-rules.md`.
-  **Decisões:** D15–D27.
-- **R01:** commitada e publicada em `main` a pedido do dono (`a16e3f9` tools, `f95c81f` F25,
-  `5a0ab3b` núcleo, `6206df1` registo, `b3dae3f` `temperature` da Anthropic). Cada commit passa o gate
-  sozinho (3097, 3107, 3886 e 3886 passed).
-- **R02:** concluída (Claude) e commitada em `main` a pedido do dono (`cf2aa43` código e testes,
-  `a8c3eea` rede do fio, e o registo), sem push. Cada árvore passa o gate sozinha (4305, 4341 e 4341
-  passed); 42 live_api deselected; dívida de complexidade 161 → 121. Falta o dono correr as
-  verificações ao vivo (comandos no relatório final da ficha).
-- **Como correr:** uma fase de cada vez, por ordem, cada uma num agente com contexto limpo. A fase
-  seguinte só começa depois de o dono rever e commitar a anterior. Os agentes não fazem commits nem
-  chamadas a fornecedores.
-
-| ID | Fase | Dono | Estado | Depende de |
-|---|---|---|---|---|
-| F24 | Quatro contratos pequenos | coordenador | done | — |
-| R01 | Núcleo de chamadas: F25 (nove correcções locais), erros tipados, meter com disposições e tecto incerto, pipeline de tentativa única | Codex; Claude (continuação) | done | nada |
-| R02 | Fornecedores: ids e preços, contrato de três fases, um adaptador de cada vez (OpenAI, xAI, Gemini, Meta, Anthropic) | Claude | done | R01 |
-| R03 | Tools, motor de flows e dívida de manutenção | — | todo | R01, R02 |
-
-## Frente em espera: capacidades em falta
-
+- **A vez:** volta a esta frente com o fim da R03 (2026-09-18). A base é o `main` publicado com a
+  R03 (`6ceb516` e o registo; gate 5465 passed, 42 deselected). As fichas
+  foram escritas antes da frente de robustez: quem pegar numa relê a sua secção de ficheiros contra
+  o `main` novo (a porta `_http.py`, o `FlowOptions`, as chaves `answer`/`response` e as
+  declarações dos manifestos mudaram o terreno de C02, C05, C07 e C08).
 - **Estado:** aberta em 2026-09-15. As nove fichas estão escritas; nenhuma tarefa começou.
 - **Antes de codificar:** o dono fixa as "Decisões a fixar" de cada ficha. Cada decisão tomada entra
   em `DECISIONS.md` a partir de D15, com o número dado pelo coordenador.
@@ -89,6 +70,37 @@ As primeiras a fixar. As alternativas e as razões estão nas fichas.
 Vinte entradas em `FINDINGS.md` (2026-09-15): catorze reproduzidas pelo coordenador, um risco medido e
 cinco confirmadas no código e na documentação oficial. Onze não têm tarefa: são correcções, não
 capacidades (ver "Por fazer").
+
+## Frente anterior: robustez (três fases)
+
+- **Estado:** aberta em 2026-09-17. **Base:** `main` a partir do commit que abre esta frente.
+  Baseline: 3070 passed, 22 deselected; ruff, formatação e pyright limpos.
+- **Plano:** `docs/internal/hardening-plan.md`. **Regras comuns:** `tasks/R00-rules.md`.
+  **Decisões:** D15–D36.
+- **R01:** commitada e publicada em `main` a pedido do dono (`a16e3f9` tools, `f95c81f` F25,
+  `5a0ab3b` núcleo, `6206df1` registo, `b3dae3f` `temperature` da Anthropic). Cada commit passa o gate
+  sozinho (3097, 3107, 3886 e 3886 passed).
+- **R02:** concluída (Claude) e commitada em `main` a pedido do dono (`cf2aa43` código e testes,
+  `a8c3eea` rede do fio, e o registo); publicada com a R03. Cada árvore passa o gate sozinha (4305, 4341 e 4341
+  passed); 42 live_api deselected; dívida de complexidade 161 → 121. Falta o dono correr as
+  verificações ao vivo (comandos no relatório final da ficha).
+- **R03:** concluída (Claude) em 2026-09-18; commitada e publicada em `main` a pedido do dono
+  (`6ceb516` código e testes, e o registo). A árvore do primeiro commit foi verificada sozinha.
+  Gate: 5465 passed, 42 deselected, zero `xfail`; ruff, formatação, pyright e lock limpos. Dívida
+  de complexidade 121 → 46. Falta o dono correr as verificações ao vivo, tools gratuitas e sem
+  chave (comandos no relatório). Ficam para decisão do dono: o risco polinomial do regex, o
+  `pdb_ligands`, o arXiv, a UniProt e o guarda de tamanho do `python_repl` (em `FINDINGS.md`), e o
+  levantamento do `__all__` de topo (ficha, passo 4.7).
+- **Como correr:** uma fase de cada vez, por ordem, cada uma num agente com contexto limpo. A fase
+  seguinte só começa depois de o dono rever e commitar a anterior. Os agentes não fazem commits nem
+  chamadas a fornecedores.
+
+| ID | Fase | Dono | Estado | Depende de |
+|---|---|---|---|---|
+| F24 | Quatro contratos pequenos | coordenador | done | — |
+| R01 | Núcleo de chamadas: F25 (nove correcções locais), erros tipados, meter com disposições e tecto incerto, pipeline de tentativa única | Codex; Claude (continuação) | done | nada |
+| R02 | Fornecedores: ids e preços, contrato de três fases, um adaptador de cada vez (OpenAI, xAI, Gemini, Meta, Anthropic) | Claude | done | R01 |
+| R03 | Tools, motor de flows e dívida de manutenção | Claude | done | R01, R02 |
 
 ## Frente anterior: achados em aberto
 

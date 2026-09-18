@@ -247,3 +247,119 @@ Só acrescentar. Uma decisão revista ganha uma nova entrada que diz qual substi
   erro dentro do stream fica `indeterminate`.
 - **Consequência:** o `claude-sonnet-4-6` passa de `budget_tokens` a adaptativo; um `top_p`/`top_k`
   explícito num modelo sem amostragem falha antes do pedido.
+
+## D28 · `ip_lookup` passa para o ipwho.is, em https (R03, passo 1; resolve a pendência da D21)
+
+- **Contexto:** a D21 deixou o transporte para a R03. O endpoint gratuito do ip-api só serve `http`
+  e proíbe uso comercial (https://ip-api.com/docs/api:json, lido a 2026-09-18).
+- **Decisão:** `https://ipwho.is/{ip}`: gratuito, sem chave, uso comercial permitido, 1000 pedidos
+  por dia por IP de cliente (https://ipwhois.io/documentation, lido a 2026-09-18). A tool mantém as
+  mesmas linhas de saída; os campos lidos são os da página (`success`, `message`, `city`, `region`,
+  `country`, `latitude`, `longitude`, `timezone.id`, `connection.isp`, `connection.org`).
+- **Consequência:** os IPs consultados vão para outro serviço; não foi verificado ao vivo (comando no
+  relatório final da ficha).
+
+## D29 · Limites das tools: por tool, e o grupo só aperta (R03, passo 1)
+
+- **Decisão:** `ToolRuntimePolicy.max_output_chars` (200 000) e `timeout_s` (120), declarados com
+  `@tool(...)`; `None` desliga (D17, D20). `ToolGroup(max_output_chars=, timeout_s=)` é um tecto
+  para todas as tools do grupo: vale o mais estrito dos dois; `None` no grupo quer dizer sem tecto.
+- **Consequência:** a app aperta um grupo inteiro de uma vez; para alargar, declara-o na própria
+  tool. O corte fica no texto e em `ToolResult.metadata["truncated"]`.
+
+## D30 · O executor corre as tools síncronas numa thread daemon própria (R03, passo 1)
+
+- **Contexto:** só se impõe prazo a uma tool síncrona se ela correr noutra thread. O
+  `asyncio.to_thread` usa o executor por omissão, cujas threads o `asyncio.run` espera até 300 s e o
+  fim do processo espera sem prazo.
+- **Decisão:** um só caminho, `_invoke`: uma coroutine é cancelada no prazo; uma função síncrona
+  corre numa thread daemon com o contexto copiado, e o executor deixa de esperar. O caminho síncrono
+  (`execute`, `run_tools_sync`) corre `_invoke` num loop seu.
+- **Consequência:** uma tool síncrona chamada pelo caminho síncrono deixa de correr na thread de quem
+  chama. Uma tool que passou do prazo corre até ao fim sem prender o processo.
+
+## D31 · Cada resposta é lida dentro do `_http` (R03, passo 1)
+
+- **Contexto:** a escada de `except` de cada tool protegia o parse com `TypeError`, mas não com
+  `AttributeError`: 93 tools levantavam com corpos inesperados.
+- **Decisão:** todo o pedido do `_http` recebe a função que lê a resposta (`parse=`). O que ela
+  levantar por uma forma inesperada (`AttributeError`, `LookupError`, `TypeError`, `ValueError`,
+  `ArithmeticError`, `RecursionError`, `SyntaxError`) vira `HttpError("could not parse API
+  response: …")`. Nenhum dado cru sai do `_http`.
+- **Consequência:** uma tool não rebenta com um corpo que não previu; o teste de invariantes prova-o
+  com corpos construídos a partir das chaves que cada módulo lê. Um erro que não é de forma continua
+  a propagar.
+
+## D32 · Tools de cálculo: o que prende o GIL recusa-se à entrada (R03, passo 1)
+
+- **Contexto:** medido que um regex catastrófico e a aritmética de inteiros enormes prendem o GIL;
+  o timeout do executor não os pára.
+- **Decisão:** `math_eval` estima o resultado de `**`, `pow`, `*`, `factorial` e `round` antes de o
+  calcular (até 15 000 bits; expressão até 1000 caracteres). `regex_search` aceita padrão até 500
+  caracteres e texto até 20 000, recusa as formas exponenciais e as referências para trás, e mostra
+  até 1000 correspondências.
+- **Consequência:** `9**9**9`, `factorial(10**7)`, `(a+)+$` e `(a|aa)+$` dão erro logo. O custo
+  polinomial de um regex continua possível: fica em `FINDINGS.md` para o dono decidir.
+
+## D33 · As vagas do motor lêem o snapshot da vaga, sem `fork()` (R03, passo 2)
+
+- **Contexto:** a vaga de um step lia o estado vivo e a vaga paralela um `fork()` (cópia profunda)
+  por irmão: o mesmo step comportava-se de duas maneiras com uma escrita in-place, e a cópia por
+  step é o custo que a R15 manda não trazer.
+- **Decisão:** um só executor de vagas; todas as vagas lêem o `state.snapshot()` tirado à entrada
+  (camadas copiadas, valores partilhados). Os irmãos continuam sem ver os artefactos uns dos outros,
+  porque a fusão é no fim da vaga, pela ordem de declaração. O trace regista cada step quando acaba,
+  pela ordem dos `step_end`.
+- **Consequência:** uma escrita in-place num valor lido passa a ficar no estado em todos os modos
+  (antes perdia-se numa vaga paralela). O passo 3 escreve o contrato (vista só de leitura) e testa-o.
+  Mudança visível no `CHANGELOG`.
+
+## D34 · `budget_policy` fica nas factories, como opção do `Flow` (R03, passo 4.2)
+
+- **Contexto:** as nove factories aceitam `budget_policy` e os builders nunca o passam. O plano
+  (secção 10) chama-lhe um segundo caminho para o mesmo budget.
+- **Decisão:** fica. É uma das quatro opções do `Flow` (`FlowOptions`) que a factory passa sem lhes
+  tocar. É o budget por omissão das corridas desse fluxo, e o `run(budget_policy=)` substitui-o;
+  num fluxo encaixado vale o scope de fora. Não é um segundo mecanismo: é o parâmetro do `Flow`,
+  agora declarado uma vez. Os builders não o passam porque o `ReasoningSpec` não tem budget (o
+  `Agent` recebe-o por corrida).
+- **Consequência:** nenhuma quebra: tirá-lo quebrava a API pública das factories sem ganho, e
+  `docs/agents.md` e `docs/safety.md` já descrevem os dois sítios (construção e corrida).
+
+## D35 · A resposta de um agente está em `answer`, ou é o valor do último step (R03, passo 4.3)
+
+- **Contexto:** o `extract_text` adivinhava a resposta por quatro chaves seguidas (`answer`,
+  `response`/`last_response`, `last_answer`) e depois o valor do último step, porque cada estratégia
+  deixava a resposta à sua maneira.
+- **Decisão:**
+  - Cada estratégia do toolkit deixa a resposta em `answer` (texto) e a `Response` de onde veio em
+    `response`, também quando esgota as voltas.
+  - O runner lê `answer`. Sem `answer`, vale o valor do último step, como o valor de um fluxo
+    encaixado (`as_step()`).
+  - As chaves partilhadas vivem num só módulo (`flows/_keys.py`).
+- **Consequência:**
+  - Um `answer` vazio conta como resposta.
+  - Um fluxo feito à mão que queira dar a sua resposta escreve `answer`; sem ela, responde o último
+    step.
+  - O `AgentResult.response` vem da mesma fonte que o texto.
+  - Nenhuma chave de estado desaparece. Mudança visível no `CHANGELOG`.
+
+## D36 · Cada manifesto tem uma declaração, e o JSON Schema gera-se dela (R03, passo 4.4)
+
+- **Contexto:** os manifestos de agentes e de prompts validavam-se à mão, em código de leitura, e
+  o JSON Schema empacotado dos prompts era um terceiro texto, mais largo do que o loader, que
+  ninguém verificava.
+- **Decisão:**
+  - A fonte da forma de cada manifesto é uma declaração em Python (`toolkit/_shape.py`), da qual
+    saem a verificação do loader e o JSON Schema publicado.
+  - O loader não precisa do `jsonschema`, que é opcional; os testes usam-no para provar que o
+    schema publicado diz a verdade.
+  - O manifesto de agentes ganha um JSON Schema empacotado.
+- **Consequência:**
+  - As folgas medidas fecham-se:
+    - `version: true`;
+    - um booleano como número;
+    - campos ignorados em silêncio;
+    - um objecto onde se espera uma lista;
+    - o crash do `trace_capture`.
+  - As mensagens de forma ganham um só formato. Mudanças visíveis no `CHANGELOG`.

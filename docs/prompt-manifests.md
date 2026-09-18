@@ -114,8 +114,13 @@ sections:
 Includes and inheritance are cycle checked and depth limited. Variables in a child override
 base declarations; included manifests may not introduce duplicate variables.
 
-The packaged JSON Schema is
-`ai_arch_toolkit/toolkit/prompts/schemas/prompt-manifest-v1.schema.json`.
+The loader checks every manifest file (extended and included ones too) against one declared
+shape, and the packaged JSON Schema,
+`ai_arch_toolkit/toolkit/prompts/schemas/prompt-manifest-v1.schema.json`, is generated from the
+same declaration, so an editor that uses it flags what the loader refuses. Errors name the
+field's path, as in `sections[0].source.select.start must be a positive integer`. An inline
+template (`template: {content: ...}`) takes no `select` or `serialize_as`: those read a template
+file.
 
 ## CLI
 

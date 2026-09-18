@@ -94,19 +94,29 @@ docstrings/comments, and when to use classes vs functions — see
 1. Drop it under `src/ai_arch_toolkit/toolkit/tools/_<file>.py`.
 2. Decorate with `@tool` from `ai_arch_toolkit.core` — the schema is inferred
    from type hints + Google-style docstring.
-3. Stdlib only. If an HTTP call is needed, use `urllib`; the existing
-   weather/geo/wikipedia tools are the template.
-4. **Return error strings, never raise.** Agents read the return value as the
+3. Stdlib only. Reach the network only through `toolkit/tools/_http.py`: declare an `Api` for
+   the service's HTTPS origin and read each response inside `parse=`, so a malformed answer
+   becomes the tool's error string. `_weather.py` and `_mediawiki.py` are the templates; an
+   architecture test refuses `urllib.request`, `http.client` and `socket` anywhere else.
+4. Declare the tool's `capability` (`network`, `compute`, …); the invariants test compares it
+   with what the tool reaches. Set `max_output_chars`/`timeout_s` on `@tool` when the defaults
+   do not fit.
+5. **Return error strings, never raise.** Agents read the return value as the
    tool result.
-5. Export from `toolkit/tools/__init__.py`.
-6. Tests in `tests/toolkit/test_<file>.py`. Use the `mock_post` fixture or
-   patch `urllib.request.urlopen`; use `tmp_path` for filesystem tools.
+6. Export from `toolkit/tools/__init__.py`.
+7. Tests in `tests/toolkit/test_<file>.py`: patch `HTTP_OPEN` with `respond(...)` or
+   `http_error(...)` from `tests/toolkit/http_fakes.py` (sockets are blocked there); use
+   `tmp_path` for filesystem tools. `tests/toolkit/test_tool_invariants.py` also runs every tool
+   against hostile arguments and response bodies.
 
 ## Adding an agent flow
 
 1. New module under `src/ai_arch_toolkit/toolkit/agents/flows/_<name>.py`.
 2. Expose a `<name>_flow(...)` factory that builds and returns a `Flow`, plus
-   a `<name>_initial_state(task)` helper that returns the operational state.
+   a `<name>_initial_state(task)` helper that returns the operational state. The factory takes
+   the `Flow` options as `**options: Unpack[FlowOptions]` and passes them on; the flow leaves its
+   answer under `ANSWER` and the response under `RESPONSE` (`flows/_keys.py`); an inner ReAct
+   loop runs through `run_react`.
 3. Build on the core primitives — `LLM`, `ToolGroup`, `State`, `Step`,
    `Result` — and on existing flow factories where possible. `react_flow` is
    the simplest reference; `lats_flow` shows search-based composition.

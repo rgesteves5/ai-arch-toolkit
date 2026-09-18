@@ -33,7 +33,7 @@ def get_distance(origin: str, destination: str, unit: str = "km") -> str:
     ...
 ```
 
-The decorator also accepts governance metadata — `capability`, `risk_level`, `requires_approval`, `approval_reason`:
+The decorator also accepts governance metadata — `capability`, `risk_level`, `requires_approval`, `approval_reason` — and the bounds the executor holds each call to, `max_output_chars` and `timeout_s`:
 
 ```python
 @tool(risk_level="high", requires_approval=True, approval_reason="Deletes data")
@@ -55,6 +55,8 @@ Full `@tool` signature:
     risk_level: RiskLevel = "low",      # "low" | "medium" | "high" | "critical"
     requires_approval: bool = False,    # gate behind an approval handler
     approval_reason: str = "",          # shown to the approver
+    max_output_chars: int | None = 200_000,  # longer results are cut and marked; None: no cut
+    timeout_s: float | None = 120.0,    # then the call fails with "timeout"; None: no deadline
 )
 ```
 
@@ -84,14 +86,18 @@ ToolGroup(
     approval_handler=None,         # ApprovalHandler for tools requiring approval (see safety.md)
     gates=(),                      # extra pre-execution ToolGate instances (see safety.md)
     max_calls=None,                # cap total executions across the group's lifetime
+    max_output_chars=None,         # ceiling on every tool's max_output_chars
+    timeout_s=None,                # ceiling on every tool's timeout_s
 )
 ```
+
+The two ceilings only tighten: each call runs under the stricter of the group's value and the tool's own (see [Output and time limits](safety.md#output-and-time-limits)).
 
 ### Executing tool calls
 
 Both `execute()` (sync) and `async_execute()` (async) take a `ToolCall` and return a structured **`ToolResult`** — they never raise on tool failure.
 
-`execute()` also runs `async def` tools, completing them on a private event loop — or on a worker thread when called from inside a running loop, which blocks that loop until the tool returns — so prefer `async_execute()` in async code. An async tool that needs the caller's loop (a client or lock created on it) cannot finish there and fails once the sync timeout expires. Both check the call's arguments against the tool's schema before any gate runs, coercing values such as `"3"` for an integer; see [Argument validation](safety.md#argument-validation).
+`execute()` also runs `async def` tools, completing them on a private event loop — or on a worker thread when called from inside a running loop, which blocks that loop until the tool returns — so prefer `async_execute()` in async code. A synchronous tool runs in a daemon thread of its own on both paths, so its `timeout_s` holds: past it the call returns a `timeout` failure and the executor stops waiting. An async tool that needs the caller's loop (a client or lock created on it) cannot finish there and fails once the sync timeout expires. Both check the call's arguments against the tool's schema before any gate runs, coercing values such as `"3"` for an integer; see [Argument validation](safety.md#argument-validation).
 
 ```python
 result = await group.async_execute(tool_call)   # tool_call: ToolCall from a Response
@@ -142,7 +148,9 @@ response = llm.complete_sync(
 
 ## Pre-built tools catalog
 
-132 tools across 25 domains, all built on the `@tool` decorator and the standard library only (zero extra pip dependencies). Each returns an error string rather than raising, so agents degrade gracefully.
+132 tools across 25 domains, all built on the `@tool` decorator and the standard library only (zero extra pip dependencies; the `youtube_*` tools need the `youtube` extra). Each returns an error string rather than raising, so agents degrade gracefully, and each declares its `capability`.
+
+Every network tool goes through one module, `toolkit/tools/_http.py`: HTTPS to the host its module declares (path segments quoted one by one, so arguments cannot move a request elsewhere), redirects only on that host and never down to `http`, a body read bounded in bytes and time, the API's documented rate limit on a clock shared across threads, and one error wording ("HTTP error 500: …", "rate limited by … (HTTP 429). Try again later.", "request timed out.", "could not parse API response: …"). A response of an unexpected shape becomes that last error instead of an exception.
 
 ```python
 from ai_arch_toolkit.toolkit.tools import get_weather, arxiv_search, pubmed_search

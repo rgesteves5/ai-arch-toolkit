@@ -42,7 +42,10 @@ run on many tasks without recompiling.
 ## ReasoningSpec
 
 A frozen, keyword-only dataclass. Every field has a default — `ReasoningSpec()`
-is a valid ReAct spec.
+is a valid ReAct spec. `knobs` and `llm_kwargs` are copied and frozen at construction
+(read-only mappings): changing the dict you passed does not change the spec, and the spec's
+own cannot be written to. The copy is shallow — a nested value is still yours. A spec is not
+`deepcopy`-able or picklable; build another with `dataclasses.replace(spec, ...)`.
 
 | Field | Type | Default | Purpose |
 |---|---|---|---|
@@ -362,6 +365,15 @@ selection and again after overrides. Override `deny` paths protect both their
 ancestors and descendants, so replacing an allowed parent object cannot bypass a
 denied child.
 
+A manifest's shape is declared once, and the loader checks every file against
+it. A wrong type or an unknown field fails with its path
+(`strategy.max_iterations must be a positive integer`, `unknown fields:
+'stratgey' (did you mean 'strategy'?)`), and a `null` value means the field is
+not set. The same declaration is packaged as a JSON Schema,
+`ai_arch_toolkit/toolkit/agents/schemas/agent-manifest-v1.schema.json`, for
+editors and other tools. JSON cannot tell `1` from `1.0`, so only the loader
+refuses a float where an integer goes.
+
 ### Per-phase prompts and models: `strategy.phases`
 
 `strategy.phases` declares per-phase prompts and model choices declaratively —
@@ -442,6 +454,12 @@ agent = Agent.from_flow(my_flow, init_state=lambda task: {"messages": [user(task
 to a dict, a fixed dict (task ignored), or `None` for the default
 `{"messages": [user(task)]}`.
 
+The run's answer (`AgentResult.text`) is the text the flow leaves under `"answer"`,
+and `AgentResult.response` the `Response` it leaves under `"response"`. A flow that
+leaves no `"answer"` answers with its last step's value, the way a nested flow's
+value is its last step's: the text of a `Response` (which is then also
+`AgentResult.response`), or `str()` of anything else.
+
 ## Composition: `Agent.as_step`
 
 `agent.as_step()` returns the agent's `Flow` wrapped as a `Step`, so an agent can
@@ -470,6 +488,10 @@ register_strategy("my_strategy", FlowStrategy(build_my_flow, my_initial_state))
 agent = Agent(ReasoningSpec(strategy="my_strategy", knobs={"depth": 3}), llm, tools)
 ```
 
+Like the built-ins, a strategy's flow should leave its answer under `"answer"`
+and the `Response` it came from under `"response"`, also when it runs out of
+turns (see [`Agent.from_flow`](#escape-hatch-agentfrom_flow) for a flow that doesn't).
+
 `BuildContext` carries `spec`, `llm`, `tools`, and `deps` — read serializable
 config from `spec`/`spec.knobs` and runtime objects from `deps`. `FlowStrategy`
 also accepts `allowed_knobs`/`knob_validators` and, symmetrically,
@@ -485,5 +507,5 @@ pieces:
   task-independent `Flow`.
 - `initial_state(spec, task) -> dict` — build the per-task operational state for
   the spec's strategy.
-- `extract_text(state, flow_result) -> str` — pull a single answer string out of
-  a finished run.
+- `extract_text(state, flow_result) -> str` — the answer of a finished run: the
+  flow's `"answer"`, or its last step's value when it left none.

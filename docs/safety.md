@@ -5,9 +5,10 @@ When an LLM can call tools, you need control over *which* tools run, *whether* a
 - **Risk metadata** on each tool (`@tool(risk_level=..., requires_approval=...)`).
 - **Gates** that run before execution — block dangerous tools, require approval, or dry-run.
 - **Structured results** (`ToolResult` / `ToolError`) so failures are data, not exceptions, and error text is redacted.
+- **Output and time limits** the executor imposes on every tool — `max_output_chars` and `timeout_s`.
 - **Budgets** (`BudgetPolicy`) that cap a flow's calls, tokens, cost, and wall-time.
 
-The execution pipeline for every tool call is: **resolve → validate & coerce arguments → gates (in order) → call-count budget → execute → redact & structure the result**.
+The execution pipeline for every tool call is: **resolve → validate & coerce arguments → gates (in order) → call-count budget → execute within `timeout_s` → redact & structure the result → cut it to `max_output_chars`**.
 
 ---
 
@@ -24,7 +25,31 @@ def delete_table(name: str) -> str:
     return f"dropped {name}"
 ```
 
-`ToolRuntimePolicy` fields: `capability` (str label), `risk_level` (`"low" | "medium" | "high" | "critical"`), `requires_approval` (bool), `approval_reason` (str). Risk metadata travels with the tool but stays out of the schema sent to the provider — only gates see it.
+`ToolRuntimePolicy` fields: `capability` (str label), `risk_level` (`"low" | "medium" | "high" | "critical"`), `requires_approval` (bool), `approval_reason` (str), `max_output_chars` (int or `None`, default 200 000) and `timeout_s` (float or `None`, default 120) — see [Output and time limits](#output-and-time-limits). Risk metadata travels with the tool but stays out of the schema sent to the provider — only gates see it.
+
+Every tool in `ai_arch_toolkit.toolkit.tools` declares its `capability`: `"network"` or `"compute"` in the safe namespace, and `"filesystem"`, `"shell"`, `"python"` or `"network"` in `dangerous`. A test reads each tool's code and checks that the label matches what it reaches, and that nothing touching files, a shell or an evaluator sits outside `dangerous`.
+
+---
+
+## Output and time limits
+
+The governed executor bounds every tool it runs — the toolkit's, yours, and dynamic ones — so a missing limit in one tool cannot flood the model or stall a run:
+
+- **`max_output_chars`** (default 200 000): the text the model receives (`to_model_text()`) keeps its first `max_output_chars` characters, followed by `[Output truncated: kept N of M characters.]`, and `result.metadata["truncated"]` records `{"chars": M, "kept": N}`. A structured value that is too long becomes its cut JSON text; an error keeps its type and has its message cut.
+- **`timeout_s`** (default 120): past it the call returns `ToolResult.failure("timeout", ...)` (`retryable=True`). An `async def` tool is cancelled. A synchronous tool runs in a daemon thread of its own — also on the sync path, `execute()` and `run_tools_sync()` — which the executor stops waiting for; a thread cannot be killed, so the tool may still finish in the background, but it never holds up `asyncio.run()` or the end of the process.
+
+Set them per tool, or switch one off with `None`:
+
+```python
+@tool(timeout_s=600, max_output_chars=None)
+def export_report(month: str) -> str:
+    """Build the monthly report (slow, and the caller wants all of it)."""
+    ...
+```
+
+A `ToolGroup` takes a ceiling for all its tools — `ToolGroup(*tools, max_output_chars=20_000, timeout_s=30)` — and the stricter of the group's and the tool's own applies: a group tightens its tools, never widens them.
+
+> A timeout only helps while the tool releases Python's GIL (waiting on I/O, or running Python code). One long call into C — a catastrophic regular expression, arithmetic on enormous integers — holds the GIL, and nothing in the process can interrupt it, the executor's timeout included. Refuse such inputs before the call: the toolkit's `math_eval` estimates each result's size before computing it, and `regex_search` refuses patterns that backtrack exponentially and texts over 20 000 characters.
 
 ---
 
@@ -57,7 +82,7 @@ A **`ToolError`** is structured so an agent (or your retry logic) can reason abo
 The `type` is drawn from a fixed set:
 
 - **Governance blocks** — `"dangerous_tool_blocked"`, `"approval_denied"`, `"max_calls_exceeded"`, `"budget_exceeded"`.
-- **Resolution / execution** — `"unknown_tool"` (no matching function), `"validation_error"` (arguments that don't fit the tool's schema or signature — see [Argument validation](#argument-validation)), `"runtime_error"` (any exception raised by the tool itself, `TypeError` included; `retryable=True`).
+- **Resolution / execution** — `"unknown_tool"` (no matching function), `"validation_error"` (arguments that don't fit the tool's schema or signature — see [Argument validation](#argument-validation)), `"runtime_error"` (any exception raised by the tool itself, `TypeError` included; `retryable=True`), `"timeout"` (the tool did not finish within its `timeout_s`; `retryable=True`).
 
 Construct results directly when writing custom executors:
 

@@ -27,12 +27,12 @@ For the conceptual guide (`@tool`, `ToolGroup`, server tools), see [Tools](tools
 
 **Math** — `_math.py`
 
-- `math_eval` — Safely evaluate math expressions (functions, constants, operators)
+- `math_eval` — Safely evaluate math expressions (functions, constants, operators); up to 1000 characters, and a result too large to print is refused before it is computed
 - `unit_convert` — Convert between units (length, mass, volume, speed, area, time, temp)
 
 **Text processing** — `_text.py`
 
-- `regex_search` — Find all regex matches with positions
+- `regex_search` — Find regex matches with positions (up to 1000); text up to 20 000 characters, pattern up to 500, and back-references or groups that repeat while holding a quantifier or an alternation are refused
 - `text_stats` — Count words, characters, lines, sentences, paragraphs
 - `base64_encode` — Encode text to base64
 - `base64_decode` — Decode base64 to text
@@ -64,7 +64,7 @@ For the conceptual guide (`@tool`, `ToolGroup`, server tools), see [Tools](tools
 - `reverse_geocode` — Place name and region from coordinates
 - `timezone_lookup` — Timezone and UTC offset from coordinates
 - `distance_between` — Great-circle distance between coordinate pairs
-- `ip_lookup` — Geographic location and ISP info for an IP
+- `ip_lookup` — Geographic location and ISP info for an explicit IP, from ipwho.is over HTTPS (free, 1000 requests a day per client IP)
 - `country_info` — Country details (capital, population, languages, etc.)
 
 **OpenStreetMap** — `_osm.py`, `_overpass.py`
@@ -253,14 +253,14 @@ These execute real side effects and live in the explicit `ai_arch_toolkit.toolki
 
 **Filesystem** — `dangerous`
 
-- `read_file` — Read file contents with optional line limit
-- `list_directory` — List files/dirs with sizes and types
-- `search_files` — Recursively search for text in files
-- `csv_read` — Read CSV files, return a formatted table
+- `read_file` — Read file contents with a line limit (1–10 000); reads at most 100 000 characters
+- `list_directory` — List files/dirs with sizes and types (up to 1000 entries)
+- `search_files` — Recursively search for text in files (1–1000 results; matching lines cut at 300 characters)
+- `csv_read` — Read CSV files, return a formatted table (1–10 000 rows)
 
 **Shell** — `dangerous`
 
-- `run_command` — Execute shell commands and return output
+- `run_command` — Execute shell commands and return output (timeout 1–600 s, output 1–100 000 characters)
 
 **Python** — `dangerous`
 
@@ -268,5 +268,5 @@ These execute real side effects and live in the explicit `ai_arch_toolkit.toolki
 
 **Web** — `dangerous`
 
-- `http_get` — Fetch a URL, return raw response text
-- `scrape_text` — Fetch web page, extract visible text (strips HTML)
+- `http_get` — Fetch an http(s) URL, return raw response text (1–100 000 characters); redirects stay on the URL's host
+- `scrape_text` — Fetch web page, extract visible text (strips HTML; 1–100 000 characters); redirects stay on the URL's host

@@ -280,3 +280,82 @@ R01 publicada em `main` (`b3dae3f`); a R02 começa com a leitura obrigatória da
   Cada árvore passa o gate sozinha (índice exportado): 4305, 4341 e 4341 passed. A decisão sobre o
   tecto de uma falha sem `BudgetPolicy` ficou em "Por fazer" no BOARD, com pistas para o dono
   investigar. A seguir: a R03, nesta sessão, depois de o dono a compactar.
+
+## 2026-09-18 · R03 (Claude)
+
+- Início: base `main` @ `4a1fa4e`, 4341 passed. Ficha e BOARD em `in-progress`.
+- Passo 1 feito (tools). `toolkit/tools/_http.py` é a única porta para a rede (regra por AST, sem
+  lista de legado): HTTPS para os hosts de cada módulo, redirects só no mesmo host, leitura limitada
+  em bytes e em tempo, segmentos citados um a um, throttle partilhado entre threads, uma só forma de
+  erro, e a leitura de cada resposta dentro de uma fronteira (`parse=`, D31). Os 47 sítios
+  migraram: quatro módulos de referência e o `_web` por mim, 31 por cinco agentes em paralelo, com
+  revisão. Executor: `max_output_chars` e `timeout_s` para qualquer tool, tecto do grupo que só
+  aperta (D29), tools síncronas numa thread daemon nos dois caminhos (D30). Facto medido: um regex
+  catastrófico ou um inteiro enorme prendem o GIL e nenhum timeout os pára; `math_eval` e
+  `regex_search` recusam-nos à entrada (D32). `ip_lookup` passa ao ipwho.is em HTTPS (D28).
+  Invariantes executáveis: 739 casos, sem `xfail`. Gate: 5208 passed, 42 deselected; ruff,
+  formatação, pyright e lock limpos. `toolkit/tools` −270 linhas; dívida 121 → 73. Quatro achados
+  novos em `FINDINGS.md` (o risco polinomial do regex para o dono decidir).
+- Passo 2 feito (motor). Um só executor de vagas (o sequencial corre vagas de um), um só sítio onde
+  um step acaba (`_ended`), e as vagas lêem o snapshot da vaga em vez de um `fork()` por irmão (D33:
+  mudança visível, escrita no `CHANGELOG`). Verificador de gramática de eventos com 16 cenários,
+  reutilizado pelos testes do motor; apanhou o stream e o trace a contarem ordens diferentes numa
+  vaga paralela. `_run_attempts` com um só bloco de fallback, fixado antes por 20 caminhos. Gate:
+  5245 passed. Dívida 73 → 66.
+- Passo 3 feito (imutabilidade). `StateSnapshot` documentado como vista só de leitura (camadas
+  copiadas, valores partilhados) e testado igual nos dois modos; `ReasoningSpec.knobs` e
+  `llm_kwargs` congelados à entrada (`MappingProxyType`), quebra visível no `CHANGELOG`. O
+  `from_mapping` estrito já estava feito. Gate: 5250 passed.
+- Passo 4.1 feito (stores de grafo). Uma base genérica partilhada, `GraphFacade[N]`, com nós,
+  índice por tipo, arestas, lotes e a forma do JSON guardado; o `Graph` e o `GraphStore` herdam-na
+  e o `GraphStore` fica só com o que é da memória. Desvio à nota (compor o `Graph`): o pyright
+  recusa um `MemoryBackend` como `GraphBackend`, e um `cast` escondia-o. API pública igual (por AST
+  e `inspect`). Janelas duplicadas 60 → 0, −110 linhas, dívida 66 → 61.
+- Passo 4.2 feito (opções das factories). `FlowOptions` declara uma vez as quatro opções que cada
+  factory passa ao `Flow`; as factories recebem-nas em `**options`, os builders lêem-nas do spec
+  num só sítio, e o `nested()` diz o que um ReAct interno herda (só o `trace_capture`). A
+  `budget_policy` fica como opção do `Flow` (D34). Chamadas iguais, verificadas pelo pyright. Gate:
+  5295 passed. −70 linhas.
+- Passo 4.3 feito (chaves de estado). As quatro chaves que as estratégias e o runner partilham
+  vivem em `flows/_keys.py` (regra por AST: 66 grafias → 0). O `extract_text` deixou a cadeia de
+  quatro chaves: lê `answer`, ou o valor do último step (D35), e a `Response` vem da mesma fonte.
+  As dez estratégias deixam `answer` e `response` também quando esgotam. Medido antes: um Reflexion
+  que passava com resposta vazia respondia o score, e um ReAct que acabava em tools respondia a
+  lista dos resultados. Gate: 5316 passed.
+- Passo 4.4 feito (manifestos).
+  - Cada manifesto tem uma declaração (`toolkit/_shape.py` e um `_manifest_shape.py` por
+    manifesto). O loader verifica cada ficheiro com ela, e o JSON Schema empacotado gera-se dela;
+    o de prompts era mais largo do que o loader, e o de agentes é novo.
+  - A sonda diferencial (1323 e 1166 casos) mostrou só as mudanças de propósito.
+  - Achado e corrigido: os leitores do manifesto de agentes partiam com `null` que o loader
+    aceitava, e um `trace_capture` lista dava `TypeError`.
+  - Testes de conformidade com o `jsonschema` do ambiente de desenvolvimento, e do loader contra
+    a declaração.
+  - Gate: 5380 passed. Dívida 61 → 53. Saldo +441 linhas de Python (desvio registado).
+- Passo 4.5 feito (`_eval_expr`).
+  - Duas tabelas de despacho (18 expressões, 7 instruções), um método por nó, e um teste por cada
+    nó do `ast` em execução, permitido ou recusado.
+  - Saíram o `hasattr` e o `getattr` do avaliador.
+  - Cinco semânticas erradas em silêncio corrigidas (desempacotar dicionários, `**kwargs`, curto
+    circuito, `del` de atributo, `**=` sem guarda).
+  - Achado na infra de testes: o pytest deixava cair as fixtures de `tests/toolkit` numa linha de
+    comando intercalada, e os testes das tools corriam com rede e throttle a sério. As fixtures
+    foram para o conftest da raiz, com um canário.
+  - Gate: 5460 passed. Dívida 53 → 48.
+- Passo 4.6 feito (ReAct interno). O `run_react` devolve a resposta, a `Response` e se algum step
+  falhou. Os sete sítios de seis estratégias usam-no, com uma regra por AST: só `_react` constrói
+  um ReAct. Gate: 5465 passed. Dívida 48 → 46.
+- Passo 4.7 feito: o levantamento do `__all__` de topo está na ficha (204 nomes, 81 usados nas docs
+  e nos exemplos, 25 nunca citados). Há duas incoerências: `Agent`/`ReasoningSpec` não estão no
+  topo, e falta lá a nona factory. Nenhum export mudou.
+- Passo 5 feito, e a R03 concluída.
+  - `AGENTS.md` e `CONTRIBUTING.md` sem o `urllib` e com as regras novas.
+  - "Upgrade notes" no `CHANGELOG`, com as quebras das três fases.
+  - Linha de base 121 → 46.
+  - Relatório final na ficha, com dois commits propostos. A árvore do primeiro foi verificada
+    sozinha, numa cópia: 5465 passed, pyright 0.
+  - O BOARD devolve a vez à frente C, que começa depois dos commits da R03.
+  - Gate final: 5465 passed, 42 deselected; ruff, formatação, pyright e lock limpos. Sem commits,
+    pushes, fornecedores nem `.env`.
+- A pedido do dono: os dois commits propostos (`6ceb516` código e testes, e o registo), e o push de
+  `main`, que publicou também os três commits da R02.
