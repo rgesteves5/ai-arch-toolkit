@@ -6,26 +6,34 @@ import pytest
 
 import ai_arch_toolkit as toolkit
 from ai_arch_toolkit.core import _exceptions as errors
-from ai_arch_toolkit.core._providers._base import network_error
+from ai_arch_toolkit.core._providers._base import transport_error
 from ai_arch_toolkit.core._retry import RetryConfig, _is_retryable
 
 
 @pytest.mark.parametrize(
-    "timed_out,builtin,name",
+    "cause,builtin,name",
     [
-        (False, ConnectionError, "TransportError"),
-        (True, TimeoutError, "ProviderTimeout"),
+        (OSError("connection lost"), ConnectionError, "TransportError"),
+        (TimeoutError("connection lost"), TimeoutError, "ProviderTimeout"),
     ],
 )
 def test_network_mapper_raises_normalized_error_without_losing_builtin_handler(
-    timed_out, builtin, name
+    cause, builtin, name
 ):
-    exc = network_error(RuntimeError("connection lost"), timed_out=timed_out)
+    exc = transport_error(cause, not_sent=(), timeouts=(TimeoutError,))
     with pytest.raises(builtin, match="connection lost"):
         raise exc
     assert isinstance(exc, errors.ProviderError)
     assert type(exc).__name__ == name
     assert exc.delivery == "indeterminate"
+    assert _is_retryable(exc, RetryConfig())
+
+
+def test_a_failure_while_connecting_was_never_sent():
+    exc = transport_error(
+        ConnectionRefusedError("refused"), not_sent=(ConnectionRefusedError,), timeouts=()
+    )
+    assert (type(exc), exc.delivery) == (errors.TransportError, "not_sent")
     assert _is_retryable(exc, RetryConfig())
 
 

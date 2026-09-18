@@ -2,38 +2,41 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-from unittest.mock import MagicMock, patch
-
 from ai_arch_toolkit.core._llm import LLM
-from ai_arch_toolkit.core._providers._base import StreamState
 from ai_arch_toolkit.core._response import (
+    Response,
     StreamEvent,
     ThinkingBlock,
     ToolCall,
     Usage,
 )
+from tests.fake_provider import MODEL, FakeProvider, Reply, fake_llm
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+USAGE = Usage(input_tokens=10, output_tokens=5)
 
-def _make_state(
-    *,
-    usage: Usage | None = None,
-    model: str = "test-model",
-    stop_reason: str = "end_turn",
-    tool_calls: list[ToolCall] | None = None,
-    thinking: list[ThinkingBlock] | None = None,
-) -> StreamState:
-    state = StreamState()
-    state.usage = usage or Usage(input_tokens=10, output_tokens=5)
-    state.model = model
-    state.stop_reason = stop_reason
-    state.tool_calls = tool_calls or []
-    state.thinking = thinking or []
-    return state
+
+class _ThinkingProvider(FakeProvider):
+    """Streams the reply's thinking blocks before its text, as a reasoning model does."""
+
+    def __init__(self, reply: Reply) -> None:
+        super().__init__(reply, model=MODEL)
+        self._thinking = reply.response.thinking
+
+    async def open_stream(self, prepared):
+        for block in self._thinking:
+            yield StreamEvent(kind="thinking", thinking=block)
+        async for item in super().open_stream(prepared):
+            yield item
+
+
+def _thinking_llm(reply: Reply) -> LLM:
+    llm = LLM(MODEL, api_key="test")
+    llm._provider = _ThinkingProvider(reply)
+    return llm
 
 
 # ---------------------------------------------------------------------------
@@ -42,27 +45,13 @@ def _make_state(
 
 
 async def test_text_only_streaming():
-    events_list = [
-        StreamEvent(kind="text", text="Hello"),
-        StreamEvent(kind="text", text=" world"),
-    ]
-    state = _make_state()
+    response = Response(text="Hello world", usage=USAGE)
+    llm, _ = fake_llm(Reply(response=response, chunks=["Hello", " world"]))
+    stream = llm.stream_events("Hello")
 
-    async def _fake_events() -> AsyncIterator[StreamEvent]:
-        for e in events_list:
-            yield e
-
-    with patch("ai_arch_toolkit.core._llm.create_provider") as mock_cp:
-        provider = MagicMock()
-        provider.stream_events.return_value = (_fake_events(), state)
-        mock_cp.return_value = provider
-
-        llm = LLM("test-model")
-        stream = llm.stream_events("Hello")
-
-        collected: list[StreamEvent] = []
-        async for event in stream:
-            collected.append(event)
+    collected: list[StreamEvent] = []
+    async for event in stream:
+        collected.append(event)
 
     assert len(collected) == 2
     assert all(e.kind == "text" for e in collected)
@@ -76,29 +65,15 @@ async def test_text_only_streaming():
 
 
 async def test_finalization_produces_response():
-    events_list = [
-        StreamEvent(kind="text", text="Test"),
-    ]
-    state = _make_state(usage=Usage(input_tokens=20, output_tokens=10))
+    llm, _ = fake_llm(Response(text="Test", usage=Usage(input_tokens=20, output_tokens=10)))
+    stream = llm.stream_events("Hello")
 
-    async def _fake_events() -> AsyncIterator[StreamEvent]:
-        for e in events_list:
-            yield e
+    async for _ in stream:
+        pass
 
-    with patch("ai_arch_toolkit.core._llm.create_provider") as mock_cp:
-        provider = MagicMock()
-        provider.stream_events.return_value = (_fake_events(), state)
-        mock_cp.return_value = provider
-
-        llm = LLM("test-model")
-        stream = llm.stream_events("Hello")
-
-        async for _ in stream:
-            pass
-
-        assert stream.response is not None
-        assert stream.response.text == "Test"
-        assert stream.response.usage.input_tokens == 20
+    assert stream.response is not None
+    assert stream.response.text == "Test"
+    assert stream.response.usage.input_tokens == 20
 
 
 # ---------------------------------------------------------------------------
@@ -107,24 +82,10 @@ async def test_finalization_produces_response():
 
 
 def test_sync_wrapper():
-    events_list = [
-        StreamEvent(kind="text", text="Sync"),
-    ]
-    state = _make_state()
+    llm, _ = fake_llm(Response(text="Sync", usage=USAGE))
+    stream = llm.stream_events_sync("Hello")
 
-    async def _fake_events() -> AsyncIterator[StreamEvent]:
-        for e in events_list:
-            yield e
-
-    with patch("ai_arch_toolkit.core._llm.create_provider") as mock_cp:
-        provider = MagicMock()
-        provider.stream_events.return_value = (_fake_events(), state)
-        mock_cp.return_value = provider
-
-        llm = LLM("test-model")
-        stream = llm.stream_events_sync("Hello")
-
-        collected = list(stream)
+    collected = list(stream)
 
     assert len(collected) == 1
     assert collected[0].kind == "text"
@@ -138,27 +99,12 @@ def test_sync_wrapper():
 
 async def test_events_with_thinking():
     thinking_block = ThinkingBlock(text="Let me think...")
-    events_list = [
-        StreamEvent(kind="thinking", thinking=thinking_block),
-        StreamEvent(kind="text", text="Answer"),
-    ]
-    state = _make_state(thinking=[thinking_block])
+    response = Response(text="Answer", thinking=(thinking_block,), usage=USAGE)
+    stream = _thinking_llm(Reply(response=response)).stream_events("Hello")
 
-    async def _fake_events() -> AsyncIterator[StreamEvent]:
-        for e in events_list:
-            yield e
-
-    with patch("ai_arch_toolkit.core._llm.create_provider") as mock_cp:
-        provider = MagicMock()
-        provider.stream_events.return_value = (_fake_events(), state)
-        mock_cp.return_value = provider
-
-        llm = LLM("test-model")
-        stream = llm.stream_events("Hello")
-
-        collected: list[StreamEvent] = []
-        async for event in stream:
-            collected.append(event)
+    collected: list[StreamEvent] = []
+    async for event in stream:
+        collected.append(event)
 
     assert len(collected) == 2
     assert collected[0].kind == "thinking"
@@ -173,27 +119,12 @@ async def test_events_with_thinking():
 
 async def test_events_with_tool_calls():
     tc = ToolCall(id="tc_1", name="search", input={"query": "test"})
-    events_list = [
-        StreamEvent(kind="text", text="Let me search"),
-        StreamEvent(kind="tool_call", tool_call=tc),
-    ]
-    state = _make_state(tool_calls=[tc])
+    llm, _ = fake_llm(Response(text="Let me search", tool_calls=(tc,), usage=USAGE))
+    stream = llm.stream_events("Hello")
 
-    async def _fake_events() -> AsyncIterator[StreamEvent]:
-        for e in events_list:
-            yield e
-
-    with patch("ai_arch_toolkit.core._llm.create_provider") as mock_cp:
-        provider = MagicMock()
-        provider.stream_events.return_value = (_fake_events(), state)
-        mock_cp.return_value = provider
-
-        llm = LLM("test-model")
-        stream = llm.stream_events("Hello")
-
-        collected: list[StreamEvent] = []
-        async for event in stream:
-            collected.append(event)
+    collected: list[StreamEvent] = []
+    async for event in stream:
+        collected.append(event)
 
     assert len(collected) == 2
     assert collected[1].kind == "tool_call"
@@ -209,66 +140,40 @@ async def test_events_with_tool_calls():
 async def test_mixed_event_types():
     thinking_block = ThinkingBlock(text="Reasoning...")
     tc = ToolCall(id="tc_1", name="search", input={"q": "test"})
-    events_list = [
-        StreamEvent(kind="thinking", thinking=thinking_block),
-        StreamEvent(kind="text", text="I'll search"),
-        StreamEvent(kind="tool_call", tool_call=tc),
-        StreamEvent(kind="text", text=" for you"),
-    ]
-    state = _make_state(thinking=[thinking_block], tool_calls=[tc])
+    response = Response(
+        text="I'll search for you", thinking=(thinking_block,), tool_calls=(tc,), usage=USAGE
+    )
+    reply = Reply(response=response, chunks=["I'll search", " for you"])
+    stream = _thinking_llm(reply).stream_events("Hello")
 
-    async def _fake_events() -> AsyncIterator[StreamEvent]:
-        for e in events_list:
-            yield e
-
-    with patch("ai_arch_toolkit.core._llm.create_provider") as mock_cp:
-        provider = MagicMock()
-        provider.stream_events.return_value = (_fake_events(), state)
-        mock_cp.return_value = provider
-
-        llm = LLM("test-model")
-        stream = llm.stream_events("Hello")
-
-        collected: list[StreamEvent] = []
-        async for event in stream:
-            collected.append(event)
+    collected: list[StreamEvent] = []
+    async for event in stream:
+        collected.append(event)
 
     assert len(collected) == 4
     kinds = [e.kind for e in collected]
-    assert kinds == ["thinking", "text", "tool_call", "text"]
-    # Text chunks should be concatenated in response
+    # Tool calls come from the assembled response, so they follow the text.
+    assert kinds == ["thinking", "text", "text", "tool_call"]
+    # The response holds the whole text that was streamed
     assert stream.response is not None
     assert stream.response.text == "I'll search for you"
+    assert "".join(e.text for e in collected if e.kind == "text") == stream.response.text
 
 
 # ---------------------------------------------------------------------------
-# 7. Multiple text chunks are concatenated in response
+# 7. Multiple text chunks add up to the response text
 # ---------------------------------------------------------------------------
 
 
 async def test_text_chunk_concatenation():
-    events_list = [
-        StreamEvent(kind="text", text="Hello"),
-        StreamEvent(kind="text", text=" "),
-        StreamEvent(kind="text", text="world"),
-    ]
-    state = _make_state()
+    response = Response(text="Hello world", usage=USAGE)
+    llm, _ = fake_llm(Reply(response=response, chunks=["Hello", " ", "world"]))
+    stream = llm.stream_events("Hello")
+    texts = [event.text async for event in stream]
 
-    async def _fake_events() -> AsyncIterator[StreamEvent]:
-        for e in events_list:
-            yield e
-
-    with patch("ai_arch_toolkit.core._llm.create_provider") as mock_cp:
-        provider = MagicMock()
-        provider.stream_events.return_value = (_fake_events(), state)
-        mock_cp.return_value = provider
-
-        llm = LLM("test-model")
-        stream = llm.stream_events("Hello")
-        async for _ in stream:
-            pass
-
-    assert stream.response.text == "Hello world"
+    assert texts == ["Hello", " ", "world"]
+    assert stream.response is not None
+    assert stream.response.text == "".join(texts) == "Hello world"
 
 
 # ---------------------------------------------------------------------------
@@ -277,21 +182,10 @@ async def test_text_chunk_concatenation():
 
 
 async def test_empty_stream():
-    state = _make_state()
-
-    async def _fake_events() -> AsyncIterator[StreamEvent]:
-        return
-        yield  # makes this an async generator
-
-    with patch("ai_arch_toolkit.core._llm.create_provider") as mock_cp:
-        provider = MagicMock()
-        provider.stream_events.return_value = (_fake_events(), state)
-        mock_cp.return_value = provider
-
-        llm = LLM("test-model")
-        stream = llm.stream_events("Hello")
-        async for _ in stream:
-            pass
+    llm, _ = fake_llm(Response(text="", usage=USAGE))
+    stream = llm.stream_events("Hello")
+    async for _ in stream:
+        pass
 
     assert stream.response is not None
     assert stream.response.text == ""

@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
@@ -14,7 +13,6 @@ from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._metering._events import UsageEvent
 from ai_arch_toolkit.core._metering._scope import RunConfig
 from ai_arch_toolkit.core._policy import Policy
-from ai_arch_toolkit.core._providers._base import StreamState
 from ai_arch_toolkit.core._response import Response, Usage
 from ai_arch_toolkit.core._retry import RetryConfig
 from ai_arch_toolkit.core._state import State, StateSnapshot
@@ -22,32 +20,14 @@ from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.toolkit.agents import Agent, ReasoningSpec
 from ai_arch_toolkit.toolkit.budget import BudgetPolicy
 from ai_arch_toolkit.toolkit.flow import Flow, FlowEvent, FlowResult, FlowStep, Scope
+from tests.fake_provider import fake_llm
 
 _MODEL = "claude-sonnet-4-6"  # priced in _default_pricing.toml
 
 
-class _Provider:
-    def __init__(self, text: str = "ok") -> None:
-        self._text = text
-
-    async def complete(self, messages, *, system=None, tools=None, **kwargs) -> Response:
-        return Response(
-            text=self._text, usage=Usage(input_tokens=100_000, output_tokens=50_000), model=_MODEL
-        )
-
-    def stream(self, messages, *, system=None, tools=None, **kwargs):
-        state = StreamState()
-        state.usage = Usage(input_tokens=10, output_tokens=5)
-
-        async def chunks() -> AsyncIterator[str]:
-            yield "partial"
-
-        return chunks(), state
-
-
 def _llm(text: str = "ok") -> LLM:
-    llm = LLM(_MODEL, api_key="test")
-    llm._provider = _Provider(text)  # type: ignore[assignment]
+    usage = Usage(input_tokens=100_000, output_tokens=50_000)
+    llm, _ = fake_llm(Response(text=text, usage=usage, model=_MODEL), model=_MODEL)
     return llm
 
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
@@ -17,56 +16,28 @@ from ai_arch_toolkit.core._metering._admission import (
 from ai_arch_toolkit.core._metering._scope import MeterScope, RunConfig
 from ai_arch_toolkit.core._middleware import Request
 from ai_arch_toolkit.core._moderation import ModerationError, ModerationResult
-from ai_arch_toolkit.core._providers._base import StreamState
-from ai_arch_toolkit.core._response import Response, StreamEvent, Usage
+from ai_arch_toolkit.core._response import Response, Usage
 from ai_arch_toolkit.core._retry import RetryConfig
 from ai_arch_toolkit.core._server_tools import web_search
 from ai_arch_toolkit.core._tools import prepare_tools
 from ai_arch_toolkit.toolkit.memory import MemoryMiddleware
 from ai_arch_toolkit.toolkit.moderation import ModerationMiddleware
+from tests.fake_provider import FakeProvider, Reply
 
 _MODEL = "claude-sonnet-4-6"
 _USAGE = Usage(input_tokens=30, output_tokens=10)
 
 
-class _Provider:
-    """Streams two chunks; can fail the first attempts before any chunk; records every call."""
+def _provider(*, fail_first: int = 0, error: Exception | None = None) -> FakeProvider:
+    """Streams two chunks; fails the first ``fail_first`` calls before any chunk.
 
-    def __init__(self, *, fail_first: int = 0, error: Exception | None = None) -> None:
-        self.calls: list[dict[str, Any]] = []
-        self._fail_first = fail_first
-        self._error = error or APIError(500, "try again")
-
-    def _stream(self, messages: Any, system: Any, as_events: bool, tools: Any, kwargs: Any):
-        self.calls.append(
-            {"messages": list(messages), "system": system, "tools": tools, "kwargs": kwargs}
-        )
-        state = StreamState()
-        state.usage = _USAGE
-        failing = len(self.calls) <= self._fail_first
-        error = self._error
-
-        async def chunks() -> AsyncIterator[Any]:
-            if failing:
-                raise error
-            for text in ("hel", "lo"):
-                yield StreamEvent(kind="text", text=text) if as_events else text
-
-        return chunks(), state
-
-    def stream(self, messages, *, system=None, tools=None, **kwargs):
-        return self._stream(messages, system, False, tools, kwargs)
-
-    def stream_events(self, messages, *, system=None, tools=None, **kwargs):
-        return self._stream(messages, system, True, tools, kwargs)
-
-    async def complete(self, messages, *, system=None, tools=None, **kwargs) -> Response:
-        self.calls.append(
-            {"messages": list(messages), "system": system, "tools": tools, "kwargs": kwargs}
-        )
-        if len(self.calls) <= self._fail_first:
-            raise self._error
-        return Response(text="hello", usage=_USAGE, model=_MODEL)
+    The fake records every request sent, in ``requests``.
+    """
+    failure = Reply(error=error or APIError(500, "try again"))
+    hello = Reply(
+        response=Response(text="hello", usage=_USAGE, model=_MODEL), chunks=["hel", "lo"]
+    )
+    return FakeProvider(*[failure] * fail_first, hello, model=_MODEL)
 
 
 class _Spy:
@@ -106,16 +77,16 @@ class _AlwaysFlag:
         return ModerationResult(flagged=True, categories=["x"], scores={}, explanation="blocked")
 
 
-def _llm(provider: _Provider, **kwargs: Any) -> LLM:
+def _llm(provider: FakeProvider, **kwargs: Any) -> LLM:
     llm = LLM(_MODEL, api_key="test", **kwargs)
-    llm._provider = provider  # type: ignore[assignment]
+    llm._provider = provider
     return llm
 
 
 @pytest.mark.parametrize("method", ["stream", "stream_events"])
 async def test_async_hooks_run_once_around_an_async_stream(method: str) -> None:
     spy = _Spy()
-    stream = getattr(_llm(_Provider(), middleware=[spy]), method)("hi")
+    stream = getattr(_llm(_provider(), middleware=[spy]), method)("hi")
 
     async for _ in stream:
         pass
@@ -128,7 +99,7 @@ async def test_async_hooks_run_once_around_an_async_stream(method: str) -> None:
 @pytest.mark.parametrize("method", ["stream_sync", "stream_events_sync"])
 def test_async_hooks_run_once_around_a_sync_stream(method: str) -> None:
     spy = _Spy()
-    stream = getattr(_llm(_Provider(), middleware=[spy]), method)("hi")
+    stream = getattr(_llm(_provider(), middleware=[spy]), method)("hi")
 
     list(stream)
 
@@ -137,7 +108,7 @@ def test_async_hooks_run_once_around_a_sync_stream(method: str) -> None:
 
 
 async def test_input_moderation_blocks_a_stream_before_the_provider_is_called() -> None:
-    provider = _Provider()
+    provider = _provider()
     llm = _llm(provider, middleware=[ModerationMiddleware(input=_AlwaysFlag())])
 
     with MeterScope() as scope:
@@ -145,7 +116,7 @@ async def test_input_moderation_blocks_a_stream_before_the_provider_is_called() 
         with pytest.raises(ModerationError):
             await stream.__anext__()
 
-    assert provider.calls == []
+    assert provider.calls == 0
     snap = scope.snapshot()
     assert snap.llm_calls == 0
     assert snap.out_llm_calls == 0
@@ -153,7 +124,7 @@ async def test_input_moderation_blocks_a_stream_before_the_provider_is_called() 
 
 
 async def test_output_moderation_runs_once_the_stream_is_consumed() -> None:
-    llm = _llm(_Provider(), middleware=[ModerationMiddleware(output=_AlwaysFlag())])
+    llm = _llm(_provider(), middleware=[ModerationMiddleware(output=_AlwaysFlag())])
     received: list[str] = []
 
     with pytest.raises(ModerationError):
@@ -174,7 +145,7 @@ async def test_memory_middleware_injects_and_records_around_a_stream() -> None:
     async def record(item: dict[str, Any]) -> None:
         recorded.append(item)
 
-    llm = _llm(_Provider(), middleware=[MemoryMiddleware(find=find, record=record)])
+    llm = _llm(_provider(), middleware=[MemoryMiddleware(find=find, record=record)])
 
     async for _ in llm.stream("remember this"):
         pass
@@ -185,8 +156,8 @@ async def test_memory_middleware_injects_and_records_around_a_stream() -> None:
 
 async def test_parent_middleware_wraps_a_fallback_stream_once() -> None:
     spy = _Spy(inject="INJECTED")
-    failing = _Provider(fail_first=1, error=TransportError("down"))
-    fallback_provider = _Provider()
+    failing = _provider(fail_first=1, error=TransportError("down"))
+    fallback_provider = _provider()
     fallback = _llm(fallback_provider)
     llm = _llm(failing, middleware=[spy], fallback=fallback)
 
@@ -195,26 +166,26 @@ async def test_parent_middleware_wraps_a_fallback_stream_once() -> None:
 
     assert received == ["hel", "lo"]
     assert spy.calls == ["abefore", "aafter"]
-    sent = fallback_provider.calls[0]
-    assert sent["messages"][-1]["content"] == "INJECTED"
-    assert sent["system"] == "INJECTED"
+    sent = fallback_provider.requests[0]
+    assert sent.messages[-1]["content"] == "INJECTED"
+    assert sent.system == "INJECTED"
 
 
 async def test_a_retry_before_the_first_chunk_does_not_rerun_abefore() -> None:
     spy = _Spy()
-    provider = _Provider(fail_first=1)
+    provider = _provider(fail_first=1)
     llm = _llm(provider, middleware=[spy], retry=RetryConfig(max_retries=1, base_delay=0.001))
 
     received = [chunk async for chunk in llm.stream("hi")]
 
     assert received == ["hel", "lo"]
-    assert len(provider.calls) == 2
+    assert provider.calls == 2
     assert spy.calls == ["abefore", "aafter"]
 
 
 async def test_an_abandoned_stream_does_not_run_aafter() -> None:
     spy = _Spy()
-    stream = _llm(_Provider(), middleware=[spy]).stream("hi")
+    stream = _llm(_provider(), middleware=[spy]).stream("hi")
 
     await stream.__anext__()
     await stream.aclose()
@@ -224,9 +195,9 @@ async def test_an_abandoned_stream_does_not_run_aafter() -> None:
 
 async def test_complete_fallback_receives_the_messages_after_middleware() -> None:
     spy = _Spy(inject="INJECTED")
-    fallback_provider = _Provider()
+    fallback_provider = _provider()
     llm = _llm(
-        _Provider(fail_first=1),
+        _provider(fail_first=1),
         middleware=[spy],
         fallback=_llm(fallback_provider),
     )
@@ -234,13 +205,13 @@ async def test_complete_fallback_receives_the_messages_after_middleware() -> Non
     response = await llm.complete("hi")
 
     assert response.text == "hello"
-    sent = fallback_provider.calls[0]
-    assert sent["messages"][-1]["content"] == "INJECTED"
-    assert sent["system"] == "INJECTED"
+    sent = fallback_provider.requests[0]
+    assert sent.messages[-1]["content"] == "INJECTED"
+    assert sent.system == "INJECTED"
 
 
 async def test_a_stream_that_is_never_iterated_releases_its_reservation() -> None:
-    llm = _llm(_Provider())
+    llm = _llm(_provider())
 
     with MeterScope() as scope:
         llm.stream("hi")
@@ -287,9 +258,9 @@ async def test_a_fallback_receives_the_tools_and_kwargs_after_middleware(method:
         set_kwargs={"max_tokens": 7, "json_mode": True},
         drop="temperature",
     )
-    fallback_provider = _Provider()
+    fallback_provider = _provider()
     llm = _llm(
-        _Provider(fail_first=1, error=TransportError("down")),
+        _provider(fail_first=1, error=TransportError("down")),
         middleware=[rewrite],
         fallback=_llm(fallback_provider),
     )
@@ -301,15 +272,16 @@ async def test_a_fallback_receives_the_tools_and_kwargs_after_middleware(method:
         async for _ in llm.stream("hi", **call):
             pass
 
-    sent = fallback_provider.calls[0]
-    assert [tool.get("name", tool.get("type")) for tool in sent["tools"]] == [
+    sent = fallback_provider.requests[0]
+    assert sent.tools is not None
+    assert [tool.get("name", tool.get("type")) for tool in sent.tools] == [
         "only_tool",
         "web_search",
     ]
-    assert sent["kwargs"]["max_tokens"] == 7
-    assert sent["kwargs"]["json_mode"] is True
-    assert sent["kwargs"]["top_p"] == 0.9
-    assert sent["kwargs"].get("temperature") != 0.3  # dropped by middleware; the fallback's own
+    assert sent.kwargs["max_tokens"] == 7
+    assert sent.kwargs["json_mode"] is True
+    assert sent.kwargs["top_p"] == 0.9
+    assert sent.kwargs.get("temperature") != 0.3  # dropped by middleware; the fallback's own
 
 
 class _Admissions:
@@ -329,7 +301,7 @@ async def test_a_stream_is_admitted_and_priced_on_the_request_after_middleware()
         tools=prepare_tools([web_search()]) or [], set_kwargs={"max_tokens": 50}, drop=""
     )
     admissions = _Admissions()
-    llm = _llm(_Provider(), middleware=[rewrite])
+    llm = _llm(_provider(), middleware=[rewrite])
 
     with MeterScope(RunConfig(controller=admissions, retain_meter_events=True)) as scope:
         async for _ in llm.stream("hi", max_tokens=4096):
@@ -345,7 +317,7 @@ async def test_a_stream_is_admitted_and_priced_on_the_request_after_middleware()
 
 
 async def test_a_stream_rejected_by_middleware_records_no_attempt() -> None:
-    provider = _Provider()
+    provider = _provider()
     llm = _llm(provider, middleware=[ModerationMiddleware(input=_AlwaysFlag())])
 
     with MeterScope() as scope:
@@ -354,7 +326,7 @@ async def test_a_stream_rejected_by_middleware_records_no_attempt() -> None:
             await stream.__anext__()
         await stream.aclose()
 
-    assert provider.calls == []
+    assert provider.calls == 0
     assert stream.response is not None
     assert stream.response.attempts == ()
     assert scope.snapshot().llm_calls == 0
@@ -376,7 +348,7 @@ class _CapOutputTokens:
 
 async def test_a_stream_whose_rewritten_request_is_denied_never_calls_the_provider() -> None:
     rewrite = _Rewrite(tools=[], set_kwargs={"max_tokens": 5_000}, drop="")
-    provider = _Provider()
+    provider = _provider()
     llm = _llm(provider, middleware=[rewrite])
 
     with MeterScope(RunConfig(controller=_CapOutputTokens(cap=1_000))) as scope:
@@ -385,7 +357,7 @@ async def test_a_stream_whose_rewritten_request_is_denied_never_calls_the_provid
             await stream.__anext__()  # middleware raised max_tokens past the cap
         await stream.aclose()
 
-    assert provider.calls == []
+    assert provider.calls == 0
     assert stream.response is not None and stream.response.attempts == ()
     snap = scope.snapshot()
     assert snap.llm_calls == 0 and snap.out_llm_calls == 0

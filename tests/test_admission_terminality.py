@@ -9,129 +9,116 @@ from __future__ import annotations
 import pytest
 
 from ai_arch_toolkit.core._llm import LLM
-from ai_arch_toolkit.core._metering._admission import AdmissionDenied
+from ai_arch_toolkit.core._metering._admission import (
+    AdmissionDecision,
+    AdmissionDenied,
+    MeterSnapshot,
+)
+from ai_arch_toolkit.core._metering._operation import OperationRequest
 from ai_arch_toolkit.core._metering._scope import MeterScope, RunConfig
 from ai_arch_toolkit.core._response import Response, Usage
 from ai_arch_toolkit.toolkit.agents._agent import Agent
 from ai_arch_toolkit.toolkit.agents._spec import ReasoningSpec
 from ai_arch_toolkit.toolkit.budget import BudgetController, BudgetExceeded, BudgetPolicy
 from ai_arch_toolkit.toolkit.moderation._llm import LLMModerator
+from tests.fake_provider import FakeProvider
+
+MODEL = "claude-sonnet-4-6"  # every LLM here, primary or fallback, unless noted
+OTHER = "claude-haiku-4-5"
 
 
 def _denial() -> BudgetExceeded:
     return BudgetExceeded(dimension="cost", limit=1.0, current=2.0, attempted=0.0)
 
 
-class _RaisingProvider:
-    def __init__(self, exc: Exception) -> None:
-        self._exc = exc
-
-    async def complete(self, *a, **k) -> Response:
-        raise self._exc
-
-
-class _RaisingStreamProvider:
-    """Provider whose stream openers raise — to drive a denial *inside* the try block,
-    so the `except self._fallback_on` guard (not the initial admission) is exercised."""
-
-    def __init__(self, exc: BaseException) -> None:
-        self._exc = exc
-
-    def stream(self, *a, **k):
-        raise self._exc
-
-    def stream_events(self, *a, **k):
-        raise self._exc
+def _ok_provider() -> FakeProvider:
+    verdict = Response(
+        text='{"flagged": false, "categories": []}',
+        usage=Usage(input_tokens=5, output_tokens=2),
+    )
+    return FakeProvider(verdict, model=MODEL)
 
 
-class _OkProvider:
-    async def complete(self, *a, **k) -> Response:
-        return Response(
-            text='{"flagged": false, "categories": []}',
-            usage=Usage(input_tokens=5, output_tokens=2),
-        )
+def _healthy() -> FakeProvider:
+    """A fallback that would answer (and so mask a denial) if it were ever reached."""
+    return FakeProvider(Response(text="MASKED", usage=Usage()), model=MODEL)
 
 
-class _FallbackProvider:
-    """Provider double; use an actual LLM so terminality crosses the shared pipeline."""
-
-    def __init__(
-        self, model: str, *, response: Response | None = None, raises: Exception | None = None
-    ):
-        self._model = model
-        self._response = response
-        self._raises = raises
-        self.called = False
-
-    async def complete(self, messages, **kwargs) -> Response:
-        self.called = True
-        if self._raises is not None:
-            raise self._raises
-        assert self._response is not None
-        return self._response
-
-    def stream(self, messages, **kwargs):
-        self.called = True
-        raise AssertionError("fallback stream must not be reached after a denial")
-
-    def stream_events(self, messages, **kwargs):
-        self.called = True
-        raise AssertionError("fallback stream_events must not be reached after a denial")
-
-
-def _real_llm(provider) -> LLM:
-    llm = LLM("claude-sonnet-4-6", api_key="test")
-    llm._provider = provider  # type: ignore[assignment]
+def _real_llm(provider: FakeProvider) -> LLM:
+    """An actual LLM, so terminality crosses the shared pipeline."""
+    llm = LLM(MODEL, api_key="test")
+    llm._provider = provider
     return llm
 
 
 async def test_complete_fallback_does_not_mask_a_denial():
     # Primary provider-errors -> enters fallbacks; the FIRST fallback is budget-denied. Under a
     # broad fallback_on the denial must escape, NOT be swallowed by a healthy later fallback.
-    primary = _real_llm(_RaisingProvider(RuntimeError("primary down")))
-    denied = _FallbackProvider("fb-denied", raises=_denial())
-    healthy = _FallbackProvider("fb-healthy", response=Response(text="MASKED", usage=Usage()))
+    primary = _real_llm(FakeProvider(RuntimeError("primary down"), model=MODEL))
+    denied = FakeProvider(_denial(), model=MODEL)
+    healthy = _healthy()
     primary._fallbacks = [_real_llm(denied), _real_llm(healthy)]
     primary._fallback_on = (Exception,)  # type: ignore[assignment]
 
     with pytest.raises(AdmissionDenied):
         await primary.complete("hi")
-    assert healthy.called is False  # short-circuited on the denial; no later fallback tried
+    assert denied.calls == 1  # the denial came from the first fallback's call
+    assert healthy.calls == 0  # short-circuited on the denial; no later fallback tried
+
+
+class _DenyModel:
+    """Denies only one model's operations, so a fallback on another model is admissible."""
+
+    def __init__(self, model: str) -> None:
+        self.model = model
+
+    def admit(self, snapshot: MeterSnapshot, request: OperationRequest) -> AdmissionDecision:
+        if request.model == self.model:
+            return AdmissionDecision.deny(_denial())
+        return AdmissionDecision.allow()
 
 
 async def test_complete_primary_denial_does_not_enter_fallbacks():
-    # A real budget denial on the PRIMARY (from scope.open) must not trigger the fallback chain.
-    primary = _real_llm(_RaisingProvider(RuntimeError("provider must not be reached")))
-    healthy = _FallbackProvider("fb", response=Response(text="MASKED", usage=Usage()))
-    primary._fallbacks = [_real_llm(healthy)]
+    # A real denial on the PRIMARY (from scope.open) must not trigger the fallback chain, even
+    # though the fallback's own admission would pass and it would answer.
+    unreachable = FakeProvider(RuntimeError("provider must not be reached"), model=MODEL)
+    primary = _real_llm(unreachable)
+    healthy = FakeProvider(Response(text="MASKED", usage=Usage()), model=OTHER)
+    fallback = LLM(OTHER, api_key="test")
+    fallback._provider = healthy
+    primary._fallbacks = [fallback]
     primary._fallback_on = (Exception,)  # type: ignore[assignment]
 
-    scope = MeterScope(RunConfig(controller=BudgetController(BudgetPolicy(max_llm_calls=0))))
-    with scope, pytest.raises(AdmissionDenied):
+    with MeterScope(RunConfig(controller=_DenyModel(MODEL))), pytest.raises(AdmissionDenied):
         await primary.complete("hi")
-    assert healthy.called is False
+    assert unreachable.calls == 0
+    assert healthy.calls == 0
+    # The fallback alone is admitted: had the denial been masked, it would have answered.
+    with MeterScope(RunConfig(controller=_DenyModel(MODEL))):
+        assert (await fallback.complete("hi")).text == "MASKED"
 
 
 async def test_completion_builder_surfaces_a_budget_denial():
     # The completion strategy must surface a denial as budget_exceeded, not a swallowed error.
-    agent = Agent(ReasoningSpec(strategy="completion"), _real_llm(_OkProvider()))
+    agent = Agent(ReasoningSpec(strategy="completion"), _real_llm(_ok_provider()))
     result = await agent.run("hi", budget_policy=BudgetPolicy(max_llm_calls=0))
     assert "budget_exceeded" in result.flow_result.results
 
 
 async def test_llm_moderator_reraises_a_budget_denial():
     # A budget denial from the classifier LLM must escape, not become a moderation fail-result.
-    mod = LLMModerator(_real_llm(_OkProvider()), ["hate"])
+    mod = LLMModerator(_real_llm(_ok_provider()), ["hate"])
     scope = MeterScope(RunConfig(controller=BudgetController(BudgetPolicy(max_llm_calls=0))))
     with scope, pytest.raises(AdmissionDenied):
         await mod.moderate("some text")
 
 
 async def test_stream_fallback_does_not_mask_a_denial():
-    # A denial surfacing from the primary stream opener must escape the `except self._fallback_on`
-    # guard under a broad fallback_on — never masked by a healthy later fallback.
-    primary = _real_llm(_RaisingStreamProvider(_denial()))
-    healthy = _FallbackProvider("fb", response=Response(text="MASKED", usage=Usage()))
+    # A denial raised by the primary's stream — after admission, *inside* the try block — must
+    # escape the `except self._fallback_on` guard under a broad fallback_on, never masked by a
+    # healthy later fallback.
+    primary = _real_llm(FakeProvider(_denial(), model=MODEL))
+    healthy = _healthy()
     primary._fallbacks = [_real_llm(healthy)]
     primary._fallback_on = (Exception,)  # type: ignore[assignment]
 
@@ -139,13 +126,13 @@ async def test_stream_fallback_does_not_mask_a_denial():
     with pytest.raises(AdmissionDenied):
         async for _ in stream:
             pass
-    assert healthy.called is False  # short-circuited on the denial; no fallback stream tried
+    assert healthy.calls == 0  # short-circuited on the denial; no fallback stream tried
 
 
 async def test_stream_events_fallback_does_not_mask_a_denial():
     # Same terminality contract for the stream_events path.
-    primary = _real_llm(_RaisingStreamProvider(_denial()))
-    healthy = _FallbackProvider("fb", response=Response(text="MASKED", usage=Usage()))
+    primary = _real_llm(FakeProvider(_denial(), model=MODEL))
+    healthy = _healthy()
     primary._fallbacks = [_real_llm(healthy)]
     primary._fallback_on = (Exception,)  # type: ignore[assignment]
 
@@ -153,4 +140,4 @@ async def test_stream_events_fallback_does_not_mask_a_denial():
     with pytest.raises(AdmissionDenied):
         async for _ in stream:
             pass
-    assert healthy.called is False
+    assert healthy.calls == 0

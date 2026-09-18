@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -15,6 +15,9 @@ from ai_arch_toolkit.core._response import (
     ThinkingBlock,
     Usage,
 )
+from tests.fake_provider import FakeProvider, Reply
+
+MODEL = "claude-sonnet-4-20250514"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -25,15 +28,21 @@ def _make_response(text: str = "Hello") -> Response:
     return Response(text=text, usage=Usage(input_tokens=10, output_tokens=5))
 
 
-def _make_stream_state(usage=None, model="claude-sonnet-4-20250514", stop_reason="end_turn"):
-    """Create a mock stream state."""
-    state = MagicMock()
-    state.usage = usage or Usage(input_tokens=10, output_tokens=5)
-    state.model = model
-    state.stop_reason = stop_reason
-    state.tool_calls = []
-    state.thinking = []
-    return state
+def _fake_provider(model: str, **_: object) -> FakeProvider:
+    """Stands in for ``create_provider``: a fake provider for ``model``."""
+    return FakeProvider(model=model)
+
+
+class _ClosingProvider(FakeProvider):
+    """A fake provider that counts how many times it is closed."""
+
+    def __init__(self) -> None:
+        super().__init__(model=MODEL)
+        self.closes = 0
+
+    async def close(self) -> None:
+        self.closes += 1
+        await super().close()
 
 
 # ---------------------------------------------------------------------------
@@ -54,86 +63,68 @@ class TestNormalize:
 class TestComplete:
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_basic(self, mock_create):
-        mock_provider = AsyncMock()
-        mock_provider.complete.return_value = _make_response()
-        mock_create.return_value = mock_provider
+        provider = FakeProvider(_make_response(), model=MODEL)
+        mock_create.return_value = provider
 
         llm = LLM("claude-sonnet-4-20250514", api_key="test")
         result = await llm.complete("Hello")
         assert result.text == "Hello"
-        mock_provider.complete.assert_called_once()
+        assert provider.calls == 1
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_string_normalized(self, mock_create):
-        mock_provider = AsyncMock()
-        mock_provider.complete.return_value = _make_response()
-        mock_create.return_value = mock_provider
+        provider = FakeProvider(_make_response(), model=MODEL)
+        mock_create.return_value = provider
 
         llm = LLM("claude-sonnet-4-20250514", api_key="test")
         await llm.complete("Hello")
-        call_args = mock_provider.complete.call_args
-        messages = call_args[0][0]
-        assert messages == [{"role": "user", "content": "Hello"}]
+        assert provider.last.messages == [{"role": "user", "content": "Hello"}]
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_list_passthrough(self, mock_create):
-        mock_provider = AsyncMock()
-        mock_provider.complete.return_value = _make_response()
-        mock_create.return_value = mock_provider
+        provider = FakeProvider(_make_response(), model=MODEL)
+        mock_create.return_value = provider
 
         llm = LLM("claude-sonnet-4-20250514", api_key="test")
         msgs = [{"role": "user", "content": "Hi"}]
         await llm.complete(msgs)
-        call_args = mock_provider.complete.call_args
-        assert call_args[0][0] is msgs
+        assert provider.last.messages is msgs
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_default_kwargs(self, mock_create):
-        mock_provider = AsyncMock()
-        mock_provider.complete.return_value = _make_response()
-        mock_create.return_value = mock_provider
+        provider = FakeProvider(_make_response(), model=MODEL)
+        mock_create.return_value = provider
 
         llm = LLM("claude-sonnet-4-20250514", api_key="test", temperature=0.5, max_tokens=1000)
         await llm.complete("Hi")
-        call_kwargs = mock_provider.complete.call_args[1]
-        assert call_kwargs["temperature"] == 0.5
-        assert call_kwargs["max_tokens"] == 1000
+        assert provider.last.kwargs["temperature"] == 0.5
+        assert provider.last.kwargs["max_tokens"] == 1000
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_override_kwargs(self, mock_create):
-        mock_provider = AsyncMock()
-        mock_provider.complete.return_value = _make_response()
-        mock_create.return_value = mock_provider
+        provider = FakeProvider(_make_response(), model=MODEL)
+        mock_create.return_value = provider
 
         llm = LLM("claude-sonnet-4-20250514", api_key="test", temperature=0.0)
         await llm.complete("Hi", temperature=0.8)
-        call_kwargs = mock_provider.complete.call_args[1]
-        assert call_kwargs["temperature"] == 0.8
+        assert provider.last.kwargs["temperature"] == 0.8
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_tools_forwarded(self, mock_create):
-        mock_provider = AsyncMock()
-        mock_provider.complete.return_value = _make_response()
-        mock_create.return_value = mock_provider
+        provider = FakeProvider(_make_response(), model=MODEL)
+        mock_create.return_value = provider
 
         tools = [{"name": "search", "description": "Search", "parameters": {"type": "object"}}]
         llm = LLM("claude-sonnet-4-20250514", api_key="test")
         await llm.complete("Hi", tools=tools)
-        call_kwargs = mock_provider.complete.call_args[1]
-        assert call_kwargs["tools"] == tools
+        assert provider.last.tools == tools
 
 
 class TestStream:
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_yields_chunks(self, mock_create):
-        async def _fake_gen():
-            for chunk in ["Hello", " ", "world"]:
-                yield chunk
-
-        state = _make_stream_state()
-        mock_provider = MagicMock()
-        mock_provider.stream.return_value = (_fake_gen(), state)
-        mock_create.return_value = mock_provider
+        reply = Reply(response=_make_response("Hello world"), chunks=["Hello", " ", "world"])
+        mock_create.return_value = FakeProvider(reply, model=MODEL)
 
         llm = LLM("claude-sonnet-4-20250514", api_key="test")
         stream = llm.stream("Hi")
@@ -146,14 +137,7 @@ class TestStream:
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_stream_response_available_after_consume(self, mock_create):
-        async def _fake_gen():
-            for chunk in ["Hello"]:
-                yield chunk
-
-        state = _make_stream_state()
-        mock_provider = MagicMock()
-        mock_provider.stream.return_value = (_fake_gen(), state)
-        mock_create.return_value = mock_provider
+        mock_create.return_value = FakeProvider(_make_response("Hello"), model=MODEL)
 
         llm = LLM("claude-sonnet-4-20250514", api_key="test")
         stream = llm.stream("Hi")
@@ -168,14 +152,8 @@ class TestStream:
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_stream_context_manager_early_exit(self, mock_create):
-        async def _fake_gen():
-            for chunk in ["Hello", " ", "world"]:
-                yield chunk
-
-        state = _make_stream_state()
-        mock_provider = MagicMock()
-        mock_provider.stream.return_value = (_fake_gen(), state)
-        mock_create.return_value = mock_provider
+        reply = Reply(response=_make_response("Hello world"), chunks=["Hello", " ", "world"])
+        mock_create.return_value = FakeProvider(reply, model=MODEL)
 
         llm = LLM("claude-sonnet-4-20250514", api_key="test")
 
@@ -191,9 +169,7 @@ class TestStream:
 class TestCall:
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_call_is_alias(self, mock_create):
-        mock_provider = AsyncMock()
-        mock_provider.complete.return_value = _make_response("via call")
-        mock_create.return_value = mock_provider
+        mock_create.return_value = FakeProvider(_make_response("via call"), model=MODEL)
 
         llm = LLM("claude-sonnet-4-20250514", api_key="test")
         result = await llm("Hello")
@@ -203,9 +179,7 @@ class TestCall:
 class TestSyncWrappers:
     @patch("ai_arch_toolkit.core._llm.create_provider")
     def test_complete_sync(self, mock_create):
-        mock_provider = AsyncMock()
-        mock_provider.complete.return_value = _make_response("sync result")
-        mock_create.return_value = mock_provider
+        mock_create.return_value = FakeProvider(_make_response("sync result"), model=MODEL)
 
         llm = LLM("claude-sonnet-4-20250514", api_key="test")
         result = llm.complete_sync("Hello")
@@ -213,14 +187,8 @@ class TestSyncWrappers:
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     def test_stream_sync(self, mock_create):
-        async def _fake_gen():
-            for chunk in ["a", "b", "c"]:
-                yield chunk
-
-        state = _make_stream_state()
-        mock_provider = MagicMock()
-        mock_provider.stream.return_value = (_fake_gen(), state)
-        mock_create.return_value = mock_provider
+        reply = Reply(response=_make_response("abc"), chunks=["a", "b", "c"])
+        mock_create.return_value = FakeProvider(reply, model=MODEL)
 
         llm = LLM("claude-sonnet-4-20250514", api_key="test")
         stream = llm.stream_sync("Hi")
@@ -235,7 +203,7 @@ class TestSyncWrappers:
 class TestRepr:
     @patch("ai_arch_toolkit.core._llm.create_provider")
     def test_repr_custom_params(self, mock_create):
-        mock_create.return_value = AsyncMock()
+        mock_create.side_effect = _fake_provider
         llm = LLM("claude-sonnet-4-20250514", api_key="test", temperature=0.5)
         r = repr(llm)
         assert "claude-sonnet-4-20250514" in r
@@ -244,7 +212,7 @@ class TestRepr:
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     def test_repr_defaults_only(self, mock_create):
-        mock_create.return_value = AsyncMock()
+        mock_create.side_effect = _fake_provider
         llm = LLM("claude-sonnet-4-20250514", api_key="test")
         assert repr(llm) == "LLM(model='claude-sonnet-4-20250514')"
 
@@ -256,14 +224,14 @@ class TestModelRouting:
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     def test_claude_model_creates_provider(self, mock_create):
-        mock_create.return_value = AsyncMock()
+        mock_create.side_effect = _fake_provider
         LLM("claude-sonnet-4-20250514", api_key="test")
         mock_create.assert_called_once()
         assert mock_create.call_args[0][0] == "claude-sonnet-4-20250514"
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     def test_provider_kwarg_forwarded(self, mock_create):
-        mock_create.return_value = AsyncMock()
+        mock_create.side_effect = _fake_provider
         LLM("gemma4:e4b", provider="openai", base_url="http://localhost:11434/v1")
         mock_create.assert_called_once()
         assert mock_create.call_args.kwargs["provider"] == "openai"
@@ -272,7 +240,7 @@ class TestModelRouting:
     @patch("ai_arch_toolkit.core._llm.create_provider")
     def test_unroutable_fallback_inherits_connection(self, mock_create):
         # A bare tag is assumed to live on the same server as the primary.
-        mock_create.return_value = AsyncMock()
+        mock_create.side_effect = _fake_provider
         LLM(
             "model-a",
             provider="openai",
@@ -288,7 +256,7 @@ class TestModelRouting:
     def test_routable_fallback_is_standalone(self, mock_create):
         # A recognizable model name fails over to its own provider/connection,
         # not the local primary's — so local→cloud failover works.
-        mock_create.return_value = AsyncMock()
+        mock_create.side_effect = _fake_provider
         LLM(
             "gemma4:e4b",
             provider="openai",
@@ -306,67 +274,62 @@ class TestModelRouting:
 class TestLifecycle:
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_async_context_manager(self, mock_create):
-        mock_provider = AsyncMock()
-        mock_create.return_value = mock_provider
+        provider = _ClosingProvider()
+        mock_create.return_value = provider
 
         async with LLM("claude-sonnet-4-20250514", api_key="test") as llm:
             assert llm is not None
 
-        mock_provider.close.assert_called_once()
+        assert provider.closes == 1
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_close(self, mock_create):
-        mock_provider = AsyncMock()
-        mock_create.return_value = mock_provider
+        provider = _ClosingProvider()
+        mock_create.return_value = provider
 
         llm = LLM("claude-sonnet-4-20250514", api_key="test")
         await llm.close()
-        mock_provider.close.assert_called_once()
+        assert provider.closes == 1
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     def test_sync_context_manager(self, mock_create):
-        mock_provider = AsyncMock()
-        mock_create.return_value = mock_provider
+        provider = _ClosingProvider()
+        mock_create.return_value = provider
 
         with LLM("claude-sonnet-4-20250514", api_key="test") as llm:
             assert llm is not None
 
-        mock_provider.close.assert_called_once()
+        assert provider.closes == 1
 
 
 class TestThinkingParams:
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_thinking_forwarded(self, mock_create):
-        mock_provider = AsyncMock()
-        mock_provider.complete.return_value = _make_response()
-        mock_create.return_value = mock_provider
+        provider = FakeProvider(_make_response(), model=MODEL)
+        mock_create.return_value = provider
 
         llm = LLM("claude-sonnet-4-20250514", api_key="test")
         await llm.complete("Hi", thinking=True, thinking_effort="high")
-        call_kwargs = mock_provider.complete.call_args[1]
-        assert call_kwargs["thinking"] is True
-        assert call_kwargs["thinking_effort"] == "high"
+        assert provider.last.kwargs["thinking"] is True
+        assert provider.last.kwargs["thinking_effort"] == "high"
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_thinking_budget_forwarded(self, mock_create):
-        mock_provider = AsyncMock()
-        mock_provider.complete.return_value = _make_response()
-        mock_create.return_value = mock_provider
+        provider = FakeProvider(_make_response(), model=MODEL)
+        mock_create.return_value = provider
 
         llm = LLM("claude-sonnet-4-20250514", api_key="test")
         await llm.complete("Hi", thinking=True, thinking_budget=10000)
-        call_kwargs = mock_provider.complete.call_args[1]
-        assert call_kwargs["thinking_budget"] == 10000
+        assert provider.last.kwargs["thinking_budget"] == 10000
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_thinking_defaults_not_forwarded(self, mock_create):
-        mock_provider = AsyncMock()
-        mock_provider.complete.return_value = _make_response()
-        mock_create.return_value = mock_provider
+        provider = FakeProvider(_make_response(), model=MODEL)
+        mock_create.return_value = provider
 
         llm = LLM("claude-sonnet-4-20250514", api_key="test")
         await llm.complete("Hi")
-        call_kwargs = mock_provider.complete.call_args[1]
+        call_kwargs = provider.last.kwargs
         assert "thinking" not in call_kwargs
         assert "thinking_effort" not in call_kwargs
         assert "thinking_budget" not in call_kwargs
@@ -375,23 +338,21 @@ class TestThinkingParams:
 class TestThinkingValidation:
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_empty_thinking_effort_raises(self, mock_create):
-        mock_create.return_value = AsyncMock()
+        mock_create.side_effect = _fake_provider
         llm = LLM("claude-sonnet-4-20250514", api_key="test")
         with pytest.raises(ValueError, match="thinking_effort must be a non-empty string"):
             await llm.complete("Hi", thinking_effort="")
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_negative_thinking_budget_raises(self, mock_create):
-        mock_create.return_value = AsyncMock()
+        mock_create.side_effect = _fake_provider
         llm = LLM("claude-sonnet-4-20250514", api_key="test")
         with pytest.raises(ValueError, match="thinking_budget must be non-negative"):
             await llm.complete("Hi", thinking_budget=-1)
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_zero_thinking_budget_allowed(self, mock_create):
-        mock_provider = AsyncMock()
-        mock_provider.complete.return_value = _make_response()
-        mock_create.return_value = mock_provider
+        mock_create.return_value = FakeProvider(_make_response(), model=MODEL)
         llm = LLM("claude-sonnet-4-20250514", api_key="test")
         await llm.complete("Hi", thinking_budget=0)  # should not raise
 
@@ -399,95 +360,72 @@ class TestThinkingValidation:
 class TestOutputSchema:
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_output_schema_forwarded(self, mock_create):
-        mock_provider = AsyncMock()
-        mock_provider.complete.return_value = _make_response()
-        mock_create.return_value = mock_provider
+        provider = FakeProvider(_make_response(), model=MODEL)
+        mock_create.return_value = provider
 
         schema = OutputSchema(name="Person", schema={"type": "object"})
         llm = LLM("claude-sonnet-4-20250514", api_key="test")
         await llm.complete("Hi", output_schema=schema)
-        call_kwargs = mock_provider.complete.call_args[1]
-        assert call_kwargs["output_schema"] is schema
+        assert provider.last.kwargs["output_schema"] is schema
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_output_schema_default_not_forwarded(self, mock_create):
-        mock_provider = AsyncMock()
-        mock_provider.complete.return_value = _make_response()
-        mock_create.return_value = mock_provider
+        provider = FakeProvider(_make_response(), model=MODEL)
+        mock_create.return_value = provider
 
         llm = LLM("claude-sonnet-4-20250514", api_key="test")
         await llm.complete("Hi")
-        call_kwargs = mock_provider.complete.call_args[1]
-        assert "output_schema" not in call_kwargs
+        assert "output_schema" not in provider.last.kwargs
 
 
 class TestStreamForwarding:
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_stream_forwards_thinking_params(self, mock_create):
-        async def _fake_gen():
-            yield "Hi"
-
-        state = _make_stream_state()
-        mock_provider = MagicMock()
-        mock_provider.stream.return_value = (_fake_gen(), state)
-        mock_create.return_value = mock_provider
+        provider = FakeProvider(_make_response("Hi"), model=MODEL)
+        mock_create.return_value = provider
 
         llm = LLM("claude-sonnet-4-20250514", api_key="test")
         stream = llm.stream("Hi", thinking=True, thinking_effort="high", thinking_budget=5000)
         async for _ in stream:
             pass
-        call_kwargs = mock_provider.stream.call_args[1]
+        call_kwargs = provider.last.kwargs
         assert call_kwargs["thinking"] is True
         assert call_kwargs["thinking_effort"] == "high"
         assert call_kwargs["thinking_budget"] == 5000
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_stream_forwards_output_schema(self, mock_create):
-        async def _fake_gen():
-            yield "Hi"
-
-        state = _make_stream_state()
-        mock_provider = MagicMock()
-        mock_provider.stream.return_value = (_fake_gen(), state)
-        mock_create.return_value = mock_provider
+        provider = FakeProvider(_make_response("Hi"), model=MODEL)
+        mock_create.return_value = provider
 
         schema = OutputSchema(name="X", schema={"type": "object"})
         llm = LLM("claude-sonnet-4-20250514", api_key="test")
         stream = llm.stream("Hi", output_schema=schema)
         async for _ in stream:
             pass
-        call_kwargs = mock_provider.stream.call_args[1]
-        assert call_kwargs["output_schema"] is schema
+        assert provider.last.kwargs["output_schema"] is schema
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     def test_stream_sync_forwards_thinking_params(self, mock_create):
-        async def _fake_gen():
-            yield "Hi"
-
-        state = _make_stream_state()
-        mock_provider = MagicMock()
-        mock_provider.stream.return_value = (_fake_gen(), state)
-        mock_create.return_value = mock_provider
+        provider = FakeProvider(_make_response("Hi"), model=MODEL)
+        mock_create.return_value = provider
 
         llm = LLM("claude-sonnet-4-20250514", api_key="test")
         stream = llm.stream_sync("Hi", thinking=True, thinking_effort="low")
         list(stream)
-        call_kwargs = mock_provider.stream.call_args[1]
-        assert call_kwargs["thinking"] is True
-        assert call_kwargs["thinking_effort"] == "low"
+        assert provider.last.kwargs["thinking"] is True
+        assert provider.last.kwargs["thinking_effort"] == "low"
 
 
 class TestStreamThinking:
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_stream_includes_thinking(self, mock_create):
-        async def _fake_gen():
-            yield "Answer"
-
-        state = _make_stream_state()
-        state.thinking = [ThinkingBlock(text="Let me think...")]
-        mock_provider = MagicMock()
-        mock_provider.stream.return_value = (_fake_gen(), state)
-        mock_create.return_value = mock_provider
+        answer = Response(
+            text="Answer",
+            thinking=(ThinkingBlock(text="Let me think..."),),
+            usage=Usage(input_tokens=10, output_tokens=5),
+        )
+        mock_create.return_value = FakeProvider(answer, model=MODEL)
 
         llm = LLM("claude-sonnet-4-20250514", api_key="test")
         stream = llm.stream("Hi")
@@ -506,38 +444,32 @@ class TestStreamThinking:
 class TestToolChoiceParam:
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_tool_choice_forwarded(self, mock_create):
-        mock_provider = AsyncMock()
-        mock_provider.complete.return_value = Response(text="ok")
-        mock_create.return_value = mock_provider
+        provider = FakeProvider(Response(text="ok"), model=MODEL)
+        mock_create.return_value = provider
 
         llm = LLM("claude-sonnet-4-20250514", api_key="test")
         await llm.complete("Hi", tool_choice="required")
-        call_kwargs = mock_provider.complete.call_args[1]
-        assert call_kwargs["tool_choice"] == "required"
+        assert provider.last.kwargs["tool_choice"] == "required"
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_tool_choice_specific_name(self, mock_create):
-        mock_provider = AsyncMock()
-        mock_provider.complete.return_value = Response(text="ok")
-        mock_create.return_value = mock_provider
+        provider = FakeProvider(Response(text="ok"), model=MODEL)
+        mock_create.return_value = provider
 
         llm = LLM("claude-sonnet-4-20250514", api_key="test")
         await llm.complete("Hi", tool_choice="get_weather")
-        call_kwargs = mock_provider.complete.call_args[1]
-        assert call_kwargs["tool_choice"] == "get_weather"
+        assert provider.last.kwargs["tool_choice"] == "get_weather"
 
 
 class TestJsonModeParam:
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_json_mode_forwarded(self, mock_create):
-        mock_provider = AsyncMock()
-        mock_provider.complete.return_value = Response(text='{"key": "value"}')
-        mock_create.return_value = mock_provider
+        provider = FakeProvider(Response(text='{"key": "value"}'), model="gpt-4o")
+        mock_create.return_value = provider
 
         llm = LLM("gpt-4o", api_key="test")
         await llm.complete("Give me JSON", json_mode=True)
-        call_kwargs = mock_provider.complete.call_args[1]
-        assert call_kwargs["json_mode"] is True
+        assert provider.last.kwargs["json_mode"] is True
 
     def test_json_mode_and_output_schema_raises(self):
         with pytest.raises(ValueError, match="mutually exclusive"):

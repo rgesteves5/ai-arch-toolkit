@@ -5,16 +5,22 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import pytest
+from tests.fake_provider import MODEL, fake_llm
 
 from ai_arch_toolkit.core import (
+    APIError,
     Cost,
     MeterScope,
     MeterSnapshot,
     Money,
     OperationRequest,
+    Response,
+    RetryConfig,
     RunConfig,
+    Usage,
 )
 from ai_arch_toolkit.core._metering._admission import AdmissionDenied, Reservation
+from ai_arch_toolkit.core._pricing import _estimate_response_cost
 from ai_arch_toolkit.toolkit.budget import BudgetController, BudgetPolicy, BudgetReport
 
 
@@ -160,3 +166,43 @@ def test_budget_report_constructor_keeps_existing_keywords() -> None:
     legacy = BudgetReport(**arguments)
     assert legacy.cost == 0.3
     assert legacy.cost_at_most == 0.3
+
+
+# A failure the provider reported usage for (Meta's response.failed): the meter keeps it (R02).
+FAILED_USAGE = Usage(input_tokens=100, output_tokens=50)
+
+
+def test_a_failure_with_reported_usage_settles_that_usage_and_cost() -> None:
+    with MeterScope(RunConfig(retain_meter_events=True)) as scope:
+        op = scope.open(OperationRequest(kind="llm", parent_span_id="run", model="priced"))
+        op.mark_started()
+        op.fail("indeterminate", usage=FAILED_USAGE, cost=Cost.known(Money.from_usd(0.01)))
+    snap = scope.snapshot()
+    assert (snap.llm_calls, snap.input_tokens, snap.output_tokens) == (1, 100, 50)
+    assert snap.cost == Money.from_usd(0.01)
+    assert (snap.unknown_cost_count, snap.uncertain_cost_count) == (0, 0)
+    (event,) = scope.events()
+    assert (event.status, event.delivery, event.usage) == ("failed", "indeterminate", FAILED_USAGE)
+
+
+async def test_llm_meters_the_usage_a_failed_response_reported() -> None:
+    llm, _ = fake_llm(APIError(503, "failed", usage=FAILED_USAGE))
+    with MeterScope(RunConfig(retain_meter_events=True)) as scope, pytest.raises(APIError):
+        await llm.complete("hi")
+    snap = scope.snapshot()
+    expected = _estimate_response_cost(MODEL, FAILED_USAGE)
+    assert expected is not None
+    assert snap.cost == Money.from_usd(expected)
+    assert (snap.input_tokens, snap.unknown_cost_count, snap.uncertain_cost_count) == (100, 0, 0)
+
+
+async def test_the_failed_attempt_keeps_its_reported_usage() -> None:
+    retry = RetryConfig(max_retries=1, base_delay=0.001)
+    llm, _ = fake_llm(
+        APIError(503, "failed", usage=FAILED_USAGE), Response(text="ok"), retry=retry
+    )
+    response = await llm.complete("hi")
+    assert [(a.status, a.usage) for a in response.attempts] == [
+        ("failed", FAILED_USAGE),
+        ("ok", Usage()),
+    ]

@@ -9,8 +9,8 @@ from ai_arch_toolkit.core._moderation import ModerationResult
 from ai_arch_toolkit.core._providers._imports import require_sdk
 from ai_arch_toolkit.core._sync import _run_sync
 
-require_sdk("openai", "openai")
-import openai  # noqa: E402
+with require_sdk("openai"):
+    import openai
 
 
 class OpenAIModerator:

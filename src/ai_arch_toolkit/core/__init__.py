@@ -29,6 +29,7 @@ from ai_arch_toolkit.core._exceptions import (
     RequestError,
     ResponseError,
     TransportError,
+    UnpricedModelError,
 )
 from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._metering import (
@@ -239,6 +240,7 @@ __all__ = [
     "TraceMode",
     "TracingMiddleware",
     "TransportError",
+    "UnpricedModelError",
     "Usage",
     "UsageEvent",
     "UsageSink",

@@ -1,19 +1,35 @@
-"""Tests for _providers/_gemini.py — SDK adapter."""
+"""Tests for _providers/_gemini.py — the Gemini adapter over the ``google-genai`` SDK.
+
+Requests are read from what ``prepare`` builds (the SDK's own pydantic types); answers are the
+SDK's ``GenerateContentResponse``. Calls through the real SDK and HTTP are in
+``tests/integration/test_provider_transport.py``.
+"""
 
 from __future__ import annotations
 
 import warnings
-from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-import aiohttp
 import httpx
 import pytest
+from google.genai import errors as genai_errors
+from google.genai import types
 
-from ai_arch_toolkit.core._exceptions import APIError, RateLimitError
+from ai_arch_toolkit.core import ServerTool
+from ai_arch_toolkit.core._exceptions import (
+    APIError,
+    Delivery,
+    ProviderError,
+    ProviderTimeout,
+    RateLimitError,
+    RequestError,
+    ResponseError,
+    TransportError,
+)
+from ai_arch_toolkit.core._providers._base import on_request
 from ai_arch_toolkit.core._providers._gemini import (
     GeminiProvider,
-    _build_thinking_config,
     _extract_usage,
     _messages_to_sdk,
     _parse_sdk_response,
@@ -21,10 +37,14 @@ from ai_arch_toolkit.core._providers._gemini import (
 )
 from ai_arch_toolkit.core._response import OutputSchema, Response
 from ai_arch_toolkit.core._tools import prepare_tools, tool
+from tests.provider_calls import assembled, complete, prepare, stream
 
-# ---------------------------------------------------------------------------
-# Helpers — build fake SDK objects
-# ---------------------------------------------------------------------------
+HI = [{"role": "user", "content": "Hi"}]
+WEATHER = {
+    "name": "get_weather",
+    "description": "Get weather",
+    "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+}
 
 
 @tool
@@ -39,92 +59,94 @@ def _lookup(query: str, limit: int = 5) -> str:
     return f"{query}:{limit}"
 
 
-def _sdk_part(*, text=None, thought=False, function_call=None, function_response=None):
-    """Build a fake Part-like object."""
-    p = SimpleNamespace(text=text, thought=thought, function_call=function_call)
-    if function_response is not None:
-        p.function_response = function_response
-    return p
+# ---------------------------------------------------------------------------
+# SDK objects
+# ---------------------------------------------------------------------------
 
 
-def _sdk_candidate(parts=None, finish_reason=None):
-    content = SimpleNamespace(parts=parts or [])
-    return SimpleNamespace(content=content, finish_reason=finish_reason)
+def _usage(
+    prompt: int = 10, candidates: int = 5, cached: int = 0, thoughts: int = 0, tool_use: int = 0
+) -> types.GenerateContentResponseUsageMetadata:
+    return types.GenerateContentResponseUsageMetadata(
+        prompt_token_count=prompt,
+        candidates_token_count=candidates,
+        cached_content_token_count=cached,
+        thoughts_token_count=thoughts,
+        tool_use_prompt_token_count=tool_use,
+    )
 
 
-def _sdk_response(
-    text="Hello",
-    parts=None,
-    finish_reason="STOP",
-    prompt_tokens=10,
-    candidates_tokens=5,
-    cached_tokens=0,
-    thoughts_tokens=0,
-    tool_use_prompt_tokens=0,
-    tool_calls=None,
-    thinking_parts=None,
-):
-    """Build a fake GenerateContentResponse."""
-    all_parts = []
-    if thinking_parts:
-        for t in thinking_parts:
-            all_parts.append(_sdk_part(text=t, thought=True))
-    if text:
-        all_parts.append(_sdk_part(text=text))
-    if tool_calls:
-        for tc in tool_calls:
-            fc = SimpleNamespace(
-                id=tc.get("id", ""),
-                name=tc["name"],
-                args=tc.get("args", {}),
+def _response(
+    *parts: types.Part,
+    finish: str | None = "STOP",
+    usage: types.GenerateContentResponseUsageMetadata | None = None,
+) -> types.GenerateContentResponse:
+    """A ``GenerateContentResponse`` with one candidate (a text part "Hello" by default)."""
+    return types.GenerateContentResponse(
+        candidates=[
+            types.Candidate(
+                content=types.Content(
+                    role="model", parts=list(parts) or [types.Part(text="Hello")]
+                ),
+                finish_reason=finish,
             )
-            all_parts.append(_sdk_part(function_call=fc))
-    if parts:
-        all_parts = parts
-
-    candidate = _sdk_candidate(parts=all_parts, finish_reason=finish_reason)
-    usage = SimpleNamespace(
-        prompt_token_count=prompt_tokens,
-        candidates_token_count=candidates_tokens,
-        cached_content_token_count=cached_tokens,
-        thoughts_token_count=thoughts_tokens,
-        tool_use_prompt_token_count=tool_use_prompt_tokens,
+        ],
+        usage_metadata=usage or _usage(),
+        response_id="resp-1",
     )
-    return SimpleNamespace(candidates=[candidate], usage_metadata=usage)
 
 
-def _sdk_stream_chunk(
-    text=None,
-    thought_text=None,
-    function_call=None,
-    finish_reason=None,
-    prompt_tokens=0,
-    candidates_tokens=0,
-    thoughts_tokens=0,
-    tool_use_prompt_tokens=0,
-):
-    """Build a fake streaming chunk."""
-    parts = []
-    if thought_text:
-        parts.append(_sdk_part(text=thought_text, thought=True))
-    if text:
-        parts.append(_sdk_part(text=text))
-    if function_call:
-        parts.append(_sdk_part(function_call=function_call))
-
-    candidate = _sdk_candidate(parts=parts, finish_reason=finish_reason)
-    usage = SimpleNamespace(
-        prompt_token_count=prompt_tokens,
-        candidates_token_count=candidates_tokens,
-        cached_content_token_count=0,
-        thoughts_token_count=thoughts_tokens,
-        tool_use_prompt_token_count=tool_use_prompt_tokens,
+def _call(name: str, call_id: str | None = None, signature: bytes | None = None, **args: Any):
+    return types.Part(
+        function_call=types.FunctionCall(id=call_id, name=name, args=args),
+        thought_signature=signature,
     )
-    return SimpleNamespace(candidates=[candidate], usage_metadata=usage)
+
+
+def _chunk(*parts: types.Part, finish: str | None = None, usage=None):
+    return types.GenerateContentResponse(
+        candidates=[
+            types.Candidate(
+                content=types.Content(role="model", parts=list(parts)), finish_reason=finish
+            )
+        ],
+        usage_metadata=usage,
+    )
+
+
+def _config(model: str, **kwargs: Any) -> types.GenerateContentConfig:
+    """The config the adapter would send for this call."""
+    return prepare(GeminiProvider(model, "test-key"), HI, **kwargs).params["config"]
+
+
+def _refusal(model: str, messages: list[dict[str, Any]] = HI, **kwargs: Any) -> str:
+    with pytest.raises(RequestError) as refused:
+        prepare(GeminiProvider(model, "test-key"), messages, **kwargs)
+    return str(refused.value)
+
+
+def _mocked(model: str = "gemini-3.8-flash", **methods: Any) -> GeminiProvider:
+    provider = GeminiProvider(model, "test-key")
+    client = MagicMock()
+    for name, value in methods.items():
+        setattr(client.aio.models, name, value)
+    provider._client = client
+    return provider
+
+
+def _streaming(*chunks: types.GenerateContentResponse, model: str = "gemini-3.8-flash"):
+    async def _stream(**kwargs: Any):
+        for chunk in chunks:
+            yield chunk
+
+    async def generate_content_stream(**kwargs: Any):  # the SDK returns an async iterator
+        return _stream(**kwargs)
+
+    return _mocked(model, generate_content_stream=generate_content_stream)
 
 
 # ---------------------------------------------------------------------------
-# _messages_to_sdk
+# Neutral messages → contents
 # ---------------------------------------------------------------------------
 
 
@@ -199,20 +221,53 @@ class TestMessagesToSdk:
         fr = contents[0].parts[0].function_response
         assert fr.response == {"result": "plain text"}
 
+    def test_a_turns_results_go_back_together_with_the_ids_gemini_gave(self):
+        # https://ai.google.dev/gemini-api/docs/generate-content/function-calling
+        raw = _response(
+            _call("get_weather", "fc-1", b"sig", city="Lisbon"), _call("get_time", "fc-2")
+        )
+        msgs = [
+            {"role": "user", "content": "Weather and time?"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "fc-1", "name": "get_weather", "input": {"city": "Lisbon"}},
+                    {"id": "fc-2", "name": "get_time", "input": {}},
+                ],
+                "_raw": raw,
+            },
+            {"role": "tool", "tool_use_id": "fc-1", "name": "get_weather", "content": "Sunny"},
+            {"role": "tool", "tool_use_id": "fc-2", "name": "get_time", "content": "14:05"},
+        ]
+        _, contents = _messages_to_sdk(msgs)
+        assert [c.role for c in contents] == ["user", "model", "user"]
+        assert (
+            contents[1].parts[0].thought_signature == b"sig"
+        )  # the model turn, as Gemini sent it
+        responses = [part.function_response for part in contents[2].parts]
+        assert [(r.id, r.name) for r in responses] == [
+            ("fc-1", "get_weather"),
+            ("fc-2", "get_time"),
+        ]
 
-# ---------------------------------------------------------------------------
-# _tool_to_sdk
-# ---------------------------------------------------------------------------
+    def test_an_id_the_toolkit_made_up_is_not_sent(self):
+        # Gemini 2.5 gives calls no id: the toolkit invents one, which Gemini never saw.
+        msgs = [
+            {"role": "assistant", "content": "", "tool_calls": [{"id": "made-up", "name": "fn"}]},
+            {"role": "tool", "tool_use_id": "made-up", "name": "fn", "content": "ok"},
+        ]
+        _, contents = _messages_to_sdk(msgs)
+        assert contents[1].parts[0].function_response.id is None
+
+    def test_an_unknown_role_is_refused(self):
+        with pytest.raises(RequestError, match="developer"):
+            _messages_to_sdk([{"role": "developer", "content": "x"}])
 
 
 class TestToolToSdk:
     def test_basic(self):
-        tool = {
-            "name": "get_weather",
-            "description": "Get weather",
-            "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}},
-        }
-        fd = _tool_to_sdk(tool)
+        fd = _tool_to_sdk(WEATHER)
         assert fd.name == "get_weather"
         assert fd.description == "Get weather"
         # SDK auto-converts dict to types.Schema
@@ -249,610 +304,429 @@ class TestToolToSdk:
         assert fd.parameters is None
         assert fd.parameters_json_schema["$defs"]["Item"]["type"] == "object"
 
-    async def test_complete_sends_a_tuple_tool(self):
-        mock_client = MagicMock()
-        mock_client.aio.models.generate_content = AsyncMock(return_value=_sdk_response())
-        provider = GeminiProvider("gemini-2.0-flash", "test-key")
-        provider._client = mock_client
+    def test_a_tuple_tool_reaches_the_config(self):
+        config = prepare(
+            GeminiProvider("gemini-3.8-flash", "test-key"), HI, tools=prepare_tools([_locate])
+        ).params["config"]
+        assert config.tools[0].function_declarations[0].parameters_json_schema is not None
 
-        await provider.complete(
-            [{"role": "user", "content": "Where?"}], tools=prepare_tools([_locate])
+
+# ---------------------------------------------------------------------------
+# The request: config and profiles
+# ---------------------------------------------------------------------------
+
+
+class TestRequest:
+    def test_system_and_forwarded_parameters(self):
+        messages = [
+            {"role": "system", "content": "From message."},
+            {"role": "user", "content": "x"},
+        ]
+        provider = GeminiProvider("gemini-3.8-flash", "test-key")
+        params = prepare(
+            provider, messages, system="Explicit.", temperature=0.5, max_tokens=64
+        ).params
+        assert params["model"] == "gemini-3.8-flash"
+        config = params["config"]
+        assert config.system_instruction == "Explicit.\n\nFrom message."
+        assert (config.temperature, config.max_output_tokens) == (0.5, 64)
+
+    def test_tools_and_tool_choice(self):
+        config = _config("gemini-3.8-flash", tools=[WEATHER], tool_choice="get_weather")
+        assert config.tools[0].function_declarations[0].name == "get_weather"
+        calling = config.tool_config.function_calling_config
+        assert calling.mode == types.FunctionCallingConfigMode.ANY
+        assert calling.allowed_function_names == ["get_weather"]
+
+    def test_server_tools(self):
+        tools = [
+            {"_server_tool": True, "type": "web_search"},
+            {"_server_tool": True, "type": "code_execution"},
+        ]
+        config = _config("gemini-3.8-flash", tools=tools)
+        assert config.tools[0].google_search is not None
+        assert config.tools[1].code_execution is not None
+
+    @pytest.mark.parametrize(
+        "server_tool",
+        [
+            ServerTool(type="web_search", config={"max_uses": 3}),
+            ServerTool(type="file_search"),
+        ],
+        ids=["config", "unknown type"],
+    )
+    def test_a_server_tool_the_adapter_cannot_send_is_refused(self, server_tool: ServerTool):
+        # Both used to be dropped in silence (the config belongs to C05).
+        wire = prepare_tools([server_tool])
+        _refusal("gemini-3.8-flash", tools=wire)
+
+    def test_output_schema_and_json_mode(self):
+        config = _config(
+            "gemini-3.8-flash", output_schema=OutputSchema(name="P", schema={"type": "object"})
+        )
+        assert config.response_mime_type == "application/json"
+        assert config.response_json_schema == {"type": "object"}
+        assert _config("gemini-3.8-flash", json_mode=True).response_mime_type == "application/json"
+
+    def test_a_config_the_sdk_refuses_is_a_request_error(self):
+        _refusal("gemini-3.8-flash", temperature="hot")
+
+    def test_unknown_kwargs_warn(self):
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            _config("gemini-3.8-flash", typo_param=True)
+        assert [str(x.message) for x in w if "typo_param" in str(x.message)]
+
+    def test_known_kwargs_no_warn(self):
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            _config("gemini-3.8-flash", temperature=0.5, top_p=0.9, max_output_tokens=1000)
+        assert [str(x.message) for x in w] == []
+
+    def test_the_client_takes_one_attempt_the_httpx_stack_and_the_timeout_in_ms(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        captured: dict[str, Any] = {}
+
+        class FakeClient:
+            def __init__(self, **kwargs: Any) -> None:
+                captured.update(kwargs)
+
+        monkeypatch.setattr("ai_arch_toolkit.core._providers._gemini.genai.Client", FakeClient)
+        GeminiProvider("gemini-3.8-flash", "test-key", timeout=45)
+
+        options: types.HttpOptions = captured["http_options"]
+        assert captured["api_key"] == "test-key"
+        assert options.retry_options is not None and options.retry_options.attempts == 1
+        assert options.timeout == 45_000
+        args = options.async_client_args or {}
+        # A transport of its own keeps the SDK off aiohttp, which re-sends on connection errors.
+        assert isinstance(args["transport"], httpx.AsyncHTTPTransport)
+        assert args["event_hooks"] == {"request": [on_request]}
+
+
+# Documented thinking controls (https://ai.google.dev/gemini-api/docs/generate-content/thinking).
+LEVELS = {
+    "gemini-3.8-flash": {"low", "medium", "high"},
+    "gemini-3.1-pro-preview": {"low", "medium", "high"},
+    "gemini-3.9-flash": {"low", "medium", "high"},  # a model newer than the table
+    "gemini-3.5-flash-lite": {"minimal", "low", "medium", "high"},
+    "gemini-3-flash-preview": {"minimal", "low", "medium", "high"},
+    "gemini-3-pro-preview": {"low", "high"},
+}
+
+
+class TestThinking:
+    @pytest.mark.parametrize("model", LEVELS)
+    @pytest.mark.parametrize("effort", ["minimal", "low", "medium", "high", "xhigh", "max"])
+    def test_gemini_3_takes_the_levels_its_model_documents(self, model: str, effort: str):
+        if effort not in LEVELS[model]:
+            assert effort in _refusal(model, thinking_effort=effort)
+            return
+        config = _config(model, thinking_effort=effort)
+        assert config.thinking_config.thinking_level == types.ThinkingLevel(effort.upper())
+        assert config.thinking_config.thinking_budget is None
+
+    def test_thinking_asks_for_thoughts_and_defaults_to_high(self):
+        thinking = _config("gemini-3.8-flash", thinking=True).thinking_config
+        assert thinking.include_thoughts is True
+        assert thinking.thinking_level == types.ThinkingLevel.HIGH
+
+    def test_no_thinking_option_sends_no_thinking_config(self):
+        assert _config("gemini-3.8-flash").thinking_config is None
+
+    def test_a_thinking_budget_on_gemini_3_only_warns(self):
+        with pytest.warns(UserWarning, match="thinking_budget"):
+            config = _config("gemini-3.8-flash", thinking=True, thinking_budget=5000)
+        assert config.thinking_config.thinking_budget is None
+
+    @pytest.mark.parametrize(
+        ("effort", "budget"), [("low", 2048), ("medium", 5000), ("high", 10000)]
+    )
+    def test_gemini_2_5_turns_the_effort_into_a_budget(self, effort: str, budget: int):
+        assert (
+            _config("gemini-2.5-flash", thinking_effort=effort).thinking_config.thinking_budget
+            == budget
         )
 
-        config = mock_client.aio.models.generate_content.call_args.kwargs["config"]
-        declaration = config.tools[0].function_declarations[0]
-        assert declaration.parameters_json_schema is not None
+    def test_gemini_2_5_defaults_and_explicit_budget(self):
+        default = _config("gemini-2.5-flash", thinking=True).thinking_config
+        assert (default.include_thoughts, default.thinking_budget) == (True, 10000)
+        assert (
+            _config("gemini-2.5-pro", thinking_budget=8000).thinking_config.thinking_budget == 8000
+        )
+
+    @pytest.mark.parametrize(
+        ("model", "budget"),
+        [
+            ("gemini-2.5-pro", 0),  # Pro cannot turn thinking off
+            ("gemini-2.5-pro", 64),
+            ("gemini-2.5-flash", 30000),
+            ("gemini-2.5-flash-lite", 256),
+        ],
+    )
+    def test_a_budget_outside_the_models_range_is_refused(self, model: str, budget: int):
+        assert str(budget) in _refusal(model, thinking_budget=budget)
+
+    @pytest.mark.parametrize(
+        ("model", "budget"), [("gemini-2.5-flash-lite", 0), ("gemini-2.5-pro", -1)]
+    )
+    def test_off_and_dynamic_budgets_where_documented(self, model: str, budget: int):
+        assert _config(model, thinking_budget=budget).thinking_config.thinking_budget == budget
+
+    def test_gemini_2_5_refuses_an_effort_it_cannot_map(self):
+        _refusal("gemini-2.5-flash", thinking_effort="xhigh")
 
 
 # ---------------------------------------------------------------------------
-# _build_thinking_config
-# ---------------------------------------------------------------------------
-
-
-class TestBuildThinkingConfig:
-    def test_disabled(self):
-        assert _build_thinking_config(False, None, None, "") is None
-
-    def test_default_budget(self):
-        cfg = _build_thinking_config(True, None, None, "gemini-2.5-flash")
-        assert cfg.include_thoughts is True
-        assert cfg.thinking_budget == 10000
-
-    def test_explicit_budget(self):
-        cfg = _build_thinking_config(True, None, 5000, "gemini-2.5-flash")
-        assert cfg.thinking_budget == 5000
-
-    def test_effort_maps_to_budget(self):
-        cfg = _build_thinking_config(True, "low", None, "gemini-2.5-flash")
-        assert cfg.thinking_budget == 2048
-        cfg = _build_thinking_config(True, "high", None, "gemini-2.5-flash")
-        assert cfg.thinking_budget == 10000
-
-    def test_gemini3_uses_thinking_level(self):
-        cfg = _build_thinking_config(True, "medium", None, "gemini-3-flash")
-        # SDK auto-converts string to ThinkingLevel enum
-        assert "MEDIUM" in str(cfg.thinking_level)
-        assert cfg.thinking_budget is None
-
-
-# ---------------------------------------------------------------------------
-# _extract_usage
+# Usage and assembly
 # ---------------------------------------------------------------------------
 
 
 class TestExtractUsage:
     def test_basic(self):
-        meta = SimpleNamespace(
-            prompt_token_count=100,
-            candidates_token_count=50,
-            cached_content_token_count=10,
-        )
-        usage = _extract_usage(meta)
+        usage = _extract_usage(_usage(prompt=100, candidates=50, cached=10))
         assert usage.input_tokens == 90
         assert usage.output_tokens == 50
         assert usage.cache_read_tokens == 10
         assert usage.input_tokens + usage.cache_read_tokens == 100
 
     def test_none_values(self):
-        meta = SimpleNamespace(
-            prompt_token_count=None,
-            candidates_token_count=None,
-            cached_content_token_count=None,
-            thoughts_token_count=None,
-            tool_use_prompt_token_count=None,
-        )
-        usage = _extract_usage(meta)
+        usage = _extract_usage(types.GenerateContentResponseUsageMetadata())
         assert usage.input_tokens == 0
         assert usage.output_tokens == 0
 
     def test_thoughts_are_included_in_billable_output(self):
-        meta = SimpleNamespace(
-            prompt_token_count=100,
-            candidates_token_count=50,
-            cached_content_token_count=10,
-            thoughts_token_count=30,
-            tool_use_prompt_token_count=20,
+        usage = _extract_usage(
+            _usage(prompt=100, candidates=50, cached=10, thoughts=30, tool_use=20)
         )
-        usage = _extract_usage(meta)
         assert usage.input_tokens == 110  # 90 uncached prompt + 20 tool-use input
         assert usage.cache_read_tokens == 10
         assert usage.output_tokens == 80  # 50 candidate + 30 thoughts
 
 
-# ---------------------------------------------------------------------------
-# _parse_sdk_response
-# ---------------------------------------------------------------------------
-
-
 class TestParseSdkResponse:
     def test_candidate_with_no_parts_is_an_empty_response(self):
         # gemini-2.5-flash cut off by max_tokens while thinking: content exists, parts is None.
-        candidate = SimpleNamespace(
-            content=SimpleNamespace(parts=None, role="model"), finish_reason="MAX_TOKENS"
+        resp = types.GenerateContentResponse(
+            candidates=[
+                types.Candidate(content=types.Content(role="model"), finish_reason="MAX_TOKENS")
+            ]
         )
-        resp = SimpleNamespace(candidates=[candidate], usage_metadata=None, model_version=None)
-
         r = _parse_sdk_response(resp, "gemini-2.5-flash")
-
         assert r.text == "" and r.tool_calls == ()
         assert r.stop_reason == "MAX_TOKENS"
 
     def test_text_response(self):
-        resp = _sdk_response(text="Hello world")
-        r = _parse_sdk_response(resp, "gemini-2.0-flash")
+        r = _parse_sdk_response(_response(types.Part(text="Hello world")), "gemini-3.8-flash")
         assert isinstance(r, Response)
         assert r.text == "Hello world"
-        assert r.model == "gemini-2.0-flash"
+        assert r.model == "gemini-3.8-flash"
+        assert r.response_id == "resp-1"
 
     def test_tool_calls(self):
-        resp = _sdk_response(
-            text="",
-            tool_calls=[{"name": "get_weather", "args": {"city": "NYC"}}],
+        r = _parse_sdk_response(
+            _response(_call("get_weather", "fc-1", city="NYC")), "gemini-3.8-flash"
         )
-        r = _parse_sdk_response(resp, "gemini-2.0-flash")
-        assert len(r.tool_calls) == 1
-        assert r.tool_calls[0].name == "get_weather"
-        assert r.tool_calls[0].input == {"city": "NYC"}
+        assert [(c.id, c.name, c.input) for c in r.tool_calls] == [
+            ("fc-1", "get_weather", {"city": "NYC"})
+        ]
+
+    def test_a_call_without_an_id_gets_one(self):
+        (call,) = _parse_sdk_response(_response(_call("fn")), "gemini-2.5-flash").tool_calls
+        assert call.id
 
     def test_thinking_blocks(self):
-        resp = _sdk_response(text="Answer.", thinking_parts=["Let me think..."])
-        r = _parse_sdk_response(resp, "gemini-2.0-flash")
-        assert len(r.thinking) == 1
-        assert r.thinking[0].text == "Let me think..."
+        resp = _response(
+            types.Part(text="Let me think...", thought=True), types.Part(text="Answer.")
+        )
+        r = _parse_sdk_response(resp, "gemini-3.8-flash")
+        assert [block.text for block in r.thinking] == ["Let me think..."]
         assert r.text == "Answer."
 
     def test_empty_candidates(self):
-        resp = SimpleNamespace(candidates=[], usage_metadata=None)
-        r = _parse_sdk_response(resp, "gemini-2.0-flash")
+        r = _parse_sdk_response(types.GenerateContentResponse(candidates=[]), "gemini-3.8-flash")
         assert r.text == ""
 
     def test_structured_output_parsed(self):
         schema = OutputSchema(name="Person", schema={"type": "object"})
-        resp = _sdk_response(text='{"name": "Alice"}')
-        r = _parse_sdk_response(resp, "gemini-2.0-flash", output_schema=schema)
+        r = _parse_sdk_response(
+            _response(types.Part(text='{"name": "Alice"}')),
+            "gemini-3.8-flash",
+            output_schema=schema,
+        )
         assert r.parsed == {"name": "Alice"}
 
     def test_cost_is_computed(self):
-        resp = _sdk_response(prompt_tokens=1000, candidates_tokens=500)
-        r = _parse_sdk_response(resp, "gemini-3.7-flash")
+        resp = _response(usage=_usage(prompt=1000, candidates=500))
+        r = assembled(GeminiProvider("gemini-3.7-flash", "test-key"), resp)
         assert r.cost == pytest.approx((0.75 * 1000 + 3.75 * 500) / 1_000_000)
 
     def test_raw_is_preserved(self):
-        resp = _sdk_response()
-        r = _parse_sdk_response(resp, "gemini-2.0-flash")
-        assert r.raw is resp
+        resp = _response()
+        assert _parse_sdk_response(resp, "gemini-3.8-flash").raw is resp
 
     def test_finish_reason_mapped(self):
-        resp = _sdk_response(finish_reason="STOP")
-        r = _parse_sdk_response(resp, "gemini-2.0-flash")
-        assert r.stop_reason == "STOP"
+        assert _parse_sdk_response(_response(), "gemini-3.8-flash").stop_reason == "STOP"
 
-
-# ---------------------------------------------------------------------------
-# Provider integration tests (mocked SDK client)
-# ---------------------------------------------------------------------------
-
-
-def test_provider_timeout_is_converted_to_sdk_milliseconds(monkeypatch):
-    captured: dict[str, object] = {}
-
-    class FakeClient:
-        def __init__(self, **kwargs):
-            captured.update(kwargs)
-
-        def close(self):
-            pass
-
-    monkeypatch.setattr(
-        "ai_arch_toolkit.core._providers._gemini.genai.Client",
-        FakeClient,
-    )
-
-    GeminiProvider("gemini-2.0-flash", "test-key", timeout=45)
-
-    assert captured["api_key"] == "test-key"
-    assert captured["http_options"] == {
-        "retry_options": {"attempts": 1},
-        "timeout": 45_000,
-    }
-
-
-class TestGeminiProviderComplete:
-    async def test_complete(self):
-        mock_client = MagicMock()
-        mock_client.aio.models.generate_content = AsyncMock(return_value=_sdk_response())
-
-        provider = GeminiProvider("gemini-2.0-flash", "test-key")
-        provider._client = mock_client
-
-        result = await provider.complete([{"role": "user", "content": "Hi"}])
-        assert isinstance(result, Response)
-        assert result.text == "Hello"
-        mock_client.aio.models.generate_content.assert_awaited_once()
-
-    async def test_system_forwarded(self):
-        mock_client = MagicMock()
-        mock_client.aio.models.generate_content = AsyncMock(return_value=_sdk_response())
-
-        provider = GeminiProvider("gemini-2.0-flash", "test-key")
-        provider._client = mock_client
-        await provider.complete(
-            [{"role": "user", "content": "Hi"}],
-            system="Be helpful.",
-        )
-        call_kwargs = mock_client.aio.models.generate_content.call_args[1]
-        assert call_kwargs["config"].system_instruction == "Be helpful."
-
-    async def test_system_from_messages(self):
-        mock_client = MagicMock()
-        mock_client.aio.models.generate_content = AsyncMock(return_value=_sdk_response())
-
-        provider = GeminiProvider("gemini-2.0-flash", "test-key")
-        provider._client = mock_client
-        await provider.complete(
-            [
-                {"role": "system", "content": "From message."},
-                {"role": "user", "content": "Hi"},
+    def test_grounding_becomes_citations(self):
+        resp = _response()
+        resp.candidates[0].grounding_metadata = types.GroundingMetadata(
+            grounding_chunks=[
+                types.GroundingChunk(web=types.GroundingChunkWeb(uri="https://x", title="X"))
             ]
         )
-        call_kwargs = mock_client.aio.models.generate_content.call_args[1]
-        assert call_kwargs["config"].system_instruction == "From message."
+        (citation,) = _parse_sdk_response(resp, "gemini-3.8-flash").citations
+        assert (citation.url, citation.title) == ("https://x", "X")
 
-    async def test_explicit_system_merged_before_message_system(self):
-        mock_client = MagicMock()
-        mock_client.aio.models.generate_content = AsyncMock(return_value=_sdk_response())
 
-        provider = GeminiProvider("gemini-2.0-flash", "test-key")
-        provider._client = mock_client
-        await provider.complete(
-            [
-                {"role": "system", "content": "From message."},
-                {"role": "user", "content": "Hi"},
-            ],
-            system="Explicit.",
-        )
-        call_kwargs = mock_client.aio.models.generate_content.call_args[1]
-        assert call_kwargs["config"].system_instruction == "Explicit.\n\nFrom message."
+# ---------------------------------------------------------------------------
+# Calls through a mocked SDK client (the SDK's own types)
+# ---------------------------------------------------------------------------
 
-    async def test_stream_merges_explicit_and_message_system(self):
-        seen: dict = {}
 
-        async def _fake_stream(**kwargs):
-            seen.update(kwargs)
-            yield _sdk_stream_chunk(text="ok", finish_reason="STOP")
-
-        mock_client = MagicMock()
-        mock_client.aio.models.generate_content_stream = _wrap_as_coroutine(_fake_stream)
-
-        provider = GeminiProvider("gemini-2.0-flash", "test-key")
-        provider._client = mock_client
-        aiter, _state = provider.stream(
-            [
-                {"role": "system", "content": "A"},
-                {"role": "user", "content": "x"},
-            ],
-            system="B",
-        )
-        async for _ in aiter:
-            pass
-
-        assert seen["config"].system_instruction == "B\n\nA"
+class TestCalls:
+    async def test_complete(self):
+        provider = _mocked(generate_content=AsyncMock(return_value=_response()))
+        result = await complete(provider, HI)
+        assert result.text == "Hello"
+        kwargs = provider._client.aio.models.generate_content.call_args.kwargs
+        assert kwargs["model"] == "gemini-3.8-flash"
+        assert isinstance(kwargs["config"], types.GenerateContentConfig)
 
     async def test_count_tokens_merges_explicit_and_message_system(self):
-        mock_client = MagicMock()
-        mock_client.aio.models.count_tokens = AsyncMock(
-            return_value=SimpleNamespace(total_tokens=9)
+        provider = _mocked(
+            count_tokens=AsyncMock(return_value=types.CountTokensResponse(total_tokens=9))
         )
+        messages = [{"role": "system", "content": "A"}, {"role": "user", "content": "x"}]
+        assert await provider.count_tokens(messages, system="B") == 9
+        kwargs = provider._client.aio.models.count_tokens.call_args.kwargs
+        assert kwargs["config"].system_instruction == "B\n\nA"
 
-        provider = GeminiProvider("gemini-2.0-flash", "test-key")
-        provider._client = mock_client
-        count = await provider.count_tokens(
-            [
-                {"role": "system", "content": "A"},
-                {"role": "user", "content": "x"},
-            ],
-            system="B",
+    async def test_stream_text(self):
+        provider = _streaming(
+            _chunk(types.Part(text="Hello ")),
+            _chunk(types.Part(text="world"), finish="STOP", usage=_usage(candidates=5)),
         )
+        events, response = await stream(provider, HI)
+        assert [e.text for e in events if e.kind == "text"] == ["Hello ", "world"]
+        assert response.text == "Hello world"
+        assert response.stop_reason == "STOP"
 
-        assert count == 9
-        call_kwargs = mock_client.aio.models.count_tokens.call_args.kwargs
-        assert call_kwargs["config"].system_instruction == "B\n\nA"
-
-    async def test_tools_forwarded(self):
-        mock_client = MagicMock()
-        mock_client.aio.models.generate_content = AsyncMock(return_value=_sdk_response())
-
-        tools = [{"name": "get_weather", "description": "Get weather", "parameters": {}}]
-        provider = GeminiProvider("gemini-2.0-flash", "test-key")
-        provider._client = mock_client
-        await provider.complete([{"role": "user", "content": "Hi"}], tools=tools)
-        call_kwargs = mock_client.aio.models.generate_content.call_args[1]
-        config = call_kwargs["config"]
-        assert config.tools is not None
-        fd = config.tools[0].function_declarations[0]
-        assert fd.name == "get_weather"
-
-    async def test_thinking_forwarded(self):
-        mock_client = MagicMock()
-        mock_client.aio.models.generate_content = AsyncMock(return_value=_sdk_response())
-
-        provider = GeminiProvider("gemini-2.0-flash", "test-key")
-        provider._client = mock_client
-        await provider.complete(
-            [{"role": "user", "content": "Hi"}],
-            thinking=True,
-            thinking_budget=8000,
+    async def test_stream_thinking_and_tool_call(self):
+        provider = _streaming(
+            _chunk(types.Part(text="Let me think...", thought=True)),
+            _chunk(_call("get_weather", "fc-1", city="NYC"), finish="STOP"),
         )
-        call_kwargs = mock_client.aio.models.generate_content.call_args[1]
-        tc = call_kwargs["config"].thinking_config
-        assert tc is not None
-        assert tc.thinking_budget == 8000
-        assert tc.include_thoughts is True
+        events, response = await stream(provider, HI)
+        assert [e.kind for e in events] == ["thinking", "tool_call"]
+        assert [(c.name, c.input) for c in response.tool_calls] == [
+            ("get_weather", {"city": "NYC"})
+        ]
 
-    async def test_output_schema_forwarded(self):
-        mock_client = MagicMock()
-        mock_client.aio.models.generate_content = AsyncMock(
-            return_value=_sdk_response(text='{"name": "Alice"}')
+    async def test_stream_raw_keeps_every_chunk_part(self):
+        # The final response is the joined stream: the history replays all of it.
+        provider = _streaming(
+            _chunk(types.Part(text="Checking.")),
+            _chunk(_call("get_weather", "fc-1", b"sig", city="NYC"), finish="STOP"),
         )
+        _, response = await stream(provider, HI)
+        parts = response.raw.candidates[0].content.parts
+        assert [part.text for part in parts] == ["Checking.", None]
+        assert parts[1].function_call.name == "get_weather"
+        assert parts[1].thought_signature == b"sig"
 
-        schema = OutputSchema(name="Person", schema={"type": "object"})
-        provider = GeminiProvider("gemini-2.0-flash", "test-key")
-        provider._client = mock_client
-        result = await provider.complete(
-            [{"role": "user", "content": "Hi"}],
-            output_schema=schema,
-        )
-        call_kwargs = mock_client.aio.models.generate_content.call_args[1]
-        config = call_kwargs["config"]
-        assert config.response_mime_type == "application/json"
-        assert config.response_json_schema == {"type": "object"}
-        assert result.parsed == {"name": "Alice"}
-
-    async def test_unknown_kwargs_warn(self):
-        mock_client = MagicMock()
-        mock_client.aio.models.generate_content = AsyncMock(return_value=_sdk_response())
-
-        provider = GeminiProvider("gemini-2.0-flash", "test-key")
-        provider._client = mock_client
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            await provider.complete(
-                [{"role": "user", "content": "Hi"}],
-                typo_param=True,
-            )
-            assert len(w) == 1
-            assert "typo_param" in str(w[0].message)
-
-    async def test_known_kwargs_no_warn(self):
-        mock_client = MagicMock()
-        mock_client.aio.models.generate_content = AsyncMock(return_value=_sdk_response())
-
-        provider = GeminiProvider("gemini-2.0-flash", "test-key")
-        provider._client = mock_client
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            await provider.complete(
-                [{"role": "user", "content": "Hi"}],
-                temperature=0.5,
-                top_p=0.9,
-                max_output_tokens=1000,
-            )
-            assert len(w) == 0
+    async def test_a_stream_without_usage_has_an_unknown_cost(self):
+        provider = _streaming(_chunk(types.Part(text="ok"), finish="STOP"))
+        items = [item async for item in provider.stream(prepare(provider, HI))]
+        assert not items[-1].usage_reported
+        assert items[-1].response.cost is None
 
 
 # ---------------------------------------------------------------------------
-# Error mapping
+# Errors: the one mapper
 # ---------------------------------------------------------------------------
 
 
-class TestGeminiProviderErrors:
-    async def test_rate_limit_error(self):
-        from google.genai import errors as genai_errors
+def _http_error(code: int) -> genai_errors.APIError:
+    """What the SDK raises for an HTTP error status (the reply is an ``httpx.Response``)."""
+    body = {"error": {"code": code, "message": "scripted", "status": "X"}}
+    reply = httpx.Response(code, json=body, request=httpx.Request("POST", "http://gemini"))
+    error = genai_errors.ClientError if code < 500 else genai_errors.ServerError
+    return error(code, body, reply)
 
-        mock_client = MagicMock()
-        mock_client.aio.models.generate_content = AsyncMock(
-            side_effect=genai_errors.ClientError(429, {"error": "rate limited"})
+
+# HTTP status → (error, delivery): 400 and 500 are not billed
+# (https://ai.google.dev/gemini-api/docs/billing), 429 never is (D20).
+STATUSES: dict[int, tuple[type[ProviderError], Delivery]] = {
+    429: (RateLimitError, "unbilled"),
+    400: (APIError, "unbilled"),
+    500: (APIError, "unbilled"),
+    401: (APIError, "indeterminate"),
+    404: (APIError, "indeterminate"),
+    503: (APIError, "indeterminate"),
+}
+
+
+class TestErrors:
+    @pytest.mark.parametrize("code", STATUSES)
+    def test_http_statuses_are_typed_with_their_delivery(self, code: int):
+        error_type, delivery = STATUSES[code]
+        error = GeminiProvider("gemini-3.8-flash", "test-key").map_error(
+            _http_error(code), sent=True
         )
+        assert type(error) is error_type
+        assert (error.status_code, error.delivery) == (code, delivery)
 
-        provider = GeminiProvider("gemini-2.0-flash", "test-key")
-        provider._client = mock_client
-        with pytest.raises(RateLimitError) as exc_info:
-            await provider.complete([{"role": "user", "content": "Hi"}])
-        assert exc_info.value.status_code == 429
+    def test_an_error_inside_a_stream_is_indeterminate(self):
+        # The SDK raises it from an error object in a 200 stream: tokens may already be billed.
+        inside = genai_errors.ServerError(500, {"error": {"code": 500}}, None)
+        error = GeminiProvider("gemini-3.8-flash", "test-key").map_error(inside, sent=True)
+        assert type(error) is APIError
+        assert (error.status_code, error.delivery) == (500, "indeterminate")
 
-    async def test_client_error(self):
-        from google.genai import errors as genai_errors
-
-        mock_client = MagicMock()
-        mock_client.aio.models.generate_content = AsyncMock(
-            side_effect=genai_errors.ClientError(400, {"error": "bad request"})
-        )
-
-        provider = GeminiProvider("gemini-2.0-flash", "test-key")
-        provider._client = mock_client
-        with pytest.raises(APIError) as exc_info:
-            await provider.complete([{"role": "user", "content": "Hi"}])
-        assert exc_info.value.status_code == 400
-
-    async def test_server_error(self):
-        from google.genai import errors as genai_errors
-
-        mock_client = MagicMock()
-        mock_client.aio.models.generate_content = AsyncMock(
-            side_effect=genai_errors.ServerError(500, {"error": "internal"})
-        )
-
-        provider = GeminiProvider("gemini-2.0-flash", "test-key")
-        provider._client = mock_client
-        with pytest.raises(APIError) as exc_info:
-            await provider.complete([{"role": "user", "content": "Hi"}])
-        assert exc_info.value.status_code == 500
-
-
-class TestGeminiProviderNetworkErrors:
     @pytest.mark.parametrize(
-        ("error", "expected"),
+        ("exc", "expected", "delivery"),
         [
-            (httpx.ConnectError("refused"), ConnectionError),
-            (httpx.ReadTimeout("slow"), TimeoutError),
-            (aiohttp.ServerDisconnectedError(), ConnectionError),
+            (httpx.ConnectError("refused"), TransportError, "not_sent"),
+            (httpx.ConnectTimeout("slow"), ProviderTimeout, "not_sent"),
+            (httpx.ReadTimeout("slow"), ProviderTimeout, "indeterminate"),
+            (httpx.RemoteProtocolError("cut"), TransportError, "indeterminate"),
+            (genai_errors.UnknownApiResponseError("not JSON"), ResponseError, "indeterminate"),
         ],
     )
-    async def test_network_failures_become_builtin_errors(self, error, expected):
-        async def _broken_stream(**kwargs):
-            raise error
-            yield  # makes this an async generator
+    def test_transport_failures_by_their_cause(self, exc, expected, delivery):
+        error = GeminiProvider("gemini-3.8-flash", "test-key").map_error(exc, sent=True)
+        assert type(error) is expected
+        assert error.delivery == delivery
 
-        mock_client = MagicMock()
-        mock_client.aio.models.generate_content = AsyncMock(side_effect=error)
-        mock_client.aio.models.count_tokens = AsyncMock(side_effect=error)
-        mock_client.aio.models.generate_content_stream = _wrap_as_coroutine(_broken_stream)
-        provider = GeminiProvider("gemini-2.0-flash", "test-key")
-        provider._client = mock_client
-        messages = [{"role": "user", "content": "Hi"}]
+    async def test_a_rate_limit_inside_complete_stream_and_count_tokens(self):
+        async def broken_stream(**kwargs: Any):
+            raise _http_error(429)
 
-        with pytest.raises(expected):
-            await provider.complete(messages)
-        with pytest.raises(expected):
-            await provider.count_tokens(messages)
-        chunks, _ = provider.stream(messages)
-        with pytest.raises(expected):
-            _ = [chunk async for chunk in chunks]
-
-
-# ---------------------------------------------------------------------------
-# Streaming
-# ---------------------------------------------------------------------------
-
-
-def _wrap_as_coroutine(async_gen_fn):
-    """Wrap an async generator function to behave like the real Gemini SDK.
-
-    The real ``generate_content_stream`` is a coroutine that returns an
-    async iterator. Tests define plain async generators; this wrapper
-    makes them match the SDK's calling convention.
-    """
-
-    async def _wrapper(**kwargs):
-        return async_gen_fn(**kwargs)
-
-    return _wrapper
-
-
-class TestGeminiStreamToolCalls:
-    async def test_stream_text(self):
-        chunks = [
-            _sdk_stream_chunk(text="Hello "),
-            _sdk_stream_chunk(text="world", finish_reason="STOP", candidates_tokens=5),
-        ]
-
-        async def _fake_stream(**kwargs):
-            for c in chunks:
-                yield c
-
-        mock_client = MagicMock()
-        mock_client.aio.models.generate_content_stream = _wrap_as_coroutine(_fake_stream)
-
-        provider = GeminiProvider("gemini-2.0-flash", "test-key")
-        provider._client = mock_client
-        aiter, state = provider.stream([{"role": "user", "content": "Hi"}])
-        text_chunks = []
-        async for chunk in aiter:
-            text_chunks.append(chunk)
-
-        assert text_chunks == ["Hello ", "world"]
-        assert state.stop_reason == "STOP"
-
-    async def test_stream_tool_call(self):
-        fc = SimpleNamespace(id="tc_1", name="get_weather", args={"city": "NYC"})
-        chunks = [
-            _sdk_stream_chunk(function_call=fc, finish_reason="STOP"),
-        ]
-
-        async def _fake_stream(**kwargs):
-            for c in chunks:
-                yield c
-
-        mock_client = MagicMock()
-        mock_client.aio.models.generate_content_stream = _wrap_as_coroutine(_fake_stream)
-
-        provider = GeminiProvider("gemini-2.0-flash", "test-key")
-        provider._client = mock_client
-        aiter, state = provider.stream([{"role": "user", "content": "Hi"}])
-        text_chunks = []
-        async for chunk in aiter:
-            text_chunks.append(chunk)
-
-        assert text_chunks == []
-        assert len(state.tool_calls) == 1
-        assert state.tool_calls[0].name == "get_weather"
-        assert state.tool_calls[0].input == {"city": "NYC"}
-
-    async def test_stream_thinking(self):
-        chunks = [
-            _sdk_stream_chunk(thought_text="Let me think..."),
-            _sdk_stream_chunk(text="The answer.", finish_reason="STOP"),
-        ]
-
-        async def _fake_stream(**kwargs):
-            for c in chunks:
-                yield c
-
-        mock_client = MagicMock()
-        mock_client.aio.models.generate_content_stream = _wrap_as_coroutine(_fake_stream)
-
-        provider = GeminiProvider("gemini-2.0-flash", "test-key")
-        provider._client = mock_client
-        aiter, state = provider.stream([{"role": "user", "content": "Hi"}])
-        text_chunks = []
-        async for chunk in aiter:
-            text_chunks.append(chunk)
-
-        assert text_chunks == ["The answer."]
-        assert len(state.thinking) == 1
-        assert state.thinking[0].text == "Let me think..."
-
-    async def test_stream_usage(self):
-        chunks = [
-            _sdk_stream_chunk(text="Hi", prompt_tokens=10, candidates_tokens=5),
-        ]
-
-        async def _fake_stream(**kwargs):
-            for c in chunks:
-                yield c
-
-        mock_client = MagicMock()
-        mock_client.aio.models.generate_content_stream = _wrap_as_coroutine(_fake_stream)
-
-        provider = GeminiProvider("gemini-2.0-flash", "test-key")
-        provider._client = mock_client
-        aiter, state = provider.stream([{"role": "user", "content": "Hi"}])
-        async for _ in aiter:
-            pass
-
-        assert state.usage is not None
-        assert state.usage.input_tokens == 10
-        assert state.usage.output_tokens == 5
-
-    async def test_stream_error_mapping(self):
-        from google.genai import errors as genai_errors
-
-        async def _error_stream(**kwargs):
-            raise genai_errors.ClientError(429, {"error": "rate limited"})
-            yield  # makes this an async generator
-
-        mock_client = MagicMock()
-        mock_client.aio.models.generate_content_stream = _wrap_as_coroutine(_error_stream)
-
-        provider = GeminiProvider("gemini-2.0-flash", "test-key")
-        provider._client = mock_client
-        aiter, _state = provider.stream([{"role": "user", "content": "Hi"}])
+        provider = _mocked(
+            generate_content=AsyncMock(side_effect=_http_error(429)),
+            count_tokens=AsyncMock(side_effect=_http_error(429)),
+            generate_content_stream=broken_stream,
+        )
         with pytest.raises(RateLimitError):
-            async for _ in aiter:
-                pass
-
-
-# ---------------------------------------------------------------------------
-# Roundtrip test
-# ---------------------------------------------------------------------------
+            await complete(provider, HI)
+        with pytest.raises(RateLimitError):
+            await stream(provider, HI)
+        with pytest.raises(RateLimitError):
+            await provider.count_tokens(HI)
 
 
 class TestGeminiRoundtrip:
     def test_to_message_through_gemini_wire(self):
         """Response → to_message → Gemini _messages_to_sdk → correct format."""
-        from ai_arch_toolkit.core._response import Response as Resp
-        from ai_arch_toolkit.core._response import ToolCall as TC
+        from ai_arch_toolkit.core._response import ToolCall
 
-        r = Resp(
+        r = Response(
             text="Let me check.",
-            tool_calls=(TC(id="tc_1", name="get_weather", input={"city": "NYC"}),),
+            tool_calls=(ToolCall(id="tc_1", name="get_weather", input={"city": "NYC"}),),
         )
-        assistant_msg = r.to_message()
-
-        conversation = [
-            {"role": "user", "content": "What's the weather?"},
-            assistant_msg,
-        ]
+        conversation = [{"role": "user", "content": "What's the weather?"}, r.to_message()]
         sys, contents = _messages_to_sdk(conversation)
 
         assert sys is None

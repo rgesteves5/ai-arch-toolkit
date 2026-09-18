@@ -32,24 +32,12 @@ from ai_arch_toolkit.toolkit.agents.flows._self_discovery import (
     self_discovery_initial_state,
 )
 from ai_arch_toolkit.toolkit.budget import BudgetPolicy
+from tests.fake_provider import FakeProvider, fake_llm
 
 
-class _FakeProvider:
-    """A real LLM's provider stand-in, so LLM.complete runs its metering charge site."""
-
-    def __init__(self) -> None:
-        self.calls = 0
-
-    async def complete(self, messages, *, system=None, tools=None, **kwargs) -> Response:
-        self.calls += 1
-        return Response(text="ok", usage=Usage(input_tokens=10, output_tokens=5), cost=0.001)
-
-
-def _metered_llm() -> tuple[LLM, _FakeProvider]:
-    llm = LLM("claude-sonnet-4-6", api_key="test")
-    provider = _FakeProvider()
-    llm._provider = provider  # type: ignore[assignment]
-    return llm, provider
+def _metered_llm() -> tuple[LLM, FakeProvider]:
+    """A real LLM with a fake provider, so LLM.complete runs its metering charge site."""
+    return fake_llm(Response(text="ok", usage=Usage(input_tokens=10, output_tokens=5)))
 
 
 def _budget_dimension(result) -> str:

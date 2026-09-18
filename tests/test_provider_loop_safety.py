@@ -25,7 +25,11 @@ def _sdk_message() -> SimpleNamespace:
     )
     content = [SimpleNamespace(type="text", text="Hello!", citations=None)]
     return SimpleNamespace(
-        content=content, model="claude-sonnet-4-6", stop_reason="end_turn", usage=usage
+        id="msg_test",
+        content=content,
+        model="claude-sonnet-4-6",
+        stop_reason="end_turn",
+        usage=usage,
     )
 
 

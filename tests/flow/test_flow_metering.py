@@ -10,51 +10,28 @@ import pytest
 from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._metering._scope import MeterScope, RunConfig
 from ai_arch_toolkit.core._policy import Policy
-from ai_arch_toolkit.core._providers._base import StreamState
-from ai_arch_toolkit.core._response import Response, StreamEvent, Usage
+from ai_arch_toolkit.core._response import Response, Usage
+from ai_arch_toolkit.core._server_tools import web_search
 from ai_arch_toolkit.core._state import State, StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._step_engine import execute_step
 from ai_arch_toolkit.toolkit.budget import BudgetPolicy
 from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowStep
+from tests.fake_provider import fake_llm
 
 MODEL = "claude-sonnet-4-6"
-
-
-class FakeProvider:
-    async def complete(self, messages, *, system=None, tools=None, **kwargs) -> Response:
-        return Response(text="ok", usage=Usage(input_tokens=12, output_tokens=4), model=MODEL)
-
-    def stream(self, messages, *, system=None, tools=None, **kwargs):
-        state = StreamState()
-        state.usage = Usage(input_tokens=12, output_tokens=4)
-
-        async def _aiter():
-            yield "ok"
-
-        return _aiter(), state
-
-    def stream_events(self, messages, *, system=None, tools=None, **kwargs):
-        state = StreamState()
-        state.usage = Usage(input_tokens=12, output_tokens=4)
-
-        async def _aiter():
-            yield StreamEvent(kind="text", text="ok")
-
-        return _aiter(), state
+UNPRICED = "claude-does-not-exist-9999"
+USAGE = Usage(input_tokens=12, output_tokens=4)
 
 
 def make_llm() -> LLM:
-    llm = LLM(MODEL, api_key="test")
-    llm._provider = FakeProvider()  # type: ignore[assignment]
+    llm, _ = fake_llm(Response(text="ok", usage=USAGE, model=MODEL), model=MODEL)
     return llm
 
 
 def make_unpriced_llm() -> LLM:
-    # A claude-prefixed model (so the provider constructs) that is absent from the pricing table,
-    # so the charge site prices it as Cost.unknown.
-    llm = LLM("claude-does-not-exist-9999", api_key="test")
-    llm._provider = FakeProvider()  # type: ignore[assignment]
+    # A claude-prefixed model (so the provider constructs) that is absent from the pricing table.
+    llm, _ = fake_llm(Response(text="ok", usage=USAGE, model=UNPRICED), model=UNPRICED)
     return llm
 
 
@@ -221,13 +198,34 @@ async def test_policy_max_cost_sums_annotation_and_metered_span():
     assert result.is_error and "cost_exceeded" in trace.policy_decisions  # one + one > 1.5·one
 
 
-async def test_unpriced_model_fails_closed_under_a_cost_cap_end_to_end():
+async def test_unpriced_model_never_runs_under_a_budget():
+    # D16: under a meter, a model without a price fails before any request, even with
+    # unpriced="allow" (which governs unknown costs of priced calls, e.g. server tools).
+    for unpriced in ("fail_closed", "allow"):
+        llm = make_unpriced_llm()
+
+        async def call(snap: StateSnapshot, llm: LLM = llm) -> Result:
+            await llm.complete("hi")
+            return Result(value="ok")
+
+        flow = Flow(
+            Step(name="a", fn=call),
+            name="unpriced",
+            budget_policy=BudgetPolicy(max_cost=1.0, unpriced=unpriced),
+        )
+        result = await flow.run(State())
+        assert "No price for model 'claude-does-not-exist-9999'" in str(result.results["a"].error)
+        assert result.trace.metadata["meter"]["llm_calls"] == 0
+
+
+async def test_unknown_cost_fails_closed_under_a_cost_cap_end_to_end():
     # Phase A, end-to-end: once a call settles with an unknown cost under a max_cost cap, the next
-    # op is denied (fail_closed default) — the unbounded spend can't be admitted.
-    llm = make_unpriced_llm()
+    # op is denied (fail_closed default) — the unbounded spend can't be admitted. Server tools
+    # are the unknown here: their charge is not in the token counts.
+    llm = make_llm()
 
     async def call(snap: StateSnapshot) -> Result:
-        await llm.complete("hi")
+        await llm.complete("hi", tools=[web_search()])
         return Result(value="ok")
 
     flow = Flow(
@@ -242,12 +240,12 @@ async def test_unpriced_model_fails_closed_under_a_cost_cap_end_to_end():
     assert meter["llm_calls"] == 1 and meter["cost_uncertain"] is True
 
 
-async def test_unpriced_model_allowed_when_unpriced_is_allow():
+async def test_unknown_cost_allowed_when_unpriced_is_allow():
     # The opt-out: unpriced="allow" lets both calls run even though cost can't be bounded.
-    llm = make_unpriced_llm()
+    llm = make_llm()
 
     async def call(snap: StateSnapshot) -> Result:
-        await llm.complete("hi")
+        await llm.complete("hi", tools=[web_search()])
         return Result(value="ok")
 
     flow = Flow(
@@ -350,11 +348,12 @@ async def test_step_spans_are_reclaimed_not_leaked():
 
 async def test_policy_max_cost_fails_closed_on_unknown_cost():
     # decision #4: a per-step max_cost must fail CLOSED when the step's call can't be priced
-    # (unpriced model / server tool) — even under a huge cap, unbounded spend must not pass.
-    llm = make_unpriced_llm()
+    # (a server tool; an unpriced model never runs under a meter) — even under a huge cap,
+    # unbounded spend must not pass.
+    llm = make_llm()
 
     async def call(snap: StateSnapshot) -> Result:
-        await llm.complete("hi")
+        await llm.complete("hi", tools=[web_search()])
         return Result(value="ok")
 
     step = Step(

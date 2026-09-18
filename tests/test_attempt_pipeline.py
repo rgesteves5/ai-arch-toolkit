@@ -9,6 +9,7 @@ import pytest
 from ai_arch_toolkit.core import MeterScope, RunConfig, inference_limit
 from ai_arch_toolkit.core._attempts import StreamAbandoned
 from ai_arch_toolkit.core._exceptions import APIError
+from tests.fake_provider import FakeProvider, Reply
 from tests.test_failure_matrix import ScriptedProvider, configured, invoke
 
 
@@ -91,18 +92,16 @@ async def test_429_preserves_count_but_does_not_poison_an_enforcing_scope() -> N
 async def test_empty_completion_keeps_provider_usage_and_metadata() -> None:
     from ai_arch_toolkit.core import Response, Usage
 
-    class EmptyProvider(ScriptedProvider):
-        async def complete(self, messages, *, system=None, tools=None, **kwargs):
-            await self.send()
-            return Response(
-                usage=Usage(input_tokens=4, output_tokens=2),
-                provider_cost=0.0123,
-                stop_reason="length",
-                response_id="empty-turn",
-            )
-
+    empty = Response(
+        usage=Usage(input_tokens=4, output_tokens=2),
+        provider_cost=0.0123,
+        stop_reason="length",
+        response_id="empty-turn",
+    )
+    llm = configured(ScriptedProvider(None), "none")
+    llm._provider = FakeProvider(empty)
     with MeterScope() as scope:
-        response = await configured(EmptyProvider(None), "none").complete("hi")
+        response = await llm.complete("hi")
     assert response.text == ""
     assert response.usage == Usage(input_tokens=4, output_tokens=2)
     assert response.response_id == "empty-turn"
@@ -114,28 +113,22 @@ async def test_empty_completion_keeps_provider_usage_and_metadata() -> None:
 def test_sync_abandonment_reports_only_consumed_text_after_worker_finishes(method: str) -> None:
     import threading
 
-    from ai_arch_toolkit.core import Money
-    from ai_arch_toolkit.core._providers._base import StreamState
+    from ai_arch_toolkit.core import Money, Response
     from tests.test_failure_matrix import USAGE, meter_context
 
     finished = threading.Event()
 
-    class FastProvider(ScriptedProvider):
-        def stream(self, messages, *, system=None, tools=None, **kwargs):
-            state = StreamState()
+    class FastProvider(FakeProvider):
+        async def open_stream(self, prepared):
+            try:
+                async for item in super().open_stream(prepared):
+                    yield item
+            finally:
+                finished.set()
 
-            async def chunks():
-                self.calls += 1
-                state.usage = USAGE
-                try:
-                    yield "first"
-                    yield "last"
-                finally:
-                    finished.set()
-
-            return chunks(), state
-
-    llm = configured(FastProvider(None), "none")
+    reply = Reply(response=Response(text="firstlast", usage=USAGE), chunks=["first", "last"])
+    llm = configured(ScriptedProvider(None), "none")
+    llm._provider = FastProvider(reply)
     with meter_context("strict") as scope:
         stream = getattr(llm, method)("hi")
         iterator = iter(stream)

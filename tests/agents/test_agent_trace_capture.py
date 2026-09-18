@@ -17,6 +17,7 @@ from ai_arch_toolkit.toolkit.agents import (
     build_flow,
     load_agent_manifest,
 )
+from tests.fake_provider import fake_llm
 
 _MODEL = "claude-sonnet-4-6"
 
@@ -34,14 +35,9 @@ _STRATEGIES = (
 )
 
 
-class _Provider:
-    async def complete(self, messages, *, system=None, tools=None, **kwargs) -> Response:
-        return Response(text="answer", usage=Usage(input_tokens=10, output_tokens=5), model=_MODEL)
-
-
 def _llm() -> LLM:
-    llm = LLM(_MODEL, api_key="test")
-    llm._provider = _Provider()  # type: ignore[assignment]
+    answer = Response(text="answer", usage=Usage(input_tokens=10, output_tokens=5), model=_MODEL)
+    llm, _ = fake_llm(answer, model=_MODEL)
     return llm
 
 

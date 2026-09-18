@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from ai_arch_toolkit.core._exceptions import APIError, ProviderTimeout, TransportError
 from ai_arch_toolkit.core._llm import LLM, PROVIDER_ERRORS
 from ai_arch_toolkit.core._response import Attempt, Response, Usage
+from tests.fake_provider import FakeProvider, Reply
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -20,15 +21,9 @@ def _make_response(text: str = "Hello", model: str = "") -> Response:
     return Response(text=text, usage=Usage(input_tokens=10, output_tokens=5), model=model)
 
 
-def _make_stream_state(usage=None, model="test-model", stop_reason="end_turn"):
-    state = MagicMock()
-    state.usage = usage or Usage(input_tokens=10, output_tokens=5)
-    state.model = model
-    state.stop_reason = stop_reason
-    state.tool_calls = []
-    state.thinking = []
-    state.raw = None
-    return state
+def _fake_provider(model: str, **_: object) -> FakeProvider:
+    """Stands in for ``create_provider``: a fake provider for ``model``."""
+    return FakeProvider(model=model)
 
 
 # ---------------------------------------------------------------------------
@@ -39,7 +34,7 @@ def _make_stream_state(usage=None, model="test-model", stop_reason="end_turn"):
 class TestFallbackConstruction:
     @patch("ai_arch_toolkit.core._llm.create_provider")
     def test_string_fallback_backward_compat(self, mock_create):
-        mock_create.return_value = AsyncMock()
+        mock_create.side_effect = _fake_provider
         llm = LLM("claude-sonnet-4-20250514", api_key="test", fallback="claude-haiku-4-5-20251001")
         assert len(llm._fallbacks) == 1
         assert llm._fallbacks[0]._model == "claude-haiku-4-5-20251001"
@@ -47,7 +42,7 @@ class TestFallbackConstruction:
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     def test_llm_instance_fallback(self, mock_create):
-        mock_create.return_value = AsyncMock()
+        mock_create.side_effect = _fake_provider
         fb = LLM("gpt-4o", api_key="test")
         llm = LLM("claude-sonnet-4-20250514", api_key="test", fallback=fb)
         assert llm._fallbacks == [fb]
@@ -55,7 +50,7 @@ class TestFallbackConstruction:
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     def test_list_of_mixed_fallbacks(self, mock_create):
-        mock_create.return_value = AsyncMock()
+        mock_create.side_effect = _fake_provider
         fb_llm = LLM("gpt-4o", api_key="test")
         llm = LLM(
             "claude-sonnet-4-20250514",
@@ -69,7 +64,7 @@ class TestFallbackConstruction:
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     def test_nested_fallbacks_flattened(self, mock_create):
-        mock_create.return_value = AsyncMock()
+        mock_create.side_effect = _fake_provider
         inner = LLM("gpt-4o", api_key="test", fallback="gpt-4.1-nano")
         assert len(inner._fallbacks) == 1  # before flattening into parent
 
@@ -85,7 +80,7 @@ class TestFallbackConstruction:
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     def test_a_fallback_shared_by_two_parents_keeps_its_chain(self, mock_create):
-        mock_create.return_value = AsyncMock()
+        mock_create.side_effect = _fake_provider
         shared = LLM("gpt-4o", api_key="test", fallback="gpt-4.1-nano")
 
         first = LLM("claude-sonnet-4-20250514", api_key="test", fallback=shared)
@@ -96,7 +91,7 @@ class TestFallbackConstruction:
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     def test_a_model_reachable_twice_appears_once_in_the_chain(self, mock_create):
-        mock_create.return_value = AsyncMock()
+        mock_create.side_effect = _fake_provider
         last = LLM("gpt-4.1-nano", api_key="test")
         middle = LLM("gpt-4o", api_key="test", fallback=last)
 
@@ -106,14 +101,14 @@ class TestFallbackConstruction:
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     def test_no_fallback(self, mock_create):
-        mock_create.return_value = AsyncMock()
+        mock_create.side_effect = _fake_provider
         llm = LLM("claude-sonnet-4-20250514", api_key="test")
         assert llm._fallbacks == []
         assert llm._owned_fallbacks == []
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     def test_custom_fallback_on(self, mock_create):
-        mock_create.return_value = AsyncMock()
+        mock_create.side_effect = _fake_provider
         llm = LLM(
             "claude-sonnet-4-20250514",
             api_key="test",
@@ -123,7 +118,7 @@ class TestFallbackConstruction:
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     def test_default_fallback_on(self, mock_create):
-        mock_create.return_value = AsyncMock()
+        mock_create.side_effect = _fake_provider
         llm = LLM("claude-sonnet-4-20250514", api_key="test")
         assert llm._fallback_on == PROVIDER_ERRORS
 
@@ -131,7 +126,7 @@ class TestFallbackConstruction:
 class TestFallbackLifecycle:
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_close_only_owned(self, mock_create):
-        mock_create.return_value = AsyncMock()
+        mock_create.side_effect = _fake_provider
         user_fb = LLM("gpt-4o", api_key="test")
         llm = LLM(
             "claude-sonnet-4-20250514",
@@ -159,23 +154,23 @@ class TestFallbackLifecycle:
 class TestCompleteWithFallback:
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_primary_succeeds_no_fallback_tried(self, mock_create):
-        primary_provider = AsyncMock()
-        primary_provider.complete.return_value = _make_response("primary")
-        fb_provider = AsyncMock()
-        fb_provider.complete.return_value = _make_response("fallback")
+        primary_provider = FakeProvider(
+            _make_response("primary"), model="claude-sonnet-4-20250514"
+        )
+        fb_provider = FakeProvider(_make_response("fallback"), model="claude-haiku-4-5-20251001")
         mock_create.side_effect = [primary_provider, fb_provider]
 
         llm = LLM("claude-sonnet-4-20250514", api_key="test", fallback="claude-haiku-4-5-20251001")
         result = await llm.complete("Hi")
         assert result.text == "primary"
-        fb_provider.complete.assert_not_called()
+        assert fb_provider.calls == 0
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_primary_fails_fallback_succeeds(self, mock_create):
-        primary_provider = AsyncMock()
-        primary_provider.complete.side_effect = APIError(500, "Server error")
-        fb_provider = AsyncMock()
-        fb_provider.complete.return_value = _make_response("fallback")
+        primary_provider = FakeProvider(
+            APIError(500, "Server error"), model="claude-sonnet-4-20250514"
+        )
+        fb_provider = FakeProvider(_make_response("fallback"), model="claude-haiku-4-5-20251001")
         mock_create.side_effect = [primary_provider, fb_provider]
 
         llm = LLM("claude-sonnet-4-20250514", api_key="test", fallback="claude-haiku-4-5-20251001")
@@ -184,12 +179,9 @@ class TestCompleteWithFallback:
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_chain_walks_multiple_fallbacks(self, mock_create):
-        p1 = AsyncMock()
-        p1.complete.side_effect = APIError(500, "down")
-        p2 = AsyncMock()
-        p2.complete.side_effect = TransportError("refused")
-        p3 = AsyncMock()
-        p3.complete.return_value = _make_response("third")
+        p1 = FakeProvider(APIError(500, "down"), model="model-a")
+        p2 = FakeProvider(TransportError("refused"), model="model-b")
+        p3 = FakeProvider(_make_response("third"), model="model-c")
         mock_create.side_effect = [p1, p2, p3]
 
         llm = LLM(
@@ -204,10 +196,9 @@ class TestCompleteWithFallback:
     async def test_a_nested_chain_is_walked_once_and_the_nested_llm_still_falls_back_alone(
         self, mock_create
     ):
-        primary, middle_p, last_p = AsyncMock(), AsyncMock(), AsyncMock()
-        primary.complete.side_effect = APIError(500, "down")
-        middle_p.complete.side_effect = APIError(503, "down too")
-        last_p.complete.return_value = _make_response("from last")
+        primary = FakeProvider(APIError(500, "down"), model="model-a")
+        middle_p = FakeProvider(APIError(503, "down too"), model="model-b")
+        last_p = FakeProvider(_make_response("from last"), model="model-c")
         mock_create.side_effect = [last_p, middle_p, primary]
 
         last = LLM("model-c", api_key="test")
@@ -217,8 +208,8 @@ class TestCompleteWithFallback:
         result = await llm.complete("Hi")
 
         assert result.text == "from last"
-        assert (primary.complete.call_count, middle_p.complete.call_count) == (1, 1)
-        assert last_p.complete.call_count == 1  # reached through the parent's chain, once
+        assert (primary.calls, middle_p.calls) == (1, 1)
+        assert last_p.calls == 1  # reached through the parent's chain, once
 
         # used on its own, the nested LLM still has the chain its caller gave it
         alone = await middle.complete("Hi")
@@ -227,10 +218,8 @@ class TestCompleteWithFallback:
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_all_fail_raises_last(self, mock_create):
-        p1 = AsyncMock()
-        p1.complete.side_effect = APIError(500, "down")
-        p2 = AsyncMock()
-        p2.complete.side_effect = TransportError("also down")
+        p1 = FakeProvider(APIError(500, "down"), model="model-a")
+        p2 = FakeProvider(TransportError("also down"), model="model-b")
         mock_create.side_effect = [p1, p2]
 
         llm = LLM("model-a", api_key="test", fallback="model-b")
@@ -239,8 +228,7 @@ class TestCompleteWithFallback:
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_non_fallback_error_propagates(self, mock_create):
-        provider = AsyncMock()
-        provider.complete.side_effect = ValueError("bad input")
+        provider = FakeProvider(ValueError("bad input"), model="model-a")
         mock_create.return_value = provider
 
         llm = LLM("model-a", api_key="test", fallback="model-b")
@@ -249,10 +237,8 @@ class TestCompleteWithFallback:
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_connection_error_triggers_fallback(self, mock_create):
-        p1 = AsyncMock()
-        p1.complete.side_effect = TransportError("refused")
-        p2 = AsyncMock()
-        p2.complete.return_value = _make_response("ok")
+        p1 = FakeProvider(TransportError("refused"), model="model-a")
+        p2 = FakeProvider(_make_response("ok"), model="model-b")
         mock_create.side_effect = [p1, p2]
 
         llm = LLM("model-a", api_key="test", fallback="model-b")
@@ -261,10 +247,8 @@ class TestCompleteWithFallback:
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_timeout_error_triggers_fallback(self, mock_create):
-        p1 = AsyncMock()
-        p1.complete.side_effect = ProviderTimeout("timed out")
-        p2 = AsyncMock()
-        p2.complete.return_value = _make_response("ok")
+        p1 = FakeProvider(ProviderTimeout("timed out"), model="model-a")
+        p2 = FakeProvider(_make_response("ok"), model="model-b")
         mock_create.side_effect = [p1, p2]
 
         llm = LLM("model-a", api_key="test", fallback="model-b")
@@ -273,10 +257,8 @@ class TestCompleteWithFallback:
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_os_error_triggers_fallback(self, mock_create):
-        p1 = AsyncMock()
-        p1.complete.side_effect = TransportError("network down")
-        p2 = AsyncMock()
-        p2.complete.return_value = _make_response("ok")
+        p1 = FakeProvider(TransportError("network down"), model="model-a")
+        p2 = FakeProvider(_make_response("ok"), model="model-b")
         mock_create.side_effect = [p1, p2]
 
         llm = LLM("model-a", api_key="test", fallback="model-b")
@@ -285,8 +267,7 @@ class TestCompleteWithFallback:
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_no_fallback_raises_directly(self, mock_create):
-        provider = AsyncMock()
-        provider.complete.side_effect = APIError(500, "down")
+        provider = FakeProvider(APIError(500, "down"), model="model-a")
         mock_create.return_value = provider
 
         llm = LLM("model-a", api_key="test")
@@ -302,15 +283,9 @@ class TestCompleteWithFallback:
 class TestStreamWithFallback:
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_primary_stream_fails_fallback_stream_used(self, mock_create):
-        async def _fake_gen():
-            for chunk in ["fall", "back"]:
-                yield chunk
-
-        p1 = MagicMock()
-        p1.stream.side_effect = APIError(500, "stream down")
-        p2 = MagicMock()
-        state = _make_stream_state(model="model-b")
-        p2.stream.return_value = (_fake_gen(), state)
+        p1 = FakeProvider(APIError(500, "stream down"), model="model-a")
+        reply = Reply(response=_make_response("fallback"), chunks=["fall", "back"])
+        p2 = FakeProvider(reply, model="model-b")
         mock_create.side_effect = [p1, p2]
 
         llm = LLM("model-a", api_key="test", fallback="model-b")
@@ -323,10 +298,8 @@ class TestStreamWithFallback:
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_all_streams_fail_raises(self, mock_create):
-        p1 = MagicMock()
-        p1.stream.side_effect = APIError(500, "down")
-        p2 = MagicMock()
-        p2.stream.side_effect = TransportError("also down")
+        p1 = FakeProvider(APIError(500, "down"), model="model-a")
+        p2 = FakeProvider(TransportError("also down"), model="model-b")
         mock_create.side_effect = [p1, p2]
 
         llm = LLM("model-a", api_key="test", fallback="model-b")
@@ -344,8 +317,7 @@ class TestStreamWithFallback:
 class TestAttemptTrackingComplete:
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_primary_succeeds_one_attempt(self, mock_create):
-        provider = AsyncMock()
-        provider.complete.return_value = _make_response("ok")
+        provider = FakeProvider(_make_response("ok"), model="claude-sonnet-4-20250514")
         mock_create.return_value = provider
 
         llm = LLM("claude-sonnet-4-20250514", api_key="test")
@@ -361,10 +333,8 @@ class TestAttemptTrackingComplete:
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_primary_fails_fallback_succeeds_two_plus_attempts(self, mock_create):
-        p1 = AsyncMock()
-        p1.complete.side_effect = APIError(500, "down")
-        p2 = AsyncMock()
-        p2.complete.return_value = _make_response("ok")
+        p1 = FakeProvider(APIError(500, "down"), model="model-a")
+        p2 = FakeProvider(_make_response("ok"), model="model-b")
         mock_create.side_effect = [p1, p2]
 
         llm = LLM("model-a", api_key="test", fallback="model-b")
@@ -379,10 +349,8 @@ class TestAttemptTrackingComplete:
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_attempt_error_type_and_status_code_on_fallback(self, mock_create):
         """Failed primary attempt records error_type and status_code."""
-        p1 = AsyncMock()
-        p1.complete.side_effect = APIError(503, "unavailable")
-        p2 = AsyncMock()
-        p2.complete.return_value = _make_response("ok")
+        p1 = FakeProvider(APIError(503, "unavailable"), model="model-a")
+        p2 = FakeProvider(_make_response("ok"), model="model-b")
         mock_create.side_effect = [p1, p2]
 
         llm = LLM("model-a", api_key="test", fallback="model-b")
@@ -395,10 +363,8 @@ class TestAttemptTrackingComplete:
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_attempt_status_code_captured(self, mock_create):
-        p1 = AsyncMock()
-        p1.complete.side_effect = APIError(429, "rate limited")
-        p2 = AsyncMock()
-        p2.complete.return_value = _make_response("ok")
+        p1 = FakeProvider(APIError(429, "rate limited"), model="model-a")
+        p2 = FakeProvider(_make_response("ok"), model="model-b")
         mock_create.side_effect = [p1, p2]
 
         llm = LLM("model-a", api_key="test", fallback="model-b")
@@ -410,9 +376,7 @@ class TestAttemptTrackingComplete:
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_attempt_timestamps_are_wallclock(self, mock_create):
-        provider = AsyncMock()
-        provider.complete.return_value = _make_response("ok")
-        mock_create.return_value = provider
+        mock_create.return_value = FakeProvider(_make_response("ok"), model="model-a")
 
         before = time.time()
         llm = LLM("model-a", api_key="test")
@@ -431,13 +395,7 @@ class TestAttemptTrackingComplete:
 class TestAttemptTrackingStream:
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_stream_finalized_response_has_attempts(self, mock_create):
-        async def _fake_gen():
-            yield "hello"
-
-        state = _make_stream_state()
-        provider = MagicMock()
-        provider.stream.return_value = (_fake_gen(), state)
-        mock_create.return_value = provider
+        mock_create.return_value = FakeProvider(_make_response("hello"), model="model-a")
 
         llm = LLM("model-a", api_key="test")
         stream = llm.stream("Hi")
@@ -449,12 +407,7 @@ class TestAttemptTrackingStream:
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_stream_attempt_timestamp_starts_with_iteration(self, mock_create):
-        async def _fake_gen():
-            yield "hello"
-
-        provider = MagicMock()
-        provider.stream.return_value = (_fake_gen(), _make_stream_state())
-        mock_create.return_value = provider
+        mock_create.return_value = FakeProvider(_make_response("hello"), model="model-a")
 
         stream = LLM("model-a", api_key="test").stream("Hi")
         iteration_started = time.time()
@@ -466,14 +419,8 @@ class TestAttemptTrackingStream:
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_stream_fallback_has_merged_attempts(self, mock_create):
-        async def _fake_gen():
-            yield "ok"
-
-        p1 = MagicMock()
-        p1.stream.side_effect = APIError(500, "down")
-        p2 = MagicMock()
-        state = _make_stream_state(model="model-b")
-        p2.stream.return_value = (_fake_gen(), state)
+        p1 = FakeProvider(APIError(500, "down"), model="model-a")
+        p2 = FakeProvider(_make_response("ok"), model="model-b")
         mock_create.side_effect = [p1, p2]
 
         llm = LLM("model-a", api_key="test", fallback="model-b")
@@ -496,7 +443,7 @@ class TestAttemptTrackingStream:
 class TestFallbackRepr:
     @patch("ai_arch_toolkit.core._llm.create_provider")
     def test_repr_includes_fallbacks(self, mock_create):
-        mock_create.return_value = AsyncMock()
+        mock_create.side_effect = _fake_provider
         llm = LLM(
             "claude-sonnet-4-20250514",
             api_key="test",
@@ -510,7 +457,7 @@ class TestFallbackRepr:
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     def test_repr_no_fallbacks(self, mock_create):
-        mock_create.return_value = AsyncMock()
+        mock_create.side_effect = _fake_provider
         llm = LLM("claude-sonnet-4-20250514", api_key="test")
         assert "fallback" not in repr(llm)
 
@@ -559,10 +506,8 @@ class TestRetryWithFallback:
         """Primary retries N times, all fail, then fallback succeeds."""
         from ai_arch_toolkit.core._retry import RetryConfig
 
-        p1 = AsyncMock()
-        p1.complete.side_effect = APIError(500, "down")
-        p2 = AsyncMock()
-        p2.complete.return_value = _make_response("fallback ok")
+        p1 = FakeProvider(APIError(500, "down"), model="model-a")  # every attempt fails
+        p2 = FakeProvider(_make_response("fallback ok"), model="model-b")
         mock_create.side_effect = [p1, p2]
 
         retry = RetryConfig(max_retries=2, base_delay=0.01)
@@ -591,16 +536,8 @@ class TestRetryWithFallback:
 class TestStreamEventsWithFallback:
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_primary_stream_events_fails_fallback_used(self, mock_create):
-        from ai_arch_toolkit.core._response import StreamEvent
-
-        async def _fake_events():
-            yield StreamEvent(kind="text", text="hello")
-
-        p1 = MagicMock()
-        p1.stream_events.side_effect = APIError(500, "down")
-        p2 = MagicMock()
-        state = _make_stream_state(model="model-b")
-        p2.stream_events.return_value = (_fake_events(), state)
+        p1 = FakeProvider(APIError(500, "down"), model="model-a")
+        p2 = FakeProvider(_make_response("hello"), model="model-b")
         mock_create.side_effect = [p1, p2]
 
         llm = LLM("model-a", api_key="test", fallback="model-b")
@@ -625,15 +562,9 @@ class TestStreamEventsWithFallback:
 class TestStreamSyncWithFallback:
     @patch("ai_arch_toolkit.core._llm.create_provider")
     def test_stream_sync_fallback(self, mock_create):
-        async def _fake_gen():
-            for chunk in ["sync", "fb"]:
-                yield chunk
-
-        p1 = MagicMock()
-        p1.stream.side_effect = APIError(500, "down")
-        p2 = MagicMock()
-        state = _make_stream_state(model="model-b")
-        p2.stream.return_value = (_fake_gen(), state)
+        p1 = FakeProvider(APIError(500, "down"), model="model-a")
+        reply = Reply(response=_make_response("syncfb"), chunks=["sync", "fb"])
+        p2 = FakeProvider(reply, model="model-b")
         mock_create.side_effect = [p1, p2]
 
         llm = LLM("model-a", api_key="test", fallback="model-b")

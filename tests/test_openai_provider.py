@@ -10,8 +10,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from pydantic import BaseModel, Field
 
-from ai_arch_toolkit.core._exceptions import APIError, RateLimitError
-from ai_arch_toolkit.core._providers._base import StreamState, parse_tool_args
+from ai_arch_toolkit.core._exceptions import APIError, RateLimitError, RequestError
+from ai_arch_toolkit.core._providers._base import on_request, parse_tool_args
 from ai_arch_toolkit.core._providers._openai import (
     OpenAIProvider,
     _build_output_schema_format,
@@ -25,8 +25,14 @@ from ai_arch_toolkit.core._response import (
     Response,
     ThinkingBlock,
     ToolCall,
+    Usage,
     _resolve_output_schema,
 )
+from ai_arch_toolkit.core._server_tools import code_execution, web_search
+from ai_arch_toolkit.core._tools import prepare_tools
+from tests.provider_calls import complete, prepare, stream
+
+HI = [{"role": "user", "content": "Hi"}]
 
 # ---------------------------------------------------------------------------
 # Helpers — build fake SDK objects
@@ -363,10 +369,11 @@ class TestParseSdkResponse:
         comp = _sdk_completion(text="Hello!")
         r = _parse_sdk_response(comp, "gpt-4o")
         assert r.text == "Hello!"
-        assert r.usage.input_tokens == 10
-        assert r.usage.output_tokens == 5
         assert r.stop_reason == "stop"
         assert isinstance(r, Response)
+        # Usage is read by the adapter's usage(); the base puts it on the response.
+        usage = OpenAIProvider("gpt-4o", "test-key").usage(comp)
+        assert usage == Usage(input_tokens=10, output_tokens=5)
 
     def test_tool_calls(self):
         comp = _sdk_completion(
@@ -387,9 +394,14 @@ class TestParseSdkResponse:
         r = _parse_sdk_response(comp, "gpt-4o")
         assert r.text == ""
 
-    def test_cost_is_computed(self):
-        comp = _sdk_completion(prompt_tokens=1000, completion_tokens=500)
-        r = _parse_sdk_response(comp, "gpt-4o")
+    async def test_cost_is_computed(self):
+        mock_client = AsyncMock()
+        mock_client.chat.completions.create.return_value = _sdk_completion(
+            prompt_tokens=1000, completion_tokens=500
+        )
+        provider = OpenAIProvider("gpt-4o", "test-key")
+        provider._client = mock_client
+        r = await complete(provider, [{"role": "user", "content": "Hi"}])
         assert r.cost is not None
         assert r.cost > 0
 
@@ -421,13 +433,11 @@ class TestParseSdkResponse:
         assert r.thinking == ()
 
 
-class TestStreamState:
-    def test_initial_state(self):
-        state = StreamState()
-        assert state.usage is None
-        assert state.model == ""
-        assert state.stop_reason == ""
-        assert state.tool_calls == []
+class TestUsageReport:
+    def test_a_completion_without_usage_reports_none(self):
+        # OpenAI-compatible servers may omit usage; its cost is then unknown, never zero.
+        comp = SimpleNamespace(choices=[], model="gpt-4o", usage=None)
+        assert OpenAIProvider("gpt-4o", "test-key").usage(comp) is None
 
 
 # ---------------------------------------------------------------------------
@@ -440,7 +450,10 @@ class TestOpenAIProviderComplete:
     def test_disables_hidden_sdk_retries(self, client_cls):
         OpenAIProvider("gpt-4o", "test-key")
 
-        client_cls.assert_called_once_with(api_key="test-key", max_retries=0)
+        kwargs = client_cls.call_args.kwargs
+        assert (kwargs["api_key"], kwargs["max_retries"]) == ("test-key", 0)
+        # The HTTP client marks the moment a request is handed to the transport.
+        assert kwargs["http_client"].event_hooks["request"] == [on_request]
 
     async def test_complete(self):
         mock_client = AsyncMock()
@@ -448,7 +461,7 @@ class TestOpenAIProviderComplete:
 
         provider = OpenAIProvider("gpt-4o", "test-key")
         provider._client = mock_client
-        result = await provider.complete([{"role": "user", "content": "Hi"}])
+        result = await complete(provider, [{"role": "user", "content": "Hi"}])
         assert result.text == "Hello!"
         assert isinstance(result, Response)
         mock_client.chat.completions.create.assert_called_once()
@@ -461,7 +474,7 @@ class TestOpenAIProviderComplete:
 
         provider = OpenAIProvider("gemma4:e4b", "not-needed")
         provider._client = mock_client
-        result = await provider.complete([{"role": "user", "content": "Hi"}])
+        result = await complete(provider, [{"role": "user", "content": "Hi"}])
         assert result.thinking == (ThinkingBlock(text="Step by step."),)
         assert result.text == "42"
 
@@ -478,7 +491,7 @@ class TestOpenAIProviderComplete:
         tools = [{"name": "search", "description": "Search", "parameters": {"type": "object"}}]
         provider = OpenAIProvider("gpt-4o", "test-key")
         provider._client = mock_client
-        result = await provider.complete([{"role": "user", "content": "Hi"}], tools=tools)
+        result = await complete(provider, [{"role": "user", "content": "Hi"}], tools=tools)
         assert result.has_tool_calls
 
         call_kwargs = mock_client.chat.completions.create.call_args[1]
@@ -491,7 +504,7 @@ class TestOpenAIProviderComplete:
 
         provider = OpenAIProvider("gpt-4o", "test-key")
         provider._client = mock_client
-        await provider.complete([{"role": "user", "content": "Hi"}], system="Be brief.")
+        await complete(provider, [{"role": "user", "content": "Hi"}], system="Be brief.")
         call_kwargs = mock_client.chat.completions.create.call_args[1]
         msgs = call_kwargs["messages"]
         assert msgs[0] == {"role": "system", "content": "Be brief."}
@@ -507,7 +520,7 @@ class TestOpenAIProviderComplete:
             {"role": "system", "content": "From list."},
             {"role": "user", "content": "Hi"},
         ]
-        await provider.complete(msgs, system="Explicit.")
+        await complete(provider, msgs, system="Explicit.")
         call_kwargs = mock_client.chat.completions.create.call_args[1]
         assert call_kwargs["messages"] == [
             {"role": "system", "content": "Explicit."},
@@ -519,9 +532,10 @@ class TestOpenAIProviderComplete:
         mock_client = AsyncMock()
         mock_client.chat.completions.create.return_value = _sdk_completion()
 
-        provider = OpenAIProvider("gpt-4o", "test-key")
+        provider = OpenAIProvider("gpt-5.4-mini", "test-key")
         provider._client = mock_client
-        await provider.complete(
+        await complete(
+            provider,
             [{"role": "user", "content": "Hi"}],
             thinking=True,
             thinking_effort="medium",
@@ -533,9 +547,10 @@ class TestOpenAIProviderComplete:
         mock_client = AsyncMock()
         mock_client.chat.completions.create.return_value = _sdk_completion()
 
-        provider = OpenAIProvider("gpt-4o", "test-key")
+        provider = OpenAIProvider("gpt-5.4-mini", "test-key")
         provider._client = mock_client
-        await provider.complete(
+        await complete(
+            provider,
             [{"role": "user", "content": "Hi"}],
             thinking=True,
         )
@@ -548,7 +563,8 @@ class TestOpenAIProviderComplete:
 
         provider = OpenAIProvider("gpt-5.4-mini", "test-key")
         provider._client = mock_client
-        await provider.complete(
+        await complete(
+            provider,
             [{"role": "user", "content": "Hi"}],
             thinking=True,
             thinking_effort="medium",
@@ -564,7 +580,8 @@ class TestOpenAIProviderComplete:
 
         provider = OpenAIProvider("gpt-5.4-mini", "test-key")
         provider._client = mock_client
-        await provider.complete(
+        await complete(
+            provider,
             [{"role": "user", "content": "Hi"}],
             thinking=True,
             thinking_effort="medium",
@@ -580,7 +597,8 @@ class TestOpenAIProviderComplete:
 
         provider = OpenAIProvider("gpt-5.4-mini", "test-key")
         provider._client = mock_client
-        await provider.complete(
+        await complete(
+            provider,
             [{"role": "user", "content": "Hi"}],
             thinking=True,
             thinking_effort="none",
@@ -594,11 +612,12 @@ class TestOpenAIProviderComplete:
         mock_client = AsyncMock()
         mock_client.chat.completions.create.return_value = _sdk_completion()
 
-        provider = OpenAIProvider("gpt-4o", "test-key")
+        provider = OpenAIProvider("gpt-5.4-mini", "test-key")
         provider._client = mock_client
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            await provider.complete(
+            await complete(
+                provider,
                 [{"role": "user", "content": "Hi"}],
                 thinking=True,
                 thinking_budget=5000,
@@ -618,7 +637,8 @@ class TestOpenAIProviderComplete:
         )
         provider = OpenAIProvider("gpt-4o", "test-key")
         provider._client = mock_client
-        result = await provider.complete(
+        result = await complete(
+            provider,
             [{"role": "user", "content": "Hi"}],
             output_schema=schema,
         )
@@ -635,7 +655,8 @@ class TestOpenAIProviderComplete:
         tools = [{"name": "search", "description": "Search", "parameters": {"type": "object"}}]
         provider = OpenAIProvider("gpt-4o", "test-key")
         provider._client = mock_client
-        await provider.complete(
+        await complete(
+            provider,
             [{"role": "user", "content": "Hi"}],
             tools=tools,
             output_schema=schema,
@@ -652,7 +673,8 @@ class TestOpenAIProviderComplete:
         provider._client = mock_client
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            await provider.complete(
+            await complete(
+                provider,
                 [{"role": "user", "content": "Hi"}],
                 typo_param=True,
             )
@@ -667,7 +689,8 @@ class TestOpenAIProviderComplete:
         provider._client = mock_client
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            await provider.complete(
+            await complete(
+                provider,
                 [{"role": "user", "content": "Hi"}],
                 temperature=0.5,
                 top_p=0.9,
@@ -680,7 +703,8 @@ class TestOpenAIProviderComplete:
 
         provider = OpenAIProvider("gpt-4o", "test-key")
         provider._client = mock_client
-        await provider.complete(
+        await complete(
+            provider,
             [{"role": "user", "content": "Hi"}],
             max_completion_tokens=8192,
         )
@@ -693,7 +717,8 @@ class TestOpenAIProviderComplete:
 
         provider = OpenAIProvider("gpt-5.4-mini", "test-key")
         provider._client = mock_client
-        await provider.complete(
+        await complete(
+            provider,
             [{"role": "user", "content": "Hi"}],
             max_tokens=64,
         )
@@ -707,7 +732,8 @@ class TestOpenAIProviderComplete:
 
         provider = OpenAIProvider("o3", "test-key")
         provider._client = mock_client
-        await provider.complete(
+        await complete(
+            provider,
             [{"role": "user", "content": "Hi"}],
             max_tokens=64,
         )
@@ -721,7 +747,8 @@ class TestOpenAIProviderComplete:
 
         provider = OpenAIProvider("gpt-5.4-mini", "test-key")
         provider._client = mock_client
-        await provider.complete(
+        await complete(
+            provider,
             [{"role": "user", "content": "Hi"}],
             max_tokens=64,
             max_completion_tokens=128,
@@ -746,7 +773,7 @@ class TestOpenAIProviderErrors:
         provider = OpenAIProvider("gpt-4o", "test-key")
         provider._client = mock_client
         with pytest.raises(RateLimitError) as exc_info:
-            await provider.complete([{"role": "user", "content": "Hi"}])
+            await complete(provider, [{"role": "user", "content": "Hi"}])
         assert exc_info.value.status_code == 429
         assert exc_info.value.retry_after == 3.0
 
@@ -764,7 +791,7 @@ class TestOpenAIProviderErrors:
         provider = OpenAIProvider("gpt-4o", "test-key")
         provider._client = mock_client
         with pytest.raises(APIError) as exc_info:
-            await provider.complete([{"role": "user", "content": "Hi"}])
+            await complete(provider, [{"role": "user", "content": "Hi"}])
         assert exc_info.value.status_code == 500
 
 
@@ -786,10 +813,9 @@ class TestOpenAIProviderNetworkErrors:
         provider._client = mock_client
 
         with pytest.raises(expected):
-            await provider.complete([{"role": "user", "content": "Hi"}])
-        chunks, _ = provider.stream([{"role": "user", "content": "Hi"}])
+            await complete(provider, [{"role": "user", "content": "Hi"}])
         with pytest.raises(expected):
-            _ = [chunk async for chunk in chunks]
+            await stream(provider, [{"role": "user", "content": "Hi"}])
 
     async def test_a_dropped_connection_is_retried_by_llm(self):
         import httpx
@@ -828,7 +854,8 @@ class TestAstra:
         client.chat.completions.create.return_value = _sdk_completion()
         provider = OpenAIProvider("gpt-6-astra", "test-key")
         provider._client = client
-        await provider.complete(
+        await complete(
+            provider,
             [{"role": "user", "content": "Hi"}],
             max_tokens=4096,
             temperature=1.0,
@@ -849,10 +876,59 @@ class TestAstra:
     @pytest.mark.parametrize("effort", ["none", "minimal", "ultra"])
     def test_invalid_reasoning_effort(self, effort):
         provider = OpenAIProvider("gpt-6-astra", "test-key")
-        with pytest.raises(ValueError, match="thinking_effort"):
-            provider._build_sdk_kwargs([], thinking=True, thinking_effort=effort)
+        with pytest.raises(RequestError, match="thinking_effort"):
+            prepare(provider, HI, thinking=True, thinking_effort=effort)
 
     def test_tools_require_responses(self):
         provider = OpenAIProvider("gpt-6-astra", "test-key")
-        with pytest.raises(ValueError, match="requires the Responses API"):
-            provider._build_sdk_kwargs([], tools=[{"name": "lookup"}])
+        with pytest.raises(RequestError, match="requires the Responses API"):
+            prepare(provider, HI, tools=[{"name": "lookup"}])
+
+
+class TestProfiles:
+    """Per-model and per-host request rules (R02 step 3), resolved by the id grammar."""
+
+    def test_the_official_host_sends_max_completion_tokens_for_every_model(self):
+        # max_tokens is deprecated and not accepted by o-series models:
+        # https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+        for model in ("gpt-4o", "gpt-5.4-mini", "o3", "gpt-7"):
+            params = prepare(OpenAIProvider(model, "test-key"), HI, max_tokens=64).params
+            assert params["max_completion_tokens"] == 64, model
+            assert "max_tokens" not in params, model
+
+    def test_a_compatible_server_gets_max_tokens(self):
+        provider = OpenAIProvider("llama3.2", "not-needed", base_url="http://localhost:11434/v1")
+        params = prepare(provider, HI, max_tokens=64, thinking=True, temperature=0.0).params
+        assert params["max_tokens"] == 64
+        assert "max_completion_tokens" not in params
+        # No OpenAI model rules on another server: sampling stays as the caller set it.
+        assert params["temperature"] == 0.0
+        assert params["reasoning_effort"] == "high"
+
+    @pytest.mark.parametrize("model", ["gpt-4o", "gpt-4o-2024-08-06", "gpt-4.1-mini", "gpt-4"])
+    def test_a_model_that_does_not_reason_refuses_thinking(self, model):
+        with pytest.raises(RequestError, match="does not reason"):
+            prepare(OpenAIProvider(model, "test-key"), HI, thinking=True)
+
+    def test_a_new_model_gets_the_current_generation_rules(self):
+        params = prepare(
+            OpenAIProvider("gpt-7", "test-key"), HI, thinking=True, temperature=0.0
+        ).params
+        assert params["reasoning_effort"] == "high"
+        assert "temperature" not in params  # reasoning models take only the default
+
+    def test_astra_refusals_are_request_errors(self):
+        provider = OpenAIProvider("gpt-6-astra", "test-key")
+        with pytest.raises(RequestError, match="Responses API"):
+            prepare(provider, HI, tools=[{"name": "lookup", "input_schema": {}}])
+        with pytest.raises(RequestError, match="thinking_effort"):
+            prepare(provider, HI, thinking=True, thinking_effort="none")
+
+    @pytest.mark.parametrize(
+        "server_tool", [web_search(), web_search(max_uses=2), code_execution()]
+    )
+    def test_server_tools_are_refused_before_sending(self, server_tool):
+        # Chat Completions takes only function and custom tools (openai 3.14 SDK types).
+        tools = prepare_tools([server_tool])
+        with pytest.raises(RequestError, match="server tool"):
+            prepare(OpenAIProvider("gpt-5.4", "test-key"), HI, tools=tools)

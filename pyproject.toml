@@ -24,7 +24,7 @@ gemini = ["google-genai>=2.0,<3"]
 # Meta ships no SDK: its Model API is driven through the openai SDK's Responses API.
 meta = ["openai>=3.0,<4"]
 openai = ["openai>=3.0,<4"]
-xai = ["xai-sdk>=1.7,<2"]
+xai = ["xai-sdk>=1.18,<2"]
 
 # Optional features.
 graph = ["networkx>=3.0"]

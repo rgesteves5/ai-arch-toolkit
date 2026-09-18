@@ -6,22 +6,28 @@ import dataclasses
 import logging
 import threading
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal
 
 from ai_arch_toolkit.core._concurrency import inference_slot
-from ai_arch_toolkit.core._exceptions import APIError, Delivery, ProviderError, RequestError
+from ai_arch_toolkit.core._exceptions import (
+    APIError,
+    Delivery,
+    ProviderError,
+    RequestError,
+    UnpricedModelError,
+)
 from ai_arch_toolkit.core._metering._admission import AdmissionDenied, RequestSizing
 from ai_arch_toolkit.core._metering._cost import Cost
 from ai_arch_toolkit.core._metering._money import Money
 from ai_arch_toolkit.core._metering._operation import MeterOperation, OperationRequest
 from ai_arch_toolkit.core._metering._scope import MeterScope, current_meter, current_span_id
 from ai_arch_toolkit.core._middleware import Request, _run_aafter, _run_abefore
-from ai_arch_toolkit.core._pricing import _estimate_response_cost, pricing
-from ai_arch_toolkit.core._providers._base import BaseProvider, StreamState
-from ai_arch_toolkit.core._response import Attempt, Response, StreamEvent, Usage
+from ai_arch_toolkit.core._pricing import pricing
+from ai_arch_toolkit.core._providers._base import Answer, BaseProvider
+from ai_arch_toolkit.core._response import Attempt, Response, StreamEvent, ThinkingBlock, Usage
 from ai_arch_toolkit.core._retry import _wait_before_retry
 from ai_arch_toolkit.core._stream_lifecycle import close_async
 
@@ -30,7 +36,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 type Path = Literal["complete", "stream", "stream_events"]
-type Item = Response | str | StreamEvent
+type Item = str | StreamEvent  # what a stream delivers
 type Phase = Literal["pending", "running", "completed", "settled", "failed", "aborted"]
 
 _OPTIONS: dict[str, Any] = {
@@ -126,12 +132,42 @@ def request_facts(
     )
 
 
-def _settlement_cost(scope: MeterScope, request: OperationRequest, response: Response) -> Cost:
+def _require_price(scope: MeterScope, facts: OperationRequest) -> None:
+    """D16: a metered call is priceable before anything is sent (server tools are C05's)."""
     pricer = scope.pricer or pricing
+    try:
+        known = pricer.price(dataclasses.replace(facts, has_server_tools=False), Usage())
+    except Exception as exc:
+        raise _unpriced(scope, facts.model) from exc
+    if known.kind != "known":
+        raise _unpriced(scope, facts.model)
+
+
+def _unpriced(scope: MeterScope, model: str | None) -> UnpricedModelError:
+    source = "the scope's pricer has" if scope.pricer is not None else "the pricing table has"
+    return UnpricedModelError(
+        f"No price for model {model!r}: {source} none, and a metered call needs one before it "
+        f"is sent. Register it with pricing.register({model!r}, ModelPricing(input=..., "
+        "output=...)) in USD per 1M tokens; a local model registers zero: "
+        f"pricing.register({model!r}, ModelPricing())."
+    )
+
+
+def _settlement_cost(scope: MeterScope, request: OperationRequest, answer: Answer) -> Cost:
+    pricer = scope.pricer or pricing
+    response = answer.response
     if pricer is pricing and response.provider_cost is not None:
         return Cost.known(Money.from_usd(response.provider_cost))
+    if not answer.usage_reported:
+        return Cost.unknown("the provider reported no usage")
+    return _priced(scope, request, response.usage)
+
+
+def _priced(scope: MeterScope, request: OperationRequest, usage: Usage) -> Cost:
+    """The scope's price for ``usage``; a pricer that fails or estimates gives an unknown cost."""
+    pricer = scope.pricer or pricing
     try:
-        cost = pricer.price(request, response.usage)
+        cost = pricer.price(request, usage)
     except Exception:
         logger.exception("pricer raised while settling an LLM attempt")
         return Cost.unknown("pricer raised")
@@ -141,41 +177,37 @@ def _settlement_cost(scope: MeterScope, request: OperationRequest, response: Res
 
 
 def dispatch(
-    provider: BaseProvider, request: Request, path: Path
-) -> tuple[AsyncIterator[Item], StreamState]:
-    """The sole provider boundary; R02 replaces this call with pure prepare plus send."""
+    provider: BaseProvider[Any, Any], prepared: object, path: Path
+) -> AsyncIterator[StreamEvent | Answer]:
+    """The sole provider boundary: the answer alone for complete, events then it for streams."""
     if path == "complete":
 
-        async def result() -> AsyncIterator[Item]:
-            yield await provider.complete(
-                request.messages, system=request.system, tools=request.tools, **request.kwargs
-            )
+        async def answer() -> AsyncIterator[StreamEvent | Answer]:
+            yield await provider.complete(prepared)
 
-        return result(), StreamState()
-    if path == "stream_events":
-        iterator, state = provider.stream_events(
-            request.messages, system=request.system, tools=request.tools, **request.kwargs
-        )
-    else:
-        iterator, state = provider.stream(
-            request.messages, system=request.system, tools=request.tools, **request.kwargs
-        )
-    return cast("AsyncIterator[Item]", iterator), state
+        return answer()
+    return provider.stream(prepared)
 
 
-def _response(state: StreamState, model: str, text: str) -> Response:
-    usage = state.usage or Usage()
-    provider_cost = state.provider_cost
+def _partial(events: Sequence[StreamEvent], model: str, text: str) -> Response:
+    """What an unfinished stream gave: the consumed text, and the thinking and tool calls seen.
+
+    Consecutive ``partial`` thinking fragments form one block. Usage and cost stay unknown.
+    """
+    thinking: list[str] = []
+    joining = False
+    for event in events:
+        if event.kind == "thinking" and event.thinking is not None:
+            if joining and event.partial:
+                thinking[-1] += event.thinking.text
+            else:
+                thinking.append(event.thinking.text)
+            joining = event.partial
     return Response(
         text=text,
-        tool_calls=tuple(state.tool_calls),
-        thinking=tuple(state.thinking),
-        usage=usage,
-        provider_cost=provider_cost,
-        cost=provider_cost if provider_cost is not None else _estimate_response_cost(model, usage),
-        stop_reason=state.stop_reason,
-        model=state.model or model,
-        raw=state.raw,
+        thinking=tuple(ThinkingBlock(text=block) for block in thinking),
+        tool_calls=tuple(event.tool_call for event in events if event.tool_call is not None),
+        model=model,
     )
 
 
@@ -183,17 +215,23 @@ class _PhysicalAttempt:
     """Thread-safe ownership of a reservation and its single physical outcome."""
 
     def __init__(
-        self, execution: Execution, owner: LLM, request: Request, retry_number: int
+        self,
+        execution: Execution,
+        owner: LLM,
+        request: Request,
+        prepared: object,
+        retry_number: int,
     ) -> None:
         self.execution = execution
         self.owner = owner
         self.request = request
+        self.prepared = prepared
         self.retry_number = retry_number
         self.phase: Phase = "pending"
         self.op: MeterOperation | None = None
         self.facts: OperationRequest | None = None
-        self.state = StreamState()
-        self.response: Response | None = None
+        self.seen: list[StreamEvent] = []
+        self.answer: Answer | None = None
         self.record: Attempt | None = None
         self.started_at = 0.0
         self._reserve()
@@ -217,6 +255,7 @@ class _PhysicalAttempt:
                 parent_span_id=facts.parent_span_id,
             )
 
+        _require_price(scope, facts)
         op = scope.open(facts, failure_request=sized_facts)
         with self.execution.lock:
             if self.phase == "aborted":
@@ -224,8 +263,8 @@ class _PhysicalAttempt:
             else:
                 self.op, self.facts = op, facts
 
-    def refresh(self, request: Request) -> None:
-        self.request = request
+    def refresh(self, request: Request, prepared: object) -> None:
+        self.request, self.prepared = request, prepared
         scope = self.execution.scope
         if scope is None or self.facts is None:
             return
@@ -257,7 +296,7 @@ class _PhysicalAttempt:
         return Attempt(
             model=self.owner._model,
             status="ok" if error is None else "failed",
-            usage=response.usage if response is not None else None,
+            usage=response.usage if response is not None else _reported_usage(error),
             error=str(error) if error is not None else None,
             error_type=type(error).__name__ if error is not None else None,
             status_code=error.status_code if isinstance(error, APIError) else None,
@@ -266,28 +305,35 @@ class _PhysicalAttempt:
             retry_number=self.retry_number,
         )
 
-    def finish(self, response: Response) -> None:
+    def finish(self, answer: Answer) -> None:
         with self.execution.lock:
             if self.phase != "running":
                 return
-            self.phase, self.response = "completed", response
-            self.record = self._record(response=response)
+            self.phase, self.answer = "completed", answer
+            self.record = self._record(response=answer.response)
 
     def settle(self) -> None:
         scope = self.execution.scope
         with self.execution.lock:
-            if self.phase != "completed" or self.response is None:
+            if self.phase != "completed" or self.answer is None:
                 return
-            response = self.response
-        cost = _settlement_cost(scope, self.facts, response) if scope and self.facts else None
+            answer = self.answer
+        cost = _settlement_cost(scope, self.facts, answer) if scope and self.facts else None
         with self.execution.lock:
             if self.phase != "completed":
                 return
             if self.op is not None and cost is not None:
-                self.op.settle(usage=response.usage, cost=cost)
+                self.op.settle(usage=answer.response.usage, cost=cost)
             self.phase = "settled"
 
     def fail(self, error: BaseException) -> None:
+        reported = _reported_usage(error)
+        scope = self.execution.scope
+        cost = (
+            _priced(scope, self.facts, reported)
+            if reported is not None and scope and self.facts
+            else None
+        )
         with self.execution.lock:
             if self.phase not in ("pending", "running", "completed"):
                 return
@@ -302,12 +348,17 @@ class _PhysicalAttempt:
                 delivery: Delivery = (
                     error.delivery if isinstance(error, ProviderError) else "indeterminate"
                 )
-                self.op.fail(delivery)
+                self.op.fail(delivery, usage=reported, cost=cost)
 
     def abandon(self) -> None:
         if self.op is not None:
             self.op.mark_abandoned()
         self.fail(StreamAbandoned("stream abandoned before consumption finished"))
+
+
+def _reported_usage(error: BaseException | None) -> Usage | None:
+    """The usage a provider reported for a failed request, if it reported any."""
+    return error.usage if isinstance(error, ProviderError) else None
 
 
 class StreamAbandoned(Exception):
@@ -318,10 +369,16 @@ class _Chain:
     """Middleware around one candidate and its fallback chain, with shared attempt history."""
 
     def __init__(
-        self, execution: Execution, owner: LLM, request: Request, arguments: Arguments
+        self,
+        execution: Execution,
+        owner: LLM,
+        request: Request,
+        arguments: Arguments,
+        prepared: object | None = None,
     ) -> None:
         self.execution, self.owner = execution, owner
         self.request, self.arguments = request, arguments
+        self.prepared = prepared
         self.response: Response | None = None
 
     async def items(self, pending: _PhysicalAttempt | None = None) -> AsyncIterator[Item]:
@@ -329,16 +386,19 @@ class _Chain:
         execution.visited.add(id(self.owner))
         before = dataclasses.replace(self.request, kwargs=dict(self.request.kwargs))
         self.request = await _run_abefore(self.owner._middleware, self.request)
+        # A rewritten request is prepared again; a refusal releases a stream's reservation.
+        if self.prepared is None or self.owner._middleware:
+            self.prepared = self.owner._provider.prepare(self.request)
         if pending is not None:
-            pending.refresh(self.request)
+            pending.refresh(self.request, self.prepared)
         try:
             async with _managed(
-                execution._retry_items(self.owner, self.request, pending)
+                execution._retry_items(self.owner, self.request, self.prepared, pending)
             ) as source:
                 async for item in source:
                     yield item
-            assert execution.active is not None
-            self.response = execution.active.response
+            assert execution.active is not None and execution.active.answer is not None
+            self.response = execution.active.answer.response
         except self.owner._fallback_on as error:
             if not execution.can_recover(error):
                 raise
@@ -389,11 +449,14 @@ class Execution:
         self.active: _PhysicalAttempt | None = None
         self.delivered = False
         self.closed = False
-        self.chain = _Chain(self, owner, request, arguments)
-        self.pending = self._admit(owner, request, 0) if path != "complete" else None
+        prepared = owner._provider.prepare(request)  # a refused request never opens an operation
+        self.chain = _Chain(self, owner, request, arguments, prepared)
+        self.pending = self._admit(owner, request, prepared, 0) if path != "complete" else None
 
-    def _admit(self, owner: LLM, request: Request, retry_number: int) -> _PhysicalAttempt:
-        attempt = _PhysicalAttempt(self, owner, request, retry_number)
+    def _admit(
+        self, owner: LLM, request: Request, prepared: object, retry_number: int
+    ) -> _PhysicalAttempt:
+        attempt = _PhysicalAttempt(self, owner, request, prepared, retry_number)
         with self.lock:
             self.physical.append(attempt)
             self.active = attempt
@@ -409,43 +472,41 @@ class Execution:
         )
 
     async def _physical_items(self, attempt: _PhysicalAttempt) -> AsyncIterator[Item]:
-        iterator: AsyncIterator[Item] | None = None
-        text: list[str] = []
-        response: Response | None = None
+        source: AsyncIterator[StreamEvent | Answer] | None = None
         try:
             async with inference_slot():
                 if not attempt.start():
                     raise StreamAbandoned("stream abandoned before its attempt started")
-                iterator, attempt.state = dispatch(
-                    attempt.owner._provider, attempt.request, self.path
-                )
-                try:
-                    first = await iterator.__anext__()
-                except StopAsyncIteration:
-                    first = None
-                if self.path == "complete":
-                    response = cast("Response", first)
-            if first is not None:
-                if self.path != "complete":
-                    self.delivered = True
-                text.append(_item_text(first))
-                yield first
-            async for item in iterator:
-                text.append(_item_text(item))
-                yield item
-            if response is None:
-                response = _response(attempt.state, attempt.owner._model, "".join(text))
-            attempt.finish(response)
+                source = dispatch(attempt.owner._provider, attempt.prepared, self.path)
+                item = await anext(source, None)
+            while item is not None:
+                if isinstance(item, Answer):
+                    attempt.finish(item)
+                else:
+                    attempt.seen.append(item)
+                    if (view := self._view(item)) is not None:
+                        self.delivered = True
+                        yield view
+                item = await anext(source, None)
         except BaseException as error:
             attempt.fail(error)
             raise
         finally:
-            await close_async(iterator)
+            await close_async(source)
+
+    def _view(self, event: StreamEvent) -> Item | None:
+        """What this call's consumer receives of an event: all of it, its text, or nothing."""
+        if self.path == "stream_events":
+            return event
+        if self.path == "stream" and event.kind == "text" and event.text:
+            return event.text
+        return None
 
     async def _retry_items(
         self,
         owner: LLM,
         request: Request,
+        prepared: object,
         pending: _PhysicalAttempt | None,
     ) -> AsyncIterator[Item]:
         retries = owner._retry.max_retries if owner._retry else 0
@@ -453,7 +514,7 @@ class Execution:
             attempt = (
                 pending
                 if retry_number == 0 and pending
-                else self._admit(owner, request, retry_number)
+                else self._admit(owner, request, prepared, retry_number)
             )
             try:
                 async with _managed(self._physical_items(attempt)) as source:
@@ -496,9 +557,8 @@ class Execution:
         with self.lock:
             response = None if self.closed else self.chain.response
         if response is None:
-            state = active.state if active is not None else StreamState()
             model = active.owner._model if active is not None else self.chain.owner._model
-            response = _response(state, model, text)
+            response = _partial(active.seen if active is not None else (), model, text)
         attempts = self.attempts()
         return (
             response

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -242,12 +243,12 @@ class TestPricingRegistryGet:
 
 
 class TestPricingRegistryRegister:
-    def test_register_custom_model(self):
+    def test_register_is_exact_and_covers_dated_snapshots(self):
         reg = PricingRegistry()
         reg.register("my-model", ModelPricing(input=1.0, output=2.0))
-        p = reg.get("my-model-v1")
-        assert p is not None
-        assert p.input == 1.0
+        assert reg.get("my-model") == ModelPricing(input=1.0, output=2.0)
+        assert reg.get("my-model-20260101") == ModelPricing(input=1.0, output=2.0)
+        assert reg.get("my-model-v1") is None  # a variant is another model, never inherited
 
     def test_override_existing(self):
         reg = PricingRegistry()
@@ -256,22 +257,101 @@ class TestPricingRegistryRegister:
         assert p is not None
         assert p.input == 99.0
 
-    def test_unregister(self):
+    def test_prefix_registration_is_explicit_for_local_families(self):
+        reg = PricingRegistry()
+        reg.register("llama3", ModelPricing(), match="prefix")
+        assert reg.get("llama3.2:8b") == ModelPricing()
+        assert reg.estimate_cost("llama3.1", input_tokens=1000, output_tokens=10) == 0.0
+        assert reg.get("llama2") is None
+
+    def test_an_exact_entry_wins_over_a_prefix(self):
+        reg = PricingRegistry()
+        reg.register("acme-", ModelPricing(input=1.0), match="prefix")
+        reg.register("acme-large", ModelPricing(input=9.0))
+        assert reg.get("acme-large") == ModelPricing(input=9.0)
+        assert reg.get("acme-small") == ModelPricing(input=1.0)
+
+    def test_unregister_removes_either_kind(self):
         reg = PricingRegistry()
         reg.register("temp-model", ModelPricing(input=1.0, output=1.0))
-        assert reg.has("temp-model-v1")
+        reg.register("temp-", ModelPricing(input=2.0), match="prefix")
+        assert reg.get("temp-model") == ModelPricing(input=1.0, output=1.0)
         reg.unregister("temp-model")
-        assert not reg.has("temp-model-v1")
+        assert reg.get("temp-model") == ModelPricing(input=2.0)
+        reg.unregister("temp-")
+        assert not reg.has("temp-model")
 
 
 class TestPricingRegistryReset:
     def test_reset_clears_custom(self):
         reg = PricingRegistry()
         reg.register("custom", ModelPricing(input=1.0, output=1.0))
+        reg.register("custom-", ModelPricing(input=1.0, output=1.0), match="prefix")
         reg.reset()
+        assert not reg.has("custom")
         assert not reg.has("custom-v1")
         # Defaults still there
         assert reg.has("claude-sonnet-4-6-20260101")
+
+
+class TestIdGrammar:
+    """Prices resolve by an id's own entry or a dated snapshot of one (costura D, R6)."""
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "o3-pro",
+            "o3-deep-research",
+            "gpt-4o-audio-preview",
+            "gpt-5-codex",
+            "gemini-2.5-flash-image",
+            "grok-4.6-mini",
+        ],
+    )
+    def test_variants_of_priced_ids_have_no_price(self, model: str):
+        assert pricing.get(model) is None
+
+    def test_a_snapshot_with_its_own_tariff_keeps_it(self):
+        # https://developers.openai.com/api/docs/pricing (2026-09-18): the May 2024 gpt-4o
+        # snapshot and gpt-3.5-turbo-1106 cost more than the ids they are snapshots of.
+        dated = pricing.get("gpt-4o-2024-05-13")
+        assert dated is not None
+        assert (dated.input, dated.output) == (5.0, 15.0)
+        turbo_1106 = pricing.get("gpt-3.5-turbo-1106")
+        assert turbo_1106 is not None
+        assert (turbo_1106.input, turbo_1106.output) == (1.0, 2.0)
+        assert pricing.get("gpt-3.5-turbo-0125") == pricing.get("gpt-3.5-turbo")
+
+    @pytest.mark.parametrize(
+        ("alias", "canonical"),
+        [
+            ("grok-4.20-reasoning", "grok-4.20"),
+            ("grok-4.20-non-reasoning", "grok-4.20"),
+            ("grok-4.20-0309-reasoning", "grok-4.20"),
+            ("grok-4.20-0309-non-reasoning", "grok-4.20"),
+            ("grok-4.20-multi-agent", "grok-4.20"),
+            ("grok-4.20-multi-agent-0309", "grok-4.20"),
+            ("grok-4-fast-reasoning", "grok-4-fast"),
+            ("grok-4-fast-non-reasoning", "grok-4-fast"),
+            ("grok-4-1-fast-reasoning", "grok-4-1-fast"),
+            ("grok-4-1-fast-non-reasoning", "grok-4-1-fast"),
+            ("grok-3-fast", "grok-3"),
+            ("grok-3-mini-fast", "grok-3-mini"),
+            ("gemini-3-pro-preview", "gemini-3-pro"),
+            ("gemini-3.1-pro-preview", "gemini-3.1-pro"),
+            ("gemini-3-flash-preview", "gemini-3-flash"),
+            ("gemini-3.1-flash-lite-preview", "gemini-3.1-flash-lite"),
+            ("gpt-5.1", "gpt-5"),
+        ],
+    )
+    def test_documented_ids_share_their_entry(self, alias: str, canonical: str):
+        assert pricing.get(canonical) is not None
+        assert pricing.get(alias) == pricing.get(canonical)
+
+    def test_the_new_cyber_entry(self):
+        cyber = pricing.get("gpt-5.5-cyber")
+        assert cyber is not None
+        assert (cyber.input, cyber.output, cyber.cache_read) == (12.50, 75.0, 1.25)
 
 
 class TestEstimateCost:
@@ -525,7 +605,7 @@ class TestFastModePricing:
             ),
         )
         cost = reg.estimate_cost(
-            "fast-long-v1", input_tokens=300_000, output_tokens=1000, is_fast=True
+            "fast-long", input_tokens=300_000, output_tokens=1000, is_fast=True
         )
         # Should use fast rates, not long-context
         expected = 5.0 * 300_000 / 1_000_000 + 10.0 * 1000 / 1_000_000
@@ -618,7 +698,7 @@ class TestLoad:
 
         reg = PricingRegistry()
         reg.load(toml_file)
-        p = reg.get("my-custom-model-v1")
+        p = reg.get("my-custom-model")
         assert p is not None
         assert p.input == 5.0
         assert p.output == 10.0
@@ -632,7 +712,7 @@ class TestLoad:
         reg = PricingRegistry()
         reg.load(toml_file)
         # Custom model loaded
-        assert reg.has("custom-v1")
+        assert reg.has("custom")
         # Defaults still present
         assert reg.has("claude-sonnet-4-6-20260101")
 
@@ -650,7 +730,7 @@ class TestLoad:
 
         reg = PricingRegistry()
         reg.load(toml_file)
-        p = reg.get("my-model-v1")
+        p = reg.get("my-model")
         assert p is not None
         assert p.long_context_threshold == 100_000
         assert p.long_context_input == 3.0
@@ -665,7 +745,7 @@ class TestLoad:
 
         reg = PricingRegistry()
         reg.load(toml_file)
-        p = reg.get("my-model-v1")
+        p = reg.get("my-model")
         assert p is not None
         assert p.fast_input == 5.0
         assert p.fast_output == 10.0
@@ -689,13 +769,34 @@ class TestLoad:
 
         reg = PricingRegistry()
         reg.load(toml_file)
-        p = reg.get("my-model-v1")
+        p = reg.get("my-model")
         assert p is not None
         assert p.batch_cache_read == 0.1
         assert p.long_context_inclusive is True
         assert p.batch_long_context_input == 1.0
         assert p.batch_long_context_cache_read == 0.2
         assert p.fast_cache_read == 0.3
+
+    def test_entries_take_aliases_and_an_explicit_prefix(self, tmp_path: Path):
+        toml_file = tmp_path / "pricing.toml"
+        toml_file.write_text(
+            '["acme-1"]\ninput = 1.0\noutput = 2.0\naliases = ["acme-1-fast"]\n\n'
+            '["local-"]\nmatch = "prefix"\n'
+        )
+        reg = PricingRegistry()
+        reg.load(toml_file)
+        assert reg.get("acme-1-fast") == ModelPricing(input=1.0, output=2.0)
+        assert reg.get("acme-1-mini") is None
+        assert reg.get("local-llama") == ModelPricing()
+
+    def test_an_unknown_match_kind_is_refused(self, tmp_path: Path):
+        toml_file = tmp_path / "pricing.toml"
+        toml_file.write_text('["acme-"]\nmatch = "suffix"\n')
+        with pytest.raises(ValueError, match="match"):
+            PricingRegistry().load(toml_file)
+        kind: Any = "suffix"
+        with pytest.raises(ValueError, match="match"):
+            PricingRegistry().register("acme-", ModelPricing(), match=kind)
 
 
 class TestModelPricingNone:
@@ -720,7 +821,7 @@ class TestModelPricingNone:
 
 
 class TestPricingCache:
-    """get() memoizes longest-prefix lookups and invalidates on every mutation (perf review #4)."""
+    """get() memoizes lookups and invalidates on every mutation (perf review #4)."""
 
     def test_cache_returns_consistent_results(self):
         reg = PricingRegistry()

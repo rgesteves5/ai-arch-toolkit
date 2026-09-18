@@ -100,15 +100,17 @@ class TestResolveProviderName:
 
 class TestRequireSdk:
     def test_installed_package_passes(self):
-        require_sdk("json", "test")  # json is always available
+        with require_sdk("test"):
+            __import__("json")  # json is always available
 
     def test_missing_package_raises(self):
-        with pytest.raises(ImportError, match="pip install ai-arch-toolkit"):
-            require_sdk("nonexistent_package_xyz", "nonexistent")
+        with pytest.raises(ImportError, match="pip install ai-arch-toolkit"), require_sdk("x"):
+            __import__("nonexistent_package_xyz")
 
     def test_error_message_includes_extra_name(self):
-        with pytest.raises(ImportError, match=r"\[myextra\]"):
-            require_sdk("nonexistent_package_xyz", "myextra")
+        with pytest.raises(ImportError, match=r"\[myextra\]") as missing, require_sdk("myextra"):
+            __import__("nonexistent_package_xyz")
+        assert isinstance(missing.value.__cause__, ModuleNotFoundError)  # which import failed
 
 
 class TestResolveKey:

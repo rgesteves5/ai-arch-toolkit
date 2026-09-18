@@ -13,11 +13,11 @@ from typing import Any
 import pytest
 
 import ai_arch_toolkit.toolkit.agents as agents_package
-from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._response import Response, ToolCall, Usage
 from ai_arch_toolkit.core._tools._decorator import tool
 from ai_arch_toolkit.core._tools._group import ToolGroup
 from ai_arch_toolkit.toolkit.agents import Agent, ReasoningSpec
+from tests.fake_provider import FakeProvider, fake_llm
 
 
 @tool
@@ -34,29 +34,17 @@ def wipe_disk() -> str:
 
 def _response(text: str = "", tool_calls: tuple[ToolCall, ...] = ()) -> Response:
     return Response(
-        text=text, tool_calls=tool_calls, usage=Usage(input_tokens=10, output_tokens=5), cost=0.001
+        text=text, tool_calls=tool_calls, usage=Usage(input_tokens=10, output_tokens=5)
     )
 
 
-class _RecordingProvider:
-    def __init__(self, *responses: Response) -> None:
-        self._responses = list(responses)
-        self.tool_names: list[list[str]] = []
-
-    async def complete(self, messages, *, system=None, tools=None, **kwargs) -> Response:
-        self.tool_names.append([t["name"] for t in tools or ()])
-        return self._responses[min(len(self.tool_names) - 1, len(self._responses) - 1)]
-
-
-def _llm(*responses: Response) -> tuple[LLM, _RecordingProvider]:
-    llm = LLM("claude-sonnet-4-6", api_key="test")
-    provider = _RecordingProvider(*responses)
-    llm._provider = provider  # type: ignore[assignment]
-    return llm, provider
+def _tool_names(provider: FakeProvider) -> list[list[str]]:
+    """The names of the tools each request offered the model, in call order."""
+    return [[t["name"] for t in request.tools or ()] for request in provider.requests]
 
 
 async def test_a_group_that_starts_empty_is_the_group_the_agent_uses() -> None:
-    llm, provider = _llm(
+    llm, provider = fake_llm(
         _response(tool_calls=(ToolCall(id="tc_1", name="ping", input={}),)),
         _response("done"),
     )
@@ -66,7 +54,7 @@ async def test_a_group_that_starts_empty_is_the_group_the_agent_uses() -> None:
     group.add(ping)  # e.g. tools that arrive after the agent was built
     result = await agent.run("go")
 
-    assert provider.tool_names[0] == ["ping"]
+    assert _tool_names(provider)[0] == ["ping"]
     assert result.text == "done"
     assert not result.errors
 
@@ -85,14 +73,14 @@ PHASE_TOOL_DEPS = [
 async def test_an_empty_phase_group_never_falls_back_to_the_main_tools(
     strategy: str, dep: str, reply: str
 ) -> None:
-    llm, provider = _llm(_response(reply))
+    llm, provider = fake_llm(_response(reply))
     spec = ReasoningSpec(strategy=strategy, max_iterations=2)
     agent = Agent(spec, llm, ToolGroup(wipe_disk), deps={dep: ToolGroup()})
 
     await agent.run("the task")
 
-    assert provider.tool_names, "the strategy made no LLM call"
-    assert all("wipe_disk" not in names for names in provider.tool_names)
+    assert provider.requests, "the strategy made no LLM call"
+    assert all("wipe_disk" not in names for names in _tool_names(provider))
 
 
 def test_no_truthiness_fallback_on_a_tool_group_in_the_agents_package() -> None:

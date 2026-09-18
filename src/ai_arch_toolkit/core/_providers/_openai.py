@@ -1,4 +1,4 @@
-"""OpenAI provider — thin adapter over the ``openai`` SDK."""
+"""OpenAI provider — Chat Completions through the ``openai`` SDK, in the provider contract."""
 
 from __future__ import annotations
 
@@ -6,8 +6,10 @@ import copy
 import json
 import logging
 import warnings
-from collections.abc import AsyncIterator
-from typing import Any
+from collections.abc import AsyncIterator, Iterator
+from dataclasses import dataclass
+from typing import Any, Literal, cast, get_args
+from urllib.parse import urlsplit
 
 from ai_arch_toolkit.core._content import (
     CachePart,
@@ -16,16 +18,30 @@ from ai_arch_toolkit.core._content import (
     _encode_b64,
     _is_url,
 )
-from ai_arch_toolkit.core._exceptions import APIError, RateLimitError
+from ai_arch_toolkit.core._exceptions import (
+    APIError,
+    ProviderError,
+    RateLimitError,
+    RequestError,
+    ResponseError,
+)
+from ai_arch_toolkit.core._middleware import Request
+from ai_arch_toolkit.core._model_id import lookup
 from ai_arch_toolkit.core._pricing import _estimate_response_cost
 from ai_arch_toolkit.core._providers._base import (
     BaseProvider,
+    Done,
     LoopAwareClientCache,
-    StreamState,
+    Options,
+    Prepared,
     _parse_retry_after,
-    network_error,
+    on_request,
+    parse_options,
+    parse_structured,
     parse_tool_args,
+    refused_or_unread,
     system_content_text,
+    transport_error,
 )
 from ai_arch_toolkit.core._providers._imports import require_sdk
 from ai_arch_toolkit.core._response import (
@@ -38,81 +54,197 @@ from ai_arch_toolkit.core._response import (
     _uncached_input_tokens,
 )
 
-require_sdk("openai", "openai")
-import openai  # noqa: E402
+with require_sdk("openai"):
+    import httpx2  # the openai SDK's transport
+    import openai
+    from openai.lib.streaming.chat import ChatCompletionStreamState
+    from openai.types.chat import (
+        ChatCompletion,
+        ChatCompletionAssistantMessageParam,
+        ChatCompletionChunk,
+        ChatCompletionContentPartParam,
+        ChatCompletionFunctionToolParam,
+        ChatCompletionMessageFunctionToolCallParam,
+        ChatCompletionMessageParam,
+        ChatCompletionToolChoiceOptionParam,
+    )
+    from openai.types.chat.completion_create_params import (
+        CompletionCreateParamsNonStreaming,
+        CompletionCreateParamsStreaming,
+        ResponseFormat,
+    )
+    from openai.types.shared.reasoning_effort import ReasoningEffort
+    from openai.types.shared_params import ResponseFormatJSONSchema
 
 logger = logging.getLogger(__name__)
 
-# Parameters safe to forward directly to the SDK.
-_SDK_PARAMS = {
-    "temperature",
-    "top_p",
-    "max_tokens",
-    "max_completion_tokens",
-    "stop",
-    "frequency_penalty",
-    "presence_penalty",
-    "seed",
-    "response_format",
-    "parallel_tool_calls",
+type Params = CompletionCreateParamsNonStreaming
+
+# SDK parameters forwarded as the caller gave them (max_tokens is placed by host).
+_FORWARDED = frozenset(
+    {
+        "temperature",
+        "top_p",
+        "max_tokens",
+        "max_completion_tokens",
+        "stop",
+        "frequency_penalty",
+        "presence_penalty",
+        "seed",
+        "response_format",
+        "parallel_tool_calls",
+        "top_logprobs",
+    }
+)
+_SAMPLING = ("temperature", "top_p", "top_logprobs")
+_EFFORTS = frozenset(value for value in get_args(get_args(ReasoningEffort)[0]))
+_OFFICIAL_HOST = "api.openai.com"
+
+# Failures before the request reached the server; any other transport failure may be billed.
+_NOT_SENT = (httpx2.ConnectError, httpx2.ConnectTimeout, httpx2.PoolTimeout)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _Profile:
+    """What one family of models takes through Chat Completions.
+
+    ``thinking``: ``reasoning`` sends ``reasoning_effort`` and, with it, only the default
+    ``temperature`` (the GPT-5 models refuse another, live probe of 2026-04-28 in
+    ``scripts/model_probe_notes.md``); ``refused`` raises for a model that does not reason;
+    ``passthrough`` applies no OpenAI rule (another server).
+    """
+
+    thinking: Literal["reasoning", "refused", "passthrough"] = "reasoning"
+    sampling: bool = True  # temperature, top_p, logprobs
+    efforts: frozenset[str] = _EFFORTS
+    tools: bool = True
+
+
+_CURRENT = _Profile()
+_LEGACY = _Profile(thinking="refused")
+_COMPATIBLE = _Profile(thinking="passthrough")
+# https://developers.openai.com/api/docs/guides/latest-model: no sampling or logprobs, no
+# "none" (nor "minimal") effort, and tool calling only through the Responses API.
+_ASTRA = _Profile(
+    sampling=False, efforts=frozenset({"low", "medium", "high", "xhigh", "max"}), tools=False
+)
+
+# The families before the reasoning generation, a closed list: a model not listed (a new one)
+# gets the current generation's rules. https://developers.openai.com/api/docs/models/gpt-4o
+_PROFILES: dict[str, _Profile] = {
+    "gpt-6-astra": _ASTRA,
+    **dict.fromkeys(
+        (
+            "gpt-4o",
+            "gpt-4o-mini",
+            "gpt-4.1",
+            "gpt-4.1-mini",
+            "gpt-4.1-nano",
+            "gpt-4-turbo",
+            "gpt-4",
+            "gpt-3.5-turbo",
+        ),
+        _LEGACY,
+    ),
 }
 
-_MAX_COMPLETION_TOKEN_MODELS = {"o1", "o3", "o4"}
-_MAX_COMPLETION_TOKEN_PREFIXES = ("gpt-5", "gpt-6-astra", "o1-", "o3-", "o4-")
-
 
 # ---------------------------------------------------------------------------
-# Adapter helpers
+# Request
 # ---------------------------------------------------------------------------
 
 
-def _content_to_sdk(content: Any) -> list[dict[str, Any]] | str:
-    """Convert multimodal content to OpenAI content blocks."""
+def _content_to_sdk(content: Any) -> list[ChatCompletionContentPartParam] | str:
+    """User content as Chat Completions content parts, or a plain string."""
     if isinstance(content, str):
         return content
     if not isinstance(content, list):
         return str(content)
-
-    blocks: list[dict[str, Any]] = []
-    for part in content:
-        if isinstance(part, str):
-            blocks.append({"type": "text", "text": part})
-        elif isinstance(part, ImagePart):
-            if _is_url(part.source):
-                blocks.append(
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": part.source},
-                    }
-                )
-            else:
-                b64 = _encode_b64(part.source)
-                blocks.append(
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:{part.media_type};base64,{b64}"},
-                    }
-                )
-        elif isinstance(part, CachePart):
-            blocks.append({"type": "text", "text": part.content})  # caching is automatic here
-        elif isinstance(part, DocumentPart):
-            b64 = _encode_b64(part.source)
-            blocks.append(
-                {
-                    "type": "file",
-                    "file": {
-                        "filename": part.name or "document",
-                        "file_data": f"data:{part.media_type};base64,{b64}",
-                    },
-                }
-            )
-        else:
-            blocks.append({"type": "text", "text": str(part)})
-    return blocks
+    return [_part(part) for part in content]
 
 
-def _tool_to_sdk(tool: dict[str, Any]) -> dict[str, Any]:
-    """Map generic tool dict to OpenAI SDK format (function wrapper)."""
+def _part(part: Any) -> ChatCompletionContentPartParam:
+    if isinstance(part, ImagePart):
+        url = part.source if _is_url(part.source) else None
+        if not isinstance(url, str):
+            url = f"data:{part.media_type};base64,{_encode_b64(part.source)}"
+        return {"type": "image_url", "image_url": {"url": url}}
+    if isinstance(part, DocumentPart):
+        data = f"data:{part.media_type};base64,{_encode_b64(part.source)}"
+        return {"type": "file", "file": {"filename": part.name or "document", "file_data": data}}
+    if isinstance(part, CachePart):
+        return {"type": "text", "text": part.content}  # caching is automatic here
+    return {"type": "text", "text": part if isinstance(part, str) else str(part)}
+
+
+def _tool_calls(msg: dict[str, Any]) -> list[ChatCompletionMessageFunctionToolCallParam]:
+    return [
+        {
+            "id": call.get("id", ""),
+            "type": "function",
+            "function": {
+                "name": call.get("name", ""),
+                "arguments": json.dumps(call.get("input", {})),
+            },
+        }
+        for call in msg.get("tool_calls") or []
+    ]
+
+
+def _assistant(msg: dict[str, Any]) -> ChatCompletionAssistantMessageParam:
+    content = msg.get("content")
+    message: ChatCompletionAssistantMessageParam = {
+        "role": "assistant",
+        "content": content if isinstance(content, str) or content is None else str(content),
+    }
+    if calls := _tool_calls(msg):
+        message["tool_calls"] = calls
+    return message
+
+
+def _message(msg: dict[str, Any]) -> ChatCompletionMessageParam:
+    """One neutral message on the wire; ``tool_use_id`` marks a tool result."""
+    role = msg.get("role", "user")
+    if msg.get("tool_use_id"):
+        content = str(msg.get("content", ""))
+        return {"role": "tool", "tool_call_id": msg["tool_use_id"], "content": content}
+    if role in ("system", "developer"):
+        text = system_content_text(msg.get("content", ""))
+        return (
+            {"role": "system", "content": text}
+            if role == "system"
+            else {
+                "role": "developer",
+                "content": text,
+            }
+        )
+    if role == "assistant":
+        return _assistant(msg)
+    if role == "user":
+        return {"role": "user", "content": _content_to_sdk(msg.get("content", ""))}
+    raise RequestError(f"Chat Completions has no {role!r} role")
+
+
+def _messages_to_sdk(
+    messages: list[dict[str, Any]],
+    *,
+    system: str | None = None,
+) -> list[ChatCompletionMessageParam]:
+    """Convert generic messages to Chat Completions messages.
+
+    A non-empty ``system`` is sent as a leading system message; system messages in the list keep
+    their positions (mid-conversation system messages are valid for Chat Completions and
+    OpenAI-compatible servers). An assistant turn carries all its calls; each result is a
+    ``tool`` message with its call's id.
+    """
+    head: list[ChatCompletionMessageParam] = (
+        [{"role": "system", "content": system}] if system else []
+    )
+    return [*head, *(_message(msg) for msg in messages)]
+
+
+def _tool_to_sdk(tool: dict[str, Any]) -> ChatCompletionFunctionToolParam:
+    """A function tool; Chat Completions takes no server tools."""
     return {
         "type": "function",
         "function": {
@@ -123,74 +255,10 @@ def _tool_to_sdk(tool: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _uses_max_completion_tokens(model: str) -> bool:
-    """Return True for Chat Completions models that reject ``max_tokens``."""
-    return model in _MAX_COMPLETION_TOKEN_MODELS or model.startswith(
-        _MAX_COMPLETION_TOKEN_PREFIXES
-    )
-
-
-def _drop_temperature_for_reasoning(
-    model: str, reasoning_effort: str | None, kwargs: dict[str, Any]
-) -> None:
-    """Drop sampling temperature for reasoning models unless only default sampling is used."""
-    if not _uses_max_completion_tokens(model):
-        return
-    if reasoning_effort and reasoning_effort.lower() == "none":
-        return
-    if kwargs.get("temperature") not in (None, 1, 1.0):
-        kwargs.pop("temperature", None)
-
-
-def _messages_to_sdk(
-    messages: list[dict[str, Any]],
-    *,
-    system: str | None = None,
-) -> list[dict[str, Any]]:
-    """Convert generic messages to OpenAI SDK format.
-
-    ``tool_use_id`` is the tool-result discriminator (role is ignored).
-    System stays as a regular message role. tool results use role="tool".
-    A non-empty ``system`` is sent as a leading system message; system messages in
-    the list are kept at their positions (mid-conversation system messages are valid
-    for Chat Completions and OpenAI-compatible servers).
-    """
-    wire: list[dict[str, Any]] = []
-    if system:
-        wire.append({"role": "system", "content": system})
-    for msg in messages:
-        role = msg.get("role", "user")
-        if msg.get("tool_use_id"):
-            wire.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": msg["tool_use_id"],
-                    "content": str(msg.get("content", "")),
-                }
-            )
-        elif role == "system":
-            wire.append({"role": "system", "content": system_content_text(msg.get("content", ""))})
-        elif role == "assistant" and msg.get("tool_calls"):
-            wire.append(
-                {
-                    "role": "assistant",
-                    "content": msg.get("content"),
-                    "tool_calls": [
-                        {
-                            "id": tc.get("id", ""),
-                            "type": "function",
-                            "function": {
-                                "name": tc.get("name", ""),
-                                "arguments": json.dumps(tc.get("input", {})),
-                            },
-                        }
-                        for tc in msg["tool_calls"]
-                    ],
-                }
-            )
-        else:
-            wire.append({"role": role, "content": _content_to_sdk(msg.get("content", ""))})
-    return wire
+def _tool_choice(choice: str) -> ChatCompletionToolChoiceOptionParam:
+    if choice == "auto" or choice == "required" or choice == "none":
+        return choice
+    return {"type": "function", "function": {"name": choice}}
 
 
 def _strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
@@ -258,9 +326,7 @@ def _ensure_strict(
     return node
 
 
-def _build_output_schema_format(
-    output_schema: OutputSchema,
-) -> dict[str, Any]:
+def _build_output_schema_format(output_schema: OutputSchema) -> ResponseFormatJSONSchema:
     """Build OpenAI ``response_format`` for structured output."""
     schema = output_schema.schema
     return {
@@ -315,7 +381,7 @@ def _parse_sdk_response(
     *,
     output_schema: OutputSchema | None = None,
 ) -> Response:
-    """Convert ``openai.types.chat.ChatCompletion`` to our ``Response``."""
+    """Convert a ``ChatCompletion`` to our ``Response`` (the base adds usage and cost)."""
     choices = completion.choices or []
     if not choices:
         return Response(raw=completion, model=model)
@@ -328,49 +394,31 @@ def _parse_sdk_response(
     if reasoning := _reasoning_text(message):
         thinking = (ThinkingBlock(text=reasoning),)
 
-    tool_calls: list[ToolCall] = []
-    for tc in message.tool_calls or []:
-        tool_calls.append(
-            ToolCall(
-                id=tc.id,
-                name=tc.function.name,
-                input=parse_tool_args(tc.function.arguments),
-            )
-        )
-
-    parsed: Any = None
-    if output_schema and text:
-        try:
-            data = json.loads(text)
-            if output_schema.model_class is not None:
-                parsed = output_schema.model_class.model_validate(data)
-            else:
-                parsed = data
-        except (json.JSONDecodeError, TypeError):
-            logger.warning("Failed to parse structured output as JSON")
-        except Exception:
-            logger.warning("Failed to validate structured output against schema")
-            parsed = json.loads(text)  # fallback to raw dict
-
-    usage = _extract_usage(completion.usage) if completion.usage else Usage()
-    cost = _estimate_response_cost(model, usage)
-
-    # Extract logprobs if present
-    logprobs_data = getattr(choice, "logprobs", None)
-
+    tool_calls = tuple(
+        ToolCall(id=tc.id, name=tc.function.name, input=parse_tool_args(tc.function.arguments))
+        for tc in message.tool_calls or []
+    )
     return Response(
         text=text.strip(),
-        tool_calls=tuple(tool_calls),
+        tool_calls=tool_calls,
         thinking=thinking,
-        parsed=parsed,
-        usage=usage,
-        cost=cost,
+        parsed=parse_structured(text, output_schema) if output_schema and text else None,
         stop_reason=choice.finish_reason or "",
         model=completion.model or model,
         raw=completion,
         response_id=getattr(completion, "id", "") or "",
-        logprobs=logprobs_data,
+        logprobs=getattr(choice, "logprobs", None),
     )
+
+
+def _chunk_events(chunk: ChatCompletionChunk) -> Iterator[StreamEvent]:
+    """The text and reasoning deltas of one chunk (reasoning comes from compatible servers)."""
+    for choice in chunk.choices[:1]:
+        delta = choice.delta
+        if fragment := _reasoning_text(delta):
+            yield StreamEvent(kind="thinking", thinking=ThinkingBlock(text=fragment), partial=True)
+        if delta.content:
+            yield StreamEvent(kind="text", text=delta.content)
 
 
 # ---------------------------------------------------------------------------
@@ -378,7 +426,7 @@ def _parse_sdk_response(
 # ---------------------------------------------------------------------------
 
 
-class OpenAIProvider(LoopAwareClientCache, BaseProvider):
+class OpenAIProvider(LoopAwareClientCache, BaseProvider[Prepared[Params], ChatCompletion]):
     """OpenAI Chat Completions API provider via the official SDK."""
 
     def __init__(
@@ -390,343 +438,170 @@ class OpenAIProvider(LoopAwareClientCache, BaseProvider):
         timeout: float | None = None,
     ) -> None:
         self._model = model
+        self._official = base_url is None or urlsplit(base_url).hostname == _OFFICIAL_HOST
         # Retry ownership belongs to LLM(RetryConfig(...)): hidden SDK retries
         # would be neither metered nor represented in Response.attempts.
         client_kwargs: dict[str, Any] = {"api_key": api_key, "max_retries": 0}
         if base_url:
             client_kwargs["base_url"] = base_url
         if timeout is not None:
-            import httpx
-
-            client_kwargs["timeout"] = httpx.Timeout(timeout)
-        self._install_client(lambda: openai.AsyncOpenAI(**client_kwargs))
+            client_kwargs["timeout"] = timeout
+        self._install_client(lambda: openai.AsyncOpenAI(**client_kwargs, http_client=_http()))
 
     async def close(self) -> None:
         await self._client.close()
 
+    def _profile(self) -> _Profile:
+        if not self._official:
+            return _COMPATIBLE
+        found = lookup(self._model, _PROFILES)
+        return found.value if found is not None else _CURRENT
+
     # ------------------------------------------------------------------
-    # Internals
+    # The contract
     # ------------------------------------------------------------------
 
-    def _build_sdk_kwargs(
-        self,
-        wire_messages: list[dict[str, Any]],
-        *,
-        tools: list[dict[str, Any]] | None = None,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
-        """Build kwargs dict for ``chat.completions.create()``."""
-        # Extract our special params
-        thinking = kwargs.pop("thinking", False)
-        thinking_effort = kwargs.pop("thinking_effort", None)
-        thinking_budget = kwargs.pop("thinking_budget", None)
-        output_schema: OutputSchema | None = kwargs.pop("output_schema", None)
-        tool_choice: str | None = kwargs.pop("tool_choice", None)
-        json_mode: bool = kwargs.pop("json_mode", False)
-        logprobs_flag: bool = kwargs.pop("logprobs", False)
-        kwargs.pop("structured_output_mode", None)  # Anthropic-specific; ignored here
-
-        # Warn about unknown params
-        unknown = set(kwargs) - _SDK_PARAMS
-        if unknown:
-            warnings.warn(
-                f"Unknown parameter(s) ignored for OpenAI: {sorted(unknown)}. "
-                f"Valid: {sorted(_SDK_PARAMS)}",
-                stacklevel=4,
-            )
-
-        if _uses_max_completion_tokens(self._model) and "max_tokens" in kwargs:
-            if "max_completion_tokens" not in kwargs:
-                kwargs["max_completion_tokens"] = kwargs["max_tokens"]
-            kwargs.pop("max_tokens", None)
-
-        reasoning_effort = (thinking_effort or "high") if thinking else None
-        if thinking:
-            _drop_temperature_for_reasoning(self._model, reasoning_effort, kwargs)
-
-        if self._model.startswith("gpt-6-astra"):
-            # Astra does not accept sampling/logprob parameters, even at defaults.
-            for param in ("temperature", "top_p", "top_logprobs"):
-                kwargs.pop(param, None)
-            logprobs_flag = False
-            if thinking and reasoning_effort not in {"low", "medium", "high", "xhigh", "max"}:
-                raise ValueError(
-                    "GPT-6 Astra thinking_effort must be low, medium, high, xhigh, or max"
-                )
-            if tools or tool_choice not in (None, "none"):
-                raise ValueError(
-                    "GPT-6 Astra tool calling requires the Responses API; "
-                    "this provider uses Chat Completions"
-                )
-            tool_choice = None
-
-        filtered = {k: v for k, v in kwargs.items() if k in _SDK_PARAMS}
-
-        sdk_kwargs: dict[str, Any] = {
+    def prepare(self, request: Request) -> Prepared[Params]:
+        options = parse_options(request.kwargs, _FORWARDED, "OpenAI")
+        profile = self._profile()
+        params: Params = {
             "model": self._model,
-            "messages": wire_messages,
-            **filtered,
+            "messages": _messages_to_sdk(request.messages, system=request.system),
         }
+        self._forward(params, options)
+        self._reasoning(params, options, profile)
+        self._sampling(params, options, profile)
+        self._tools(params, request.tools, options, profile)
+        self._format(params, options)
+        return Prepared(params, output_schema=options.output_schema)
 
-        # Thinking → reasoning_effort (OpenAI naming)
-        if thinking:
-            sdk_kwargs["reasoning_effort"] = reasoning_effort
-        if thinking_budget:
+    def _forward(self, params: Params, options: Options) -> None:
+        """The caller's SDK parameters; the output limit's name depends on the host.
+
+        ``max_tokens`` is deprecated in favour of ``max_completion_tokens`` and not accepted by
+        o-series models (https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create);
+        other servers keep ``max_tokens``.
+        """
+        forwarded = dict(options.params)
+        limit = forwarded.pop("max_completion_tokens", None) or forwarded.pop("max_tokens", None)
+        forwarded.pop("max_tokens", None)
+        params.update(cast("Params", forwarded))
+        if limit is not None:
+            params["max_completion_tokens" if self._official else "max_tokens"] = limit
+        if options.logprobs:
+            params["logprobs"] = True
+
+    def _reasoning(self, params: Params, options: Options, profile: _Profile) -> None:
+        if options.thinking_budget:
             warnings.warn(
                 "thinking_budget is not supported by OpenAI (only reasoning_effort string), "
                 "ignoring",
-                stacklevel=4,
+                stacklevel=5,
             )
+        if not options.thinking:
+            return
+        if profile.thinking == "refused":
+            raise RequestError(f"{self._model} does not reason: thinking is not available")
+        effort = options.thinking_effort or "high"
+        if effort not in profile.efforts:
+            raise RequestError(
+                f"{self._model} takes thinking_effort in {sorted(profile.efforts)}, not {effort!r}"
+            )
+        params["reasoning_effort"] = cast("ReasoningEffort", effort)
+        default_only = profile.thinking == "reasoning" and effort != "none"
+        if default_only and params.get("temperature") not in (None, 1, 1.0):
+            params.pop("temperature")
 
-        # Structured output via native response_format
-        if output_schema:
-            sdk_kwargs["response_format"] = _build_output_schema_format(output_schema)
+    def _sampling(self, params: Params, options: Options, profile: _Profile) -> None:
+        if profile.sampling:
+            return
+        for name in _SAMPLING:
+            params.pop(name, None)
+        params.pop("logprobs", None)
 
+    def _tools(
+        self,
+        params: Params,
+        tools: list[dict[str, Any]] | None,
+        options: Options,
+        profile: _Profile,
+    ) -> None:
+        tools = tools or []
+        if server := [tool["type"] for tool in tools if tool.get("_server_tool")]:
+            raise RequestError(
+                f"Chat Completions takes no server tool ({', '.join(server)}): "
+                "only function tools reach OpenAI through this adapter"
+            )
+        if not profile.tools and (tools or options.tool_choice not in (None, "none")):
+            raise RequestError(
+                f"{self._model} tool calling requires the Responses API; "
+                "this provider uses Chat Completions"
+            )
         if tools:
-            fn_tools = [_tool_to_sdk(t) for t in tools if not t.get("_server_tool")]
-            server_tools = [t for t in tools if t.get("_server_tool")]
-            if fn_tools:
-                sdk_kwargs["tools"] = fn_tools
-            for st in server_tools:
-                st_type = st["type"]
-                if st_type == "web_search":
-                    sdk_kwargs.setdefault("tools", []).append({"type": "web_search"})
-                elif st_type == "code_execution":
-                    sdk_kwargs.setdefault("tools", []).append({"type": "code_interpreter"})
+            params["tools"] = [_tool_to_sdk(tool) for tool in tools]
+        if options.tool_choice is not None and profile.tools:
+            params["tool_choice"] = _tool_choice(options.tool_choice)
 
-        # tool_choice
-        if tool_choice is not None:
-            if tool_choice in ("auto", "required", "none"):
-                sdk_kwargs["tool_choice"] = tool_choice
-            else:
-                sdk_kwargs["tool_choice"] = {
-                    "type": "function",
-                    "function": {"name": tool_choice},
-                }
+    def _format(self, params: Params, options: Options) -> None:
+        response_format: ResponseFormat | None = None
+        if options.output_schema is not None:
+            response_format = _build_output_schema_format(options.output_schema)
+        if options.json_mode:
+            response_format = {"type": "json_object"}
+        if response_format is not None:
+            params["response_format"] = response_format
 
-        # json_mode
-        if json_mode:
-            sdk_kwargs["response_format"] = {"type": "json_object"}
+    async def send(self, prepared: Prepared[Params]) -> ChatCompletion:
+        return await self._client.chat.completions.create(**prepared.params)
 
-        # logprobs
-        if logprobs_flag:
-            sdk_kwargs["logprobs"] = True
+    async def open_stream(
+        self, prepared: Prepared[Params]
+    ) -> AsyncIterator[StreamEvent | Done[ChatCompletion]]:
+        # The SDK's accumulator builds the final completion; its get_final_completion() would
+        # raise on finish_reason="length", so the snapshot is read instead.
+        snapshot = ChatCompletionStreamState()
+        streaming: CompletionCreateParamsStreaming = {
+            **prepared.params,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        stream = await self._client.chat.completions.create(**streaming)
+        received = False
+        async with stream:
+            async for chunk in stream:
+                received = True
+                snapshot.handle_chunk(chunk)
+                for event in _chunk_events(chunk):
+                    yield event
+        if received:
+            yield Done(snapshot.current_completion_snapshot)
 
-        return sdk_kwargs
+    def assemble(self, final: ChatCompletion, prepared: Prepared[Params]) -> Response:
+        return _parse_sdk_response(final, self._model, output_schema=prepared.output_schema)
 
-    # ------------------------------------------------------------------
-    # complete
-    # ------------------------------------------------------------------
+    def usage(self, final: ChatCompletion) -> Usage | None:
+        return _extract_usage(final.usage) if final.usage else None
 
-    async def complete(
-        self,
-        messages: list[dict[str, Any]],
-        *,
-        system: str | None = None,
-        tools: list[dict[str, Any]] | None = None,
-        **kwargs: Any,
-    ) -> Response:
-        output_schema: OutputSchema | None = kwargs.get("output_schema")
-        wire = _messages_to_sdk(messages, system=system)
-        sdk_kwargs = self._build_sdk_kwargs(wire, tools=tools, **kwargs)
+    def map_error(self, exc: Exception, *, sent: bool) -> ProviderError | None:
+        """The one place that knows the SDK's errors.
 
-        logger.debug("complete start model=%s messages=%d", self._model, len(messages))
-        try:
-            completion = await self._client.chat.completions.create(**sdk_kwargs)
-        except openai.RateLimitError as exc:
-            retry_after = exc.response.headers.get("retry-after") if exc.response else None
-            raise RateLimitError(
-                exc.response.status_code if exc.response else 429,
-                str(exc.body),
-                retry_after=_parse_retry_after(retry_after),
-            ) from exc
-        except openai.APIStatusError as exc:
-            raise APIError(
-                exc.response.status_code if exc.response else 500,
-                str(exc.body),
-            ) from exc
-        except openai.APIConnectionError as exc:
-            timed_out = isinstance(exc, openai.APITimeoutError)
-            raise network_error(exc, timed_out=timed_out) from exc
-
-        resp = _parse_sdk_response(completion, self._model, output_schema=output_schema)
-        logger.debug(
-            "complete done model=%s tokens_in=%d tokens_out=%d",
-            self._model,
-            resp.usage.input_tokens,
-            resp.usage.output_tokens,
-        )
-        return resp
-
-    # ------------------------------------------------------------------
-    # stream
-    # ------------------------------------------------------------------
-
-    def _stream_core(
-        self,
-        sdk_kwargs: dict[str, Any],
-        state: StreamState,
-    ) -> AsyncIterator[StreamEvent]:
-        """Single SDK chunk loop shared by ``stream()`` and ``stream_events()``.
-
-        Each reasoning delta is emitted as a ``partial`` thinking event in real
-        time; ``state.thinking`` holds one block that is kept up to date after
-        every fragment, so an early-abandoned stream still finalizes with the
-        reasoning received so far.
+        OpenAI documents no billing for error responses
+        (https://developers.openai.com/api/docs/guides/error-codes), only that a 429 is not
+        charged (https://platform.openai.com/docs/guides/flex-processing); every other failure
+        after dispatch stays indeterminate.
         """
-
-        async def _flush_tool_calls(
-            tc_acc: dict[int, dict[str, str]],
-        ) -> AsyncIterator[StreamEvent]:
-            for _idx in sorted(tc_acc):
-                acc = tc_acc[_idx]
-                tool_call = ToolCall(
-                    id=acc["id"],
-                    name=acc["name"],
-                    input=parse_tool_args(acc["arguments"]),
-                )
-                state.tool_calls.append(tool_call)
-                yield StreamEvent(kind="tool_call", tool_call=tool_call)
-            tc_acc.clear()
-
-        async def _generate() -> AsyncIterator[StreamEvent]:
-            tc_acc: dict[int, dict[str, str]] = {}
-            reasoning_acc = ""
-
-            try:
-                stream = await self._client.chat.completions.create(
-                    **sdk_kwargs,
-                    stream=True,
-                    stream_options={"include_usage": True},
-                )
-                async for chunk in stream:
-                    # Usage chunk (final)
-                    if chunk.usage:
-                        state.usage = _extract_usage(chunk.usage)
-
-                    choices = chunk.choices or []
-                    if not choices:
-                        continue
-
-                    choice = choices[0]
-                    delta = choice.delta
-
-                    # Vendor reasoning deltas (local OpenAI-compatible servers).
-                    # Keep state.thinking's single block current per fragment so
-                    # early-abandoned streams still finalize with the reasoning.
-                    if delta and (fragment := _reasoning_text(delta)):
-                        first = not reasoning_acc
-                        reasoning_acc += fragment
-                        block = ThinkingBlock(text=reasoning_acc)
-                        if first:
-                            state.thinking.append(block)
-                        else:
-                            state.thinking[-1] = block
-                        yield StreamEvent(
-                            kind="thinking", thinking=ThinkingBlock(text=fragment), partial=True
-                        )
-
-                    # Text content
-                    if delta and delta.content:
-                        yield StreamEvent(kind="text", text=delta.content)
-
-                    # Accumulate tool call deltas
-                    if delta and delta.tool_calls:
-                        for tc_delta in delta.tool_calls:
-                            idx = tc_delta.index
-                            if idx not in tc_acc:
-                                tc_acc[idx] = {
-                                    "id": tc_delta.id or "",
-                                    "name": (
-                                        tc_delta.function.name
-                                        if tc_delta.function and tc_delta.function.name
-                                        else ""
-                                    ),
-                                    "arguments": "",
-                                }
-                            else:
-                                if tc_delta.id:
-                                    tc_acc[idx]["id"] = tc_delta.id
-                                if tc_delta.function and tc_delta.function.name:
-                                    tc_acc[idx]["name"] = tc_delta.function.name
-                            if tc_delta.function and tc_delta.function.arguments:
-                                tc_acc[idx]["arguments"] += tc_delta.function.arguments
-
-                    finish = choice.finish_reason
-                    if finish == "tool_calls" and tc_acc:
-                        async for event in _flush_tool_calls(tc_acc):
-                            yield event
-
-                    if finish:
-                        state.stop_reason = finish
-
-                    if chunk.model:
-                        state.model = chunk.model
-
-                    state.raw = chunk
-
-                # Some OpenAI-compatible servers end tool-call turns with
-                # finish_reason "stop" — flush whatever was accumulated.
-                if tc_acc:
-                    async for event in _flush_tool_calls(tc_acc):
-                        yield event
-
-            except openai.RateLimitError as exc:
-                retry_after = exc.response.headers.get("retry-after") if exc.response else None
-                raise RateLimitError(
-                    exc.response.status_code if exc.response else 429,
-                    str(exc.body),
-                    retry_after=_parse_retry_after(retry_after),
-                ) from exc
-            except openai.APIStatusError as exc:
-                raise APIError(
-                    exc.response.status_code if exc.response else 500,
-                    str(exc.body),
-                ) from exc
-            except openai.APIConnectionError as exc:
-                timed_out = isinstance(exc, openai.APITimeoutError)
-                raise network_error(exc, timed_out=timed_out) from exc
-
-        return _generate()
-
-    def stream(
-        self,
-        messages: list[dict[str, Any]],
-        *,
-        system: str | None = None,
-        tools: list[dict[str, Any]] | None = None,
-        **kwargs: Any,
-    ) -> tuple[AsyncIterator[str], StreamState]:
-        wire = _messages_to_sdk(messages, system=system)
-        sdk_kwargs = self._build_sdk_kwargs(wire, tools=tools, **kwargs)
-
-        logger.debug("stream start model=%s", self._model)
-        state = StreamState()
-        state.model = self._model
-        events = self._stream_core(sdk_kwargs, state)
-
-        async def _text_only() -> AsyncIterator[str]:
-            async for event in events:
-                if event.kind == "text" and event.text:
-                    yield event.text
-
-        return _text_only(), state
-
-    def stream_events(
-        self,
-        messages: list[dict[str, Any]],
-        *,
-        system: str | None = None,
-        tools: list[dict[str, Any]] | None = None,
-        **kwargs: Any,
-    ) -> tuple[AsyncIterator[StreamEvent], StreamState]:
-        wire = _messages_to_sdk(messages, system=system)
-        sdk_kwargs = self._build_sdk_kwargs(wire, tools=tools, **kwargs)
-
-        logger.debug("stream_events start model=%s", self._model)
-        state = StreamState()
-        state.model = self._model
-        return self._stream_core(sdk_kwargs, state), state
+        if isinstance(exc, openai.RateLimitError):
+            retry_after = _parse_retry_after(exc.response.headers.get("retry-after"))
+            return RateLimitError(exc.response.status_code, str(exc.body), retry_after=retry_after)
+        if isinstance(exc, openai.APIStatusError):
+            return APIError(exc.response.status_code, str(exc.body))
+        if isinstance(exc, openai.APIConnectionError):
+            return transport_error(exc.__cause__ or exc, not_sent=_NOT_SENT, timeouts=_TIMEOUTS)
+        if isinstance(exc, httpx2.TransportError):  # raised while reading a stream
+            return transport_error(exc, not_sent=_NOT_SENT, timeouts=_TIMEOUTS)
+        if isinstance(exc, openai.APIError):  # an error event inside the stream
+            return ResponseError(f"the stream reported an error: {exc.message}")
+        return refused_or_unread(exc, sent=sent)
 
     # ------------------------------------------------------------------
     # batch
@@ -737,41 +612,22 @@ class OpenAIProvider(LoopAwareClientCache, BaseProvider):
         requests: list[dict[str, Any]],
         **kwargs: Any,
     ) -> str:
-        """Submit a batch via OpenAI's Batch API."""
+        """Submit a batch via OpenAI's Batch API; each body is what ``prepare`` builds."""
         import io
 
-        lines: list[str] = []
-        for req in requests:
-            custom_id = req.get("custom_id", "")
-            messages = req.get("messages", [])
-            req_system = req.get("system")
-            tools = req.get("tools")
-            req_kwargs = req.get("kwargs", {})
-
-            wire = _messages_to_sdk(messages, system=req_system)
-            body: dict[str, Any] = {
-                "model": self._model,
-                "messages": wire,
-                "max_tokens": req_kwargs.get("max_tokens", 4096),
-            }
-            if tools:
-                fn_tools = [t for t in tools if not t.get("_server_tool")]
-                if fn_tools:
-                    body["tools"] = [_tool_to_sdk(t) for t in fn_tools]
-
-            lines.append(
-                json.dumps(
-                    {
-                        "custom_id": custom_id,
-                        "method": "POST",
-                        "url": "/v1/chat/completions",
-                        "body": body,
-                    }
-                )
+        lines = [
+            json.dumps(
+                {
+                    "custom_id": req.get("custom_id", ""),
+                    "method": "POST",
+                    "url": "/v1/chat/completions",
+                    "body": self._batch_body(req),
+                }
             )
-
+            for req in requests
+        ]
         content = "\n".join(lines)
-        try:
+        with self._mapped():
             file = await self._client.files.create(
                 file=io.BytesIO(content.encode()), purpose="batch"
             )
@@ -780,48 +636,35 @@ class OpenAIProvider(LoopAwareClientCache, BaseProvider):
                 endpoint="/v1/chat/completions",
                 completion_window="24h",
             )
-            return batch.id
-        except openai.APIStatusError as exc:
-            raise APIError(
-                exc.response.status_code if exc.response else 500,
-                str(exc.body),
-            ) from exc
-        except openai.APIConnectionError as exc:
-            timed_out = isinstance(exc, openai.APITimeoutError)
-            raise network_error(exc, timed_out=timed_out) from exc
+        return batch.id
+
+    def _batch_body(self, req: dict[str, Any]) -> Params:
+        """A batch line's body: the same typed request a call sends (4096 tokens by default)."""
+        request = Request(
+            messages=req.get("messages", []),
+            system=req.get("system"),
+            tools=req.get("tools"),
+            model=self._model,
+            kwargs={"max_tokens": 4096, **req.get("kwargs", {})},
+        )
+        return self.prepare(request).params
 
     async def batch_status(self, batch_id: str) -> str:
         """Check batch status."""
-        try:
+        with self._mapped():
             batch = await self._client.batches.retrieve(batch_id)
-            return batch.status
-        except openai.APIStatusError as exc:
-            raise APIError(
-                exc.response.status_code if exc.response else 500,
-                str(exc.body),
-            ) from exc
-        except openai.APIConnectionError as exc:
-            timed_out = isinstance(exc, openai.APITimeoutError)
-            raise network_error(exc, timed_out=timed_out) from exc
+        return batch.status
 
     async def batch_results(self, batch_id: str) -> list[Any]:
         """Retrieve completed batch results."""
         from ai_arch_toolkit.core._batch import BatchResult
 
-        try:
+        with self._mapped():
             batch = await self._client.batches.retrieve(batch_id)
             if not batch.output_file_id:
                 return []
             file_response = await self._client.files.content(batch.output_file_id)
-            raw_text = file_response.text
-        except openai.APIStatusError as exc:
-            raise APIError(
-                exc.response.status_code if exc.response else 500,
-                str(exc.body),
-            ) from exc
-        except openai.APIConnectionError as exc:
-            timed_out = isinstance(exc, openai.APITimeoutError)
-            raise network_error(exc, timed_out=timed_out) from exc
+        raw_text = file_response.text
 
         results: list[BatchResult] = []
         for line in raw_text.strip().splitlines():
@@ -888,3 +731,11 @@ class OpenAIProvider(LoopAwareClientCache, BaseProvider):
             model=body.get("model", self._model),
             raw=body,
         )
+
+
+def _http() -> Any:
+    """The SDK's HTTP client, with the hook that marks a request as handed to the transport."""
+    return openai.DefaultAsyncHttpxClient(event_hooks={"request": [on_request]})
+
+
+_TIMEOUTS = (httpx2.TimeoutException, openai.APITimeoutError)

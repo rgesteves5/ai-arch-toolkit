@@ -14,23 +14,41 @@ from anthropic.types.raw_message_delta_event import Delta
 
 from ai_arch_toolkit.core import LLM, MeterScope
 from ai_arch_toolkit.core._content import CachePart, DocumentPart, ImagePart
-from ai_arch_toolkit.core._exceptions import APIError, RateLimitError
+from ai_arch_toolkit.core._exceptions import (
+    APIError,
+    RateLimitError,
+    RequestError,
+    ResponseError,
+    TransportError,
+)
 from ai_arch_toolkit.core._providers._anthropic import (
     AnthropicProvider,
     _build_output_config,
-    _build_thinking_param,
     _content_to_sdk,
     _extract_usage,
     _messages_to_sdk,
     _parse_sdk_response,
     _tool_to_sdk,
 )
-from ai_arch_toolkit.core._providers._base import StreamState
+from ai_arch_toolkit.core._providers._base import on_request
 from ai_arch_toolkit.core._response import OutputSchema, Response, ToolCall, Usage
+from tests.provider_calls import assembled, prepare
+from tests.provider_calls import complete as _complete
+from tests.provider_calls import stream as _stream
+from tests.sdk_streams import AnthropicStream
 
 # ---------------------------------------------------------------------------
 # Helpers — build fake SDK objects
 # ---------------------------------------------------------------------------
+
+
+async def complete(provider, messages, **kwargs):
+    """A call as the LLM makes it: the Messages API requires max_tokens, and the LLM sends one."""
+    return await _complete(provider, messages, **{"max_tokens": 1024, **kwargs})
+
+
+async def stream(provider, messages, **kwargs):
+    return await _stream(provider, messages, **{"max_tokens": 1024, **kwargs})
 
 
 def _sdk_accepts(method: str, call_kwargs: dict) -> None:
@@ -76,6 +94,7 @@ def _sdk_message(
         output_tokens_details=SimpleNamespace(thinking_tokens=thinking_tokens),
     )
     return SimpleNamespace(
+        id="msg_test",
         content=content,
         model=model,
         stop_reason=stop_reason,
@@ -224,31 +243,6 @@ class TestToolToSdk:
         assert "b" not in result["input_schema"]["properties"]
 
 
-class TestBuildThinkingParam:
-    def test_disabled(self):
-        assert _build_thinking_param(False, None, None) is None
-
-    def test_enabled_default(self):
-        cfg = _build_thinking_param(True, None, None)
-        assert cfg == {"type": "enabled", "budget_tokens": 10000}
-
-    def test_explicit_budget(self):
-        cfg = _build_thinking_param(True, None, 5000)
-        assert cfg == {"type": "enabled", "budget_tokens": 5000}
-
-    def test_effort_high(self):
-        cfg = _build_thinking_param(True, "high", None)
-        assert cfg["budget_tokens"] == 10000
-
-    def test_effort_low(self):
-        cfg = _build_thinking_param(True, "low", None)
-        assert cfg["budget_tokens"] == 2048
-
-    def test_effort_medium(self):
-        cfg = _build_thinking_param(True, "medium", None)
-        assert cfg["budget_tokens"] == 5000
-
-
 class TestBuildOutputConfig:
     def test_creates_output_config(self):
         schema = OutputSchema(
@@ -274,12 +268,6 @@ class TestExtractUsage:
         assert usage.cache_write_tokens == 20
         assert usage.cache_read_tokens == 10
 
-    def test_missing_cache_fields(self):
-        sdk_usage = SimpleNamespace(input_tokens=10, output_tokens=5)
-        usage = _extract_usage(sdk_usage)
-        assert usage.cache_write_tokens == 0
-        assert usage.cache_read_tokens == 0
-
     def test_null_cache_fields_become_zero(self):
         # The SDK types both cache counters as Optional and defaults them to None.
         usage = _extract_usage(sdk_types.Usage(input_tokens=10, output_tokens=5))
@@ -288,11 +276,7 @@ class TestExtractUsage:
         )
 
     def test_output_tokens_remain_inclusive_of_thinking(self):
-        sdk_usage = SimpleNamespace(
-            input_tokens=100,
-            output_tokens=50,
-            output_tokens_details=SimpleNamespace(thinking_tokens=30),
-        )
+        sdk_usage = sdk_types.Usage(input_tokens=100, output_tokens=50)
         usage = _extract_usage(sdk_usage)
         assert usage.output_tokens == 50
 
@@ -300,7 +284,7 @@ class TestExtractUsage:
 class TestParseSdkResponse:
     def test_text_response(self):
         msg = _sdk_message(text="Hello!")
-        r = _parse_sdk_response(msg, "claude-sonnet-4-6")
+        r = assembled(AnthropicProvider("claude-sonnet-4-6", "test-key"), msg)
         assert r.text == "Hello!"
         assert r.usage.input_tokens == 10
         assert r.usage.output_tokens == 5
@@ -321,18 +305,18 @@ class TestParseSdkResponse:
 
     def test_cost_is_computed(self):
         msg = _sdk_message(input_tokens=1000, output_tokens=500)
-        r = _parse_sdk_response(msg, "claude-sonnet-4-6")
+        r = assembled(AnthropicProvider("claude-sonnet-4-6", "test-key"), msg)
         assert r.cost is not None
         assert r.cost > 0
 
     def test_cost_unknown_model(self):
         msg = _sdk_message(input_tokens=1000, output_tokens=500)
-        r = _parse_sdk_response(msg, "unknown-model-v9")
+        r = assembled(AnthropicProvider("unknown-model-v9", "test-key"), msg)
         assert r.cost is None
 
     def test_cache_tokens(self):
         msg = _sdk_message(cache_creation_input_tokens=20, cache_read_input_tokens=10)
-        r = _parse_sdk_response(msg, "claude-sonnet-4-6")
+        r = assembled(AnthropicProvider("claude-sonnet-4-6", "test-key"), msg)
         assert r.usage.cache_write_tokens == 20
         assert r.usage.cache_read_tokens == 10
 
@@ -345,7 +329,7 @@ class TestParseSdkResponse:
                 cache_read_input_tokens=None,
             )
         )
-        r = _parse_sdk_response(msg, "claude-sonnet-4-6")
+        r = assembled(AnthropicProvider("claude-sonnet-4-6", "test-key"), msg)
         assert r.usage.cache_write_tokens == 0
         assert r.usage.cache_read_tokens == 0
         assert r.cost is not None
@@ -413,17 +397,6 @@ class TestParseSdkResponse:
         assert r.raw is msg
 
 
-class TestStreamState:
-    def test_initial_state(self):
-        state = StreamState()
-        assert state.usage is None
-        assert state.model == ""
-        assert state.stop_reason == ""
-        assert state.raw is None
-        assert state.tool_calls == []
-        assert state.thinking == []
-
-
 # ---------------------------------------------------------------------------
 # Provider integration tests (mocked SDK client)
 # ---------------------------------------------------------------------------
@@ -438,20 +411,13 @@ _SYSTEM_MERGE_MESSAGES = [
 class TestAnthropicSystemPrompts:
     """``system=`` is never dropped for ``system()`` messages, or the other way round."""
 
-    @pytest.mark.parametrize("method", ["stream", "stream_events"])
-    async def test_streams_send_explicit_then_message_system(self, method):
+    async def test_streams_send_explicit_then_message_system(self):
         mock_client = MagicMock()
-        mock_client.messages.stream.return_value = _FakeAnthropicStream(
-            [], SimpleNamespace(content=[])
-        )
+        mock_client.messages.stream.return_value = _cumulative_text_stream()
         provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
         provider._client = mock_client
 
-        iterator, _state = getattr(provider, method)(
-            _SYSTEM_MERGE_MESSAGES, system="B", max_tokens=64
-        )
-        async for _ in iterator:
-            pass
+        await stream(provider, _SYSTEM_MERGE_MESSAGES, system="B", max_tokens=64)
 
         call_kwargs = mock_client.messages.stream.call_args.kwargs
         assert call_kwargs["system"] == "B\n\nA"
@@ -472,7 +438,7 @@ class TestAnthropicSystemPrompts:
         provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
         provider._client = mock_client
 
-        await provider.complete(_SYSTEM_MERGE_MESSAGES, system="")
+        await complete(provider, _SYSTEM_MERGE_MESSAGES, system="")
 
         assert mock_client.messages.create.call_args.kwargs["system"] == "A"
 
@@ -493,7 +459,7 @@ class TestAnthropicSystemPrompts:
         provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
         provider._client = mock_client
 
-        await provider.complete(messages, system=blocks)  # type: ignore[arg-type]
+        await complete(provider, messages, system=blocks)  # type: ignore[arg-type]
 
         assert mock_client.messages.create.call_args.kwargs["system"] == [*blocks, *extra]
 
@@ -532,9 +498,13 @@ class TestAnthropicProviderComplete:
         mock_client.messages.create.return_value = _sdk_message(text="Hello!")
 
         provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
-        mock_sdk.AsyncAnthropic.assert_called_once_with(api_key="test-key", max_retries=0)
+        mock_sdk.AsyncAnthropic.assert_called_once_with(
+            api_key="test-key",
+            max_retries=0,
+            http_client=mock_sdk.DefaultAsyncHttpxClient.return_value,
+        )
         provider._client = mock_client
-        result = await provider.complete([{"role": "user", "content": "Hi"}])
+        result = await complete(provider, [{"role": "user", "content": "Hi"}])
         assert result.text == "Hello!"
         assert isinstance(result, Response)
         mock_client.messages.create.assert_called_once()
@@ -552,7 +522,7 @@ class TestAnthropicProviderComplete:
         tools = [{"name": "search", "description": "Search", "parameters": {"type": "object"}}]
         provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
         provider._client = mock_client
-        result = await provider.complete([{"role": "user", "content": "Hi"}], tools=tools)
+        result = await complete(provider, [{"role": "user", "content": "Hi"}], tools=tools)
         assert result.has_tool_calls
 
         call_kwargs = mock_client.messages.create.call_args[1]
@@ -570,7 +540,7 @@ class TestAnthropicProviderComplete:
             {"role": "system", "content": "Be brief."},
             {"role": "user", "content": "Hi"},
         ]
-        await provider.complete(msgs)
+        await complete(provider, msgs)
         call_kwargs = mock_client.messages.create.call_args[1]
         assert call_kwargs["system"] == "Be brief."
         assert all(m["role"] != "system" for m in call_kwargs["messages"])
@@ -587,7 +557,7 @@ class TestAnthropicProviderComplete:
             {"role": "system", "content": "From message."},
             {"role": "user", "content": "Hi"},
         ]
-        await provider.complete(msgs, system="Explicit system.")
+        await complete(provider, msgs, system="Explicit system.")
         call_kwargs = mock_client.messages.create.call_args[1]
         assert call_kwargs["system"] == "Explicit system.\n\nFrom message."
         assert all(m["role"] != "system" for m in call_kwargs["messages"])
@@ -602,15 +572,17 @@ class TestAnthropicProviderComplete:
 
         provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
         provider._client = mock_client
-        result = await provider.complete(
+        result = await complete(
+            provider,
             [{"role": "user", "content": "Hi"}],
             temperature=0.0,
             thinking=True,
             thinking_effort="high",
         )
         call_kwargs = mock_client.messages.create.call_args[1]
-        assert "thinking" in call_kwargs
-        assert call_kwargs["thinking"]["type"] == "enabled"
+        # The 4.6 models think adaptively, with the effort in output_config.
+        assert call_kwargs["thinking"] == {"type": "adaptive", "display": "summarized"}
+        assert call_kwargs["output_config"] == {"effort": "high"}
         assert "temperature" not in call_kwargs.get("extra_body", {})  # thinking needs the default
         _sdk_accepts("create", call_kwargs)
         assert len(result.thinking) == 1
@@ -630,7 +602,8 @@ class TestAnthropicProviderComplete:
         )
         provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
         provider._client = mock_client
-        result = await provider.complete(
+        result = await complete(
+            provider,
             [{"role": "user", "content": "Hi"}],
             output_schema=schema,
         )
@@ -653,7 +626,8 @@ class TestAnthropicProviderComplete:
         tools = [{"name": "search", "description": "Search", "parameters": {"type": "object"}}]
         provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
         provider._client = mock_client
-        result = await provider.complete(
+        result = await complete(
+            provider,
             [{"role": "user", "content": "Hi"}],
             tools=tools,
             output_schema=schema,
@@ -678,7 +652,8 @@ class TestAnthropicProviderComplete:
         )
         provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
         provider._client = mock_client
-        result = await provider.complete(
+        result = await complete(
+            provider,
             [{"role": "user", "content": "Hi"}],
             system="You are helpful.",
             output_schema=schema,
@@ -702,7 +677,8 @@ class TestAnthropicProviderComplete:
         provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
         provider._client = mock_client
         with pytest.raises(ValueError, match="structured_output_mode"):
-            await provider.complete(
+            await complete(
+                provider,
                 [{"role": "user", "content": "Hi"}],
                 output_schema=schema,
                 structured_output_mode="bogus",
@@ -718,7 +694,8 @@ class TestAnthropicProviderComplete:
         provider._client = mock_client
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            await provider.complete(
+            await complete(
+                provider,
                 [{"role": "user", "content": "Hi"}],
                 topp=0.9,
                 typo_param=True,
@@ -736,7 +713,8 @@ class TestAnthropicProviderComplete:
         provider._client = mock_client
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            await provider.complete(
+            await complete(
+                provider,
                 [{"role": "user", "content": "Hi"}],
                 temperature=0.5,
                 top_p=0.9,
@@ -761,7 +739,8 @@ class TestAnthropicProviderComplete:
 
         provider = AnthropicProvider(model, "test-key")
         provider._client = mock_client
-        await provider.complete(
+        await complete(
+            provider,
             [{"role": "user", "content": "Hi"}],
             temperature=0.0,
         )
@@ -777,7 +756,8 @@ class TestAnthropicProviderComplete:
 
         provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
         provider._client = mock_client
-        await provider.complete(
+        await complete(
+            provider,
             [{"role": "user", "content": "Hi"}],
             temperature=0.2,
             top_p=0.9,
@@ -787,18 +767,6 @@ class TestAnthropicProviderComplete:
         # anthropic 1.x removed sampling from its signatures; the API still takes it in the body.
         assert call_kwargs["extra_body"] == {"temperature": 0.2, "top_p": 0.9, "top_k": 40}
         _sdk_accepts("create", call_kwargs)
-
-    @patch("ai_arch_toolkit.core._providers._anthropic.anthropic")
-    async def test_does_not_inject_max_tokens(self, mock_sdk):
-        mock_client = AsyncMock()
-        mock_sdk.AsyncAnthropic.return_value = mock_client
-        mock_client.messages.create.return_value = _sdk_message()
-
-        provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
-        provider._client = mock_client
-        await provider.complete([{"role": "user", "content": "Hi"}])
-        call_kwargs = mock_client.messages.create.call_args[1]
-        assert "max_tokens" not in call_kwargs
 
 
 class TestAnthropicProviderErrors:
@@ -816,7 +784,7 @@ class TestAnthropicProviderErrors:
         provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
         provider._client = mock_client
         with pytest.raises(RateLimitError) as exc_info:
-            await provider.complete([{"role": "user", "content": "Hi"}])
+            await complete(provider, [{"role": "user", "content": "Hi"}])
         assert exc_info.value.status_code == 429
         assert exc_info.value.retry_after == 5.0
 
@@ -834,7 +802,7 @@ class TestAnthropicProviderErrors:
         provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
         provider._client = mock_client
         with pytest.raises(APIError) as exc_info:
-            await provider.complete([{"role": "user", "content": "Hi"}])
+            await complete(provider, [{"role": "user", "content": "Hi"}])
         assert exc_info.value.status_code == 500
 
 
@@ -859,15 +827,11 @@ class TestAnthropicProviderNetworkErrors:
         messages = [{"role": "user", "content": "Hi"}]
 
         with pytest.raises(expected):
-            await provider.complete(messages)
+            await complete(provider, messages)
         with pytest.raises(expected):
             await provider.count_tokens(messages)
-        chunks, _ = provider.stream(messages)
         with pytest.raises(expected):
-            _ = [chunk async for chunk in chunks]
-        events, _ = provider.stream_events(messages)
-        with pytest.raises(expected):
-            _ = [event async for event in events]
+            await stream(provider, messages)
 
 
 class TestAnthropicProviderLifecycle:
@@ -880,109 +844,82 @@ class TestAnthropicProviderLifecycle:
             assert provider._client is not None
 
 
-class _FakeAnthropicStream:
-    def __init__(self, events, final_message):
-        self._events = iter(events)
-        self._final = final_message
+def _message_start(usage: sdk_types.Usage | None = None) -> sdk_types.RawMessageStartEvent:
+    return sdk_types.RawMessageStartEvent(
+        type="message_start", message=_real_message(text="", stop_reason=None, usage=usage)
+    )
 
-    async def __aenter__(self):
-        return self
 
-    async def __aexit__(self, exc_type, exc, tb):
-        return None
-
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        try:
-            return next(self._events)
-        except StopIteration as exc:
-            raise StopAsyncIteration from exc
-
-    async def get_final_message(self):
-        return self._final
+def _message_end(usage: sdk_types.MessageDeltaUsage) -> list:
+    return [
+        sdk_types.RawMessageDeltaEvent(
+            type="message_delta", delta=Delta(stop_reason="end_turn"), usage=usage
+        ),
+        sdk_types.RawMessageStopEvent(type="message_stop"),
+    ]
 
 
 class TestAnthropicProviderStreamEvents:
-    async def test_stream_events_yield_thinking_deltas(self):
+    async def test_a_thinking_block_streams_whole_when_it_finishes(self):
         events = [
-            SimpleNamespace(
+            _message_start(),
+            sdk_types.RawContentBlockStartEvent(
                 type="content_block_start",
-                content_block=SimpleNamespace(type="thinking"),
+                index=0,
+                content_block=sdk_types.ThinkingBlock(type="thinking", thinking="", signature=""),
             ),
-            SimpleNamespace(
+            sdk_types.RawContentBlockDeltaEvent(
                 type="content_block_delta",
-                delta=SimpleNamespace(type="thinking_delta", thinking="step1 "),
+                index=0,
+                delta=sdk_types.ThinkingDelta(type="thinking_delta", thinking="step1 "),
             ),
-            SimpleNamespace(
+            sdk_types.RawContentBlockDeltaEvent(
                 type="content_block_delta",
-                delta=SimpleNamespace(type="thinking_delta", thinking="step2"),
+                index=0,
+                delta=sdk_types.ThinkingDelta(type="thinking_delta", thinking="step2"),
             ),
-            SimpleNamespace(type="content_block_stop"),
+            sdk_types.RawContentBlockStopEvent(type="content_block_stop", index=0),
+            *_message_end(sdk_types.MessageDeltaUsage(output_tokens=7)),
         ]
-        final_message = SimpleNamespace(content=[])
-
         mock_client = MagicMock()
-        mock_client.messages.stream.return_value = _FakeAnthropicStream(events, final_message)
-
+        mock_client.messages.stream.return_value = AnthropicStream(events)
         provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
         provider._client = mock_client
 
-        event_iter, state = provider.stream_events(
-            [{"role": "user", "content": "Hi"}],
-            max_tokens=64,
+        collected, response = await stream(
+            provider, [{"role": "user", "content": "Hi"}], max_tokens=64
         )
-        collected = [event async for event in event_iter]
 
         thinking_events = [event for event in collected if event.kind == "thinking"]
-        # Deltas are buffered and emitted as a single complete block on content_block_stop
+        # The SDK buffers the deltas; the block streams whole when it stops.
         assert [e.thinking.text for e in thinking_events if e.thinking] == ["step1 step2"]
-        assert [b.text for b in state.thinking] == ["step1 step2"]
-
-
-_USAGE_COUNT_FIELDS = {
-    "input_tokens",
-    "output_tokens",
-    "cache_creation_input_tokens",
-    "cache_read_input_tokens",
-}
+        assert [b.text for b in response.thinking] == ["step1 step2"]
 
 
 def _real_text_stream(
     start_usage: sdk_types.Usage, delta_usage: sdk_types.MessageDeltaUsage
-) -> _FakeAnthropicStream:
+) -> AnthropicStream:
     """Stream a one-block text reply as the real SDK event types, in wire order."""
-    events = [
-        sdk_types.RawMessageStartEvent(
-            type="message_start",
-            message=_real_message(text="", stop_reason=None, usage=start_usage),
-        ),
-        sdk_types.RawContentBlockStartEvent(
-            type="content_block_start",
-            index=0,
-            content_block=sdk_types.TextBlock(type="text", text=""),
-        ),
-        sdk_types.RawContentBlockDeltaEvent(
-            type="content_block_delta",
-            index=0,
-            delta=sdk_types.TextDelta(type="text_delta", text="Hello!"),
-        ),
-        sdk_types.RawContentBlockStopEvent(type="content_block_stop", index=0),
-        sdk_types.RawMessageDeltaEvent(
-            type="message_delta",
-            delta=Delta(stop_reason="end_turn"),
-            usage=delta_usage,
-        ),
-        sdk_types.RawMessageStopEvent(type="message_stop"),
-    ]
-    # Like the SDK's accumulated snapshot: each non-null delta count replaces the start count.
-    final_counts = delta_usage.model_dump(include=_USAGE_COUNT_FIELDS, exclude_none=True)
-    final = _real_message(usage=start_usage.model_copy(update=final_counts))
-    return _FakeAnthropicStream(events, final)
+    return AnthropicStream(
+        [
+            _message_start(start_usage),
+            sdk_types.RawContentBlockStartEvent(
+                type="content_block_start",
+                index=0,
+                content_block=sdk_types.TextBlock(type="text", text=""),
+            ),
+            sdk_types.RawContentBlockDeltaEvent(
+                type="content_block_delta",
+                index=0,
+                delta=sdk_types.TextDelta(type="text_delta", text="Hello!"),
+            ),
+            sdk_types.RawContentBlockStopEvent(type="content_block_stop", index=0),
+            *_message_end(delta_usage),
+        ]
+    )
 
 
-def _cumulative_text_stream() -> _FakeAnthropicStream:
+def _cumulative_text_stream() -> AnthropicStream:
     """Current API shape: ``message_delta`` repeats the input counts as running totals."""
     return _real_text_stream(
         sdk_types.Usage(
@@ -1000,28 +937,26 @@ def _cumulative_text_stream() -> _FakeAnthropicStream:
     )
 
 
-async def _drain_provider_stream(stream: _FakeAnthropicStream, method: str) -> StreamState:
+async def _stream_usage(sdk_stream: AnthropicStream) -> Usage:
     provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
     provider._client = MagicMock()
-    provider._client.messages.stream.return_value = stream
-    iterator, state = getattr(provider, method)([{"role": "user", "content": "Hi"}])
-    async for _ in iterator:
-        pass
-    return state
+    provider._client.messages.stream.return_value = sdk_stream
+    events, response = await stream(provider, [{"role": "user", "content": "Hi"}])
+    assert [event.text for event in events] == ["Hello!"]
+    return response.usage
 
 
-@pytest.mark.parametrize("method", ["stream", "stream_events"])
 class TestAnthropicStreamUsage:
-    """``message_delta.usage`` counts are cumulative: they replace the running usage."""
+    """``message_delta.usage`` counts are cumulative: the SDK's snapshot replaces, not adds."""
 
-    async def test_cumulative_delta_replaces_message_start_usage(self, method):
-        state = await _drain_provider_stream(_cumulative_text_stream(), method)
-        assert state.usage == Usage(
+    async def test_cumulative_delta_replaces_message_start_usage(self):
+        usage = await _stream_usage(_cumulative_text_stream())
+        assert usage == Usage(
             input_tokens=25, output_tokens=15, cache_write_tokens=0, cache_read_tokens=0
         )
 
-    async def test_cumulative_cache_counts_are_not_added_twice(self, method):
-        stream = _real_text_stream(
+    async def test_cumulative_cache_counts_are_not_added_twice(self):
+        sdk_stream = _real_text_stream(
             sdk_types.Usage(
                 input_tokens=5,
                 output_tokens=1,
@@ -1035,14 +970,13 @@ class TestAnthropicStreamUsage:
                 cache_read_input_tokens=200,
             ),
         )
-        state = await _drain_provider_stream(stream, method)
-        assert state.usage == Usage(
+        assert await _stream_usage(sdk_stream) == Usage(
             input_tokens=5, output_tokens=15, cache_write_tokens=100, cache_read_tokens=200
         )
 
-    async def test_delta_with_only_output_tokens_keeps_message_start_counts(self, method):
+    async def test_delta_with_only_output_tokens_keeps_message_start_counts(self):
         # Every MessageDeltaUsage count except output_tokens is Optional in the SDK.
-        stream = _real_text_stream(
+        sdk_stream = _real_text_stream(
             sdk_types.Usage(
                 input_tokens=25,
                 output_tokens=1,
@@ -1051,8 +985,7 @@ class TestAnthropicStreamUsage:
             ),
             sdk_types.MessageDeltaUsage(output_tokens=15),
         )
-        state = await _drain_provider_stream(stream, method)
-        assert state.usage == Usage(
+        assert await _stream_usage(sdk_stream) == Usage(
             input_tokens=25, output_tokens=15, cache_write_tokens=7, cache_read_tokens=3
         )
 
@@ -1162,3 +1095,261 @@ class TestContentToSdk:
         assert len(wire) == 1
         assert isinstance(wire[0]["content"], list)
         assert wire[0]["content"][0] == {"type": "text", "text": "hello"}
+
+
+# ---------------------------------------------------------------------------
+# R02: the request by model family, from the documented thinking and effort tables
+# (https://platform.claude.com/docs/en/build-with-claude/thinking-troubleshooting,
+# https://platform.claude.com/docs/en/build-with-claude/effort)
+# ---------------------------------------------------------------------------
+
+HI = [{"role": "user", "content": "Hi"}]
+ADAPTIVE = (
+    "claude-fable-5-1",
+    "claude-fable-5",
+    "claude-opus-5",
+    "claude-sonnet-5",
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-opus-4-6",
+    "claude-sonnet-4-6",
+    "claude-opus-5-2",  # a model newer than the table gets the current generation's rules
+)
+EXTENDED = (
+    "claude-haiku-4-5",
+    "claude-haiku-4-5-20251001",
+    "claude-sonnet-4-5-20250929",
+    "claude-opus-4-5",
+    "claude-opus-4-1",
+    "claude-sonnet-4-20250514",
+)
+NO_SAMPLING = ("claude-fable-5-1", "claude-opus-5", "claude-sonnet-5", "claude-opus-4-7")
+
+
+def _params(model: str, messages: list[dict] | None = None, **kwargs) -> dict:
+    kwargs.setdefault("max_tokens", 1024)
+    return prepare(AnthropicProvider(model, "test-key"), messages or HI, **kwargs).params
+
+
+def _refused(model: str, **kwargs) -> str:
+    with pytest.raises(RequestError) as refused:
+        _params(model, **kwargs)
+    return str(refused.value)
+
+
+class TestThinkingByModel:
+    @pytest.mark.parametrize("model", ADAPTIVE)
+    def test_adaptive_models_think_adaptively_and_show_a_summary(self, model):
+        params = _params(model, thinking=True)
+        assert params["thinking"] == {"type": "adaptive", "display": "summarized"}
+        assert params["max_tokens"] == 1024
+        _sdk_accepts("create", params)
+
+    @pytest.mark.parametrize("model", ADAPTIVE)
+    def test_thinking_false_sends_nothing_where_thinking_may_be_on(self, model):
+        assert "thinking" not in _params(model)
+
+    @pytest.mark.parametrize("model", ["claude-opus-5", "claude-fable-5-1", "claude-sonnet-5"])
+    def test_the_effort_applies_on_its_own_and_merges_with_the_format(self, model):
+        assert _params(model, thinking_effort="xhigh")["output_config"] == {"effort": "xhigh"}
+        schema = OutputSchema(name="P", schema={"type": "object"})
+        config = _params(model, thinking_effort="low", output_schema=schema)["output_config"]
+        assert config == {
+            "format": {"type": "json_schema", "schema": {"type": "object"}},
+            "effort": "low",
+        }
+
+    @pytest.mark.parametrize(
+        ("model", "effort"),
+        [
+            ("claude-opus-4-6", "xhigh"),  # the 4.6 models take max but not xhigh
+            ("claude-sonnet-4-6", "xhigh"),
+            ("claude-opus-5", "minimal"),
+            ("claude-opus-5", "none"),
+        ],
+    )
+    def test_an_effort_the_model_does_not_take_is_refused(self, model, effort):
+        assert effort in _refused(model, thinking_effort=effort)
+
+    def test_the_4_6_models_take_max(self):
+        assert _params("claude-sonnet-4-6", thinking_effort="max")["output_config"] == {
+            "effort": "max"
+        }
+
+    def test_a_thinking_budget_on_an_adaptive_model_only_warns(self):
+        with pytest.warns(UserWarning, match="thinking_budget"):
+            params = _params("claude-opus-5", thinking=True, thinking_budget=5000)
+        assert params["thinking"] == {"type": "adaptive", "display": "summarized"}
+
+    @pytest.mark.parametrize("model", EXTENDED)
+    def test_older_models_take_a_budget_added_to_max_tokens(self, model):
+        assert "thinking" not in _params(model)
+        # D20: max_tokens = budget + max_tokens, so the budget never eats the answer.
+        params = _params(model, thinking=True, max_tokens=1000)
+        assert params["thinking"] == {"type": "enabled", "budget_tokens": 10000}
+        assert params["max_tokens"] == 11000
+        assert "output_config" not in params
+        _sdk_accepts("create", params)
+
+    @pytest.mark.parametrize(
+        ("options", "budget"),
+        [
+            ({"thinking_effort": "low"}, 2048),
+            ({"thinking_effort": "medium"}, 5000),
+            ({"thinking_effort": "high"}, 10000),
+            ({"thinking_budget": 4000}, 4000),
+            ({"thinking": True, "thinking_budget": 4000, "thinking_effort": "low"}, 4000),
+        ],
+    )
+    def test_on_older_models_an_effort_or_a_budget_turns_thinking_on(self, options, budget):
+        params = _params("claude-haiku-4-5", max_tokens=500, **options)
+        assert params["thinking"] == {"type": "enabled", "budget_tokens": budget}
+        assert params["max_tokens"] == budget + 500
+
+    @pytest.mark.parametrize(
+        "options",
+        [{"thinking_budget": 512}, {"thinking_effort": "xhigh"}, {"thinking_effort": "max"}],
+    )
+    def test_older_models_refuse_a_budget_below_1024_or_an_effort_without_a_budget(self, options):
+        _refused("claude-haiku-4-5", **options)
+
+
+class TestSamplingByModel:
+    @pytest.mark.parametrize("model", NO_SAMPLING)
+    @pytest.mark.parametrize("name", ["top_p", "top_k"])
+    def test_models_without_sampling_refuse_it(self, model, name):
+        assert name in _refused(model, **{name: 0.5 if name == "top_p" else 40})
+
+    @pytest.mark.parametrize("model", NO_SAMPLING)
+    def test_models_without_sampling_drop_the_llm_default_temperature(self, model):
+        assert "extra_body" not in _params(model, temperature=0.0)
+
+    def test_thinking_drops_the_temperature_on_a_model_that_samples(self):
+        params = _params("claude-haiku-4-5", thinking=True, temperature=0.2, top_p=0.9)
+        assert params["extra_body"] == {"top_p": 0.9}
+
+    def test_max_tokens_is_required(self):
+        with pytest.raises(RequestError, match="max_tokens"):
+            prepare(AnthropicProvider("claude-opus-5", "test-key"), HI)
+
+
+WEATHER_TOOL = {"name": "get_weather", "description": "d", "input_schema": {"type": "object"}}
+
+
+class TestToolChoiceAndServerTools:
+    TOOLS = (WEATHER_TOOL,)
+
+    @pytest.mark.parametrize("model", ["claude-fable-5-1", "claude-mythos-5-1"])
+    @pytest.mark.parametrize("choice", ["required", "get_weather"])
+    def test_forced_tool_use_is_refused_where_the_api_refuses_it(self, model, choice):
+        # https://platform.claude.com/docs/en/api/errors#forced-tool-use-not-supported
+        assert "tool_choice" in _refused(model, tools=list(self.TOOLS), tool_choice=choice)
+
+    @pytest.mark.parametrize("choice", ["auto", "none"])
+    def test_auto_and_none_stay_open_on_fable_5_1(self, choice):
+        params = _params("claude-fable-5-1", tools=list(self.TOOLS), tool_choice=choice)
+        assert params["tool_choice"] == {"type": choice}
+
+    def test_other_models_take_a_forced_tool(self):
+        params = _params("claude-opus-5", tools=list(self.TOOLS), tool_choice="get_weather")
+        assert params["tool_choice"] == {"type": "tool", "name": "get_weather"}
+
+    def test_server_tools_carry_their_name(self):
+        tools = [
+            {"_server_tool": True, "type": "web_search"},
+            {"_server_tool": True, "type": "code_execution"},
+        ]
+        assert _params("claude-opus-5", tools=tools)["tools"] == [
+            {"type": "web_search_20250305", "name": "web_search"},
+            {"type": "code_execution_20250825", "name": "code_execution"},
+        ]
+
+    @pytest.mark.parametrize(
+        "tool",
+        [
+            {"_server_tool": True, "type": "web_search", "max_uses": 3},
+            {"_server_tool": True, "type": "file_search"},
+        ],
+        ids=["config", "unknown type"],
+    )
+    def test_a_server_tool_the_adapter_cannot_send_is_refused(self, tool):
+        _refused("claude-opus-5", tools=[tool])
+
+
+class TestErrorsR02:
+    @staticmethod
+    def _status(code: int, body: object = None):
+        import anthropic as anthropic_sdk
+        import httpx
+
+        request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        return anthropic_sdk.APIStatusError(
+            "error", response=httpx.Response(code, request=request), body=body
+        )
+
+    @pytest.mark.parametrize("code", [400, 404, 500, 529])
+    def test_an_error_response_is_unbilled(self, code):
+        # "Failed requests aren't charged"
+        # (https://support.claude.com/en/articles/8977456-how-do-i-pay-for-my-claude-api-usage).
+        error = AnthropicProvider("claude-opus-5", "k").map_error(self._status(code), sent=True)
+        assert (type(error), error.status_code, error.delivery) == (APIError, code, "unbilled")
+
+    @pytest.mark.parametrize(
+        ("kind", "status"),
+        [("overloaded_error", 529), ("api_error", 500), ("rate_limit_error", 429)],
+    )
+    def test_an_error_event_inside_a_stream_takes_its_types_status(self, kind, status):
+        # The SDK raises it with the stream's 200 response
+        # (https://platform.claude.com/docs/en/api/errors).
+        body = {"type": "error", "error": {"type": kind, "message": "x"}}
+        error = AnthropicProvider("claude-opus-5", "k").map_error(
+            self._status(200, body), sent=True
+        )
+        assert error.status_code == status
+        assert error.delivery == ("unbilled" if status == 429 else "indeterminate")
+
+    def test_an_unknown_error_event_is_an_unreadable_response(self):
+        body = {"type": "error", "error": {"type": "brand_new_error", "message": "x"}}
+        error = AnthropicProvider("claude-opus-5", "k").map_error(
+            self._status(200, body), sent=True
+        )
+        assert isinstance(error, ResponseError)
+
+    def test_a_connection_that_never_opened_was_not_sent(self):
+        import anthropic as anthropic_sdk
+        import httpx
+        import httpx2
+
+        refused = anthropic_sdk.APIConnectionError(
+            request=httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        )
+        refused.__cause__ = httpx2.ConnectError("refused")
+        error = AnthropicProvider("claude-opus-5", "k").map_error(refused, sent=True)
+        assert (type(error), error.delivery) == (TransportError, "not_sent")
+
+    async def test_count_tokens_and_batch_map_a_rate_limit(self):
+        import anthropic as anthropic_sdk
+        import httpx
+
+        request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        limited = anthropic_sdk.RateLimitError(
+            "slow down", response=httpx.Response(429, request=request), body=None
+        )
+        client = MagicMock()
+        client.messages.count_tokens = AsyncMock(side_effect=limited)
+        client.messages.batches.create = AsyncMock(side_effect=limited)
+        provider = AnthropicProvider("claude-opus-5", "k")
+        provider._client = client
+        with pytest.raises(RateLimitError):
+            await provider.count_tokens(HI)
+        with pytest.raises(RateLimitError):
+            await provider.batch_submit([{"custom_id": "a", "messages": HI}])
+
+    def test_the_client_marks_the_dispatch(self):
+        with patch("ai_arch_toolkit.core._providers._anthropic.anthropic") as sdk:
+            AnthropicProvider("claude-opus-5", "test-key")
+        kwargs = sdk.AsyncAnthropic.call_args.kwargs
+        assert sdk.DefaultAsyncHttpxClient.call_args.kwargs == {
+            "event_hooks": {"request": [on_request]}
+        }
+        assert kwargs["http_client"] is sdk.DefaultAsyncHttpxClient.return_value

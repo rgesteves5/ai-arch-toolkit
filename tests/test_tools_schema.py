@@ -7,9 +7,7 @@ import enum
 import functools
 import json
 import warnings
-from types import SimpleNamespace
 from typing import Any, Literal, Optional, TypedDict, Union
-from unittest.mock import AsyncMock, MagicMock
 
 from google.genai import types as genai_types
 from pydantic import BaseModel, Field
@@ -23,6 +21,7 @@ from ai_arch_toolkit.core._tools._schema import (
     _parse_param_descriptions,
     infer_schema,
 )
+from tests.provider_calls import prepare
 
 INT_OR_STR = [{"type": "integer"}, {"type": "string"}]
 
@@ -584,19 +583,6 @@ def _variant_types(schema: genai_types.Schema | None) -> list[genai_types.Type |
     return [variant.type for variant in schema.any_of]
 
 
-def _gemini_text_response() -> SimpleNamespace:
-    part = SimpleNamespace(text="ok", thought=False, function_call=None)
-    candidate = SimpleNamespace(content=SimpleNamespace(parts=[part]), finish_reason="STOP")
-    usage = SimpleNamespace(
-        prompt_token_count=1,
-        candidates_token_count=1,
-        cached_content_token_count=0,
-        thoughts_token_count=0,
-        tool_use_prompt_token_count=0,
-    )
-    return SimpleNamespace(candidates=[candidate], usage_metadata=usage)
-
-
 class TestAnyOfReachesProviderAdapters:
     def test_provider_definition_uses_any_of(self):
         input_schema = _lookup_definition()["input_schema"]
@@ -631,15 +617,13 @@ class TestAnyOfReachesProviderAdapters:
         assert tags.type == genai_types.Type.ARRAY
         assert _variant_types(tags.items) == GEMINI_INT_OR_STR
 
-    async def test_gemini_request_carries_any_of(self):
-        mock_client = MagicMock()
-        mock_client.aio.models.generate_content = AsyncMock(return_value=_gemini_text_response())
+    def test_gemini_request_carries_any_of(self):
         provider = _gemini.GeminiProvider("gemini-2.5-flash", "test-key")
-        provider._client = mock_client
+        prepared = prepare(
+            provider, [{"role": "user", "content": "Hi"}], tools=[_lookup_definition()]
+        )
 
-        await provider.complete([{"role": "user", "content": "Hi"}], tools=[_lookup_definition()])
-
-        config = mock_client.aio.models.generate_content.call_args.kwargs["config"]
+        config = prepared.params["config"]
         parameters = config.tools[0].function_declarations[0].parameters
         assert _variant_types(parameters.properties["query"]) == GEMINI_INT_OR_STR
         assert _variant_types(parameters.properties["tags"].items) == GEMINI_INT_OR_STR

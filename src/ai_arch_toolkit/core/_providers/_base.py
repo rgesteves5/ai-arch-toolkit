@@ -1,17 +1,33 @@
-"""Abstract base for LLM providers — async-only."""
+"""The provider contract: pure preparation, I/O behind one error mapper, one assembly."""
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import dataclasses
 import json
 import logging
+import re
+import warnings
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Callable
-from typing import Any
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
+from contextvars import ContextVar
+from dataclasses import dataclass, field, fields
+from typing import Any, cast
 
 from ai_arch_toolkit.core._content import CachePart
-from ai_arch_toolkit.core._exceptions import ProviderTimeout, TransportError
-from ai_arch_toolkit.core._response import Response, StreamEvent, ThinkingBlock, ToolCall, Usage
+from ai_arch_toolkit.core._exceptions import (
+    Delivery,
+    ProviderError,
+    ProviderTimeout,
+    RequestError,
+    ResponseError,
+    TransportError,
+)
+from ai_arch_toolkit.core._middleware import Request
+from ai_arch_toolkit.core._pricing import _estimate_response_cost
+from ai_arch_toolkit.core._response import OutputSchema, Response, StreamEvent, Usage
+from ai_arch_toolkit.core._stream_lifecycle import close_async
 
 logger = logging.getLogger(__name__)
 
@@ -28,9 +44,55 @@ THINKING_EFFORT_BUDGETS: dict[str, int] = {
 DEFAULT_THINKING_BUDGET: int = 10000
 
 
-def network_error(exc: BaseException, *, timed_out: bool) -> TransportError | ProviderTimeout:
-    """Normalize an SDK transport failure while preserving builtin exception handlers."""
-    return ProviderTimeout(str(exc)) if timed_out else TransportError(str(exc))
+def transport_error(
+    exc: BaseException,
+    *,
+    not_sent: tuple[type[BaseException], ...],
+    timeouts: tuple[type[BaseException], ...],
+) -> TransportError | ProviderTimeout:
+    """A transport failure, from the HTTP library's exception (an SDK error's ``__cause__``).
+
+    A failure while connecting or waiting for a pooled connection (``not_sent``) never sent the
+    request; any other may have been received and billed.
+    """
+    delivery: Delivery = "not_sent" if isinstance(exc, not_sent) else "indeterminate"
+    if isinstance(exc, timeouts):
+        return ProviderTimeout(str(exc) or type(exc).__name__, delivery=delivery)
+    return TransportError(str(exc) or type(exc).__name__, delivery=delivery)
+
+
+def refused_or_unread(exc: Exception, *, sent: bool) -> RequestError | ResponseError:
+    """An exception the SDK raised outside its own error types.
+
+    Before the request was handed to the transport, the SDK refused it (its own validation or
+    serialization): nothing was sent. After, the response could not be read: it may be billed.
+    """
+    if sent:
+        return ResponseError(f"the provider's response could not be read: {exc!r}")
+    return RequestError(f"the SDK refused the request before sending it: {exc!r}")
+
+
+@dataclass(slots=True)
+class Dispatch:
+    """Whether one call's request has been handed to the transport."""
+
+    sent: bool = False
+
+
+_dispatch: ContextVar[Dispatch | None] = ContextVar("provider_dispatch", default=None)
+
+
+def mark_dispatched() -> None:
+    """Record that the current call's request left the SDK for the transport."""
+    current = _dispatch.get()
+    if current is not None:
+        current.sent = True
+
+
+async def on_request(request: object) -> None:
+    """An ``httpx``/``httpx2`` request event hook: the SDK hands a built request to the
+    transport. Adapters install it on their SDK's HTTP client."""
+    mark_dispatched()
 
 
 def _parse_retry_after(value: str | None) -> float | None:
@@ -95,54 +157,129 @@ class LoopAwareClientCache:
         self._client_loop = None
 
 
-class BaseProvider(ABC):
-    """Interface that every provider must implement (async-only)."""
+@dataclass(frozen=True, slots=True)
+class Prepared[R]:
+    """A request ready to send: the SDK's arguments, and what assembling its answer needs."""
+
+    params: R
+    output_schema: OutputSchema | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Done[F]:
+    """The last item of an adapter's stream: the SDK's final object."""
+
+    final: F
+
+
+@dataclass(frozen=True, slots=True)
+class Answer:
+    """One attempt's assembled response, and whether the provider reported its usage."""
+
+    response: Response
+    usage_reported: bool
+
+
+class BaseProvider[P, F](ABC):
+    """A provider adapter in three phases (costura B).
+
+    An adapter supplies six small pieces: :meth:`prepare` builds the SDK request — synchronous and
+    pure, raising ``RequestError`` for what the model or the adapter cannot take; :meth:`send` and
+    :meth:`open_stream` do all the I/O; :meth:`assemble` turns the SDK's final object into a
+    ``Response`` and :meth:`usage` reads its usage; :meth:`map_error` is the one place that knows
+    the SDK's exceptions. The algorithm lives here, once: :meth:`complete` and :meth:`stream` run
+    the I/O inside the mapper and assemble the final object the same way, so a stream and a
+    complete give the same ``Response`` by construction.
+    """
+
+    _model: str
 
     @abstractmethod
-    async def complete(
-        self,
-        messages: list[dict[str, Any]],
-        *,
-        system: str | None = None,
-        tools: list[dict[str, Any]] | None = None,
-        **kwargs: Any,
-    ) -> Response: ...
+    def prepare(self, request: Request) -> P:
+        """The SDK request for ``request``; synchronous, pure, and raising ``RequestError``."""
 
     @abstractmethod
-    def stream(
-        self,
-        messages: list[dict[str, Any]],
-        *,
-        system: str | None = None,
-        tools: list[dict[str, Any]] | None = None,
-        **kwargs: Any,
-    ) -> tuple[AsyncIterator[str], StreamState]: ...
+    async def send(self, prepared: P) -> F:
+        """Send one request and return the SDK's response."""
 
-    def stream_events(
-        self,
-        messages: list[dict[str, Any]],
-        *,
-        system: str | None = None,
-        tools: list[dict[str, Any]] | None = None,
-        **kwargs: Any,
-    ) -> tuple[AsyncIterator[StreamEvent], StreamState]:
-        """Stream structured events. Default wraps ``stream()``.
+    @abstractmethod
+    def open_stream(self, prepared: P) -> AsyncIterator[StreamEvent | Done[F]]:
+        """Stream one request: text and thinking as they arrive, then ``Done`` with the final."""
 
-        Note: the default implementation yields thinking and tool_call events
-        *after* the text stream is exhausted (non-real-time). Providers that
-        support real-time structured events (e.g. Anthropic) override this.
+    @abstractmethod
+    def assemble(self, final: F, prepared: P) -> Response:
+        """The ``Response`` for the SDK's final object; its usage and cost are set by the base."""
+
+    @abstractmethod
+    def usage(self, final: F) -> Usage | None:
+        """The final object's usage, or ``None`` when the provider reported none."""
+
+    @abstractmethod
+    def map_error(self, exc: Exception, *, sent: bool) -> ProviderError | None:
+        """The normalized error for a failure; ``None`` to let it pass unchanged.
+
+        ``sent`` says whether the request had been handed to the transport when ``exc`` was
+        raised (see :func:`refused_or_unread`).
         """
-        text_stream, state = self.stream(messages, system=system, tools=tools, **kwargs)
 
-        async def _events() -> AsyncIterator[StreamEvent]:
-            async for chunk in text_stream:
-                yield StreamEvent(kind="text", text=chunk)
-            for block in state.thinking:
-                yield StreamEvent(kind="thinking", thinking=block)
-            for tool_call in state.tool_calls:
-                yield StreamEvent(kind="tool_call", tool_call=tool_call)
+    async def complete(self, prepared: P) -> Answer:
+        """Send ``prepared`` and assemble the answer."""
+        with self._mapped(Dispatch()):
+            final = await self.send(prepared)
+        return self._answer(final, prepared)
 
-        return _events(), state
+    async def stream(self, prepared: P) -> AsyncIterator[StreamEvent | Answer]:
+        """Stream ``prepared``: its events, its tool calls, then the assembled answer."""
+        dispatch = Dispatch()
+        source = self.open_stream(prepared)
+        done: Done[F] | None = None
+        try:
+            while True:
+                with self._mapped(dispatch):
+                    item = await anext(source, None)
+                if item is None:
+                    break
+                if isinstance(item, Done):
+                    done = item
+                else:
+                    yield item
+        finally:
+            await close_async(source)
+        if done is None:
+            raise ResponseError("the stream ended without a final message")
+        answer = self._answer(done.final, prepared)
+        for call in answer.response.tool_calls:
+            yield StreamEvent(kind="tool_call", tool_call=call)
+        yield answer
+
+    @contextlib.contextmanager
+    def _mapped(self, dispatch: Dispatch | None = None) -> Iterator[None]:
+        """Run one I/O step: its failures leave through :meth:`map_error`."""
+        dispatch = dispatch or Dispatch()
+        token = _dispatch.set(dispatch)
+        try:
+            yield
+        except ProviderError:
+            raise
+        except Exception as exc:
+            error = self.map_error(exc, sent=dispatch.sent)
+            if error is None:
+                raise
+            raise error from exc
+        finally:
+            _dispatch.reset(token)
+
+    def _answer(self, final: F, prepared: P) -> Answer:
+        try:
+            response = self.assemble(final, prepared)
+            usage = self.usage(final)
+        except Exception as exc:
+            raise ResponseError(f"could not read the provider's response: {exc!r}") from exc
+        cost = response.provider_cost
+        if cost is None and usage is not None:
+            cost = _estimate_response_cost(self._model, usage)
+        response = dataclasses.replace(response, usage=usage or Usage(), cost=cost)
+        return Answer(response, usage_reported=usage is not None)
 
     async def batch_submit(
         self,
@@ -177,7 +314,7 @@ class BaseProvider(ABC):
     async def close(self) -> None:  # noqa: B027
         """Release resources. Override in providers that hold clients."""
 
-    async def __aenter__(self) -> BaseProvider:
+    async def __aenter__(self) -> BaseProvider[P, F]:
         return self
 
     async def __aexit__(self, *args: Any) -> None:
@@ -189,27 +326,73 @@ class BaseProvider(ABC):
 # ---------------------------------------------------------------------------
 
 
-class StreamState:
-    """Per-stream metadata accumulator (one per call). Used by all providers."""
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Options:
+    """The toolkit's call options, read once from a request's keyword arguments."""
 
-    __slots__ = (
-        "model",
-        "provider_cost",
-        "raw",
-        "stop_reason",
-        "thinking",
-        "tool_calls",
-        "usage",
-    )
+    thinking: bool = False
+    thinking_effort: str | None = None
+    thinking_budget: int | None = None
+    output_schema: OutputSchema | None = None
+    tool_choice: str | None = None
+    json_mode: bool = False
+    logprobs: bool = False
+    structured_output_mode: str = "native"  # Anthropic's "prompt" fallback; ignored elsewhere
+    params: dict[str, Any] = field(default_factory=dict)  # the SDK parameters forwarded as-is
 
-    def __init__(self) -> None:
-        self.usage: Usage | None = None
-        self.model: str = ""
-        self.provider_cost: float | None = None
-        self.stop_reason: str = ""
-        self.raw: Any = None
-        self.tool_calls: list[ToolCall] = []
-        self.thinking: list[ThinkingBlock] = []
+
+_OPTION_NAMES = frozenset(option.name for option in fields(Options)) - {"params"}
+
+
+def parse_options(kwargs: Mapping[str, Any], forwarded: frozenset[str], provider: str) -> Options:
+    """Split a request's kwargs into the toolkit's options and the SDK parameters ``forwarded``.
+
+    Any other keyword is ignored with a warning that names ``provider``.
+    """
+    unknown = set(kwargs) - forwarded - _OPTION_NAMES
+    if unknown:
+        warnings.warn(
+            f"Unknown parameter(s) ignored for {provider}: {sorted(unknown)}. "
+            f"Valid: {sorted(forwarded)}",
+            stacklevel=3,
+        )
+    options = {name: value for name, value in kwargs.items() if name in _OPTION_NAMES}
+    params = {name: value for name, value in kwargs.items() if name in forwarded}
+    return Options(**options, params=params)
+
+
+_JSON_FENCE = re.compile(r"```(?:json)?\s*\n?(.*?)\n?\s*```", re.DOTALL)
+
+
+def _json_of(text: str) -> Any:
+    """The JSON value of ``text``, or of a Markdown code fence in it; raises ``ValueError``."""
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        fenced = _JSON_FENCE.search(text)
+        if fenced is None:
+            raise
+        return json.loads(fenced.group(1).strip())
+
+
+def parse_structured(text: str, schema: OutputSchema) -> Any:
+    """``text`` as the structured output ``schema`` asks for, validated into its model if any.
+
+    JSON inside a Markdown code fence is accepted. ``None`` when the text holds no JSON; the plain
+    data when it does not validate against the schema's Pydantic model.
+    """
+    try:
+        data = _json_of(text.strip())
+    except ValueError:
+        logger.warning("Failed to parse structured output as JSON")
+        return None
+    if schema.model_class is None:
+        return data
+    try:
+        return cast("Any", schema.model_class).model_validate(data)
+    except Exception:
+        logger.warning("Failed to validate structured output against schema")
+        return data
 
 
 def merge_system_prompts(*parts: str | None) -> str | None:

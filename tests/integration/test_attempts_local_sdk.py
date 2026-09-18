@@ -54,15 +54,18 @@ async def test_local_sdk_error_delivery_and_bounded_meter(vendor, path, status):
         with MeterScope(RunConfig(controller=controller, retain_meter_events=True)) as scope:
             with pytest.raises(error_type) as raised:
                 await invoke(llm, path)
-            assert raised.value.delivery == ("unbilled" if status == 429 else "indeterminate")
+            # A 429 is never billed (D20); Anthropic bills no failed request
+            # (https://support.claude.com/en/articles/8977456), OpenAI documents nothing for a 503.
+            unbilled = status == 429 or vendor == "anthropic"
+            assert raised.value.delivery == ("unbilled" if unbilled else "indeterminate")
             snap = scope.snapshot()
             assert snap.llm_calls == 1
             assert snap.cost.to_float() == 0.0
             assert snap.unknown_cost_count == 0
-            assert snap.uncertain_cost_count == int(status == 503)
+            assert snap.uncertain_cost_count == int(not unbilled)
             assert (
                 snap.uncertain_cost.to_float() > 0
-                if status == 503
+                if not unbilled
                 else snap.uncertain_cost.pico == 0
             )
             assert scope.events()[0].delivery == raised.value.delivery

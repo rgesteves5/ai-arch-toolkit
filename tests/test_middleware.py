@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._middleware import Request, _run_aafter, _run_abefore
 from ai_arch_toolkit.core._response import Response
+from tests.fake_provider import FakeProvider
 
 # ---------------------------------------------------------------------------
 # Request dataclass
@@ -142,21 +143,17 @@ class TestRunAafter:
 class TestLLMMiddlewareIntegration:
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_before_hook_modifies_request(self, mock_create):
-        mock_provider = AsyncMock()
-        mock_provider.complete.return_value = Response(text="ok")
-        mock_create.return_value = mock_provider
+        provider = FakeProvider(Response(text="ok"), model="gpt-4o")
+        mock_create.return_value = provider
 
         llm = LLM("gpt-4o", api_key="test", middleware=[_AddSystemMW()])
         await llm.complete("Hi")
 
-        call_kwargs = mock_provider.complete.call_args
-        assert call_kwargs[1]["system"] == "injected system"
+        assert provider.last.system == "injected system"
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_after_hook_modifies_response(self, mock_create):
-        mock_provider = AsyncMock()
-        mock_provider.complete.return_value = Response(text="hello")
-        mock_create.return_value = mock_provider
+        mock_create.return_value = FakeProvider(Response(text="hello"), model="gpt-4o")
 
         llm = LLM("gpt-4o", api_key="test", middleware=[_UpperTextMW()])
         result = await llm.complete("Hi")

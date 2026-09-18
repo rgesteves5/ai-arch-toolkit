@@ -8,13 +8,13 @@ import time
 
 import pytest
 
-from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._policy import Policy
 from ai_arch_toolkit.core._response import Response, Usage
 from ai_arch_toolkit.core._retry import RetryConfig
 from ai_arch_toolkit.core._state import State, StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowStep
+from tests.fake_provider import Reply, fake_llm
 
 _MODEL = "claude-sonnet-4-6"  # priced in _default_pricing.toml
 
@@ -194,13 +194,8 @@ class TestFlowTimeout:
         assert "timeout" in types
 
     async def test_timeout_fails_the_in_flight_llm_call_in_the_meter(self) -> None:
-        class SlowProvider:
-            async def complete(self, messages, *, system=None, tools=None, **kwargs) -> Response:
-                await asyncio.sleep(10.0)
-                return Response(text="late", usage=Usage(input_tokens=10), model=_MODEL)
-
-        llm = LLM(_MODEL, api_key="test")
-        llm._provider = SlowProvider()  # type: ignore[assignment]
+        late = Response(text="late", usage=Usage(input_tokens=10), model=_MODEL)
+        llm, _ = fake_llm(Reply(response=late, delay=10.0), model=_MODEL)
 
         async def call(snap: StateSnapshot) -> Result:
             await llm.complete("hi")

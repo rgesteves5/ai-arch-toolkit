@@ -149,7 +149,7 @@ requires-dist = [
     { name = "reflex", marker = "extra == 'app'", specifier = ">=0.9.6.post1" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.16" },
     { name = "tiktoken", marker = "extra == 'tokens'", specifier = ">=0.11" },
-    { name = "xai-sdk", marker = "extra == 'xai'", specifier = ">=1.7,<2" },
+    { name = "xai-sdk", marker = "extra == 'xai'", specifier = ">=1.18,<2" },
     { name = "youtube-transcript-api", marker = "extra == 'youtube'", specifier = ">=1.2.4" },
 ]
 provides-extras = ["anthropic", "gemini", "meta", "openai", "xai", "graph", "tokens", "yaml", "templates", "prompts", "youtube", "all", "app", "bench", "docs", "telemetry", "dev"]

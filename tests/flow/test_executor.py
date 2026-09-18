@@ -11,18 +11,14 @@ from ai_arch_toolkit.core._state import State, StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.toolkit.budget import BudgetPolicy
 from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowEvent, FlowStep
+from tests.fake_provider import fake_llm
 
 _MODEL = "claude-sonnet-4-6"  # priced in _default_pricing.toml
 
 
-class _FakeProvider:
-    async def complete(self, messages, *, system=None, tools=None, **kwargs) -> Response:
-        return Response(text="ok", usage=Usage(input_tokens=1000, output_tokens=5), model=_MODEL)
-
-
 def _metered_llm() -> LLM:
-    llm = LLM(_MODEL, api_key="test")
-    llm._provider = _FakeProvider()  # type: ignore[assignment]
+    usage = Usage(input_tokens=1000, output_tokens=5)
+    llm, _ = fake_llm(Response(text="ok", usage=usage, model=_MODEL), model=_MODEL)
     return llm
 
 

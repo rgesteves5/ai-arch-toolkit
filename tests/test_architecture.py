@@ -92,19 +92,23 @@ def test_provider_dispatch_and_attempt_start_have_one_home() -> None:
         if isinstance(node, ast.FunctionDef) and node.name == "dispatch"
     )
 
-    def provider_calls(tree: ast.AST) -> set[int]:
+    def provider_calls(tree: ast.AST, names: tuple[str, ...]) -> set[int]:
         return {
             node.lineno
             for node in ast.walk(tree)
             if isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
-            and node.func.attr in ("complete", "stream", "stream_events")
-            and ast.unparse(node.func.value) in ("provider", "self._provider")
+            and node.func.attr in names
+            and "provider" in ast.unparse(node.func.value)
         }
 
-    assert len(provider_calls(dispatch)) == 3
-    assert provider_calls(attempts) == provider_calls(dispatch)
-    assert not provider_calls(facade)
+    io = ("complete", "stream", "stream_events")
+    assert len(provider_calls(dispatch, io)) == 2  # complete, and one stream for both views
+    assert provider_calls(attempts, io) == provider_calls(dispatch, io)
+    assert not provider_calls(facade, io)
+    # Preparation happens before admission, in the pipeline only.
+    assert provider_calls(attempts, ("prepare",))
+    assert not provider_calls(facade, ("prepare",))
     starts = [
         node
         for node in ast.walk(attempts)
@@ -129,3 +133,90 @@ def test_provider_dispatch_and_attempt_start_have_one_home() -> None:
         }
         & old_names
     )
+
+
+def model_prefix_checks(source: str) -> list[int]:
+    """Lines comparing a model id's prefix or suffix outside the id grammar."""
+    return [
+        node.lineno
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in ("startswith", "endswith")
+        and "model" in ast.unparse(node.func.value).lower()
+    ]
+
+
+def _model_prefix_offenders() -> set[str]:
+    return {
+        str(path.relative_to(CORE))
+        for path in CORE.rglob("*.py")
+        if path.name != "_model_id.py" and model_prefix_checks(path.read_text())
+    }
+
+
+def test_model_ids_are_matched_only_by_the_grammar() -> None:
+    assert _model_prefix_offenders() == set()
+
+
+def test_model_prefix_detector_rejects_prefix_and_suffix_checks() -> None:
+    assert model_prefix_checks('self._model.startswith("gpt-5")')
+    assert model_prefix_checks("model_id.endswith(SUFFIXES)")
+    assert not model_prefix_checks('path.startswith("/")')
+
+
+_SDK_MODULES = ("openai", "anthropic", "httpx", "httpx2", "grpc", "genai_errors", "aiohttp")
+
+
+def sdk_errors_outside_the_mapper(source: str) -> list[int]:
+    """Lines that catch or test an SDK exception anywhere but a ``map_error`` method."""
+
+    def mentions_sdk(node: ast.AST | None) -> bool:
+        return node is not None and any(
+            isinstance(name, ast.Name) and name.id in _SDK_MODULES for name in ast.walk(node)
+        )
+
+    lines: list[int] = []
+
+    def visit(node: ast.AST, in_mapper: bool) -> None:
+        for child in ast.iter_child_nodes(node):
+            inside = in_mapper or (
+                isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef)
+                and child.name == "map_error"
+            )
+            if isinstance(child, ast.ExceptHandler) and mentions_sdk(child.type):
+                lines.append(child.lineno)
+            if (
+                not inside
+                and isinstance(child, ast.Call)
+                and isinstance(child.func, ast.Name)
+                and child.func.id == "isinstance"
+                and len(child.args) == 2
+                and mentions_sdk(child.args[1])
+            ):
+                lines.append(child.lineno)
+            visit(child, inside)
+
+    visit(ast.parse(source), False)
+    return lines
+
+
+def _sdk_error_offenders() -> set[str]:
+    return {
+        str(path.relative_to(CORE))
+        for path in (CORE / "_providers").glob("_*.py")
+        if sdk_errors_outside_the_mapper(path.read_text())
+    }
+
+
+def test_sdk_exceptions_are_known_only_by_each_adapters_mapper() -> None:
+    assert _sdk_error_offenders() == set()
+
+
+def test_sdk_exception_detector_flags_catches_and_checks_outside_the_mapper() -> None:
+    assert sdk_errors_outside_the_mapper("try:\n    x()\nexcept openai.APIError:\n    pass\n")
+    assert sdk_errors_outside_the_mapper(
+        "def send(e):\n    return isinstance(e, httpx2.ReadError)\n"
+    )
+    mapper = "def map_error(self, exc, *, sent):\n    return isinstance(exc, openai.APIError)\n"
+    assert not sdk_errors_outside_the_mapper(mapper)

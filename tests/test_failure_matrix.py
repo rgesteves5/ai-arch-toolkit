@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
 from contextlib import nullcontext
 from itertools import product
 
@@ -29,10 +28,10 @@ from ai_arch_toolkit.core._exceptions import (
     ResponseError,
     TransportError,
 )
-from ai_arch_toolkit.core._providers._base import BaseProvider, StreamState
 from ai_arch_toolkit.core._retry import RetryConfig
 from ai_arch_toolkit.core._step_engine import execute_step
 from ai_arch_toolkit.toolkit.budget import BudgetController, BudgetPolicy
+from tests.fake_provider import FakeProvider, Reply
 
 MODEL = "claude-sonnet-4-6"
 USAGE = Usage(input_tokens=4, output_tokens=2)
@@ -71,66 +70,42 @@ def failure(kind: str) -> BaseException:
     return errors[kind]
 
 
-class ScriptedProvider(BaseProvider):
-    def __init__(self, kind: str | None) -> None:
-        self.kind = kind
-        self.calls = 0
-        self.constructions = 0
-        self.entered = asyncio.Event()
-        self.release = asyncio.Event()
-
-    async def send(self) -> None:
-        self.calls += 1
-        self.entered.set()
-        if self.calls != 1 or self.kind in (None, "request"):
-            return
-        if self.kind in ("cancel", "abandon"):
-            await self.release.wait()
-        raise failure(self.kind)
-
-    async def complete(self, messages, *, system=None, tools=None, **kwargs) -> Response:
-        await self.send()
-        return Response(text="ok", model=MODEL, usage=USAGE)
-
-    def stream(self, messages, *, system=None, tools=None, **kwargs):
-        state = StreamState()
-        state.model = MODEL
-
-        async def chunks() -> AsyncIterator[str]:
-            if self.calls == 0 and self.kind in ("midstream", "abandon"):
-                self.calls += 1
-                self.entered.set()
-                yield "partial"
-                if self.kind == "midstream":
-                    raise failure(self.kind)
-                await self.release.wait()
-            else:
-                await self.send()
-            state.usage = USAGE
-            yield "ok"
-
-        return chunks(), state
+def first_reply(kind: str | None, release: asyncio.Event) -> Reply:
+    """How the first call fails; ``cancel`` and ``abandon`` wait until the test releases them."""
+    ok = Response(text="ok", model=MODEL, usage=USAGE)
+    if kind in (None, "request"):
+        return Reply(response=ok)
+    if kind == "cancel":
+        return Reply(response=ok, error=failure(kind), hold=release)
+    if kind in ("midstream", "abandon"):
+        hold = release if kind == "abandon" else None
+        return Reply(
+            response=ok,
+            chunks=["partial"],
+            error=failure(kind),
+            error_after=1,
+            hold=hold,
+            hold_after=1,
+        )
+    return Reply(response=ok, error=failure(kind))
 
 
-class ConstructionFailureLLM(LLM):
-    """Exercise request construction at the facade's pure preparation boundary.
+class ScriptedProvider(FakeProvider):
+    """The matrix's provider: its first call fails as ``kind``; every later one answers ``ok``.
 
-    Provider-specific preparation moves to the same boundary in R02; the current provider
-    interface has no separate prepare method.
+    ``request`` is refused by the first preparation instead, so nothing is sent.
     """
 
-    def _prepare_call(self, messages, system, tools, arguments):
-        provider = self._provider
-        assert isinstance(provider, ScriptedProvider)
-        provider.constructions += 1
-        if provider.constructions == 1:
-            raise RequestError("invalid request")
-        return super()._prepare_call(messages, system, tools, arguments)
+    def __init__(self, kind: str | None) -> None:
+        self.kind = kind
+        self.release = asyncio.Event()
+        refusals = [RequestError("invalid request")] if kind == "request" else []
+        ok = Reply(response=Response(text="ok", model=MODEL, usage=USAGE))
+        super().__init__(first_reply(kind, self.release), ok, model=MODEL, refuse=refusals)
 
 
 def configured(provider: ScriptedProvider, recovery: str, fallback: LLM | None = None) -> LLM:
-    cls = ConstructionFailureLLM if provider.kind == "request" else LLM
-    llm = cls(MODEL, api_key="test", max_tokens=32, fallback=fallback)
+    llm = LLM(MODEL, api_key="test", max_tokens=32, fallback=fallback)
     llm._provider = provider
     if recovery == "retry":
         llm._retry = RetryConfig(max_retries=1, base_delay=0.001, max_delay=0.001)

@@ -9,6 +9,7 @@ import pytest
 
 from ai_arch_toolkit.core._content import cache, document, image, system, user
 from ai_arch_toolkit.core._providers import _anthropic, _gemini, _openai, _xai
+from tests.provider_calls import complete
 
 SYSTEM_WITH_PARTS = {"role": "system", "content": ["Be terse.", cache("POLICY")]}
 SYSTEM_WITH_IMAGE = {"role": "system", "content": ["Look:", image("https://example.com/a.png")]}
@@ -85,7 +86,11 @@ def _anthropic_message() -> SimpleNamespace:
     )
     text = SimpleNamespace(type="text", text="{}", citations=None)
     return SimpleNamespace(
-        content=[text], model="claude-sonnet-4-6", stop_reason="end_turn", usage=usage
+        id="msg_test",
+        content=[text],
+        model="claude-sonnet-4-6",
+        stop_reason="end_turn",
+        usage=usage,
     )
 
 
@@ -116,7 +121,13 @@ class TestAnthropic:
         provider = _anthropic.AnthropicProvider("claude-sonnet-4-6", "test-key")
         provider._client = client
 
-        await provider.complete([SYSTEM_WITH_PARTS, user("hi")], system="Rules.", json_mode=True)
+        await complete(
+            provider,
+            [SYSTEM_WITH_PARTS, user("hi")],
+            system="Rules.",
+            json_mode=True,
+            max_tokens=1024,
+        )
 
         assert client.messages.create.call_args.kwargs["system"] == [
             {"type": "text", "text": "Rules."},

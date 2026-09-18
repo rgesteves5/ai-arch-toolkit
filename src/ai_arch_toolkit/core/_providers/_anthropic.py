@@ -1,29 +1,43 @@
-"""Anthropic provider — thin adapter over the ``anthropic`` SDK."""
+"""Anthropic provider — the Messages API through ``anthropic``, in the provider contract."""
 
 from __future__ import annotations
 
 import json
 import logging
-import re
 import warnings
 from collections.abc import AsyncIterator
-from typing import Any, cast
+from dataclasses import dataclass
+from typing import Any, Literal, cast
 
 from ai_arch_toolkit.core._content import CachePart, DocumentPart, ImagePart, _encode_b64, _is_url
-from ai_arch_toolkit.core._exceptions import APIError, RateLimitError
-from ai_arch_toolkit.core._pricing import _estimate_response_cost
+from ai_arch_toolkit.core._exceptions import (
+    APIError,
+    ProviderError,
+    RateLimitError,
+    RequestError,
+    ResponseError,
+)
+from ai_arch_toolkit.core._middleware import Request
+from ai_arch_toolkit.core._model_id import lookup
 from ai_arch_toolkit.core._providers._base import (
     DEFAULT_THINKING_BUDGET,
     THINKING_EFFORT_BUDGETS,
     BaseProvider,
+    Done,
     LoopAwareClientCache,
+    Options,
+    Prepared,
     StreamEvent,
-    StreamState,
     _parse_retry_after,
+    mark_dispatched,
     merge_system_prompts,
-    network_error,
+    on_request,
+    parse_options,
+    parse_structured,
     parse_tool_args,
+    refused_or_unread,
     system_content_text,
+    transport_error,
 )
 from ai_arch_toolkit.core._providers._imports import require_sdk
 from ai_arch_toolkit.core._response import (
@@ -35,101 +49,166 @@ from ai_arch_toolkit.core._response import (
     Usage,
 )
 
-require_sdk("anthropic", "anthropic")
-import anthropic  # noqa: E402
+with require_sdk("anthropic"):
+    import anthropic
+    import httpx2  # the anthropic SDK's transport
+    from anthropic.resources.messages import AsyncMessages
+    from anthropic.types import (
+        CacheControlEphemeralParam,
+        ContentBlock,
+        ContentBlockParam,
+        Message,
+        MessageParam,
+        OutputConfigParam,
+        TextBlockParam,
+        TextCitation,
+        ToolChoiceParam,
+        ToolParam,
+        ToolResultBlockParam,
+        ToolUnionParam,
+        ToolUseBlockParam,
+    )
+    from anthropic.types import Usage as SDKUsage
+    from anthropic.types.message_count_tokens_params import MessageCountTokensParams
+    from anthropic.types.message_create_params import (
+        MessageCreateParamsBase,
+        MessageCreateParamsNonStreaming,
+    )
+    from anthropic.types.messages.batch_create_params import Request as BatchRequest
 
 logger = logging.getLogger(__name__)
 
-# Parameters forwarded as SDK arguments.
-_SDK_PARAMS = {"stop_sequences", "max_tokens"}
 
-# anthropic 1.x removed the sampling parameters from its signatures (passing one is a TypeError),
-# but the API still takes them on models before Opus 4.7, so they travel in the request body.
-_SAMPLING_PARAMS = ("temperature", "top_p", "top_k")
+class Params(MessageCreateParamsBase, total=False):
+    """``messages.create``/``messages.stream`` arguments: the SDK's own, and the body fields its
+    signature lacks."""
 
-# Anthropic server tool type identifiers (versioned by Anthropic).
-_SERVER_TOOL_TYPES: dict[str, str] = {
-    "web_search": "web_search_20250305",
-    "code_execution": "code_execution_20250522",
+    # anthropic 1.x removed temperature, top_p and top_k from its signatures (passing one is a
+    # TypeError), but the API still takes them on the models that sample.
+    extra_body: dict[str, object]
+
+
+# SDK arguments and body fields forwarded as the caller gave them.
+_FORWARDED = frozenset({"max_tokens", "stop_sequences", "temperature", "top_p", "top_k"})
+_SAMPLING = ("temperature", "top_p", "top_k")
+_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
+_MIN_BUDGET = 1024  # https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+
+# Failures before the request reached the server; any other transport failure may be billed.
+_NOT_SENT = (httpx2.ConnectError, httpx2.ConnectTimeout, httpx2.PoolTimeout)
+_TIMEOUTS = (httpx2.TimeoutException, anthropic.APITimeoutError)
+
+# The error types and their statuses (https://platform.claude.com/docs/en/api/errors); an error
+# event inside a stream carries only its type.
+_ERROR_STATUS = {
+    "invalid_request_error": 400,
+    "authentication_error": 401,
+    "billing_error": 402,
+    "permission_error": 403,
+    "not_found_error": 404,
+    "conflict_error": 409,
+    "request_too_large": 413,
+    "rate_limit_error": 429,
+    "api_error": 500,
+    "timeout_error": 504,
+    "overloaded_error": 529,
 }
 
-# Anthropic removed sampling parameters on Opus 4.7+ and the Claude 5 family;
-# sending ``temperature`` to these models returns a 400.
-_TEMPERATURE_DEPRECATED_PREFIXES = (
-    "claude-fable-5",
-    "claude-mythos-5",
-    "claude-mythos-preview",
-    "claude-opus-4-7",
-    "claude-opus-4-8",
-    "claude-opus-5",
-    "claude-sonnet-5",
-)
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _Profile:
+    """How one family of Claude models is asked to think, per the documented tables
+    (https://platform.claude.com/docs/en/build-with-claude/thinking-troubleshooting and
+    https://platform.claude.com/docs/en/build-with-claude/effort).
 
-# ---------------------------------------------------------------------------
-# Adapter helpers — pure functions for message/tool/response conversion
-# ---------------------------------------------------------------------------
-
-
-def _content_to_sdk(content: Any) -> list[dict[str, Any]] | str:
-    """Convert multimodal content to Anthropic content blocks.
-
-    Returns a list of content blocks if multimodal, or a plain string.
+    ``thinking``: ``adaptive`` models take ``{type: "adaptive"}`` and an ``output_config.effort``
+    in ``efforts``; ``extended`` models take a ``budget_tokens`` budget. ``sampling``: the model
+    takes ``temperature``, ``top_p`` and ``top_k``. ``forced_tools``: it takes ``tool_choice``
+    ``any`` and ``tool``.
     """
+
+    thinking: Literal["adaptive", "extended"] = "adaptive"
+    efforts: frozenset[str] = _EFFORTS
+    sampling: bool = False
+    forced_tools: bool = True
+
+
+# The Claude 5 family (Opus 5, Sonnet 5, Fable 5, Mythos 5), Opus 4.8 and 4.7, and any newer
+# model: adaptive thinking with every effort level, no sampling parameters.
+_CURRENT = _Profile()
+_EXTENDED = _Profile(
+    thinking="extended", efforts=frozenset(THINKING_EFFORT_BUDGETS), sampling=True
+)
+# The families that differ from the current rules, a closed list.
+_PROFILES: dict[str, _Profile] = {
+    # Forced tool use returns a 400 (https://platform.claude.com/docs/en/api/errors).
+    **dict.fromkeys(("claude-fable-5-1", "claude-mythos-5-1"), _Profile(forced_tools=False)),
+    "claude-mythos-preview": _Profile(efforts=_EFFORTS - {"xhigh"}),
+    **dict.fromkeys(
+        ("claude-opus-4-6", "claude-sonnet-4-6"),
+        _Profile(efforts=_EFFORTS - {"xhigh"}, sampling=True),
+    ),
+    **dict.fromkeys(
+        (
+            "claude-opus-4-5",
+            "claude-sonnet-4-5",
+            "claude-haiku-4-5",
+            "claude-opus-4-1",
+            "claude-opus-4",
+            "claude-opus-4-0",
+            "claude-sonnet-4",
+            "claude-sonnet-4-0",
+        ),
+        _EXTENDED,
+    ),
+}
+
+
+# ---------------------------------------------------------------------------
+# Request
+# ---------------------------------------------------------------------------
+
+
+def _cache_control(part: CachePart) -> CacheControlEphemeralParam:
+    if part.ttl == "5m" or part.ttl == "1h":
+        return {"type": "ephemeral", "ttl": part.ttl}
+    return {"type": "ephemeral"}
+
+
+def _block(part: Any) -> ContentBlockParam:
+    if isinstance(part, ImagePart) and isinstance(part.source, str) and _is_url(part.source):
+        return {"type": "image", "source": {"type": "url", "url": part.source}}
+    if isinstance(part, ImagePart):
+        media = cast(
+            "Literal['image/jpeg', 'image/png', 'image/gif', 'image/webp']", part.media_type
+        )
+        data = _encode_b64(part.source)
+        return {"type": "image", "source": {"type": "base64", "media_type": media, "data": data}}
+    if isinstance(part, DocumentPart):
+        source = {
+            "type": "base64",
+            "media_type": part.media_type,
+            "data": _encode_b64(part.source),
+        }
+        document: ContentBlockParam = {"type": "document", "source": cast("Any", source)}
+        if part.name:
+            document["title"] = part.name
+        return document
+    if isinstance(part, CachePart):
+        return {"type": "text", "text": part.content, "cache_control": _cache_control(part)}
+    return {"type": "text", "text": part if isinstance(part, str) else str(part)}
+
+
+def _content_to_sdk(content: Any) -> list[ContentBlockParam] | str:
+    """Convert multimodal content to Anthropic content blocks, or keep a plain string."""
     if isinstance(content, str):
         return content
     if not isinstance(content, list):
         return str(content)
-
-    blocks: list[dict[str, Any]] = []
-    for part in content:
-        if isinstance(part, str):
-            blocks.append({"type": "text", "text": part})
-        elif isinstance(part, ImagePart):
-            if _is_url(part.source):
-                blocks.append(
-                    {
-                        "type": "image",
-                        "source": {"type": "url", "url": part.source},
-                    }
-                )
-            else:
-                blocks.append(
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": part.media_type,
-                            "data": _encode_b64(part.source),
-                        },
-                    }
-                )
-        elif isinstance(part, DocumentPart):
-            block: dict[str, Any] = {
-                "type": "document",
-                "source": {
-                    "type": "base64",
-                    "media_type": part.media_type,
-                    "data": _encode_b64(part.source),
-                },
-            }
-            if part.name:
-                block["title"] = part.name
-            blocks.append(block)
-        elif isinstance(part, CachePart):
-            blocks.append(
-                {
-                    "type": "text",
-                    "text": part.content,
-                    "cache_control": {"type": part.ttl},
-                }
-            )
-        else:
-            blocks.append({"type": "text", "text": str(part)})
-    return blocks
+    return [_block(part) for part in content]
 
 
-def _tool_to_sdk(tool: dict[str, Any]) -> dict[str, Any]:
+def _tool_to_sdk(tool: dict[str, Any]) -> ToolParam:
     """Map generic tool dict to Anthropic SDK format."""
     return {
         "name": tool["name"],
@@ -138,25 +217,49 @@ def _tool_to_sdk(tool: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-type SystemParam = str | list[dict[str, Any]]
+def _server_tool(tool: dict[str, Any]) -> ToolUnionParam:
+    """A server tool with its name, at the version every current model takes; its config
+    belongs to C05 (https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool,
+    https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool)."""
+    config = sorted(set(tool) - {"_server_tool", "type"})
+    if config:
+        raise RequestError(f"server tool {tool['type']!r}: config {config} is not supported yet")
+    if tool["type"] == "web_search":
+        return {"type": "web_search_20250305", "name": "web_search"}
+    if tool["type"] == "code_execution":
+        return {"type": "code_execution_20250825", "name": "code_execution"}
+    raise RequestError(f"Anthropic has no server tool {tool['type']!r} in this adapter")
 
 
-def _system_blocks(content: Any) -> list[dict[str, Any]]:
+def _tool_choice(choice: str) -> ToolChoiceParam:
+    if choice == "auto":
+        return {"type": "auto"}
+    if choice == "required":
+        return {"type": "any"}
+    if choice == "none":
+        return {"type": "none"}
+    return {"type": "tool", "name": choice}
+
+
+type SystemParam = str | list[TextBlockParam]
+
+
+def _system_blocks(content: Any) -> list[TextBlockParam]:
     """Text blocks for one system message; a ``cache()`` part keeps its cache marker."""
     parts = content if isinstance(content, list | tuple) else [content]
-    blocks: list[dict[str, Any]] = []
+    blocks: list[TextBlockParam] = []
     for part in parts:
         if isinstance(part, CachePart):
             if part.content:
                 blocks.append(
-                    {"type": "text", "text": part.content, "cache_control": {"type": part.ttl}}
+                    {"type": "text", "text": part.content, "cache_control": _cache_control(part)}
                 )
         elif text := system_content_text(part):
             blocks.append({"type": "text", "text": text})
     return blocks
 
 
-def _as_system_blocks(system: SystemParam | None) -> list[dict[str, Any]]:
+def _as_system_blocks(system: SystemParam | None) -> list[TextBlockParam]:
     if not system:
         return []
     if isinstance(system, str):
@@ -183,55 +286,84 @@ def _with_system_suffix(system: SystemParam | None, suffix: str) -> SystemParam:
     return f"{system}\n\n{suffix}" if system else suffix
 
 
+def _text_of(content: list[ContentBlock]) -> str:
+    return "".join(block.text for block in content if block.type == "text").strip()
+
+
+def _replayable(msg: dict[str, Any]) -> list[ContentBlock] | None:
+    """The content Claude sent for this turn, while the message still matches it.
+
+    Thinking blocks, their signatures and server tool results must go back as received
+    (https://platform.claude.com/docs/en/build-with-claude/thinking); a message whose text or
+    tool calls were changed, or whose ``_raw`` came from another provider, is rebuilt instead.
+    """
+    raw = msg.get("_raw")
+    if not isinstance(raw, Message) or _text_of(raw.content) != (msg.get("content") or "").strip():
+        return None
+    sent = [(b.id, b.name, b.input) for b in raw.content if b.type == "tool_use"]
+    calls = [
+        (c.get("id", ""), c.get("name", ""), c.get("input", {}))
+        for c in msg.get("tool_calls") or []
+    ]
+    return list(raw.content) if sent == calls else None
+
+
+def _tool_use(call: dict[str, Any]) -> ToolUseBlockParam:
+    return {
+        "type": "tool_use",
+        "id": call.get("id", ""),
+        "name": call.get("name", ""),
+        "input": call.get("input", {}),
+    }
+
+
+def _assistant(msg: dict[str, Any]) -> MessageParam:
+    """An assistant turn: as Claude sent it, else rebuilt from its text and calls."""
+    if (replay := _replayable(msg)) is not None:
+        return {"role": "assistant", "content": replay}
+    calls = msg.get("tool_calls") or []
+    if not calls:
+        return {"role": "assistant", "content": _content_to_sdk(msg.get("content", ""))}
+    text = msg.get("content") or ""
+    blocks: list[ContentBlockParam] = [{"type": "text", "text": text}] if text else []
+    blocks.extend(_tool_use(call) for call in calls)
+    return {"role": "assistant", "content": blocks}
+
+
 def _messages_to_sdk(
     messages: list[dict[str, Any]],
-) -> tuple[SystemParam | None, list[dict[str, Any]]]:
-    """Extract system messages and convert the rest to SDK-compatible format.
+) -> tuple[SystemParam | None, list[MessageParam]]:
+    """The system prompt, and the messages.
 
-    ``tool_use_id`` is treated as the tool-result discriminator (role is ignored). The system
-    prompt is one string, or text blocks when a ``cache()`` part asks for a cache marker.
+    ``tool_use_id`` marks a tool result: every result of a turn goes back in one user message, in
+    call order (https://platform.claude.com/docs/en/agents-and-tools/tool-use/parallel-tool-use).
+    The system prompt is one string, or text blocks when a ``cache()`` part asks for a cache
+    marker.
     """
-    system_blocks: list[dict[str, Any]] = []
-    wire: list[dict[str, Any]] = []
+    system_blocks: list[TextBlockParam] = []
+    wire: list[MessageParam] = []
+    results: list[ToolResultBlockParam] = []
     for msg in messages:
         if msg.get("tool_use_id"):
-            wire.append(
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": msg["tool_use_id"],
-                            "content": msg.get("content", ""),
-                        }
-                    ],
-                }
+            content = msg.get("content", "")
+            results.append(
+                {"type": "tool_result", "tool_use_id": msg["tool_use_id"], "content": content}
             )
-        elif msg.get("role") == "system":
+            continue
+        if results:
+            wire.append({"role": "user", "content": results})
+            results = []
+        role = msg.get("role", "user")
+        if role == "system":
             system_blocks.extend(_system_blocks(msg.get("content", "")))
-        elif msg.get("role") == "assistant" and msg.get("tool_calls"):
-            content_blocks: list[dict[str, Any]] = []
-            text = msg.get("content", "")
-            if text:
-                content_blocks.append({"type": "text", "text": text})
-            for tc in msg["tool_calls"]:
-                content_blocks.append(
-                    {
-                        "type": "tool_use",
-                        "id": tc.get("id", ""),
-                        "name": tc.get("name", ""),
-                        "input": tc.get("input", {}),
-                    }
-                )
-            wire.append({"role": "assistant", "content": content_blocks})
+        elif role == "assistant":
+            wire.append(_assistant(msg))
+        elif role == "user":
+            wire.append({"role": "user", "content": _content_to_sdk(msg.get("content", ""))})
         else:
-            raw_content = msg.get("content", "")
-            wire.append(
-                {
-                    "role": msg.get("role", "user"),
-                    "content": _content_to_sdk(raw_content),
-                }
-            )
+            raise RequestError(f"the Messages API has no {role!r} role")
+    if results:
+        wire.append({"role": "user", "content": results})
     if not system_blocks:
         return None, wire
     if any("cache_control" in block for block in system_blocks):
@@ -239,41 +371,9 @@ def _messages_to_sdk(
     return "\n\n".join(block["text"] for block in system_blocks), wire
 
 
-def _build_thinking_param(
-    thinking: bool,
-    thinking_effort: str | None,
-    thinking_budget: int | None,
-) -> dict[str, Any] | None:
-    """Build the SDK ``thinking`` config dict, or None if disabled."""
-    if not thinking:
-        return None
-    budget = thinking_budget or DEFAULT_THINKING_BUDGET
-    cfg: dict[str, Any] = {"type": "enabled", "budget_tokens": budget}
-    if thinking_effort:
-        cfg["budget_tokens"] = THINKING_EFFORT_BUDGETS.get(
-            thinking_effort, DEFAULT_THINKING_BUDGET
-        )
-    return cfg
-
-
-def _build_output_config(output_schema: OutputSchema) -> dict[str, Any]:
+def _build_output_config(output_schema: OutputSchema) -> OutputConfigParam:
     """Build native ``output_config`` for structured output (Anthropic JSON mode)."""
-    return {
-        "format": {
-            "type": "json_schema",
-            "schema": output_schema.schema,
-        }
-    }
-
-
-_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*\n?(.*?)\n?\s*```", re.DOTALL)
-
-
-def _extract_json_text(text: str) -> str:
-    """Return *text* with a wrapping Markdown code fence removed, if present."""
-    stripped = text.strip()
-    match = _JSON_FENCE_RE.search(stripped)
-    return match.group(1).strip() if match else stripped
+    return {"format": {"type": "json_schema", "schema": output_schema.schema}}
 
 
 def _schema_prompt_instruction(output_schema: OutputSchema) -> str:
@@ -291,133 +391,100 @@ def _schema_prompt_instruction(output_schema: OutputSchema) -> str:
     )
 
 
-def _parse_structured_output(text: str, output_schema: OutputSchema) -> Any:
-    """Parse structured-output *text*, coercing to the schema's Pydantic model.
-
-    Tolerates Markdown-fenced JSON (the ``"prompt"`` strategy can produce it).
-    When the schema carries a ``model_class``, the parsed data is validated into
-    that model — at parity with the OpenAI, Gemini, and xAI adapters. Returns
-    ``None`` if the text is not valid JSON, or the raw dict if validation fails.
-    """
-    try:
-        data = json.loads(_extract_json_text(text))
-    except (json.JSONDecodeError, TypeError):
-        logger.warning("Failed to parse structured output as JSON")
-        return None
-    if output_schema.model_class is None:
-        return data
-    try:
-        return output_schema.model_class.model_validate(data)
-    except Exception:
-        logger.warning("Failed to validate structured output against schema")
-        return data
+# ---------------------------------------------------------------------------
+# Response
+# ---------------------------------------------------------------------------
 
 
-def _uses_deprecated_temperature(model: str) -> bool:
-    """Return True for Anthropic models that reject ``temperature``."""
-    return model.startswith(_TEMPERATURE_DEPRECATED_PREFIXES)
-
-
-def _sampling_body(model: str, params: dict[str, Any], *, thinking: bool) -> dict[str, Any]:
-    """The sampling parameters for ``extra_body``.
-
-    ``temperature`` is dropped for the models that reject it and when thinking is on, which
-    requires the default temperature.
-    """
-    body = {name: params[name] for name in _SAMPLING_PARAMS if name in params}
-    if thinking or _uses_deprecated_temperature(model):
-        body.pop("temperature", None)
-    return body
-
-
-def _extract_usage(sdk_usage: Any) -> Usage:
-    """Convert SDK usage object to our Usage dataclass.
-
-    A missing or ``None`` counter counts as 0 (the SDK types the cache counters as nullable).
-    """
+def _extract_usage(usage: SDKUsage) -> Usage:
+    """The toolkit's usage; the SDK types the cache counters as nullable."""
     return Usage(
-        input_tokens=getattr(sdk_usage, "input_tokens", 0) or 0,
-        output_tokens=getattr(sdk_usage, "output_tokens", 0) or 0,
-        cache_write_tokens=getattr(sdk_usage, "cache_creation_input_tokens", 0) or 0,
-        cache_read_tokens=getattr(sdk_usage, "cache_read_input_tokens", 0) or 0,
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+        cache_write_tokens=usage.cache_creation_input_tokens or 0,
+        cache_read_tokens=usage.cache_read_input_tokens or 0,
     )
 
 
-def _merge_delta_usage(prev: Usage | None, sdk_usage: Any) -> Usage:
-    """Apply a ``message_delta`` usage to a stream's running usage.
-
-    ``message_delta`` counters are cumulative totals for the whole message, so each reported
-    counter replaces the running value rather than adding to it. A missing or ``None``
-    counter (the SDK makes all but ``output_tokens`` optional) keeps the previous value,
-    normally the one from ``message_start``.
-    """
-    base = prev or Usage()
-    input_tokens = getattr(sdk_usage, "input_tokens", None)
-    output_tokens = getattr(sdk_usage, "output_tokens", None)
-    cache_write = getattr(sdk_usage, "cache_creation_input_tokens", None)
-    cache_read = getattr(sdk_usage, "cache_read_input_tokens", None)
-    return Usage(
-        input_tokens=base.input_tokens if input_tokens is None else input_tokens,
-        output_tokens=base.output_tokens if output_tokens is None else output_tokens,
-        cache_write_tokens=base.cache_write_tokens if cache_write is None else cache_write,
-        cache_read_tokens=base.cache_read_tokens if cache_read is None else cache_read,
-    )
+def _citation(cite: TextCitation) -> Citation:
+    if cite.type == "web_search_result_location":
+        return Citation(text=cite.cited_text, url=cite.url, title=cite.title or "")
+    if cite.type == "char_location":
+        return Citation(
+            text=cite.cited_text,
+            url="",
+            title="",
+            start_index=cite.start_char_index,
+            end_index=cite.end_char_index,
+        )
+    return Citation(text=cite.cited_text, url="", title="")
 
 
 def _parse_sdk_response(
-    message: Any,
+    message: Message,
     model: str,
     *,
     output_schema: OutputSchema | None = None,
 ) -> Response:
-    """Convert an ``anthropic.types.Message`` to our ``Response``."""
-    text_parts: list[str] = []
-    tool_calls: list[ToolCall] = []
-    thinking_blocks: list[ThinkingBlock] = []
-    citations: list[Citation] = []
-    parsed: Any = None
+    """Convert an ``anthropic.types.Message`` to our ``Response`` (the base adds usage, cost).
 
-    for block in message.content:
-        block_type = getattr(block, "type", "")
-        if block_type == "text":
-            text_parts.append(block.text)
-            # Extract citations from text blocks
-            for cite in getattr(block, "citations", None) or []:
-                citations.append(
-                    Citation(
-                        text=getattr(cite, "cited_text", ""),
-                        url=getattr(cite, "url", ""),
-                        title=getattr(cite, "title", ""),
-                        start_index=getattr(cite, "start_char_index", None),
-                        end_index=getattr(cite, "end_char_index", None),
-                    )
-                )
-        elif block_type == "tool_use":
-            tool_calls.append(ToolCall(id=block.id, name=block.name, input=dict(block.input)))
-        elif block_type == "thinking":
-            thinking_blocks.append(ThinkingBlock(text=block.thinking))
-
-    text = "".join(text_parts).strip()
-
-    if output_schema and text:
-        parsed = _parse_structured_output(text, output_schema)
-
-    usage = _extract_usage(message.usage)
-    cost = _estimate_response_cost(model, usage)
-
+    A thinking block whose text the model left out (``display: "omitted"``) adds no thinking.
+    """
+    text = _text_of(message.content)
     return Response(
         text=text,
-        tool_calls=tuple(tool_calls),
-        thinking=tuple(thinking_blocks),
-        parsed=parsed,
-        usage=usage,
-        cost=cost,
+        tool_calls=tuple(
+            ToolCall(id=block.id, name=block.name, input=parse_tool_args(cast("Any", block.input)))
+            for block in message.content
+            if block.type == "tool_use"
+        ),
+        thinking=tuple(
+            ThinkingBlock(text=block.thinking)
+            for block in message.content
+            if block.type == "thinking" and block.thinking
+        ),
+        parsed=parse_structured(text, output_schema) if output_schema and text else None,
         stop_reason=message.stop_reason or "",
         model=message.model or model,
         raw=message,
-        response_id=getattr(message, "id", "") or "",
-        citations=tuple(citations),
+        response_id=message.id or "",
+        citations=tuple(
+            _citation(cite)
+            for block in message.content
+            if block.type == "text"
+            for cite in block.citations or []
+        ),
     )
+
+
+def _stream_event(event: Any) -> StreamEvent | None:
+    """A text delta, or a finished thinking block, from one SDK stream event."""
+    if event.type == "content_block_delta" and event.delta.type == "text_delta":
+        return StreamEvent(kind="text", text=event.delta.text)
+    if (
+        event.type == "content_block_stop"
+        and event.content_block.type == "thinking"
+        and event.content_block.thinking
+    ):
+        return StreamEvent(
+            kind="thinking", thinking=ThinkingBlock(text=event.content_block.thinking)
+        )
+    return None
+
+
+def _stream_error(body: object) -> ProviderError:
+    """An error event inside a 200 stream, typed by its documented error type.
+
+    Tokens may already be billed, so it stays indeterminate (a 429 never is, D20).
+    """
+    error = body.get("error") if isinstance(body, dict) else None
+    kind = error.get("type") if isinstance(error, dict) else None
+    status = _ERROR_STATUS.get(kind) if isinstance(kind, str) else None
+    if status is None:
+        return ResponseError(f"the stream reported an error: {body}")
+    if status == 429:
+        return RateLimitError(status, str(body))
+    return APIError(status, str(body))
 
 
 # ---------------------------------------------------------------------------
@@ -425,7 +492,7 @@ def _parse_sdk_response(
 # ---------------------------------------------------------------------------
 
 
-class AnthropicProvider(LoopAwareClientCache, BaseProvider):
+class AnthropicProvider(LoopAwareClientCache, BaseProvider[Prepared[Params], Message]):
     """Anthropic Messages API provider via the official SDK."""
 
     def __init__(
@@ -444,10 +511,19 @@ class AnthropicProvider(LoopAwareClientCache, BaseProvider):
             client_kwargs["base_url"] = base_url
         if timeout is not None:
             client_kwargs["timeout"] = timeout
-        self._install_client(lambda: anthropic.AsyncAnthropic(**client_kwargs))
+        self._install_client(
+            lambda: anthropic.AsyncAnthropic(**client_kwargs, http_client=_http())
+        )
 
     async def close(self) -> None:
         await self._client.close()
+
+    def _messages(self) -> AsyncMessages:
+        return self._client.messages
+
+    def _profile(self) -> _Profile:
+        found = lookup(self._model, _PROFILES)
+        return found.value if found is not None else _CURRENT
 
     async def count_tokens(
         self,
@@ -458,375 +534,185 @@ class AnthropicProvider(LoopAwareClientCache, BaseProvider):
     ) -> int:
         """Count tokens using Anthropic's count_tokens API."""
         msg_system, wire = _messages_to_sdk(messages)
-        effective_system = _merge_system(system, msg_system)
-        sdk_kwargs: dict[str, Any] = {"model": self._model, "messages": wire}
-        if effective_system:
-            sdk_kwargs["system"] = effective_system
-        if tools:
-            fn_tools = [t for t in tools if not t.get("_server_tool")]
-            if fn_tools:
-                sdk_kwargs["tools"] = [_tool_to_sdk(t) for t in fn_tools]
-        try:
-            result = await self._client.messages.count_tokens(**sdk_kwargs)
-            return result.input_tokens
-        except anthropic.APIStatusError as exc:
-            raise APIError(exc.response.status_code, str(exc.body)) from exc
-        except anthropic.APIConnectionError as exc:
-            timed_out = isinstance(exc, anthropic.APITimeoutError)
-            raise network_error(exc, timed_out=timed_out) from exc
+        request: MessageCountTokensParams = {"model": self._model, "messages": wire}
+        if effective_system := _merge_system(system, msg_system):
+            request["system"] = effective_system
+        if function_tools := [_tool_to_sdk(t) for t in tools or [] if not t.get("_server_tool")]:
+            request["tools"] = list[ToolUnionParam](function_tools)
+        with self._mapped():
+            result = await self._messages().count_tokens(**request)
+        return result.input_tokens
 
     # ------------------------------------------------------------------
-    # Internals
+    # The contract
     # ------------------------------------------------------------------
 
-    def _build_sdk_kwargs(
-        self,
-        wire_messages: list[dict[str, Any]],
-        *,
-        system: SystemParam | None = None,
-        tools: list[dict[str, Any]] | None = None,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
-        """Build kwargs dict for ``messages.create()`` / ``messages.stream()``."""
-        # Extract our special params before forwarding
-        thinking = kwargs.pop("thinking", False)
-        thinking_effort = kwargs.pop("thinking_effort", None)
-        thinking_budget = kwargs.pop("thinking_budget", None)
-        output_schema: OutputSchema | None = kwargs.pop("output_schema", None)
-        tool_choice: str | None = kwargs.pop("tool_choice", None)
-        json_mode: bool = kwargs.pop("json_mode", False)
-        structured_output_mode: str = kwargs.pop("structured_output_mode", "native")
-        kwargs.pop("logprobs", None)  # Not supported by Anthropic
-
-        if structured_output_mode not in ("native", "prompt"):
-            raise ValueError(
+    def prepare(self, request: Request) -> Prepared[Params]:
+        options = parse_options(request.kwargs, _FORWARDED, "Anthropic")
+        profile = self._profile()
+        if options.structured_output_mode not in ("native", "prompt"):
+            raise RequestError(
                 "structured_output_mode must be 'native' or 'prompt', "
-                f"got {structured_output_mode!r}"
+                f"got {options.structured_output_mode!r}"
             )
-
-        # Warn about unknown params
-        unknown = set(kwargs) - _SDK_PARAMS.union(_SAMPLING_PARAMS)
-        if unknown:
-            warnings.warn(
-                f"Unknown parameter(s) ignored for Anthropic: {sorted(unknown)}. "
-                f"Valid: {sorted(_SDK_PARAMS.union(_SAMPLING_PARAMS))}",
-                stacklevel=4,
-            )
-        filtered = {k: v for k, v in kwargs.items() if k in _SDK_PARAMS}
-
-        sdk_kwargs: dict[str, Any] = {
-            "model": self._model,
-            "messages": wire_messages,
-            **filtered,
-        }
-
+        max_tokens = options.params.get("max_tokens")
+        if max_tokens is None:
+            raise RequestError("the Messages API requires max_tokens")
+        msg_system, wire = _messages_to_sdk(request.messages)
+        params: Params = {"model": self._model, "messages": wire, "max_tokens": max_tokens}
+        if "stop_sequences" in options.params:
+            params["stop_sequences"] = options.params["stop_sequences"]
+        thinking = self._thinking(params, options, profile)
+        self._sampling(params, options, profile, thinking=thinking)
+        self._output(params, options, profile)
+        self._tools(params, request.tools, options, profile)
+        system = _merge_system(request.system, msg_system)
+        if options.output_schema is not None and options.structured_output_mode == "prompt":
+            system = _with_system_suffix(system, _schema_prompt_instruction(options.output_schema))
+        if options.json_mode:  # Anthropic has no json_mode of its own
+            system = _with_system_suffix(system, "Respond with valid JSON only.")
         if system:
-            sdk_kwargs["system"] = system
+            params["system"] = system
+        return Prepared(params, output_schema=options.output_schema)
 
-        # Thinking
-        thinking_cfg = _build_thinking_param(thinking, thinking_effort, thinking_budget)
-        if thinking_cfg:
-            sdk_kwargs["thinking"] = thinking_cfg
-        if sampling := _sampling_body(self._model, kwargs, thinking=bool(thinking_cfg)):
-            sdk_kwargs["extra_body"] = sampling
-
-        # Structured output: native ``output_config`` by default, or schema-in-
-        # prompt for schemas that exceed Anthropic's native complexity limit.
-        if output_schema:
-            if structured_output_mode == "prompt":
-                instruction = _schema_prompt_instruction(output_schema)
-                sdk_kwargs["system"] = _with_system_suffix(sdk_kwargs.get("system"), instruction)
-            else:
-                sdk_kwargs["output_config"] = _build_output_config(output_schema)
-
-        if tools:
-            fn_tools = [_tool_to_sdk(t) for t in tools if not t.get("_server_tool")]
-            server_tools = [t for t in tools if t.get("_server_tool")]
-            all_tools = fn_tools
-            for st in server_tools:
-                sdk_type = _SERVER_TOOL_TYPES.get(st["type"])
-                if sdk_type:
-                    all_tools.append({"type": sdk_type})
-            if all_tools:
-                sdk_kwargs["tools"] = all_tools
-
-        # tool_choice
-        if tool_choice is not None:
-            if tool_choice == "auto":
-                sdk_kwargs["tool_choice"] = {"type": "auto"}
-            elif tool_choice == "required":
-                sdk_kwargs["tool_choice"] = {"type": "any"}
-            elif tool_choice == "none":
-                sdk_kwargs["tool_choice"] = {"type": "none"}
-            else:
-                sdk_kwargs["tool_choice"] = {"type": "tool", "name": tool_choice}
-
-        # json_mode — Anthropic has no native json_mode; append system instruction
-        if json_mode:
-            sdk_kwargs["system"] = _with_system_suffix(
-                sdk_kwargs.get("system"), "Respond with valid JSON only."
+    def _thinking(self, params: Params, options: Options, profile: _Profile) -> bool:
+        """Adaptive models think on ``thinking=True``, with a summary to show (``display``
+        defaults to ``"omitted"`` on the newer ones); ``thinking=False`` sends nothing, so a
+        model that thinks by default keeps doing so. Older models take a budget."""
+        if profile.thinking == "extended":
+            return self._budget(params, options)
+        if options.thinking_budget is not None:
+            warnings.warn(
+                f"thinking_budget is not taken by {self._model}, which thinks adaptively; "
+                "thinking_effort sets its effort, ignoring",
+                stacklevel=5,
             )
+        if options.thinking:
+            params["thinking"] = {"type": "adaptive", "display": "summarized"}
+        return options.thinking
 
-        return sdk_kwargs
+    def _budget(self, params: Params, options: Options) -> bool:
+        """An older model's thinking budget, added to ``max_tokens`` so it never takes the
+        answer's room (D20). An effort or a budget turns thinking on by itself."""
+        if not (options.thinking or options.thinking_effort or options.thinking_budget):
+            return False
+        budget = options.thinking_budget
+        effort = options.thinking_effort
+        if budget is None and effort is not None:
+            if effort not in THINKING_EFFORT_BUDGETS:
+                raise RequestError(
+                    f"{self._model} takes thinking_effort in {sorted(THINKING_EFFORT_BUDGETS)}, "
+                    f"not {effort!r}"
+                )
+            budget = THINKING_EFFORT_BUDGETS[effort]
+        budget = DEFAULT_THINKING_BUDGET if budget is None else budget
+        if budget < _MIN_BUDGET:
+            raise RequestError(
+                f"{self._model} takes a thinking_budget of at least {_MIN_BUDGET}, not {budget}"
+            )
+        params["thinking"] = {"type": "enabled", "budget_tokens": budget}
+        params["max_tokens"] = params["max_tokens"] + budget
+        return True
 
-    # ------------------------------------------------------------------
-    # complete
-    # ------------------------------------------------------------------
+    def _sampling(
+        self, params: Params, options: Options, profile: _Profile, *, thinking: bool
+    ) -> None:
+        """``temperature``, ``top_p`` and ``top_k`` travel in the request body. A model without
+        sampling refuses them; its ``temperature`` is dropped, since the ``LLM`` always sends one.
+        Thinking needs the default temperature."""
+        given = {name: options.params[name] for name in _SAMPLING if name in options.params}
+        if not profile.sampling:
+            if explicit := sorted(set(given) - {"temperature"}):
+                raise RequestError(f"{self._model} takes no sampling parameters: {explicit}")
+            return
+        if thinking:
+            given.pop("temperature", None)
+        if given:
+            params["extra_body"] = dict(given)
 
-    async def complete(
+    def _output(self, params: Params, options: Options, profile: _Profile) -> None:
+        """``output_config``: the structured output format and, on adaptive models, the effort
+        (which applies with or without thinking)."""
+        config: OutputConfigParam = {}
+        if options.output_schema is not None and options.structured_output_mode == "native":
+            config = _build_output_config(options.output_schema)
+        effort = options.thinking_effort
+        if profile.thinking == "adaptive" and effort is not None:
+            if effort not in profile.efforts:
+                raise RequestError(
+                    f"{self._model} takes thinking_effort in {sorted(profile.efforts)}, "
+                    f"not {effort!r}"
+                )
+            config["effort"] = cast("Literal['low', 'medium', 'high', 'xhigh', 'max']", effort)
+        if config:
+            params["output_config"] = config
+
+    def _tools(
         self,
-        messages: list[dict[str, Any]],
-        *,
-        system: str | None = None,
-        tools: list[dict[str, Any]] | None = None,
-        **kwargs: Any,
-    ) -> Response:
-        msg_system, wire = _messages_to_sdk(messages)
-        effective_system = _merge_system(system, msg_system)
-        output_schema: OutputSchema | None = kwargs.get("output_schema")
+        params: Params,
+        tools: list[dict[str, Any]] | None,
+        options: Options,
+        profile: _Profile,
+    ) -> None:
+        tools = tools or []
+        if tools:
+            functions: list[ToolUnionParam] = [
+                _tool_to_sdk(tool) for tool in tools if not tool.get("_server_tool")
+            ]
+            params["tools"] = functions + [
+                _server_tool(tool) for tool in tools if tool.get("_server_tool")
+            ]
+        choice = options.tool_choice
+        if choice is None:
+            return
+        if not profile.forced_tools and choice not in ("auto", "none"):
+            raise RequestError(
+                f"{self._model} takes tool_choice 'auto' or 'none' only: forced tool use "
+                "returns a 400 (https://platform.claude.com/docs/en/api/errors)"
+            )
+        params["tool_choice"] = _tool_choice(choice)
 
-        sdk_kwargs = self._build_sdk_kwargs(wire, system=effective_system, tools=tools, **kwargs)
+    async def send(self, prepared: Prepared[Params]) -> Message:
+        return await self._messages().create(**prepared.params)
 
-        logger.debug("complete start model=%s messages=%d", self._model, len(messages))
-        try:
-            message = await self._client.messages.create(**sdk_kwargs)
-        except anthropic.RateLimitError as exc:
-            retry_after = exc.response.headers.get("retry-after")
-            raise RateLimitError(
-                exc.response.status_code,
-                str(exc.body),
-                retry_after=_parse_retry_after(retry_after),
-            ) from exc
-        except anthropic.APIStatusError as exc:
-            raise APIError(exc.response.status_code, str(exc.body)) from exc
-        except anthropic.APIConnectionError as exc:
-            timed_out = isinstance(exc, anthropic.APITimeoutError)
-            raise network_error(exc, timed_out=timed_out) from exc
+    async def open_stream(
+        self, prepared: Prepared[Params]
+    ) -> AsyncIterator[StreamEvent | Done[Message]]:
+        # The SDK accumulates the final message, cumulative usage deltas included.
+        async with self._messages().stream(**prepared.params) as stream:
+            mark_dispatched()  # a response has begun: the request was sent
+            async for event in stream:
+                if (decoded := _stream_event(event)) is not None:
+                    yield decoded
+            yield Done(await stream.get_final_message())
 
-        resp = _parse_sdk_response(message, self._model, output_schema=output_schema)
-        logger.debug(
-            "complete done model=%s tokens_in=%d tokens_out=%d",
-            self._model,
-            resp.usage.input_tokens,
-            resp.usage.output_tokens,
-        )
-        return resp
+    def assemble(self, final: Message, prepared: Prepared[Params]) -> Response:
+        return _parse_sdk_response(final, self._model, output_schema=prepared.output_schema)
 
-    # ------------------------------------------------------------------
-    # stream
-    # ------------------------------------------------------------------
+    def usage(self, final: Message) -> Usage | None:
+        return _extract_usage(final.usage)
 
-    def stream(
-        self,
-        messages: list[dict[str, Any]],
-        *,
-        system: str | None = None,
-        tools: list[dict[str, Any]] | None = None,
-        **kwargs: Any,
-    ) -> tuple[AsyncIterator[str], StreamState]:
-        msg_system, wire = _messages_to_sdk(messages)
-        effective_system = _merge_system(system, msg_system)
-        output_schema: OutputSchema | None = kwargs.get("output_schema")
+    def map_error(self, exc: Exception, *, sent: bool) -> ProviderError | None:
+        """The one place that knows the SDK's errors.
 
-        sdk_kwargs = self._build_sdk_kwargs(wire, system=effective_system, tools=tools, **kwargs)
-
-        logger.debug("stream start model=%s", self._model)
-        state = StreamState()
-        state.model = self._model
-
-        async def _generate() -> AsyncIterator[str]:
-            current_block: Any = None
-            tool_args_acc = ""
-
-            try:
-                async with self._client.messages.stream(**sdk_kwargs) as stream:
-                    async for event in stream:
-                        # The SDK stream yields a discriminated union keyed by ``event.type``.
-                        # We narrow with ``cast`` once per branch so pyright can resolve the
-                        # subsequent attribute access; the runtime check is the string match.
-                        event_type = event.type
-
-                        if event_type == "content_block_start":
-                            ev = cast(anthropic.types.RawContentBlockStartEvent, event)
-                            current_block = ev.content_block
-                            tool_args_acc = ""
-
-                        elif event_type == "content_block_delta":
-                            ev = cast(anthropic.types.RawContentBlockDeltaEvent, event)
-                            delta = ev.delta
-                            delta_type = delta.type
-                            if delta_type == "text_delta":
-                                yield cast(anthropic.types.TextDelta, delta).text
-                            elif delta_type == "input_json_delta":
-                                tool_args_acc += cast(
-                                    anthropic.types.InputJSONDelta, delta
-                                ).partial_json
-
-                        elif event_type == "content_block_stop":
-                            if current_block and getattr(current_block, "type", "") == "tool_use":
-                                args = parse_tool_args(tool_args_acc) if tool_args_acc else {}
-                                if (
-                                    output_schema
-                                    and getattr(current_block, "name", "") == output_schema.name
-                                ):
-                                    pass  # structured output handled via final message
-                                else:
-                                    state.tool_calls.append(
-                                        ToolCall(
-                                            id=getattr(current_block, "id", ""),
-                                            name=getattr(current_block, "name", ""),
-                                            input=args,
-                                        )
-                                    )
-                            current_block = None
-                            tool_args_acc = ""
-
-                        elif event_type == "message_start":
-                            ev = cast(anthropic.types.RawMessageStartEvent, event)
-                            state.model = getattr(ev.message, "model", self._model)
-                            if hasattr(ev.message, "usage"):
-                                state.usage = _extract_usage(ev.message.usage)
-
-                        elif event_type == "message_delta":
-                            ev = cast(anthropic.types.RawMessageDeltaEvent, event)
-                            state.stop_reason = ev.delta.stop_reason or ""
-                            if getattr(ev, "usage", None):
-                                state.usage = _merge_delta_usage(state.usage, ev.usage)
-
-                    # After stream completes, extract thinking from final message
-                    final = await stream.get_final_message()
-                    state.raw = final
-                    for block in final.content:
-                        if getattr(block, "type", "") == "thinking":
-                            state.thinking.append(
-                                ThinkingBlock(
-                                    text=cast(anthropic.types.ThinkingBlock, block).thinking
-                                )
-                            )
-
-            except anthropic.RateLimitError as exc:
-                retry_after = exc.response.headers.get("retry-after")
-                raise RateLimitError(
-                    exc.response.status_code,
-                    str(exc.body),
-                    retry_after=_parse_retry_after(retry_after),
-                ) from exc
-            except anthropic.APIStatusError as exc:
-                raise APIError(exc.response.status_code, str(exc.body)) from exc
-            except anthropic.APIConnectionError as exc:
-                timed_out = isinstance(exc, anthropic.APITimeoutError)
-                raise network_error(exc, timed_out=timed_out) from exc
-
-        return _generate(), state
-
-    def stream_events(
-        self,
-        messages: list[dict[str, Any]],
-        *,
-        system: str | None = None,
-        tools: list[dict[str, Any]] | None = None,
-        **kwargs: Any,
-    ) -> tuple[AsyncIterator[StreamEvent], StreamState]:
-        msg_system, wire = _messages_to_sdk(messages)
-        effective_system = _merge_system(system, msg_system)
-        output_schema: OutputSchema | None = kwargs.get("output_schema")
-
-        sdk_kwargs = self._build_sdk_kwargs(wire, system=effective_system, tools=tools, **kwargs)
-
-        state = StreamState()
-        state.model = self._model
-
-        async def _generate() -> AsyncIterator[StreamEvent]:
-            current_block: Any = None
-            tool_args_acc = ""
-            thinking_acc = ""
-
-            try:
-                async with self._client.messages.stream(**sdk_kwargs) as stream:
-                    async for event in stream:
-                        # See comment in ``stream`` — same cast-per-branch pattern.
-                        event_type = event.type
-
-                        if event_type == "content_block_start":
-                            ev = cast(anthropic.types.RawContentBlockStartEvent, event)
-                            current_block = ev.content_block
-                            tool_args_acc = ""
-                            thinking_acc = ""
-
-                        elif event_type == "content_block_delta":
-                            ev = cast(anthropic.types.RawContentBlockDeltaEvent, event)
-                            delta = ev.delta
-                            delta_type = delta.type
-                            if delta_type == "text_delta":
-                                yield StreamEvent(
-                                    kind="text", text=cast(anthropic.types.TextDelta, delta).text
-                                )
-                            elif delta_type == "input_json_delta":
-                                tool_args_acc += cast(
-                                    anthropic.types.InputJSONDelta, delta
-                                ).partial_json
-                            elif delta_type == "thinking_delta":
-                                thinking_acc += cast(anthropic.types.ThinkingDelta, delta).thinking
-
-                        elif event_type == "content_block_stop":
-                            if current_block and getattr(current_block, "type", "") == "tool_use":
-                                args = parse_tool_args(tool_args_acc) if tool_args_acc else {}
-                                if (
-                                    output_schema
-                                    and getattr(current_block, "name", "") == output_schema.name
-                                ):
-                                    pass  # structured output handled via final message
-                                else:
-                                    tc = ToolCall(
-                                        id=getattr(current_block, "id", ""),
-                                        name=getattr(current_block, "name", ""),
-                                        input=args,
-                                    )
-                                    state.tool_calls.append(tc)
-                                    yield StreamEvent(kind="tool_call", tool_call=tc)
-                            elif (
-                                current_block and getattr(current_block, "type", "") == "thinking"
-                            ):
-                                # Emit complete thinking block (buffered from deltas)
-                                text = thinking_acc or getattr(current_block, "thinking", "")
-                                if text:
-                                    block = ThinkingBlock(text=text)
-                                    state.thinking.append(block)
-                                    yield StreamEvent(kind="thinking", thinking=block)
-                            current_block = None
-                            tool_args_acc = ""
-                            thinking_acc = ""
-
-                        elif event_type == "message_start":
-                            ev = cast(anthropic.types.RawMessageStartEvent, event)
-                            state.model = getattr(ev.message, "model", self._model)
-                            if hasattr(ev.message, "usage"):
-                                state.usage = _extract_usage(ev.message.usage)
-
-                        elif event_type == "message_delta":
-                            ev = cast(anthropic.types.RawMessageDeltaEvent, event)
-                            state.stop_reason = ev.delta.stop_reason or ""
-                            if getattr(ev, "usage", None):
-                                state.usage = _merge_delta_usage(state.usage, ev.usage)
-
-                    # After stream completes, get final message for raw state
-                    final = await stream.get_final_message()
-                    state.raw = final
-
-            except anthropic.RateLimitError as exc:
-                retry_after = exc.response.headers.get("retry-after")
-                raise RateLimitError(
-                    exc.response.status_code,
-                    str(exc.body),
-                    retry_after=_parse_retry_after(retry_after),
-                ) from exc
-            except anthropic.APIStatusError as exc:
-                raise APIError(exc.response.status_code, str(exc.body)) from exc
-            except anthropic.APIConnectionError as exc:
-                timed_out = isinstance(exc, anthropic.APITimeoutError)
-                raise network_error(exc, timed_out=timed_out) from exc
-
-        return _generate(), state
+        "Failed requests aren't charged", but a client that times out or disconnects mid-request
+        is (https://support.claude.com/en/articles/8977456-how-do-i-pay-for-my-claude-api-usage):
+        an error response is unbilled, a transport failure after sending is indeterminate. An
+        error event inside a stream arrives with the stream's 200.
+        """
+        if isinstance(exc, anthropic.APIStatusError):
+            status = exc.response.status_code
+            if status == 200:
+                return _stream_error(exc.body)
+            if isinstance(exc, anthropic.RateLimitError):
+                retry_after = _parse_retry_after(exc.response.headers.get("retry-after"))
+                return RateLimitError(status, str(exc.body), retry_after=retry_after)
+            return APIError(status, str(exc.body), delivery="unbilled")
+        if isinstance(exc, anthropic.APIConnectionError):
+            return transport_error(exc.__cause__ or exc, not_sent=_NOT_SENT, timeouts=_TIMEOUTS)
+        if isinstance(exc, httpx2.TransportError):  # raised while reading a stream
+            return transport_error(exc, not_sent=_NOT_SENT, timeouts=_TIMEOUTS)
+        return refused_or_unread(exc, sent=sent)
 
     # ------------------------------------------------------------------
     # batch
@@ -837,74 +723,55 @@ class AnthropicProvider(LoopAwareClientCache, BaseProvider):
         requests: list[dict[str, Any]],
         **kwargs: Any,
     ) -> str:
-        """Submit a batch via Anthropic's Message Batches API."""
-        batch_requests = []
-        for req in requests:
-            custom_id = req.get("custom_id", "")
-            messages = req.get("messages", [])
-            req_system = req.get("system")
-            tools = req.get("tools")
-            req_kwargs = req.get("kwargs", {})
+        """Submit a batch via the Message Batches API; each body is what ``prepare`` builds."""
+        batch = [
+            BatchRequest(custom_id=req.get("custom_id", ""), params=self._batch_params(req))
+            for req in requests
+        ]
+        with self._mapped():
+            result = await self._messages().batches.create(requests=batch)
+        return result.id
 
-            msg_system, wire = _messages_to_sdk(messages)
-            params: dict[str, Any] = {
-                "model": self._model,
-                "messages": wire,
-                "max_tokens": req_kwargs.get("max_tokens", 4096),
-            }
-            if system_text := _merge_system(req_system, msg_system):
-                params["system"] = system_text
-            if tools:
-                fn_tools = [t for t in tools if not t.get("_server_tool")]
-                if fn_tools:
-                    params["tools"] = [_tool_to_sdk(t) for t in fn_tools]
-
-            batch_requests.append(
-                {
-                    "custom_id": custom_id,
-                    "params": params,
-                }
-            )
-
-        try:
-            result = await self._client.messages.batches.create(requests=batch_requests)
-            return result.id
-        except anthropic.APIStatusError as exc:
-            raise APIError(exc.response.status_code, str(exc.body)) from exc
-        except anthropic.APIConnectionError as exc:
-            timed_out = isinstance(exc, anthropic.APITimeoutError)
-            raise network_error(exc, timed_out=timed_out) from exc
+    def _batch_params(self, req: dict[str, Any]) -> MessageCreateParamsNonStreaming:
+        """A batch line's body: the same request a call sends (4096 tokens by default), with
+        the sampling fields in the body itself."""
+        request = Request(
+            messages=req.get("messages", []),
+            system=req.get("system"),
+            tools=req.get("tools"),
+            model=self._model,
+            kwargs={"max_tokens": 4096, **req.get("kwargs", {})},
+        )
+        params = dict(self.prepare(request).params)
+        body = cast("dict[str, object]", params.pop("extra_body", {}))
+        return cast("MessageCreateParamsNonStreaming", {**params, **body})
 
     async def batch_status(self, batch_id: str) -> str:
         """Check batch status."""
-        try:
-            result = await self._client.messages.batches.retrieve(batch_id)
-            return result.processing_status
-        except anthropic.APIStatusError as exc:
-            raise APIError(exc.response.status_code, str(exc.body)) from exc
-        except anthropic.APIConnectionError as exc:
-            timed_out = isinstance(exc, anthropic.APITimeoutError)
-            raise network_error(exc, timed_out=timed_out) from exc
+        with self._mapped():
+            result = await self._messages().batches.retrieve(batch_id)
+        return result.processing_status
 
     async def batch_results(self, batch_id: str) -> list[Any]:
         """Retrieve completed batch results."""
         from ai_arch_toolkit.core._batch import BatchResult
 
         results: list[BatchResult] = []
-        try:
-            async for entry in await self._client.messages.batches.results(batch_id):
-                custom_id = getattr(entry, "custom_id", "")
-                result_data = getattr(entry, "result", None)
-                if result_data and getattr(result_data, "type", "") == "succeeded":
-                    message = result_data.message
-                    response = _parse_sdk_response(message, self._model)
-                    results.append(BatchResult(custom_id=custom_id, response=response))
+        with self._mapped():
+            async for entry in await self._messages().batches.results(batch_id):
+                result = entry.result
+                if result.type == "succeeded":
+                    answer = self._answer(result.message, Prepared(cast("Params", {})))
+                    results.append(
+                        BatchResult(custom_id=entry.custom_id, response=answer.response)
+                    )
+                elif result.type == "errored":
+                    results.append(BatchResult(custom_id=entry.custom_id, error=str(result.error)))
                 else:
-                    error_msg = str(getattr(result_data, "error", "unknown error"))
-                    results.append(BatchResult(custom_id=custom_id, error=error_msg))
-        except anthropic.APIStatusError as exc:
-            raise APIError(exc.response.status_code, str(exc.body)) from exc
-        except anthropic.APIConnectionError as exc:
-            timed_out = isinstance(exc, anthropic.APITimeoutError)
-            raise network_error(exc, timed_out=timed_out) from exc
+                    results.append(BatchResult(custom_id=entry.custom_id, error=result.type))
         return results
+
+
+def _http() -> Any:
+    """The SDK's HTTP client, with the hook that marks a request as handed to the transport."""
+    return anthropic.DefaultAsyncHttpxClient(event_hooks={"request": [on_request]})

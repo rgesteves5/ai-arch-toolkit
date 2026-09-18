@@ -398,30 +398,48 @@ class MeterStore:
             self._terminalize(op, "settled", _payload_key(usage, cost))
         self._dispatch(event)
 
-    def fail(self, op_id: str, disposition: Delivery) -> None:
-        """Finalize failed work with a classified cost; pending work is aborted."""
-        self._finish_failure(op_id, "failed", disposition)
+    def fail(
+        self,
+        op_id: str,
+        disposition: Delivery,
+        *,
+        usage: Usage | None = None,
+        cost: Cost | None = None,
+    ) -> None:
+        """Finalize failed work with a classified cost; pending work is aborted.
 
-    def _finish_failure(self, op_id: str, status: EventStatus, delivery: Delivery) -> None:
+        A failure the provider reported usage for settles with that usage and ``cost``.
+        """
+        if cost is not None and cost.kind == "estimated":
+            raise ValueError("fail() needs an actual cost (known|unknown), not an estimate")
+        self._finish_failure(op_id, "failed", disposition, usage or _NO_USAGE, cost)
+
+    def _finish_failure(
+        self,
+        op_id: str,
+        status: EventStatus,
+        delivery: Delivery,
+        usage: Usage = _NO_USAGE,
+        reported: Cost | None = None,
+    ) -> None:
         while True:
             with self._lock:
                 op = self._ops.get(op_id)
             if op is None:
                 return
-            cost = _fail_cost(op, delivery) if op.started else _ZERO_COST
+            cost = (reported or _fail_cost(op, delivery)) if op.started else _ZERO_COST
             with self._lock:
                 if self._ops.get(op_id) is not op:
                     continue
                 if op.started:
                     self._apply(
                         op.request.parent_span_id,
-                        lambda c, op=op, cost=cost: _settle(c, op, _NO_USAGE, cost),
+                        lambda c, op=op, usage=usage, cost=cost: _settle(c, op, usage, cost),
                     )
                 else:
-                    status = "aborted"
-                    delivery = "not_sent"
+                    status, delivery, usage = "aborted", "not_sent", _NO_USAGE
                     self._apply(op.request.parent_span_id, lambda c, op=op: _abort(c, op))
-                event = self._make_event(op, status, _NO_USAGE, cost, delivery)
+                event = self._make_event(op, status, usage, cost, delivery)
                 self._terminalize(op, status, None)
                 break
         self._dispatch(event)

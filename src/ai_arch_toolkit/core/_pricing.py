@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import logging
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from ai_arch_toolkit.core._metering._cost import Cost
 from ai_arch_toolkit.core._metering._money import Money
+from ai_arch_toolkit.core._model_id import lookup
 
 if TYPE_CHECKING:
     from ai_arch_toolkit.core._metering._operation import OperationRequest
@@ -19,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["ModelPricing", "PricingRegistry", "pricing"]
 
-_MISS = object()  # sentinel: distinguishes "not cached" from a cached None (known-unpriced)
+type PriceMatch = Literal["exact", "prefix"]
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -56,6 +57,9 @@ class ModelPricing:
     fast_long_context_cache_read: float | None = None
 
 
+_PRICE_FIELDS = frozenset(field.name for field in fields(ModelPricing))
+
+
 def _first_rate(*rates: float | None) -> float | None:
     """Return the first explicitly configured rate, preserving valid zeroes."""
     return next((rate for rate in rates if rate is not None), None)
@@ -64,20 +68,26 @@ def _first_rate(*rates: float | None) -> float | None:
 class PricingRegistry:
     """Registry of model pricing. Ships with defaults, fully overridable.
 
+    A model id finds its price by its own entry or as a dated snapshot of one
+    (``claude-haiku-4-5-20251001`` → ``claude-haiku-4-5``); a variant such as ``o3-pro`` never
+    inherits ``o3``. A prefix entry is an explicit choice, for a family of local models.
+
     Usage::
 
         from ai_arch_toolkit.core import ModelPricing, pricing
 
         cost = pricing.estimate_cost("claude-sonnet-5", input_tokens=1000)
         pricing.register("my-model", ModelPricing(input=1.0, output=2.0))
+        pricing.register("llama3", ModelPricing(), match="prefix")  # local: zero, explicitly
         pricing.load("./my_pricing.toml")
         pricing.reset()
     """
 
     def __init__(self) -> None:
-        self._models: dict[str, ModelPricing] = {}
-        # Memoize longest-prefix lookups: get() is on the settle hot path (once per LLM attempt),
-        # and a run reuses the same model string thousands of times. Cleared on any mutation.
+        self._models: dict[str, ModelPricing] = {}  # exact ids and their aliases
+        self._prefixes: dict[str, ModelPricing] = {}  # registered with match="prefix"
+        # Memoize lookups: get() is on the settle hot path (once per LLM attempt), and a run
+        # reuses the same model string thousands of times. Cleared on any mutation.
         self._cache: dict[str, ModelPricing | None] = {}
         self._load_defaults()
 
@@ -92,39 +102,44 @@ class PricingRegistry:
 
     # ── Registration ──
 
-    def register(self, model_prefix: str, pricing: ModelPricing) -> None:
-        """Register or override pricing for a model prefix."""
-        self._models[model_prefix] = pricing
+    def register(self, model: str, pricing: ModelPricing, *, match: PriceMatch = "exact") -> None:
+        """Register or override the price of ``model`` and its dated snapshots.
+
+        With ``match="prefix"`` the price covers every id that starts with ``model`` — meant for
+        a family of local models. An id's own entry always wins over a prefix.
+        """
+        self._table(match)[model] = pricing
         self._cache.clear()
 
-    def unregister(self, model_prefix: str) -> None:
-        """Remove pricing for a model prefix."""
-        self._models.pop(model_prefix, None)
+    def unregister(self, model: str) -> None:
+        """Remove the entry for ``model``, exact or prefix."""
+        self._models.pop(model, None)
+        self._prefixes.pop(model, None)
         self._cache.clear()
+
+    def _table(self, match: PriceMatch) -> dict[str, ModelPricing]:
+        if match == "exact":
+            return self._models
+        if match == "prefix":
+            return self._prefixes
+        raise ValueError(f"match must be 'exact' or 'prefix', got {match!r}")
 
     # ── Query ──
 
     def get(self, model: str) -> ModelPricing | None:
-        """Find pricing by longest prefix match (memoized). Returns None if unknown."""
-        cached = self._cache.get(model, _MISS)
-        if cached is not _MISS:
-            return cached  # type: ignore[return-value]  # _MISS excluded above
-        best: ModelPricing | None = None
-        best_len = 0
-        for prefix, p in self._models.items():
-            if model.startswith(prefix) and len(prefix) > best_len:
-                best = p
-                best_len = len(prefix)
-        self._cache[model] = best
-        return best
+        """The price of ``model`` (memoized), or ``None`` when it has none."""
+        if model not in self._cache:
+            found = lookup(model, self._models, self._prefixes)
+            self._cache[model] = found.value if found is not None else None
+        return self._cache[model]
 
     def has(self, model: str) -> bool:
         """Check if a model has pricing registered."""
         return self.get(model) is not None
 
     def list_models(self) -> list[str]:
-        """List all registered model prefixes."""
-        return sorted(self._models.keys())
+        """Every registered id, alias and prefix, sorted."""
+        return sorted({*self._models, *self._prefixes})
 
     # ── Cost Estimation ──
 
@@ -259,45 +274,25 @@ class PricingRegistry:
         self._load_toml(Path(path))
 
     def _load_toml(self, path: Path) -> None:
-        """Parse a pricing TOML file and register all entries."""
+        """Parse a pricing TOML file and register all entries.
+
+        An entry may list ``aliases`` (other ids with the same price) and ``match = "prefix"``.
+        """
         with open(path, "rb") as f:
             data: dict[str, Any] = tomllib.load(f)
 
-        for prefix, values in data.items():
+        for model, values in data.items():
             if isinstance(values, dict):
-                self._models[prefix] = ModelPricing(
-                    input=values.get("input", 0.0),
-                    output=values.get("output", 0.0),
-                    cache_write=values.get("cache_write"),
-                    cache_read=values.get("cache_read"),
-                    batch_input=values.get("batch_input"),
-                    batch_output=values.get("batch_output"),
-                    batch_cache_write=values.get("batch_cache_write"),
-                    batch_cache_read=values.get("batch_cache_read"),
-                    long_context_threshold=values.get("long_context_threshold"),
-                    long_context_inclusive=values.get("long_context_inclusive", False),
-                    long_context_input=values.get("long_context_input"),
-                    long_context_output=values.get("long_context_output"),
-                    long_context_cache_write=values.get("long_context_cache_write"),
-                    long_context_cache_read=values.get("long_context_cache_read"),
-                    batch_long_context_input=values.get("batch_long_context_input"),
-                    batch_long_context_output=values.get("batch_long_context_output"),
-                    batch_long_context_cache_write=values.get("batch_long_context_cache_write"),
-                    batch_long_context_cache_read=values.get("batch_long_context_cache_read"),
-                    fast_input=values.get("fast_input"),
-                    fast_output=values.get("fast_output"),
-                    fast_cache_write=values.get("fast_cache_write"),
-                    fast_cache_read=values.get("fast_cache_read"),
-                    fast_long_context_input=values.get("fast_long_context_input"),
-                    fast_long_context_output=values.get("fast_long_context_output"),
-                    fast_long_context_cache_write=values.get("fast_long_context_cache_write"),
-                    fast_long_context_cache_read=values.get("fast_long_context_cache_read"),
-                )
+                price = ModelPricing(**{k: v for k, v in values.items() if k in _PRICE_FIELDS})
+                table = self._table(values.get("match", "exact"))
+                for name in (model, *values.get("aliases", ())):
+                    table[name] = price
         self._cache.clear()
 
     def reset(self) -> None:
         """Reset to shipped defaults, discarding all custom registrations."""
         self._models.clear()
+        self._prefixes.clear()
         self._cache.clear()
         self._load_defaults()
 

@@ -25,6 +25,7 @@ from ai_arch_toolkit.toolkit.agents import (
 )
 from ai_arch_toolkit.toolkit.agents.flows._react import react_flow, react_initial_state
 from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowResult
+from tests.fake_provider import fake_llm
 
 _BUILTINS = {
     "react",
@@ -51,21 +52,9 @@ def _make_response(
     )
 
 
-class _FakeProvider:
-    """A real LLM's provider stand-in, so LLM.complete runs its metering charge site."""
-
-    def __init__(self, *responses: Response) -> None:
-        self._responses = list(responses)
-        self.calls = 0
-
-    async def complete(self, messages, *, system=None, tools=None, **kwargs) -> Response:
-        self.calls += 1
-        return self._responses[min(self.calls - 1, len(self._responses) - 1)]
-
-
 def _metered_llm(*responses: Response) -> LLM:
-    llm = LLM("claude-sonnet-4-6", api_key="test")
-    llm._provider = _FakeProvider(*responses)  # type: ignore[assignment]
+    """A real LLM with a fake provider, so LLM.complete runs its metering charge site."""
+    llm, _ = fake_llm(*responses)
     return llm
 
 

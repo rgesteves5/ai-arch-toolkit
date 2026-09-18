@@ -2,30 +2,28 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from ai_arch_toolkit.core._exceptions import APIError
 from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._middleware import Request
-from ai_arch_toolkit.core._providers._base import StreamState
-from ai_arch_toolkit.core._response import Response, StreamEvent, Usage
+from ai_arch_toolkit.core._response import Response, Usage
 from ai_arch_toolkit.core._retry import RetryConfig
+from tests.fake_provider import FakeProvider, Reply
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+# Each test builds its LLMs through a patched ``create_provider``; every fake answers for the
+# model of the LLM it is handed to. A scripted exception fails a stream before its first chunk.
 
-def _make_state(usage: Usage | None = None) -> StreamState:
-    state = StreamState()
-    state.usage = usage or Usage(input_tokens=10, output_tokens=5)
-    state.model = "test-model"
-    state.stop_reason = "end_turn"
-    return state
+
+def _answer(text: str, usage: Usage | None = None) -> Response:
+    return Response(text=text, usage=usage or Usage(input_tokens=10, output_tokens=5))
 
 
 # ---------------------------------------------------------------------------
@@ -34,17 +32,9 @@ def _make_state(usage: Usage | None = None) -> StreamState:
 
 
 async def test_stream_fallback_on_error():
-    state = _make_state()
-
-    async def _fake_stream() -> AsyncIterator[str]:
-        yield "fallback text"
-
     with patch("ai_arch_toolkit.core._llm.create_provider") as mock_cp:
-        primary = MagicMock()
-        primary.stream.side_effect = APIError(500, "Server error")
-
-        fallback = MagicMock()
-        fallback.stream.return_value = (_fake_stream(), state)
+        primary = FakeProvider(APIError(500, "Server error"), model="test-model")
+        fallback = FakeProvider(_answer("fallback text"), model="fallback-model")
 
         mock_cp.side_effect = [primary, fallback]
 
@@ -66,8 +56,7 @@ async def test_stream_fallback_on_error():
 
 async def test_stream_raises_without_fallback():
     with patch("ai_arch_toolkit.core._llm.create_provider") as mock_cp:
-        primary = MagicMock()
-        primary.stream.side_effect = APIError(500, "Server error")
+        primary = FakeProvider(APIError(500, "Server error"), model="test-model")
         mock_cp.return_value = primary
 
         llm = LLM("test-model")
@@ -83,11 +72,6 @@ async def test_stream_raises_without_fallback():
 
 
 async def test_stream_middleware_before():
-    state = _make_state()
-
-    async def _fake_stream() -> AsyncIterator[str]:
-        yield "modified"
-
     @dataclass
     class AddSystemMW:
         def before(self, request: Request) -> Request:
@@ -103,8 +87,7 @@ async def test_stream_middleware_before():
             return response
 
     with patch("ai_arch_toolkit.core._llm.create_provider") as mock_cp:
-        provider = MagicMock()
-        provider.stream.return_value = (_fake_stream(), state)
+        provider = FakeProvider(_answer("modified"), model="test-model")
         mock_cp.return_value = provider
 
         llm = LLM("test-model", middleware=[AddSystemMW()])
@@ -114,8 +97,7 @@ async def test_stream_middleware_before():
             pass
 
     # Provider should have been called with the injected system
-    call_kwargs = provider.stream.call_args
-    assert call_kwargs.kwargs.get("system") == "injected system"
+    assert provider.last.system == "injected system"
 
 
 # ---------------------------------------------------------------------------
@@ -124,11 +106,6 @@ async def test_stream_middleware_before():
 
 
 async def test_stream_middleware_after():
-    state = _make_state()
-
-    async def _fake_stream() -> AsyncIterator[str]:
-        yield "hello"
-
     after_called: list[bool] = []
 
     @dataclass
@@ -141,9 +118,7 @@ async def test_stream_middleware_after():
             return response
 
     with patch("ai_arch_toolkit.core._llm.create_provider") as mock_cp:
-        provider = MagicMock()
-        provider.stream.return_value = (_fake_stream(), state)
-        mock_cp.return_value = provider
+        mock_cp.return_value = FakeProvider(_answer("hello"), model="test-model")
 
         llm = LLM("test-model", middleware=[TrackAfterMW()])
         stream = llm.stream("Hello")
@@ -162,25 +137,10 @@ async def test_stream_middleware_after():
 
 
 async def test_stream_events_fallback_on_error():
-    from ai_arch_toolkit.core._providers._base import StreamState
-    from ai_arch_toolkit.core._response import StreamEvent
-
-    state = StreamState()
-    state.usage = Usage(input_tokens=5, output_tokens=3)
-    state.model = "fallback-model"
-    state.stop_reason = "end_turn"
-    state.tool_calls = []
-    state.thinking = []
-
-    async def _fake_events():
-        yield StreamEvent(kind="text", text="fallback")
-
     with patch("ai_arch_toolkit.core._llm.create_provider") as mock_cp:
-        primary = MagicMock()
-        primary.stream_events.side_effect = APIError(500, "Server error")
-
-        fallback = MagicMock()
-        fallback.stream_events.return_value = (_fake_events(), state)
+        primary = FakeProvider(APIError(500, "Server error"), model="test-model")
+        usage = Usage(input_tokens=5, output_tokens=3)
+        fallback = FakeProvider(_answer("fallback", usage), model="fallback-model")
 
         mock_cp.side_effect = [primary, fallback]
 
@@ -203,10 +163,8 @@ async def test_stream_events_fallback_on_error():
 
 async def test_non_api_error_does_not_fallback():
     with patch("ai_arch_toolkit.core._llm.create_provider") as mock_cp:
-        primary = MagicMock()
-        primary.stream.side_effect = ValueError("Not an API error")
-
-        fallback = MagicMock()
+        primary = FakeProvider(ValueError("Not an API error"), model="test-model")
+        fallback = FakeProvider(_answer("fallback"), model="fallback-model")
         mock_cp.side_effect = [primary, fallback]
 
         llm = LLM("test-model", fallback="fallback-model")
@@ -215,6 +173,8 @@ async def test_non_api_error_does_not_fallback():
             async for _ in stream:
                 pass
 
+    assert fallback.calls == 0
+
 
 # ---------------------------------------------------------------------------
 # 7. Combined fallback + middleware
@@ -222,11 +182,6 @@ async def test_non_api_error_does_not_fallback():
 
 
 async def test_fallback_with_middleware():
-    state = _make_state()
-
-    async def _fake_stream():
-        yield "from fallback"
-
     before_calls: list[bool] = []
     after_calls: list[bool] = []
 
@@ -241,11 +196,8 @@ async def test_fallback_with_middleware():
             return response
 
     with patch("ai_arch_toolkit.core._llm.create_provider") as mock_cp:
-        primary = MagicMock()
-        primary.stream.side_effect = APIError(500, "Down")
-
-        fallback = MagicMock()
-        fallback.stream.return_value = (_fake_stream(), state)
+        primary = FakeProvider(APIError(500, "Down"), model="test-model")
+        fallback = FakeProvider(_answer("from fallback"), model="fallback-model")
 
         mock_cp.side_effect = [primary, fallback]
 
@@ -263,26 +215,18 @@ async def test_fallback_with_middleware():
 
 
 async def test_stream_retries_lazy_error_before_first_chunk(monkeypatch):
-    first_state = _make_state()
-    second_state = _make_state(Usage(input_tokens=7, output_tokens=2))
-
-    async def _fails_before_output():
-        raise APIError(500, "temporary")
-        yield  # pragma: no cover
-
-    async def _succeeds():
-        yield "recovered"
+    second_usage = Usage(input_tokens=7, output_tokens=2)
 
     async def _no_sleep(_delay: float) -> None:
         return None
 
     monkeypatch.setattr("ai_arch_toolkit.core._retry.asyncio.sleep", _no_sleep)
     with patch("ai_arch_toolkit.core._llm.create_provider") as mock_cp:
-        provider = MagicMock()
-        provider.stream.side_effect = [
-            (_fails_before_output(), first_state),
-            (_succeeds(), second_state),
-        ]
+        provider = FakeProvider(
+            APIError(500, "temporary"),  # fails before any output
+            _answer("recovered", second_usage),
+            model="test-model",
+        )
         mock_cp.return_value = provider
 
         llm = LLM(
@@ -293,34 +237,24 @@ async def test_stream_retries_lazy_error_before_first_chunk(monkeypatch):
         chunks = [chunk async for chunk in stream]
 
     assert chunks == ["recovered"]
-    assert provider.stream.call_count == 2
+    assert provider.calls == 2
     assert stream.response is not None
     assert [attempt.status for attempt in stream.response.attempts] == ["failed", "ok"]
     assert [attempt.retry_number for attempt in stream.response.attempts] == [0, 1]
-    assert stream.response.attempts[1].usage == second_state.usage
+    assert stream.response.attempts[1].usage == second_usage
 
 
 async def test_stream_events_retries_lazy_error_before_first_event(monkeypatch):
-    first_state = _make_state()
-    second_state = _make_state()
-
-    async def _fails_before_output():
-        raise APIError(503, "temporary")
-        yield  # pragma: no cover
-
-    async def _succeeds():
-        yield StreamEvent(kind="text", text="recovered")
-
     async def _no_sleep(_delay: float) -> None:
         return None
 
     monkeypatch.setattr("ai_arch_toolkit.core._retry.asyncio.sleep", _no_sleep)
     with patch("ai_arch_toolkit.core._llm.create_provider") as mock_cp:
-        provider = MagicMock()
-        provider.stream_events.side_effect = [
-            (_fails_before_output(), first_state),
-            (_succeeds(), second_state),
-        ]
+        provider = FakeProvider(
+            APIError(503, "temporary"),  # fails before any output
+            _answer("recovered"),
+            model="test-model",
+        )
         mock_cp.return_value = provider
 
         llm = LLM(
@@ -331,27 +265,15 @@ async def test_stream_events_retries_lazy_error_before_first_event(monkeypatch):
         events = [event async for event in stream]
 
     assert [event.text for event in events] == ["recovered"]
-    assert provider.stream_events.call_count == 2
+    assert provider.calls == 2
     assert stream.response is not None
     assert [attempt.status for attempt in stream.response.attempts] == ["failed", "ok"]
 
 
 async def test_stream_falls_back_after_lazy_error_before_first_chunk():
-    primary_state = _make_state()
-    fallback_state = _make_state()
-
-    async def _fails_before_output():
-        raise APIError(500, "primary down")
-        yield  # pragma: no cover
-
-    async def _fallback_stream():
-        yield "fallback"
-
     with patch("ai_arch_toolkit.core._llm.create_provider") as mock_cp:
-        primary = MagicMock()
-        primary.stream.return_value = (_fails_before_output(), primary_state)
-        fallback = MagicMock()
-        fallback.stream.return_value = (_fallback_stream(), fallback_state)
+        primary = FakeProvider(APIError(500, "primary down"), model="test-model")
+        fallback = FakeProvider(_answer("fallback"), model="fallback-model")
         mock_cp.side_effect = [primary, fallback]
 
         llm = LLM("test-model", fallback="fallback-model")
@@ -368,16 +290,10 @@ async def test_stream_falls_back_after_lazy_error_before_first_chunk():
 
 
 async def test_stream_preserves_nested_llm_fallback_chains():
-    async def _nested_success():
-        yield "nested fallback"
-
     with patch("ai_arch_toolkit.core._llm.create_provider") as mock_cp:
-        nested_provider = MagicMock()
-        nested_provider.stream.return_value = (_nested_success(), _make_state())
-        middle_provider = MagicMock()
-        middle_provider.stream.side_effect = APIError(500, "middle down")
-        primary_provider = MagicMock()
-        primary_provider.stream.side_effect = APIError(500, "primary down")
+        nested_provider = FakeProvider(_answer("nested fallback"), model="nested-model")
+        middle_provider = FakeProvider(APIError(500, "middle down"), model="middle-model")
+        primary_provider = FakeProvider(APIError(500, "primary down"), model="primary-model")
         mock_cp.side_effect = [nested_provider, middle_provider, primary_provider]
 
         nested = LLM("nested-model")
@@ -388,7 +304,7 @@ async def test_stream_preserves_nested_llm_fallback_chains():
         chunks = [chunk async for chunk in stream]
 
     assert chunks == ["nested fallback"]
-    assert nested_provider.stream.call_count == 1
+    assert nested_provider.calls == 1
     assert stream.response is not None
     assert [attempt.model for attempt in stream.response.attempts] == [
         "primary-model",
@@ -398,20 +314,16 @@ async def test_stream_preserves_nested_llm_fallback_chains():
 
 
 async def test_stream_does_not_retry_or_fallback_after_first_chunk(monkeypatch):
-    state = _make_state()
-
-    async def _partial_then_error():
-        yield "partial"
-        raise APIError(500, "failed after output")
-
     async def _no_sleep(_delay: float) -> None:
         return None
 
     monkeypatch.setattr("ai_arch_toolkit.core._retry.asyncio.sleep", _no_sleep)
     with patch("ai_arch_toolkit.core._llm.create_provider") as mock_cp:
-        primary = MagicMock()
-        primary.stream.return_value = (_partial_then_error(), state)
-        fallback = MagicMock()
+        partial_then_error = Reply(
+            chunks=["partial"], error=APIError(500, "failed after output"), error_after=1
+        )
+        primary = FakeProvider(partial_then_error, model="test-model")
+        fallback = FakeProvider(_answer("fallback"), model="fallback-model")
         mock_cp.side_effect = [primary, fallback]
 
         llm = LLM(
@@ -426,5 +338,5 @@ async def test_stream_does_not_retry_or_fallback_after_first_chunk(monkeypatch):
                 chunks.append(chunk)
 
     assert chunks == ["partial"]
-    assert primary.stream.call_count == 1
-    assert fallback.stream.call_count == 0
+    assert primary.calls == 1
+    assert fallback.calls == 0

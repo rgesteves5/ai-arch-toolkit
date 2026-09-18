@@ -2,6 +2,10 @@
 # Last updated: 2026-08-29 (verified against each provider's official catalog);
 # Meta Muse Spark added 2026-09-13.
 # Override with: pricing.load("your_file.toml") or pricing.register(...)
+# Keys are exact model ids. A dated snapshot (-20251001, -2024-08-06, @20251101, -0709, -001,
+# -latest) takes the price of the id it snapshots, unless it has an entry of its own. `aliases`
+# lists other ids billed at the same rates; a variant (o3-pro, gpt-4o-audio-preview) is another
+# model and has no price until it gets an entry. `match = "prefix"` is an explicit opt-in.
 # Known simplifications: cache_write uses Anthropic's 5-min TTL tier (1.25x input) —
 # the 1-hour tier (2x input) can be overridden via pricing.register().
 
@@ -223,39 +227,12 @@ fast_long_context_output = 150
 fast_long_context_cache_write = 50
 fast_long_context_cache_read = 4
 
-
 # ── GPT-5.6 family (sol > terra > luna capability tiers) ──
 
 # Sol's current promotional rate is available at least through 2026-11-21.
 # gpt-5.6 is an alias of the default Sol tier.
-["gpt-5.6"]
-input = 4.0
-output = 20.0
-cache_write = 5.0
-cache_read = 0.40
-batch_input = 2.0
-batch_output = 10.0
-batch_cache_write = 2.50
-batch_cache_read = 0.20
-long_context_threshold = 272_000
-long_context_input = 8.0
-long_context_output = 30.0
-long_context_cache_write = 10.0
-long_context_cache_read = 0.80
-batch_long_context_input = 4.0
-batch_long_context_output = 15.0
-batch_long_context_cache_write = 5.0
-batch_long_context_cache_read = 0.40
-fast_input = 8.0
-fast_output = 40.0
-fast_cache_write = 10.0
-fast_cache_read = 0.80
-fast_long_context_input = 16.0
-fast_long_context_output = 60.0
-fast_long_context_cache_write = 20.0
-fast_long_context_cache_read = 1.60
-
 ["gpt-5.6-sol"]
+aliases = ["gpt-5.6", "gpt-daybreak-blue-latest"]
 input = 4.0
 output = 20.0
 cache_write = 5.0
@@ -337,7 +314,9 @@ fast_long_context_cache_write = 1.0
 fast_long_context_cache_read = 0.080
 
 # Cyber has no separately published Batch/Fast tariff; do not infer a discount.
+# Daybreak Red is an alias of Cyber.
 ["gpt-5.6-cyber"]
+aliases = ["gpt-daybreak-red-latest"]
 input = 12.50
 output = 75.0
 cache_write = 15.625
@@ -348,44 +327,11 @@ long_context_output = 112.50
 long_context_cache_write = 31.25
 long_context_cache_read = 2.50
 
-# Daybreak Blue aliases Sol; Daybreak Red aliases Cyber.
-["gpt-daybreak-blue-latest"]
-input = 4.0
-output = 20.0
-cache_write = 5.0
-cache_read = 0.40
-batch_input = 2.0
-batch_output = 10.0
-batch_cache_write = 2.50
-batch_cache_read = 0.20
-long_context_threshold = 272_000
-long_context_input = 8.0
-long_context_output = 30.0
-long_context_cache_write = 10.0
-long_context_cache_read = 0.80
-batch_long_context_input = 4.0
-batch_long_context_output = 15.0
-batch_long_context_cache_write = 5.0
-batch_long_context_cache_read = 0.40
-fast_input = 8.0
-fast_output = 40.0
-fast_cache_write = 10.0
-fast_cache_read = 0.80
-fast_long_context_input = 16.0
-fast_long_context_output = 60.0
-fast_long_context_cache_write = 20.0
-fast_long_context_cache_read = 1.60
-
-["gpt-daybreak-red-latest"]
+# Verified 2026-09-18: https://developers.openai.com/api/docs/pricing
+["gpt-5.5-cyber"]
 input = 12.50
 output = 75.0
-cache_write = 15.625
 cache_read = 1.25
-long_context_threshold = 272_000
-long_context_input = 25.0
-long_context_output = 112.50
-long_context_cache_write = 31.25
-long_context_cache_read = 2.50
 
 [chat-latest]
 input = 5.0
@@ -520,8 +466,9 @@ batch_input = 0.125
 batch_output = 1.0
 batch_cache_read = 0.0125
 
-# gpt-5 and gpt-5.1 share the same pricing; gpt-5 prefix covers both
+# gpt-5.1 shares gpt-5's pricing.
 ["gpt-5"]
+aliases = ["gpt-5.1"]
 input = 1.25
 output = 10.0
 cache_read = 0.125
@@ -573,14 +520,19 @@ batch_input = 1.25
 batch_output = 5.0
 batch_cache_read = 0.625
 
+# A snapshot with a tariff of its own. Verified 2026-09-18:
+# https://developers.openai.com/api/docs/pricing
+["gpt-4o-2024-05-13"]
+input = 5.0
+output = 15.0
+
 # ── GPT legacy (still served) ──
 
 [gpt-4-turbo]
 input = 10.0
 output = 30.0
 
-# Bare gpt-4 / gpt-4-0613 — the longer gpt-4o/gpt-4.1/gpt-4-turbo prefixes win
-# for those families.
+# gpt-4-0613 is a snapshot of gpt-4.
 [gpt-4]
 input = 30.0
 output = 60.0
@@ -588,6 +540,12 @@ output = 60.0
 ["gpt-3.5-turbo"]
 input = 0.50
 output = 1.50
+
+# gpt-3.5-turbo-0125 costs the base rate; the 1106 snapshot has a tariff of its own.
+# Verified 2026-09-18: https://developers.openai.com/api/docs/pricing
+["gpt-3.5-turbo-1106"]
+input = 1.0
+output = 2.0
 
 # ── o-series (reasoning) ──
 
@@ -692,8 +650,9 @@ batch_cache_read = 0.015
 
 # ── Gemini 3.0 / 3.1 ──
 
-# gemini-3-pro-preview — same pricing as 3.1-pro family.
+# Model ids from https://ai.google.dev/gemini-api/docs/models (2026-09-18).
 ["gemini-3-pro"]
+aliases = ["gemini-3-pro-preview"]
 input = 2.0
 output = 12.0
 cache_read = 0.20
@@ -709,6 +668,7 @@ batch_long_context_output = 9.0
 batch_long_context_cache_read = 0.20
 
 ["gemini-3.1-pro"]
+aliases = ["gemini-3.1-pro-preview"]
 input = 2.0
 output = 12.0
 cache_read = 0.20
@@ -724,6 +684,7 @@ batch_long_context_output = 9.0
 batch_long_context_cache_read = 0.20
 
 ["gemini-3.1-flash-lite"]
+aliases = ["gemini-3.1-flash-lite-preview"]
 input = 0.25
 output = 1.50
 cache_read = 0.025
@@ -732,6 +693,7 @@ batch_output = 0.75
 batch_cache_read = 0.0125
 
 ["gemini-3-flash"]
+aliases = ["gemini-3-flash-preview"]
 input = 0.50
 output = 3.0
 cache_read = 0.05
@@ -790,7 +752,9 @@ long_context_input = 4.0
 long_context_output = 12.0
 long_context_cache_read = 1.0
 
+# Despite its name, xAI documents grok-build-latest under Grok 4.5.
 ["grok-4.5"]
+aliases = ["grok-build-latest"]
 input = 2.0
 output = 6.0
 cache_read = 0.30
@@ -800,7 +764,24 @@ long_context_input = 4.0
 long_context_output = 12.0
 long_context_cache_read = 0.60
 
+# Legacy ids, still callable: xAI resolves them server-side to grok-4.3 and bills at its rates
+# (verified live: a grok-4 request answers as grok-4.3). grok-4-0709, grok-4-latest and
+# grok-3-latest are snapshots of these ids.
 ["grok-4.3"]
+aliases = [
+    "grok-4",
+    "grok-4-fast",
+    "grok-4-fast-reasoning",
+    "grok-4-fast-non-reasoning",
+    "grok-4-1-fast",
+    "grok-4-1-fast-reasoning",
+    "grok-4-1-fast-non-reasoning",
+    "grok-3",
+    "grok-3-fast",
+    "grok-3-mini",
+    "grok-3-mini-fast",
+    "grok-3-mini-high",
+]
 input = 1.25
 output = 2.50
 cache_read = 0.20
@@ -816,8 +797,16 @@ batch_long_context_input = 2.0
 batch_long_context_output = 4.0
 batch_long_context_cache_read = 0.32
 
-# grok-4.20-* ids share Grok 4.3's rates.
+# The grok-4.20 ids share Grok 4.3's rates (https://docs.x.ai/docs/models, 2026-09-18);
+# grok-4.20-multi-agent-0309 is a snapshot of grok-4.20-multi-agent.
 ["grok-4.20"]
+aliases = [
+    "grok-4.20-reasoning",
+    "grok-4.20-non-reasoning",
+    "grok-4.20-0309-reasoning",
+    "grok-4.20-0309-non-reasoning",
+    "grok-4.20-multi-agent",
+]
 input = 1.25
 output = 2.50
 cache_read = 0.20
@@ -832,104 +821,10 @@ long_context_cache_read = 0.40
 batch_long_context_input = 2.0
 batch_long_context_output = 4.0
 batch_long_context_cache_read = 0.32
-
-# Legacy alias ids — still callable; xAI resolves them server-side to grok-4.3
-# and bills at grok-4.3 rates (verified live: a grok-4 request answers as
-# grok-4.3). Covered by these prefix entries: grok-4, grok-4-0709,
-# grok-4-latest, grok-4-fast(-reasoning/-non-reasoning), grok-4-1-fast(-…),
-# grok-3, grok-3-fast, and grok-3-mini(-fast/-high).
-[grok-4]
-input = 1.25
-output = 2.50
-cache_read = 0.20
-batch_input = 1.0
-batch_output = 2.0
-batch_cache_read = 0.16
-long_context_threshold = 200_000
-long_context_inclusive = true
-long_context_input = 2.50
-long_context_output = 5.0
-long_context_cache_read = 0.40
-batch_long_context_input = 2.0
-batch_long_context_output = 4.0
-batch_long_context_cache_read = 0.32
-
-["grok-4-1-fast"]
-input = 1.25
-output = 2.50
-cache_read = 0.20
-batch_input = 1.0
-batch_output = 2.0
-batch_cache_read = 0.16
-long_context_threshold = 200_000
-long_context_inclusive = true
-long_context_input = 2.50
-long_context_output = 5.0
-long_context_cache_read = 0.40
-batch_long_context_input = 2.0
-batch_long_context_output = 4.0
-batch_long_context_cache_read = 0.32
-
-[grok-4-fast]
-input = 1.25
-output = 2.50
-cache_read = 0.20
-batch_input = 1.0
-batch_output = 2.0
-batch_cache_read = 0.16
-long_context_threshold = 200_000
-long_context_inclusive = true
-long_context_input = 2.50
-long_context_output = 5.0
-long_context_cache_read = 0.40
-batch_long_context_input = 2.0
-batch_long_context_output = 4.0
-batch_long_context_cache_read = 0.32
-
-[grok-3]
-input = 1.25
-output = 2.50
-cache_read = 0.20
-batch_input = 1.0
-batch_output = 2.0
-batch_cache_read = 0.16
-long_context_threshold = 200_000
-long_context_inclusive = true
-long_context_input = 2.50
-long_context_output = 5.0
-long_context_cache_read = 0.40
-batch_long_context_input = 2.0
-batch_long_context_output = 4.0
-batch_long_context_cache_read = 0.32
-
-[grok-3-mini]
-input = 1.25
-output = 2.50
-cache_read = 0.20
-batch_input = 1.0
-batch_output = 2.0
-batch_cache_read = 0.16
-long_context_threshold = 200_000
-long_context_inclusive = true
-long_context_input = 2.50
-long_context_output = 5.0
-long_context_cache_read = 0.40
-batch_long_context_input = 2.0
-batch_long_context_output = 4.0
-batch_long_context_cache_read = 0.32
-
-["grok-build-0.1"]
-input = 1.0
-output = 2.0
-cache_read = 0.20
-long_context_threshold = 200_000
-long_context_inclusive = true
-long_context_input = 2.0
-long_context_output = 4.0
-long_context_cache_read = 0.40
 
 # grok-code-fast and grok-code-fast-1 are aliases of Grok Build 0.1.
-[grok-code-fast]
+["grok-build-0.1"]
+aliases = ["grok-code-fast", "grok-code-fast-1"]
 input = 1.0
 output = 2.0
 cache_read = 0.20
@@ -938,27 +833,6 @@ long_context_inclusive = true
 long_context_input = 2.0
 long_context_output = 4.0
 long_context_cache_read = 0.40
-
-[grok-code-fast-1]
-input = 1.0
-output = 2.0
-cache_read = 0.20
-long_context_threshold = 200_000
-long_context_inclusive = true
-long_context_input = 2.0
-long_context_output = 4.0
-long_context_cache_read = 0.40
-
-# Despite its name, xAI documents this alias under Grok 4.5.
-[grok-build-latest]
-input = 2.0
-output = 6.0
-cache_read = 0.30
-long_context_threshold = 200_000
-long_context_inclusive = true
-long_context_input = 4.0
-long_context_output = 12.0
-long_context_cache_read = 0.60
 
 # ═══════════════════════════════════════════════════════════════════
 # Meta Muse Spark (Meta Model API)

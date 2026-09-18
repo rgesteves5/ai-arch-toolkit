@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._response import Response, ToolCall, Usage
 from ai_arch_toolkit.nanope.advanced_multi_purpose_configurable_agent import (
     CapabilityProfile,
@@ -31,6 +30,7 @@ from ai_arch_toolkit.nanope.advanced_multi_purpose_configurable_agent import (
     web_search_query,
 )
 from ai_arch_toolkit.toolkit.memory._types import Node
+from tests.fake_provider import fake_llm
 
 
 def _response(
@@ -46,27 +46,6 @@ def _response(
         cost=cost,
         parsed=parsed,
     )
-
-
-class _CapturingProvider:
-    """Real-LLM provider stand-in: runs the metering charge site and captures call kwargs."""
-
-    def __init__(self, *responses: Response) -> None:
-        self._responses = list(responses)
-        self.calls = 0
-        self.last_kwargs: dict = {}
-
-    async def complete(self, messages, *, system=None, tools=None, **kwargs) -> Response:
-        self.calls += 1
-        self.last_kwargs = {"system": system, "tools": tools, **kwargs}
-        return self._responses[min(self.calls - 1, len(self._responses) - 1)]
-
-
-def _metered_llm(*responses: Response) -> tuple[LLM, _CapturingProvider]:
-    llm = LLM("claude-sonnet-4-6", api_key="test")
-    provider = _CapturingProvider(*responses)
-    llm._provider = provider  # type: ignore[assignment]
-    return llm, provider
 
 
 def _base_config() -> dict:
@@ -675,7 +654,7 @@ def test_tool_governance_max_calls_blocks_after_limit() -> None:
 
 async def test_configurable_agent_run_simple_response() -> None:
     # Real LLM + fake provider so cost/usage flow through the meter (the single source of truth).
-    llm, provider = _metered_llm(_response(text="done"))
+    llm, provider = fake_llm(_response(text="done"))
     agent = ConfigurableAgent(_base_config(), llm_factory=lambda _: llm)
 
     result = await agent.run("hello")
@@ -687,7 +666,7 @@ async def test_configurable_agent_run_simple_response() -> None:
     assert result.cost > 0  # metered from a priced model, not the response's manual cost field
     assert result.usage.input_tokens == 10
     assert result.enabled_tools == ()
-    assert "Agent name: researcher" in provider.last_kwargs["system"]
+    assert "Agent name: researcher" in provider.last.system
 
 
 async def test_configurable_agent_passes_output_schema_to_react_llm() -> None:

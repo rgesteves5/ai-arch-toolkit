@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import time
 from pathlib import Path
 from textwrap import dedent
@@ -22,6 +21,7 @@ from ai_arch_toolkit.toolkit.agents import (
     load_agent_manifest,
 )
 from ai_arch_toolkit.toolkit.agents.flows import react_flow
+from tests.fake_provider import Reply, fake_llm
 
 _MODEL = "claude-sonnet-4-6"
 
@@ -39,21 +39,10 @@ _STRATEGIES = (
 )
 
 
-class _Provider:
-    def __init__(self, text: str = "answer", delay: float = 0.0) -> None:
-        self._text = text
-        self._delay = delay
-
-    async def complete(self, messages, *, system=None, tools=None, **kwargs) -> Response:
-        await asyncio.sleep(self._delay)
-        return Response(
-            text=self._text, usage=Usage(input_tokens=10, output_tokens=5), model=_MODEL
-        )
-
-
 def _llm(text: str = "answer", delay: float = 0.0) -> LLM:
-    llm = LLM(_MODEL, api_key="test")
-    llm._provider = _Provider(text, delay)  # type: ignore[assignment]
+    """A real LLM whose provider waits ``delay`` seconds before every answer."""
+    answer = Response(text=text, usage=Usage(input_tokens=10, output_tokens=5), model=_MODEL)
+    llm, _ = fake_llm(Reply(response=answer, delay=delay), model=_MODEL)
     return llm
 
 

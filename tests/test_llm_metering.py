@@ -19,33 +19,10 @@ from ai_arch_toolkit.core._metering._money import Money
 from ai_arch_toolkit.core._metering._operation import OperationRequest
 from ai_arch_toolkit.core._metering._scope import MeterScope, RunConfig
 from ai_arch_toolkit.core._middleware import Request
-from ai_arch_toolkit.core._providers._base import StreamState
-from ai_arch_toolkit.core._response import Response, StreamEvent, Usage
+from ai_arch_toolkit.core._pricing import ModelPricing, pricing
+from ai_arch_toolkit.core._response import Response, Usage
 from ai_arch_toolkit.core._retry import RetryConfig
-
-MODEL = "claude-sonnet-4-6"  # priced in _default_pricing.toml
-
-
-class FakeProvider:
-    """Stands in for a real provider — returns a canned Response or raises."""
-
-    def __init__(
-        self, *, response: Response | None = None, error: Exception | None = None
-    ) -> None:
-        self._response = response
-        self._error = error
-        self.calls = 0
-
-    async def complete(self, messages, *, system=None, tools=None, **kwargs) -> Response:
-        self.calls += 1
-        if self._error is not None:
-            raise self._error
-        assert self._response is not None
-        return self._response
-
-    async def batch_submit(self, requests) -> str:
-        self.calls += 1
-        return "batch-123"
+from tests.fake_provider import MODEL, FakeProvider, Reply, fake_llm  # MODEL is priced
 
 
 class CapController:
@@ -56,24 +33,26 @@ class CapController:
         return AdmissionDecision.allow(limits=self._limits)
 
 
-def make_llm(provider: FakeProvider) -> LLM:
-    llm = LLM(MODEL, api_key="test")
-    llm._provider = provider  # type: ignore[assignment]  # inject the fake
-    return llm
-
-
 def resp(**usage: int) -> Response:
     return Response(text="ok", usage=Usage(**usage), model=MODEL)
 
 
+def streamed(*chunks: str, provider_cost: float | None = None, **usage: int) -> Reply:
+    """A streamed answer: ``chunks`` as text events, then the response with ``usage``."""
+    response = Response(
+        text="".join(chunks), usage=Usage(**usage), provider_cost=provider_cost, model=MODEL
+    )
+    return Reply(response=response, chunks=chunks)
+
+
 async def test_complete_without_a_scope_is_unchanged():
-    llm = make_llm(FakeProvider(response=resp(input_tokens=10)))
+    llm, _ = fake_llm(resp(input_tokens=10))
     out = await llm.complete("hi")  # no MeterScope bound -> charge site is inert
     assert out.text == "ok"
 
 
 async def test_complete_meters_one_llm_call_with_cost():
-    llm = make_llm(FakeProvider(response=resp(input_tokens=1000, output_tokens=500)))
+    llm, _ = fake_llm(resp(input_tokens=1000, output_tokens=500))
     with MeterScope() as scope:
         await llm.complete("hi")
     snap = scope.snapshot()
@@ -86,19 +65,17 @@ async def test_default_pricer_prefers_exact_provider_cost():
     response = Response(
         text="ok",
         usage=Usage(input_tokens=100, output_tokens=50),
-        cost=0.123456,
         provider_cost=0.123456,
         model=MODEL,
     )
-    llm = make_llm(FakeProvider(response=response))
+    llm, _ = fake_llm(response)
     with MeterScope() as scope:
         await llm.complete("hi")
     assert scope.snapshot().cost == Money.from_usd(0.123456)
 
 
 async def test_enforcing_scope_denies_over_the_call_cap():
-    prov = FakeProvider(response=resp(input_tokens=10))
-    llm = make_llm(prov)
+    llm, prov = fake_llm(resp(input_tokens=10))
     with (
         MeterScope(RunConfig(controller=CapController(max_llm_calls=0))) as scope,
         pytest.raises(AdmissionDenied),
@@ -109,8 +86,7 @@ async def test_enforcing_scope_denies_over_the_call_cap():
 
 
 async def test_failed_attempt_keeps_the_count_as_unknown_cost():
-    prov = FakeProvider(error=ValueError("boom"))  # non-retryable, not a PROVIDER_ERROR
-    llm = make_llm(prov)
+    llm, _ = fake_llm(ValueError("boom"))  # non-retryable, not a PROVIDER_ERROR
     with MeterScope() as scope, pytest.raises(ValueError, match="boom"):
         await llm.complete("hi")
     snap = scope.snapshot()
@@ -126,11 +102,10 @@ async def test_runconfig_pricer_overrides_the_default():
     response = Response(
         text="ok",
         usage=Usage(input_tokens=100),
-        cost=0.123456,
         provider_cost=0.123456,
         model=MODEL,
     )
-    llm = make_llm(FakeProvider(response=response))
+    llm, _ = fake_llm(response)
     with MeterScope(RunConfig(pricer=FixedPricer())) as scope:
         await llm.complete("hi")
     assert scope.snapshot().cost == Money.from_usd(0.42)
@@ -139,7 +114,7 @@ async def test_runconfig_pricer_overrides_the_default():
 def test_complete_sync_is_metered_too():
     # Plain sync test: complete_sync -> _run_sync (no running loop -> same-thread asyncio.run),
     # so the scope bound in this thread is visible to the coroutine.
-    llm = make_llm(FakeProvider(response=resp(input_tokens=20, output_tokens=5)))
+    llm, _ = fake_llm(resp(input_tokens=20, output_tokens=5))
     with MeterScope() as scope:
         llm.complete_sync("hi")
     snap = scope.snapshot()
@@ -149,65 +124,13 @@ def test_complete_sync_is_metered_too():
 # ── stream / stream_events charge sites ──────────────────────────────────────
 
 
-class FakeStreamProvider:
-    """Yields canned chunks; fills StreamState.usage for the finalizer to settle from."""
-
-    def __init__(
-        self,
-        *,
-        chunks=(),
-        usage: Usage | None = None,
-        provider_cost: float | None = None,
-        error: Exception | None = None,
-    ):
-        self._chunks = list(chunks)
-        self._usage = usage or Usage()
-        self._provider_cost = provider_cost
-        self._error = error
-
-    def stream(self, messages, *, system=None, tools=None, **kwargs):
-        if self._error is not None:
-            raise self._error
-        state = StreamState()
-        state.usage = self._usage
-        state.provider_cost = self._provider_cost
-        chunks = self._chunks
-
-        async def _aiter():
-            for c in chunks:
-                yield c
-
-        return _aiter(), state
-
-    def stream_events(self, messages, *, system=None, tools=None, **kwargs):
-        if self._error is not None:
-            raise self._error
-        state = StreamState()
-        state.usage = self._usage
-        state.provider_cost = self._provider_cost
-        chunks = self._chunks
-
-        async def _aiter():
-            for c in chunks:
-                yield StreamEvent(kind="text", text=c)
-
-        return _aiter(), state
-
-
-def make_stream_llm(provider: FakeStreamProvider) -> LLM:
-    llm = LLM(MODEL, api_key="test")
-    llm._provider = provider  # type: ignore[assignment]
-    return llm
-
-
 async def _drain(stream) -> None:
     async for _ in stream:
         pass
 
 
 async def test_stream_reserves_on_build_starts_on_iteration_and_settles_on_drain():
-    prov = FakeStreamProvider(chunks=["a", "b"], usage=Usage(input_tokens=30, output_tokens=10))
-    llm = make_stream_llm(prov)
+    llm, _ = fake_llm(streamed("a", "b", input_tokens=30, output_tokens=10))
     with MeterScope() as scope:
         stream = llm.stream("hi")
         built = scope.snapshot()
@@ -222,12 +145,7 @@ async def test_stream_reserves_on_build_starts_on_iteration_and_settles_on_drain
 
 
 async def test_stream_prefers_exact_provider_cost():
-    prov = FakeStreamProvider(
-        chunks=["ok"],
-        usage=Usage(input_tokens=30, output_tokens=10),
-        provider_cost=0.234567,
-    )
-    llm = make_stream_llm(prov)
+    llm, _ = fake_llm(streamed("ok", input_tokens=30, output_tokens=10, provider_cost=0.234567))
     with MeterScope() as scope:
         stream = llm.stream("hi")
         await _drain(stream)
@@ -238,8 +156,7 @@ async def test_stream_prefers_exact_provider_cost():
 
 
 async def test_never_iterated_stream_releases_its_reservation_at_scope_close():
-    prov = FakeStreamProvider(chunks=["a"], usage=Usage(input_tokens=5))
-    llm = make_stream_llm(prov)
+    llm, _ = fake_llm(streamed("a", input_tokens=5))
     with MeterScope() as scope:
         llm.stream("hi")  # never iterated -> the op stays PENDING, the provider is never called
     snap = scope.snapshot()
@@ -247,8 +164,7 @@ async def test_never_iterated_stream_releases_its_reservation_at_scope_close():
 
 
 async def test_started_but_undrained_stream_is_incomplete_at_scope_close():
-    prov = FakeStreamProvider(chunks=["a", "b"], usage=Usage(input_tokens=5))
-    llm = make_stream_llm(prov)
+    llm, _ = fake_llm(streamed("a", "b", input_tokens=5))
     with MeterScope() as scope:
         stream = llm.stream("hi")
         await stream.__anext__()  # started, then left undrained and unclosed
@@ -259,8 +175,7 @@ async def test_started_but_undrained_stream_is_incomplete_at_scope_close():
 
 
 async def test_stream_enforce_denies_before_the_provider():
-    prov = FakeStreamProvider(chunks=["a"], usage=Usage(input_tokens=5))
-    llm = make_stream_llm(prov)
+    llm, _ = fake_llm(streamed("a", input_tokens=5))
     with (
         MeterScope(RunConfig(controller=CapController(max_llm_calls=0))) as scope,
         pytest.raises(AdmissionDenied),
@@ -270,8 +185,7 @@ async def test_stream_enforce_denies_before_the_provider():
 
 
 async def test_stream_provider_failure_is_a_failed_attempt():
-    prov = FakeStreamProvider(error=TransportError("down"))  # a PROVIDER_ERROR, no fallbacks
-    llm = make_stream_llm(prov)
+    llm, _ = fake_llm(TransportError("down"))  # a PROVIDER_ERROR, no fallbacks
     with MeterScope() as scope, pytest.raises(ConnectionError):
         await _drain(llm.stream("hi"))
     snap = scope.snapshot()
@@ -279,33 +193,14 @@ async def test_stream_provider_failure_is_a_failed_attempt():
 
 
 async def test_stream_retry_meters_every_physical_attempt(monkeypatch):
-    calls = 0
-
-    class RetryProvider:
-        def stream(self, messages, *, system=None, tools=None, **kwargs):
-            nonlocal calls
-            calls += 1
-            state = StreamState()
-            if calls == 1:
-
-                async def _failing():
-                    raise APIError(500, "temporary")
-                    yield  # pragma: no cover
-
-                return _failing(), state
-
-            state.usage = Usage(input_tokens=20, output_tokens=4)
-
-            async def _success():
-                yield "ok"
-
-            return _success(), state
-
     async def _no_sleep(_delay: float) -> None:
         return None
 
     monkeypatch.setattr("ai_arch_toolkit.core._retry.asyncio.sleep", _no_sleep)
-    llm = make_stream_llm(RetryProvider())  # type: ignore[arg-type]
+    # The first stream fails before its first event; the retry answers.
+    llm, prov = fake_llm(
+        APIError(500, "temporary"), streamed("ok", input_tokens=20, output_tokens=4)
+    )
     llm._retry = RetryConfig(max_retries=1, base_delay=0.01)
 
     with MeterScope() as scope:
@@ -313,7 +208,7 @@ async def test_stream_retry_meters_every_physical_attempt(monkeypatch):
         await _drain(stream)
 
     snap = scope.snapshot()
-    assert calls == 2
+    assert prov.calls == 2
     assert snap.llm_calls == 2
     assert snap.unknown_cost_count == 1
     assert snap.input_tokens == 20 and snap.output_tokens == 4
@@ -322,25 +217,11 @@ async def test_stream_retry_meters_every_physical_attempt(monkeypatch):
 
 
 async def test_stream_retry_admission_denial_is_terminal(monkeypatch):
-    calls = 0
-
-    class AlwaysFailingProvider:
-        def stream(self, messages, *, system=None, tools=None, **kwargs):
-            nonlocal calls
-            calls += 1
-            state = StreamState()
-
-            async def _failing():
-                raise APIError(500, "temporary")
-                yield  # pragma: no cover
-
-            return _failing(), state
-
     async def _no_sleep(_delay: float) -> None:
         return None
 
     monkeypatch.setattr("ai_arch_toolkit.core._retry.asyncio.sleep", _no_sleep)
-    llm = make_stream_llm(AlwaysFailingProvider())  # type: ignore[arg-type]
+    llm, prov = fake_llm(APIError(500, "temporary"))  # every stream fails before its first event
     llm._retry = RetryConfig(max_retries=1, base_delay=0.01)
 
     with (
@@ -349,14 +230,13 @@ async def test_stream_retry_admission_denial_is_terminal(monkeypatch):
     ):
         await _drain(llm.stream("hi"))
 
-    assert calls == 1
+    assert prov.calls == 1
     assert scope.snapshot().llm_calls == 1
     assert scope.snapshot().unknown_cost_count == 1
 
 
 async def test_stream_events_is_metered_on_drain():
-    prov = FakeStreamProvider(chunks=["x"], usage=Usage(input_tokens=12, output_tokens=3))
-    llm = make_stream_llm(prov)
+    llm, _ = fake_llm(streamed("x", input_tokens=12, output_tokens=3))
     with MeterScope() as scope:
         await _drain(llm.stream_events("hi"))
     snap = scope.snapshot()
@@ -367,14 +247,14 @@ async def test_stream_events_is_metered_on_drain():
 
 
 async def test_complete_event_names_the_provider():
-    llm = make_llm(FakeProvider(response=resp(input_tokens=10)))
+    llm, _ = fake_llm(resp(input_tokens=10))
     with MeterScope(RunConfig(retain_meter_events=True)) as scope:
         await llm.complete("hi")
     assert [(e.model, e.provider) for e in scope.events()] == [(MODEL, "anthropic")]
 
 
 async def test_stream_event_names_the_provider():
-    llm = make_stream_llm(FakeStreamProvider(chunks=["a"], usage=Usage(input_tokens=3)))
+    llm, _ = fake_llm(streamed("a", input_tokens=3))
     with MeterScope(RunConfig(retain_meter_events=True)) as scope:
         await _drain(llm.stream("hi"))
     assert [(e.status, e.provider) for e in scope.events()] == [("settled", "anthropic")]
@@ -382,17 +262,21 @@ async def test_stream_event_names_the_provider():
 
 async def test_openai_compatible_server_is_attributed_to_openai():
     llm = LLM("gemma4:e4b", base_url="http://localhost:11434/v1")
-    llm._provider = FakeProvider(response=resp(input_tokens=1))  # type: ignore[assignment]
-    with MeterScope(RunConfig(retain_meter_events=True)) as scope:
-        await llm.complete("hi")
+    llm._provider = FakeProvider(resp(input_tokens=1), model="gemma4:e4b")
+    pricing.register("gemma4:e4b", ModelPricing())  # a local model's price is an explicit zero
+    try:
+        with MeterScope(RunConfig(retain_meter_events=True)) as scope:
+            await llm.complete("hi")
+    finally:
+        pricing.unregister("gemma4:e4b")
     assert [e.provider for e in scope.events()] == ["openai"]
 
 
 async def test_cross_provider_fallback_attempt_names_its_own_provider():
     fallback = LLM("gpt-4o", api_key="test")
-    fallback._provider = FakeProvider(response=resp(input_tokens=1))  # type: ignore[assignment]
+    fallback._provider = FakeProvider(resp(input_tokens=1), model="gpt-4o")
     llm = LLM(MODEL, api_key="test", fallback=fallback)
-    llm._provider = FakeProvider(error=APIError(500, "down"))  # type: ignore[assignment]
+    llm._provider = FakeProvider(APIError(500, "down"), model=MODEL)
     with MeterScope(RunConfig(retain_meter_events=True)) as scope:
         await llm.complete("hi")
     assert [(e.status, e.model, e.provider) for e in scope.events()] == [
@@ -405,37 +289,34 @@ async def test_cross_provider_fallback_attempt_names_its_own_provider():
 
 
 async def test_batch_submit_blocked_under_an_enforcing_scope():
-    prov = FakeProvider()
-    llm = make_llm(prov)
+    llm, prov = fake_llm()
     with (
         MeterScope(RunConfig(controller=CapController(max_llm_calls=10))),
         pytest.raises(NotMeteredOperationError),
     ):
         await llm.batch_submit([{"messages": "hi"}])
-    assert prov.calls == 0  # rejected before the provider was touched
+    assert prov.batches == []  # rejected before the provider was touched
 
 
 async def test_batch_submit_allowed_in_measure_only():
-    prov = FakeProvider()
-    llm = make_llm(prov)
+    llm, _ = fake_llm()
     with MeterScope():  # controller=None -> measure-only, batch simply not metered
-        assert await llm.batch_submit([{"messages": "hi"}]) == "batch-123"
+        assert await llm.batch_submit([{"messages": "hi"}]) == "batch-1"
 
 
 async def test_batch_submit_allowed_without_a_scope():
-    llm = make_llm(FakeProvider())
-    assert await llm.batch_submit([{"messages": "hi"}]) == "batch-123"
+    llm, _ = fake_llm()
+    assert await llm.batch_submit([{"messages": "hi"}]) == "batch-1"
 
 
 def test_batch_submit_sync_is_also_blocked_under_enforcement():
-    prov = FakeProvider()
-    llm = make_llm(prov)
+    llm, prov = fake_llm()
     with (
         MeterScope(RunConfig(controller=CapController(max_llm_calls=10))),
         pytest.raises(NotMeteredOperationError),
     ):
         llm.batch_submit_sync([{"messages": "hi"}])
-    assert prov.calls == 0
+    assert prov.batches == []
 
 
 async def test_baseexception_fails_the_op_promptly_not_leaked():
@@ -444,7 +325,7 @@ async def test_baseexception_fails_the_op_promptly_not_leaked():
     class Boom(BaseException):
         pass
 
-    llm = make_llm(FakeProvider(error=Boom()))
+    llm, _ = fake_llm(Boom())
     with MeterScope() as scope:
         with pytest.raises(Boom):
             await llm.complete("hi")
@@ -461,7 +342,7 @@ async def test_strict_reserve_denies_an_oversized_prompt():
     # (it was always 0 before, admitting prompts that should be denied).
     from ai_arch_toolkit.toolkit.budget import BudgetController, BudgetExceeded, BudgetPolicy
 
-    llm = make_llm(FakeProvider(response=resp(input_tokens=10)))
+    llm, _ = fake_llm(resp(input_tokens=10))
     policy = BudgetPolicy(reserve="strict", max_input_tokens=10)
     with (
         MeterScope(RunConfig(controller=BudgetController(policy))),
@@ -473,7 +354,7 @@ async def test_strict_reserve_denies_an_oversized_prompt():
 async def test_server_tool_call_is_costed_unknown():
     from ai_arch_toolkit.core._server_tools import web_search
 
-    llm = make_llm(FakeProvider(response=resp(input_tokens=100, output_tokens=50)))
+    llm, _ = fake_llm(resp(input_tokens=100, output_tokens=50))
     with MeterScope() as scope:
         await llm.complete("hi", tools=[web_search()])
     # has_server_tools -> the pricer returns Cost.unknown (surcharge isn't in the token counts),
@@ -514,7 +395,7 @@ async def test_meter_request_tolerates_a_non_callable_wants_request_size():
         def admit(self, snapshot, request) -> AdmissionDecision:
             return AdmissionDecision.allow()
 
-    llm = make_llm(FakeProvider(response=resp(input_tokens=1)))
+    llm, _ = fake_llm(resp(input_tokens=1))
     msgs = [{"role": "user", "content": "hi"}]
     with MeterScope(RunConfig(controller=_WeirdController())) as scope:
         request = Request(messages=msgs, system=None, tools=None, model=MODEL)

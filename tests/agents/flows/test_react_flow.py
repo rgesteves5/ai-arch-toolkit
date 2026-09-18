@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock
 
-from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._response import Response, ToolCall, Usage
 from ai_arch_toolkit.core._state import State
 from ai_arch_toolkit.core._tools._decorator import tool
@@ -12,6 +11,7 @@ from ai_arch_toolkit.core._tools._group import ToolGroup
 from ai_arch_toolkit.core._tools._result import ToolResult
 from ai_arch_toolkit.toolkit.agents.flows._react import react_flow, react_initial_state
 from ai_arch_toolkit.toolkit.budget import BudgetPolicy
+from tests.fake_provider import fake_llm
 
 
 def _make_response(
@@ -23,25 +23,6 @@ def _make_response(
         usage=Usage(input_tokens=10, output_tokens=5),
         cost=cost,
     )
-
-
-class _FakeProvider:
-    """A real LLM's provider stand-in, so LLM.complete runs its metering charge site."""
-
-    def __init__(self, *responses: Response) -> None:
-        self._responses = list(responses)
-        self.calls = 0
-
-    async def complete(self, messages, *, system=None, tools=None, **kwargs) -> Response:
-        self.calls += 1
-        return self._responses[min(self.calls - 1, len(self._responses) - 1)]
-
-
-def _metered_llm(*responses: Response) -> tuple[LLM, _FakeProvider]:
-    llm = LLM("claude-sonnet-4-6", api_key="test")
-    provider = _FakeProvider(*responses)
-    llm._provider = provider  # type: ignore[assignment]
-    return llm, provider
 
 
 def _budget_dimension(result) -> str:
@@ -141,7 +122,7 @@ class TestReactFlow:
         assert tool_results[0].error.type == "approval_denied"
 
     async def test_llm_call_budget_stops_before_model_call(self) -> None:
-        llm, provider = _metered_llm(_make_response(text="should not happen"))
+        llm, provider = fake_llm(_make_response(text="should not happen"))
 
         flow = react_flow(
             llm,
@@ -163,7 +144,7 @@ class TestReactFlow:
             return q
 
         tc = ToolCall(id="tc1", name="search", input={"q": "x"})
-        llm, _provider = _metered_llm(_make_response(tool_calls=(tc,)))
+        llm, _provider = fake_llm(_make_response(tool_calls=(tc,)))
 
         flow = react_flow(
             llm,
@@ -391,7 +372,7 @@ async def test_parallel_tool_budget_surfaces_denial_cleanly():
 
     tc1 = ToolCall(id="a", name="t1", input={"x": "1"})
     tc2 = ToolCall(id="b", name="t2", input={"x": "2"})
-    llm, _p = _metered_llm(_make_response(tool_calls=(tc1, tc2)))
+    llm, _p = fake_llm(_make_response(tool_calls=(tc1, tc2)))
     flow = react_flow(
         llm,
         ToolGroup(t1, t2),

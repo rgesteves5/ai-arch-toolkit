@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from copy import deepcopy
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -13,41 +12,9 @@ import pytest
 from ai_arch_toolkit.core import LLM, Response, ToolCall, ToolGroup, Usage, tool
 from ai_arch_toolkit.toolkit.agents import Agent, ResolvedAgentManifest, load_agent_manifest
 from ai_arch_toolkit.toolkit.prompts import load_prompt
+from tests.fake_provider import FakeProvider
 
 pytestmark = pytest.mark.integration
-
-
-class _ScriptedProvider:
-    """Deterministic provider boundary while the real toolkit stack stays active."""
-
-    def __init__(self, *responses: Response) -> None:
-        self._responses = list(responses)
-        self.requests: list[dict[str, Any]] = []
-        self.closed = False
-
-    async def complete(
-        self,
-        messages: list[dict[str, Any]],
-        *,
-        system: str | None = None,
-        tools: list[dict[str, Any]] | None = None,
-        **kwargs: Any,
-    ) -> Response:
-        self.requests.append(
-            {
-                "messages": deepcopy(messages),
-                "system": system,
-                "tools": deepcopy(tools),
-                "kwargs": deepcopy(kwargs),
-            }
-        )
-        index = len(self.requests) - 1
-        if index >= len(self._responses):
-            raise AssertionError("scripted provider received an unexpected call")
-        return self._responses[index]
-
-    async def close(self) -> None:
-        self.closed = True
 
 
 def _write_json(path: Path, value: Any) -> Path:
@@ -138,17 +105,28 @@ def _load_configured_manifest(
 
 def _llm_from_manifest(
     manifest: ResolvedAgentManifest,
-    provider: _ScriptedProvider,
-) -> LLM:
+    *responses: Response,
+) -> tuple[LLM, FakeProvider]:
+    """The manifest's LLM, whose provider answers ``responses`` in order.
+
+    Only the provider boundary is scripted; the real toolkit stack stays active. A call past the
+    script fails the test.
+    """
     model = manifest.as_dict()["model"]
+    provider = FakeProvider(
+        *responses,
+        AssertionError("scripted provider received an unexpected call"),
+        model=model["model"],
+    )
     with patch("ai_arch_toolkit.core._llm.create_provider", return_value=provider):
-        return LLM(
+        llm = LLM(
             model["model"],
             temperature=model["temperature"],
             max_tokens=model["max_tokens"],
             api_key="test",
             retry=False,
         )
+    return llm, provider
 
 
 def _system_from_manifest(manifest: ResolvedAgentManifest) -> str:
@@ -161,7 +139,8 @@ async def test_manifest_prompt_agent_tool_and_metering_work_as_one_system(
 ) -> None:
     manifest = _load_configured_manifest(tmp_path)
     system = _system_from_manifest(manifest)
-    provider = _ScriptedProvider(
+    llm, provider = _llm_from_manifest(
+        manifest,
         Response(
             tool_calls=(ToolCall(id="add-1", name="add", input={"a": 3, "b": 4}),),
             usage=Usage(input_tokens=11, output_tokens=3),
@@ -176,7 +155,6 @@ async def test_manifest_prompt_agent_tool_and_metering_work_as_one_system(
         executions.append((a, b))
         return a + b
 
-    llm = _llm_from_manifest(manifest, provider)
     async with llm:
         result = await Agent(
             manifest.reasoning_spec(system=system),
@@ -194,14 +172,14 @@ async def test_manifest_prompt_agent_tool_and_metering_work_as_one_system(
     assert provider.closed
 
     first, second = provider.requests
-    assert first["system"] == system
-    assert "precise calculator" in first["system"]
-    assert first["kwargs"]["temperature"] == 0.1
-    assert first["kwargs"]["max_tokens"] == 64
-    assert [definition["name"] for definition in first["tools"]] == ["add"]
+    assert first.system == system
+    assert "precise calculator" in first.system
+    assert first.kwargs["temperature"] == 0.1
+    assert first.kwargs["max_tokens"] == 64
+    assert [definition["name"] for definition in first.tools] == ["add"]
     assert any(
         message.get("role") == "tool" and message.get("content") == "7"
-        for message in second["messages"]
+        for message in second.messages
     )
 
     assert result.report is not None
@@ -215,11 +193,12 @@ async def test_manifest_budget_stops_the_configured_agent_at_the_charge_site(
     tmp_path: Path,
 ) -> None:
     manifest = _load_configured_manifest(tmp_path, max_llm_calls=1)
-    provider = _ScriptedProvider(
+    llm, provider = _llm_from_manifest(
+        manifest,
         Response(
             tool_calls=(ToolCall(id="add-1", name="add", input={"a": 5, "b": 6}),),
             usage=Usage(input_tokens=8, output_tokens=2),
-        )
+        ),
     )
     executions: list[tuple[int, int]] = []
 
@@ -229,7 +208,6 @@ async def test_manifest_budget_stops_the_configured_agent_at_the_charge_site(
         executions.append((a, b))
         return a + b
 
-    llm = _llm_from_manifest(manifest, provider)
     async with llm:
         result = await Agent(
             manifest.reasoning_spec(system=_system_from_manifest(manifest)),

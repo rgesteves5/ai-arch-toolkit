@@ -2,19 +2,14 @@
 
 from __future__ import annotations
 
-from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._metering._events import UsageEvent
 from ai_arch_toolkit.core._metering._scope import RunConfig
 from ai_arch_toolkit.core._response import Response, Usage
 from ai_arch_toolkit.toolkit.agents import Agent, ReasoningSpec
 from ai_arch_toolkit.toolkit.budget import BudgetController, BudgetPolicy
+from tests.fake_provider import fake_llm
 
 _MODEL = "claude-sonnet-4-6"
-
-
-class _Provider:
-    async def complete(self, messages, *, system=None, tools=None, **kwargs) -> Response:
-        return Response(text="answer", usage=Usage(input_tokens=10, output_tokens=5), model=_MODEL)
 
 
 class _Sink:
@@ -26,8 +21,8 @@ class _Sink:
 
 
 def _agent() -> Agent:
-    llm = LLM(_MODEL, api_key="test")
-    llm._provider = _Provider()  # type: ignore[assignment]
+    answer = Response(text="answer", usage=Usage(input_tokens=10, output_tokens=5), model=_MODEL)
+    llm, _ = fake_llm(answer, model=_MODEL)
     return Agent(ReasoningSpec(strategy="completion"), llm)
 
 

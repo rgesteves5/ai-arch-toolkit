@@ -6,8 +6,9 @@ import math
 from collections.abc import Sequence
 from typing import Any
 
-# Correction factors: tiktoken underestimates non-OpenAI models.
-# Keyed by model prefix → correction factor (longest-prefix match).
+from ai_arch_toolkit.core._model_id import family
+
+# Correction factors by model family: tiktoken underestimates non-OpenAI models.
 _CORRECTIONS: dict[str, float] = {
     "gpt-": 1.0,  # tiktoken is exact for OpenAI
     "o1": 1.0,
@@ -21,22 +22,19 @@ _CORRECTIONS: dict[str, float] = {
     "muse-spark-": 1.0,  # Meta input_tokens count was 0.98x o200k_base on English prose
 }
 
-# Prefixes that use the o200k_base encoding (GPT-4o+, o-series, Muse Spark).
-_O200K_PREFIXES = ("gpt-4o", "gpt-5", "o1", "o3", "o4", "muse-spark-")
+# Families that use the o200k_base encoding (GPT-4o+, o-series, Muse Spark).
+_ENCODINGS: dict[str, str] = dict.fromkeys(
+    ("gpt-4o", "gpt-5", "o1", "o3", "o4", "muse-spark-"), "o200k_base"
+)
 
 # Average chars per token (rough cross-model approximation).
 _CHARS_PER_TOKEN = 4
 
 
 def _get_correction(model: str) -> float:
-    """Return the correction factor for *model* via longest-prefix match."""
-    best = 1.0
-    best_len = 0
-    for prefix, factor in _CORRECTIONS.items():
-        if model.startswith(prefix) and len(prefix) > best_len:
-            best = factor
-            best_len = len(prefix)
-    return best
+    """Return the correction factor of *model*'s family (1.0 when unknown)."""
+    factor = family(model, _CORRECTIONS)
+    return 1.0 if factor is None else factor
 
 
 def _get_encoding(model: str) -> Any:
@@ -50,9 +48,7 @@ def _get_encoding(model: str) -> Any:
         )
         raise ImportError(msg) from e
 
-    if any(model.startswith(p) for p in _O200K_PREFIXES):
-        return tiktoken.get_encoding("o200k_base")
-    return tiktoken.get_encoding("cl100k_base")
+    return tiktoken.get_encoding(family(model, _ENCODINGS) or "cl100k_base")
 
 
 def count_tokens_local(

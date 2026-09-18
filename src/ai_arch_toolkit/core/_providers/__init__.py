@@ -8,6 +8,8 @@ import warnings
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
+from ai_arch_toolkit.core._model_id import lookup
+
 if TYPE_CHECKING:
     from ai_arch_toolkit.core._providers._base import BaseProvider
 
@@ -54,13 +56,9 @@ _OWN_HOSTS: dict[str, str] = {
 
 
 def _match_provider(model: str) -> str | None:
-    """Map a model string to a provider name via prefix matching, or None."""
-    if provider := _MODEL_IDS.get(model):
-        return provider
-    for prefix, provider in _MODEL_PREFIXES.items():
-        if model.startswith(prefix):
-            return provider
-    return None
+    """Map a model id to a provider name by its id or family, or None."""
+    found = lookup(model, _MODEL_IDS, _MODEL_PREFIXES)
+    return found.value if found is not None else None
 
 
 def _unknown_model_error(model: str) -> ValueError:

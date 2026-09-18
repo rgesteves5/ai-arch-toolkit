@@ -4,6 +4,7 @@ and per-run Flow.run(config=...)."""
 from __future__ import annotations
 
 import pytest
+from tests.fake_provider import fake_llm
 
 from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._metering._admission import NotMeteredOperationError
@@ -17,17 +18,10 @@ from ai_arch_toolkit.toolkit.flow._flow import Flow
 MODEL = "claude-sonnet-4-6"
 
 
-class _FullProvider:
-    async def complete(self, messages, *, system=None, tools=None, **kwargs) -> Response:
-        return Response(text="ok", usage=Usage(input_tokens=10, output_tokens=5), model=MODEL)
-
-    async def batch_submit(self, requests) -> str:
-        return "batch-1"
-
-
 def _llm() -> LLM:
-    llm = LLM(MODEL, api_key="test")
-    llm._provider = _FullProvider()  # type: ignore[assignment]
+    # The fake answers every call with this response and numbers its batches "batch-1", ...
+    usage = Usage(input_tokens=10, output_tokens=5)
+    llm, _ = fake_llm(Response(text="ok", usage=usage, model=MODEL), model=MODEL)
     return llm
 
 

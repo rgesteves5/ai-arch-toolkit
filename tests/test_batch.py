@@ -12,6 +12,7 @@ from ai_arch_toolkit.core._batch import BatchRequest, BatchResult
 from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._providers._base import BaseProvider
 from ai_arch_toolkit.core._response import Response
+from tests.fake_provider import FakeProvider
 
 # ---------------------------------------------------------------------------
 # Existing tests — types, base provider, LLM delegation
@@ -48,28 +49,34 @@ class TestBatchTypes:
 
 class TestBaseProviderBatch:
     async def test_not_implemented(self):
-        class DummyProvider(BaseProvider):
-            async def complete(self, messages, **kwargs):
-                pass
-
-            def stream(self, messages, **kwargs):
-                pass
-
-        provider = DummyProvider()
+        provider = FakeProvider()
         with pytest.raises(NotImplementedError, match="does not support batch API"):
-            await provider.batch_submit([])
+            # FakeProvider records batches; the base class's own batch_submit refuses them.
+            await BaseProvider.batch_submit(provider, [])
         with pytest.raises(NotImplementedError):
             await provider.batch_status("x")
         with pytest.raises(NotImplementedError):
             await provider.batch_results("x")
 
 
+class _FinishedBatchProvider(FakeProvider):
+    """A fake provider whose batches have all completed with ``results``."""
+
+    def __init__(self, results: list[Any] | None = None) -> None:
+        super().__init__(model="claude-sonnet-4-20250514")
+        self.results = results or []
+
+    async def batch_status(self, batch_id: str) -> str:
+        return "completed"
+
+    async def batch_results(self, batch_id: str) -> list[Any]:
+        return self.results
+
+
 class TestLLMBatch:
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_batch_submit(self, mock_create):
-        mock_provider = AsyncMock()
-        mock_provider.batch_submit.return_value = "batch-123"
-        mock_create.return_value = mock_provider
+        mock_create.return_value = FakeProvider(model="claude-sonnet-4-20250514")
 
         llm = LLM("claude-sonnet-4-20250514", api_key="test")
         batch_id = await llm.batch_submit(
@@ -77,13 +84,11 @@ class TestLLMBatch:
                 {"custom_id": "r1", "messages": [{"role": "user", "content": "Hi"}]},
             ]
         )
-        assert batch_id == "batch-123"
+        assert batch_id == "batch-1"  # the fake provider's id for its first batch
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_batch_status(self, mock_create):
-        mock_provider = AsyncMock()
-        mock_provider.batch_status.return_value = "completed"
-        mock_create.return_value = mock_provider
+        mock_create.return_value = _FinishedBatchProvider()
 
         llm = LLM("claude-sonnet-4-20250514", api_key="test")
         status = await llm.batch_status("batch-123")
@@ -91,11 +96,9 @@ class TestLLMBatch:
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_batch_results(self, mock_create):
-        mock_provider = AsyncMock()
-        mock_provider.batch_results.return_value = [
-            BatchResult(custom_id="r1", response=Response(text="Hello")),
-        ]
-        mock_create.return_value = mock_provider
+        mock_create.return_value = _FinishedBatchProvider(
+            [BatchResult(custom_id="r1", response=Response(text="Hello"))]
+        )
 
         llm = LLM("claude-sonnet-4-20250514", api_key="test")
         results = await llm.batch_results("batch-123")
@@ -232,11 +235,14 @@ class TestOpenAIBatchSubmit:
         assert lines[0]["method"] == "POST"
         assert lines[0]["url"] == "/v1/chat/completions"
         assert lines[0]["body"]["model"] == "gpt-4o"
-        assert lines[0]["body"]["max_tokens"] == 100
+        # The body comes from the same prepare() as complete(): the official host takes
+        # max_completion_tokens (max_tokens is deprecated and refused by o-series models).
+        assert lines[0]["body"]["max_completion_tokens"] == 100
+        assert "max_tokens" not in lines[0]["body"]
 
         # Second request uses default max_tokens (4096)
         assert lines[1]["custom_id"] == "req-2"
-        assert lines[1]["body"]["max_tokens"] == 4096
+        assert lines[1]["body"]["max_completion_tokens"] == 4096
 
     async def test_request_system_does_not_drop_message_system(self):
         """The request's system leads; system() messages stay where they are."""

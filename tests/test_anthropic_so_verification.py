@@ -10,6 +10,7 @@ from ai_arch_toolkit.core._providers._anthropic import (
     _build_output_config,
 )
 from ai_arch_toolkit.core._response import OutputSchema
+from tests.provider_calls import complete
 
 # ---------------------------------------------------------------------------
 # 1. _build_output_config produces correct structure
@@ -38,6 +39,7 @@ async def test_output_schema_flows_to_output_config():
 
     # Build a fake SDK response
     fake_message = SimpleNamespace(
+        id="msg_test",
         content=[SimpleNamespace(type="text", text='{"answer": "42"}', citations=None)],
         model="claude-sonnet-4-20250514",
         stop_reason="end_turn",
@@ -55,9 +57,11 @@ async def test_output_schema_flows_to_output_config():
         mock_anthropic.AsyncAnthropic.return_value = mock_client
 
         provider = AnthropicProvider(model="claude-sonnet-4-20250514", api_key="test-key")
-        await provider.complete(
+        await complete(
+            provider,
             [{"role": "user", "content": "What is 6*7?"}],
             output_schema=schema,
+            max_tokens=1024,
         )
 
         # Verify the SDK call included output_config
@@ -80,6 +84,7 @@ async def test_output_schema_does_not_create_tool():
     )
 
     fake_message = SimpleNamespace(
+        id="msg_test",
         content=[SimpleNamespace(type="text", text='{"answer": "42"}', citations=None)],
         model="claude-sonnet-4-20250514",
         stop_reason="end_turn",
@@ -97,9 +102,11 @@ async def test_output_schema_does_not_create_tool():
         mock_anthropic.AsyncAnthropic.return_value = mock_client
 
         provider = AnthropicProvider(model="claude-sonnet-4-20250514", api_key="test-key")
-        await provider.complete(
+        await complete(
+            provider,
             [{"role": "user", "content": "Structured output test"}],
             output_schema=schema,
+            max_tokens=1024,
         )
 
         sdk_call = mock_client.messages.create.call_args

@@ -14,35 +14,27 @@ from typing import Any
 import pytest
 
 from ai_arch_toolkit.core._llm import LLM
+from ai_arch_toolkit.core._middleware import Request
 from ai_arch_toolkit.core._response import OutputSchema, Response, Usage
 from ai_arch_toolkit.core._tools._group import ToolGroup
 from ai_arch_toolkit.toolkit.agents import Agent, ReasoningSpec, build_flow, get_strategy
+from tests.fake_provider import FakeProvider, fake_llm
 
 
 def _make_response(text: str = "") -> Response:
-    return Response(text=text, usage=Usage(input_tokens=10, output_tokens=5), cost=0.001)
-
-
-class _RecordingProvider:
-    """Real-LLM provider stand-in that records every call it receives."""
-
-    def __init__(self, *texts: str) -> None:
-        self._responses = [_make_response(text) for text in (texts or ("",))]
-        self.calls: list[dict[str, Any]] = []
-
-    async def complete(self, messages, *, system=None, tools=None, **kwargs) -> Response:
-        self.calls.append({"messages": messages, "system": system, "kwargs": kwargs})
-        return self._responses[min(len(self.calls) - 1, len(self._responses) - 1)]
+    return Response(text=text, usage=Usage(input_tokens=10, output_tokens=5))
 
 
 def _llm(*texts: str) -> LLM:
-    llm = LLM("claude-sonnet-4-6", api_key="test")
-    llm._provider = _RecordingProvider(*texts)  # type: ignore[assignment]
+    """A real LLM whose provider answers ``texts`` in order and records every request."""
+    llm, _ = fake_llm(*(_make_response(text) for text in texts or ("",)))
     return llm
 
 
-def _calls(llm: LLM) -> list[dict[str, Any]]:
-    return llm._provider.calls  # type: ignore[union-attr]
+def _calls(llm: LLM) -> list[Request]:
+    provider = llm._provider
+    assert isinstance(provider, FakeProvider)
+    return provider.requests
 
 
 async def _run(spec: ReasoningSpec, llm: LLM, tools: ToolGroup | None = None, **deps: Any):
@@ -68,10 +60,10 @@ class TestPlanExecuteRouting:
         assert result.text == "final answer"
         assert not _calls(default)
         assert len(_calls(planner)) == 1
-        assert _calls(planner)[0]["system"] == "PLAN IT"
+        assert _calls(planner)[0].system == "PLAN IT"
         assert len(_calls(executor)) == 1
         assert len(_calls(solver)) == 1
-        assert _calls(solver)[0]["system"] == "SOLVE IT"
+        assert _calls(solver)[0].system == "SOLVE IT"
 
     async def test_planner_sees_executor_tools(self) -> None:
         def lookup(query: str) -> str:
@@ -89,7 +81,7 @@ class TestPlanExecuteRouting:
             solver_llm=_llm("final"),
         )
 
-        planner_system = _calls(planner)[0]["system"]
+        planner_system = _calls(planner)[0].system
         assert "Available tools:" in planner_system
         assert "lookup" in planner_system
 
@@ -108,8 +100,8 @@ class TestRewooRouting:
 
         assert result.text == "final answer"
         assert not _calls(default)
-        assert _calls(planner)[0]["system"] == "PLAN IT"
-        assert _calls(solver)[0]["system"] == "SOLVE IT"
+        assert _calls(planner)[0].system == "PLAN IT"
+        assert _calls(solver)[0].system == "SOLVE IT"
 
 
 class TestReflexionRouting:
@@ -135,7 +127,7 @@ class TestReflexionRouting:
         assert not _calls(default)
         assert len(_calls(executor)) == 2
         assert len(_calls(reflector)) == 1
-        assert _calls(reflector)[0]["system"] == "REFLECT IT"
+        assert _calls(reflector)[0].system == "REFLECT IT"
 
 
 class TestSelfDiscoveryRouting:
@@ -158,10 +150,10 @@ class TestSelfDiscoveryRouting:
 
         assert result.text == "final answer"
         assert not _calls(default)
-        assert [c["system"] for c in _calls(reasoning)] == ["SELECT", "ADAPT", "PLAN"]
-        assert "Only Module" in str(_calls(reasoning)[0]["messages"])
+        assert [c.system for c in _calls(reasoning)] == ["SELECT", "ADAPT", "PLAN"]
+        assert "Only Module" in str(_calls(reasoning)[0].messages)
         assert len(_calls(solver)) == 1
-        assert _calls(solver)[0]["system"].startswith("SOLVE")
+        assert _calls(solver)[0].system.startswith("SOLVE")
 
 
 class TestTotRouting:
@@ -179,7 +171,7 @@ class TestTotRouting:
         assert result.text == "final answer"
         assert not _calls(default)
         assert len(_calls(generator)) == 1
-        assert _calls(evaluator)[0]["system"] == "SCORE IT"
+        assert _calls(evaluator)[0].system == "SCORE IT"
         assert len(_calls(solver)) == 1
 
 
@@ -211,8 +203,8 @@ class TestLatsRouting:
         assert result.text == "final answer"
         assert not _calls(default)
         assert len(_calls(rollout)) == 1
-        assert _calls(evaluator)[0]["system"] == "SCORE IT"
-        assert _calls(reflector)[0]["system"] == "REFLECT IT"
+        assert _calls(evaluator)[0].system == "SCORE IT"
+        assert _calls(reflector)[0].system == "REFLECT IT"
         assert len(_calls(solver)) == 1
 
 
@@ -233,9 +225,9 @@ class TestLlmCompilerRouting:
 
         assert result.text == "final answer"
         assert not _calls(default)
-        assert _calls(planner)[0]["system"] == "PLAN IT"
+        assert _calls(planner)[0].system == "PLAN IT"
         assert len(_calls(executor)) == 1
-        assert _calls(joiner)[0]["system"] == "JOIN IT"
+        assert _calls(joiner)[0].system == "JOIN IT"
 
 
 class TestGenerateReviewRouting:
@@ -249,7 +241,7 @@ class TestGenerateReviewRouting:
         assert result.text == "draft answer"
         assert len(_calls(default)) == 1
         assert len(_calls(reviewer)) == 1
-        assert _calls(reviewer)[0]["system"] == "REVIEW IT"
+        assert _calls(reviewer)[0].system == "REVIEW IT"
 
     async def test_legacy_alias_still_works(self) -> None:
         reviewer = _llm("ACCEPT")
@@ -297,8 +289,8 @@ class TestGenerateReviewRouting:
         )
 
         assert result.text == '{"title": "draft"}'
-        assert _calls(generator)[0]["kwargs"]["output_schema"] is schema
-        assert "output_schema" not in _calls(reviewer)[0]["kwargs"]
+        assert _calls(generator)[0].kwargs["output_schema"] is schema
+        assert "output_schema" not in _calls(reviewer)[0].kwargs
 
     async def test_output_schema_is_preserved_across_review_retries(self) -> None:
         generator = _llm('{"title": "first"}', '{"title": "revised"}')
@@ -314,12 +306,14 @@ class TestGenerateReviewRouting:
 
         assert len(_calls(generator)) == 2
         assert len(_calls(reviewer)) == 2
-        assert all(call["kwargs"]["output_schema"] is schema for call in _calls(generator))
-        assert all("output_schema" not in call["kwargs"] for call in _calls(reviewer))
+        assert all(call.kwargs["output_schema"] is schema for call in _calls(generator))
+        assert all("output_schema" not in call.kwargs for call in _calls(reviewer))
 
     async def test_llm_kwargs_reach_reviewer_with_precedence(self) -> None:
         default = _llm("draft")
-        reviewer = _llm("ACCEPT")
+        # A request's kwargs include the LLM's defaults: give the reviewer one that is neither
+        # value below, so only the reviewer_kwargs override can produce 0.0.
+        reviewer, _ = fake_llm(_make_response("ACCEPT"), temperature=0.7)
 
         spec = ReasoningSpec(
             strategy="generate_review",
@@ -328,7 +322,7 @@ class TestGenerateReviewRouting:
         )
         await _run(spec, default, reviewer_llm=reviewer)
 
-        kwargs = _calls(reviewer)[0]["kwargs"]
+        kwargs = _calls(reviewer)[0].kwargs
         assert kwargs.get("temperature") == 0.0  # reviewer_kwargs wins per key
         assert kwargs.get("top_p") == 0.9  # global llm_kwargs fill the rest
 
@@ -347,7 +341,7 @@ class TestToolsPlaceholder:
         )
         await _run(spec, _llm(), ToolGroup(lookup), planner_llm=planner, solver_llm=solver)
 
-        planner_system = _calls(planner)[0]["system"]
+        planner_system = _calls(planner)[0].system
         assert "- lookup:" in planner_system
         assert "Look up a fact" in planner_system
         assert "{tools}" not in planner_system
@@ -366,9 +360,9 @@ class TestGlobalLlmKwargs:
         )
         await _run(spec, _llm(), planner_llm=planner, executor_llm=executor, solver_llm=solver)
 
-        assert _calls(planner)[0]["kwargs"].get("temperature") == 0.2
-        assert _calls(executor)[0]["kwargs"].get("temperature") == 0.2
-        assert _calls(solver)[0]["kwargs"].get("temperature") == 0.2
+        assert _calls(planner)[0].kwargs.get("temperature") == 0.2
+        assert _calls(executor)[0].kwargs.get("temperature") == 0.2
+        assert _calls(solver)[0].kwargs.get("temperature") == 0.2
 
 
 class TestDepValidation:

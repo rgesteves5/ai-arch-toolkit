@@ -91,9 +91,15 @@ class MeterOperation:
         """Record the actual usage and cost (idempotent; ``cost`` must not be estimated)."""
         self._store.settle(self._op_id, usage=usage, cost=cost)
 
-    def fail(self, disposition: Delivery) -> None:
-        """Keep the started count; free unbilled work or bound indeterminate spend."""
-        self._store.fail(self._op_id, disposition)
+    def fail(
+        self, disposition: Delivery, *, usage: Usage | None = None, cost: Cost | None = None
+    ) -> None:
+        """Keep the started count; free unbilled work or bound indeterminate spend.
+
+        ``usage`` and ``cost`` are the actuals of a failure the provider reported usage for;
+        they replace the cost the disposition would give.
+        """
+        self._store.fail(self._op_id, disposition, usage=usage, cost=cost)
 
     def abort(self) -> None:
         """A never-started operation is fully released (no count)."""

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -11,13 +11,14 @@ from ai_arch_toolkit.core._sync import (
     _read_positive_float_env,
     configure_sync_timeouts,
 )
+from tests.fake_provider import FakeProvider
 
 
 @pytest.fixture
 def mock_provider():
     """Patch create_provider for all tests that need it."""
     with patch("ai_arch_toolkit.core._llm.create_provider") as mock_cp:
-        mock_cp.return_value = MagicMock()
+        mock_cp.return_value = FakeProvider(model="gpt-4")
         yield mock_cp
 
 

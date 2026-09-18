@@ -8,33 +8,15 @@ import asyncio
 import pytest
 
 from ai_arch_toolkit import LLM, inference_limit
-from ai_arch_toolkit.core._providers._base import StreamState
 from ai_arch_toolkit.core._response import Response, Usage
+from tests.fake_provider import FakeProvider, Reply, fake_llm
+
+_OK = Response(text="ok", usage=Usage(input_tokens=1))
 
 
-class _TrackingProvider:
-    """Records the peak number of concurrent in-flight complete() calls."""
-
-    def __init__(self, delay: float = 0.02) -> None:
-        self._delay = delay
-        self.live = 0
-        self.peak = 0
-
-    async def complete(self, *a, **k) -> Response:
-        self.live += 1
-        self.peak = max(self.peak, self.live)
-        try:
-            await asyncio.sleep(self._delay)
-        finally:
-            self.live -= 1
-        return Response(text="ok", usage=Usage(input_tokens=1))
-
-
-def _llm() -> tuple[LLM, _TrackingProvider]:
-    prov = _TrackingProvider()
-    llm = LLM("claude-sonnet-4-6", api_key="test")
-    llm._provider = prov  # type: ignore[assignment]
-    return llm, prov
+def _llm() -> tuple[LLM, FakeProvider]:
+    # Each call stays in flight for 20 ms; the fake records the peak of concurrent calls.
+    return fake_llm(Reply(response=_OK, delay=0.02))
 
 
 # ── B: global inference cap ──────────────────────────────────────────────────
@@ -79,26 +61,21 @@ async def test_inference_limit_rejects_non_positive():
 
 
 async def test_stream_abandonment_closes_provider_without_holding_inference_limit():
-    class Provider(_TrackingProvider):
-        def __init__(self) -> None:
-            super().__init__(delay=0)
-            self.stream_closed = False
+    class Provider(FakeProvider):
+        stream_closed = False
 
-        def stream(self, *args, **kwargs):
-            state = StreamState()
+        async def open_stream(self, prepared):
+            try:
+                async for item in super().open_stream(prepared):
+                    yield item
+            finally:
+                self.stream_closed = True
 
-            async def chunks():
-                try:
-                    yield "first"
-                    await asyncio.Event().wait()
-                finally:
-                    self.stream_closed = True
-
-            return chunks(), state
-
-    provider = Provider()
+    # The stream sends "first", then never ends; the complete that follows answers at once.
+    never = asyncio.Event()
+    provider = Provider(Reply(response=_OK, chunks=["first"], hold=never, hold_after=1), _OK)
     llm = LLM("claude-sonnet-4-6", api_key="test")
-    llm._provider = provider  # type: ignore[assignment]
+    llm._provider = provider
 
     with inference_limit(1):
         async with llm.stream("hi") as stream:

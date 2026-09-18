@@ -12,6 +12,7 @@ from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._response import OutputSchema, Response, Usage
 from ai_arch_toolkit.core._tools._group import ToolGroup
 from ai_arch_toolkit.toolkit.agents import agent_from_manifest, load_agent_manifest
+from tests.fake_provider import FakeProvider, fake_llm
 
 
 def _write(path: Path, text: str) -> Path:
@@ -21,33 +22,27 @@ def _write(path: Path, text: str) -> Path:
 
 
 def _make_response(text: str = "") -> Response:
-    return Response(text=text, usage=Usage(input_tokens=10, output_tokens=5), cost=0.001)
-
-
-class _RecordingProvider:
-    def __init__(self, *texts: str) -> None:
-        self._responses = [_make_response(text) for text in (texts or ("",))]
-        self.calls = 0
-        self.call_kwargs: list[dict[str, Any]] = []
-
-    async def complete(self, messages, *, system=None, tools=None, **kwargs) -> Response:
-        self.calls += 1
-        self.call_kwargs.append(kwargs)
-        return self._responses[min(self.calls - 1, len(self._responses) - 1)]
+    return Response(text=text, usage=Usage(input_tokens=10, output_tokens=5))
 
 
 def _llm(*texts: str) -> LLM:
-    llm = LLM("claude-sonnet-4-6", api_key="test")
-    llm._provider = _RecordingProvider(*texts)  # type: ignore[assignment]
+    """A real LLM whose provider answers ``texts`` in order and records every request."""
+    llm, _ = fake_llm(*(_make_response(text) for text in texts or ("",)))
     return llm
 
 
+def _provider(llm: LLM) -> FakeProvider:
+    provider = llm._provider
+    assert isinstance(provider, FakeProvider)
+    return provider
+
+
 def _calls(llm: LLM) -> int:
-    return llm._provider.calls  # type: ignore[union-attr]
+    return _provider(llm).calls
 
 
 def _call_kwargs(llm: LLM) -> list[dict[str, Any]]:
-    return llm._provider.call_kwargs  # type: ignore[union-attr]
+    return [request.kwargs for request in _provider(llm).requests]
 
 
 def _manifest_path(tmp_path: Path) -> Path:

@@ -8,6 +8,13 @@ import pytest
 
 from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._retry import RetryConfig
+from tests.fake_provider import FakeProvider
+
+
+def _fake_provider(model: str, **_: object) -> FakeProvider:
+    """Stands in for ``create_provider``: a fake provider for ``model``."""
+    return FakeProvider(model=model)
+
 
 # ---------------------------------------------------------------------------
 # LLM.__init__() validation
@@ -17,37 +24,37 @@ from ai_arch_toolkit.core._retry import RetryConfig
 class TestLLMInitValidation:
     """Validate constructor guards on temperature, max_tokens, and timeout."""
 
-    @patch("ai_arch_toolkit.core._llm.create_provider")
+    @patch("ai_arch_toolkit.core._llm.create_provider", side_effect=_fake_provider)
     def test_temperature_below_range(self, mock_cp):
         with pytest.raises(ValueError, match=r"temperature must be between 0\.0 and 2\.0"):
             LLM("claude-3-haiku", temperature=-0.1)
 
-    @patch("ai_arch_toolkit.core._llm.create_provider")
+    @patch("ai_arch_toolkit.core._llm.create_provider", side_effect=_fake_provider)
     def test_temperature_above_range(self, mock_cp):
         with pytest.raises(ValueError, match=r"temperature must be between 0\.0 and 2\.0"):
             LLM("claude-3-haiku", temperature=2.1)
 
-    @patch("ai_arch_toolkit.core._llm.create_provider")
+    @patch("ai_arch_toolkit.core._llm.create_provider", side_effect=_fake_provider)
     def test_max_tokens_zero(self, mock_cp):
         with pytest.raises(ValueError, match="max_tokens must be a positive integer"):
             LLM("claude-3-haiku", max_tokens=0)
 
-    @patch("ai_arch_toolkit.core._llm.create_provider")
+    @patch("ai_arch_toolkit.core._llm.create_provider", side_effect=_fake_provider)
     def test_max_tokens_negative(self, mock_cp):
         with pytest.raises(ValueError, match="max_tokens must be a positive integer"):
             LLM("claude-3-haiku", max_tokens=-5)
 
-    @patch("ai_arch_toolkit.core._llm.create_provider")
+    @patch("ai_arch_toolkit.core._llm.create_provider", side_effect=_fake_provider)
     def test_timeout_zero(self, mock_cp):
         with pytest.raises(ValueError, match="timeout must be positive"):
             LLM("claude-3-haiku", timeout=0)
 
-    @patch("ai_arch_toolkit.core._llm.create_provider")
+    @patch("ai_arch_toolkit.core._llm.create_provider", side_effect=_fake_provider)
     def test_timeout_negative(self, mock_cp):
         with pytest.raises(ValueError, match="timeout must be positive"):
             LLM("claude-3-haiku", timeout=-1.0)
 
-    @patch("ai_arch_toolkit.core._llm.create_provider")
+    @patch("ai_arch_toolkit.core._llm.create_provider", side_effect=_fake_provider)
     def test_valid_params_no_error(self, mock_cp):
         llm = LLM("claude-3-haiku", temperature=1.0, max_tokens=100, timeout=30.0)
         assert llm._model == "claude-3-haiku"

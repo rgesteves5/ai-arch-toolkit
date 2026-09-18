@@ -1,4 +1,4 @@
-"""Gemini provider — thin adapter over the ``google-genai`` SDK."""
+"""Gemini provider — ``generateContent`` through ``google-genai``, in the provider contract."""
 
 from __future__ import annotations
 
@@ -8,71 +8,132 @@ import logging
 import uuid
 import warnings
 from collections.abc import AsyncIterator
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, TypedDict, cast
 
 from ai_arch_toolkit.core._content import CachePart, DocumentPart, ImagePart, _is_url
-from ai_arch_toolkit.core._exceptions import APIError, RateLimitError
-from ai_arch_toolkit.core._pricing import _estimate_response_cost
+from ai_arch_toolkit.core._exceptions import APIError, ProviderError, RateLimitError, RequestError
+from ai_arch_toolkit.core._middleware import Request
+from ai_arch_toolkit.core._model_id import lookup
 from ai_arch_toolkit.core._providers._base import (
     DEFAULT_THINKING_BUDGET,
     THINKING_EFFORT_BUDGETS,
     BaseProvider,
+    Done,
     LoopAwareClientCache,
-    StreamState,
+    Options,
+    Prepared,
     _parse_retry_after,
     merge_system_prompts,
-    network_error,
+    on_request,
+    parse_options,
+    parse_structured,
+    refused_or_unread,
     system_content_text,
+    transport_error,
 )
 from ai_arch_toolkit.core._providers._imports import require_sdk
 from ai_arch_toolkit.core._response import (
     Citation,
     OutputSchema,
     Response,
+    StreamEvent,
     ThinkingBlock,
     ToolCall,
     Usage,
     _uncached_input_tokens,
 )
 
-require_sdk("google.genai", "gemini")
-import httpx  # noqa: E402  (a google-genai dependency)
-from google import genai  # noqa: E402
-from google.genai import errors as genai_errors  # noqa: E402
-from google.genai import types  # noqa: E402
+with require_sdk("gemini"):
+    import httpx  # a google-genai dependency
+    from google import genai
+    from google.genai import errors as genai_errors
+    from google.genai import types
+    from google.genai.models import AsyncModels
 
 logger = logging.getLogger(__name__)
 
-# Failures before any HTTP response. The SDK sends requests through httpx, or through aiohttp
-# when that is installed, whose connection errors are not all OSError.
-try:
-    import aiohttp
-except ImportError:  # pragma: no cover - aiohttp is optional for google-genai
-    _AIOHTTP_ERRORS: tuple[type[Exception], ...] = ()
-else:
-    _AIOHTTP_ERRORS = (aiohttp.ClientConnectionError,)
-_NETWORK_ERRORS: tuple[type[Exception], ...] = (httpx.TransportError, *_AIOHTTP_ERRORS)
+# SDK config fields forwarded as the caller gave them (max_tokens becomes max_output_tokens).
+_FORWARDED = frozenset(
+    {
+        "temperature",
+        "top_p",
+        "top_k",
+        "max_tokens",
+        "max_output_tokens",
+        "stop_sequences",
+        "seed",
+        "presence_penalty",
+        "frequency_penalty",
+    }
+)
+_MODES = {
+    "auto": types.FunctionCallingConfigMode.AUTO,
+    "required": types.FunctionCallingConfigMode.ANY,
+    "none": types.FunctionCallingConfigMode.NONE,
+}
+_SERVER_TOOLS = {
+    "web_search": types.Tool(google_search=types.GoogleSearch()),
+    "code_execution": types.Tool(code_execution=types.ToolCodeExecution()),
+}
+
+# Failures before the request reached the server; any other transport failure may be billed.
+_NOT_SENT = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
+# Billing: "If your request fails with a 400 or 500 error, you won't be charged for the tokens
+# used" (https://ai.google.dev/gemini-api/docs/billing); a 429 never is (D20).
+_UNBILLED_STATUSES = frozenset({400, 500})
 
 
-def _timed_out(exc: BaseException) -> bool:
-    return isinstance(exc, httpx.TimeoutException | TimeoutError)
+class _Generate(TypedDict):
+    """The ``generate_content`` arguments, in the SDK's own types."""
+
+    model: str
+    contents: list[types.ContentUnion]
+    config: types.GenerateContentConfig
 
 
-# Parameters safe to forward directly to the SDK config.
-_SDK_PARAMS = {
-    "temperature",
-    "top_p",
-    "top_k",
-    "max_output_tokens",
-    "stop_sequences",
-    "seed",
-    "presence_penalty",
-    "frequency_penalty",
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _Profile:
+    """How one family of Gemini models is told to think.
+
+    ``levels``: the ``thinking_level`` values of a Gemini 3 model. ``budget``: the
+    ``thinking_budget`` range of a Gemini 2.5 model (which takes no level), and whether it can
+    turn thinking off with 0.
+    """
+
+    levels: frozenset[str] = frozenset({"low", "medium", "high"})
+    budget: tuple[int, int] | None = None
+    can_disable: bool = False
+
+
+# Thinking controls per model (https://ai.google.dev/gemini-api/docs/generate-content/thinking);
+# the Gemini 3 levels also in https://ai.google.dev/gemini-api/docs/thinking.
+_CURRENT = _Profile()  # gemini-3.8-flash, gemini-3.7-flash, gemini-3.1-pro, and newer models
+_MINIMAL = _Profile(levels=frozenset({"minimal", "low", "medium", "high"}))
+_PROFILES: dict[str, _Profile] = {
+    **dict.fromkeys(
+        (
+            "gemini-3.6-flash",
+            "gemini-3.5-flash",
+            "gemini-3.5-flash-lite",
+            "gemini-3.1-flash-lite",
+            "gemini-3.1-flash-lite-preview",
+            "gemini-3-flash",
+            "gemini-3-flash-preview",
+        ),
+        _MINIMAL,
+    ),
+    **dict.fromkeys(
+        ("gemini-3-pro", "gemini-3-pro-preview"), _Profile(levels=frozenset({"low", "high"}))
+    ),
+    "gemini-2.5-pro": _Profile(budget=(128, 32768)),
+    "gemini-2.5-flash": _Profile(budget=(0, 24576), can_disable=True),
+    "gemini-2.5-flash-lite": _Profile(budget=(512, 24576), can_disable=True),
 }
 
 
 # ---------------------------------------------------------------------------
-# Adapter helpers
+# Request
 # ---------------------------------------------------------------------------
 
 
@@ -82,146 +143,103 @@ def _content_parts_to_gemini(content: Any) -> list[types.Part]:
         return [types.Part(text=content)]
     if not isinstance(content, list):
         return [types.Part(text=str(content))]
+    return [_part(part) for part in content]
 
-    parts: list[types.Part] = []
-    for part in content:
-        if isinstance(part, str):
-            parts.append(types.Part(text=part))
-        elif isinstance(part, ImagePart):
-            if _is_url(part.source):
-                # _is_url returns False for bytes, so part.source is str here.
-                assert isinstance(part.source, str)
-                parts.append(
-                    types.Part(
-                        file_data=types.FileData(
-                            file_uri=part.source,
-                            mime_type=part.media_type,
-                        )
-                    )
-                )
-            else:
-                data = (
-                    part.source
-                    if isinstance(part.source, bytes)
-                    else base64.b64decode(part.source)
-                )
-                parts.append(
-                    types.Part(
-                        inline_data=types.Blob(
-                            data=data,
-                            mime_type=part.media_type,
-                        )
-                    )
-                )
-        elif isinstance(part, DocumentPart):
-            data = part.source if isinstance(part.source, bytes) else base64.b64decode(part.source)
-            parts.append(
-                types.Part(
-                    inline_data=types.Blob(
-                        data=data,
-                        mime_type=part.media_type,
-                    )
-                )
-            )
-        elif isinstance(part, CachePart):
-            parts.append(types.Part(text=part.content))
-        else:
-            parts.append(types.Part(text=str(part)))
-    return parts
+
+def _part(part: Any) -> types.Part:
+    if isinstance(part, ImagePart) and isinstance(part.source, str) and _is_url(part.source):
+        return types.Part(
+            file_data=types.FileData(file_uri=part.source, mime_type=part.media_type)
+        )
+    if isinstance(part, ImagePart | DocumentPart):
+        data = part.source if isinstance(part.source, bytes) else base64.b64decode(part.source)
+        return types.Part(inline_data=types.Blob(data=data, mime_type=part.media_type))
+    if isinstance(part, CachePart):
+        return types.Part(text=part.content)
+    return types.Part(text=part if isinstance(part, str) else str(part))
+
+
+def _model_turn(msg: dict[str, Any]) -> types.Content:
+    """An assistant turn: with tool calls, Gemini's own content when the message carries it (every
+    part and thought signature, required for function calling), else rebuilt."""
+    raw = msg.get("_raw")
+    calls = msg.get("tool_calls") or []
+    if calls and isinstance(raw, types.GenerateContentResponse) and raw.candidates:
+        content = raw.candidates[0].content
+        if content is not None:
+            return content
+    if not calls:
+        return types.Content(role="model", parts=_content_parts_to_gemini(msg.get("content", "")))
+    text = msg.get("content")
+    parts = [types.Part(text=text)] if text else []
+    parts += [
+        types.Part(
+            function_call=types.FunctionCall(name=call.get("name", ""), args=call.get("input", {}))
+        )
+        for call in calls
+    ]
+    return types.Content(role="model", parts=parts)
+
+
+def _function_response(msg: dict[str, Any], call_ids: set[str]) -> types.Part:
+    """A tool result, with its call's id when Gemini gave the call one (Gemini 3 maps results
+    to calls by id; an id the toolkit made up was never Gemini's)."""
+    content = msg.get("content", "")
+    try:
+        data = json.loads(content) if isinstance(content, str) else content
+    except json.JSONDecodeError:
+        data = content
+    name = msg.get("name", "")
+    if not name:
+        warnings.warn(
+            "Gemini requires 'name' in tool results. Pass name= to tool_result().", stacklevel=4
+        )
+    call_id = msg["tool_use_id"]
+    return types.Part(
+        function_response=types.FunctionResponse(
+            id=call_id if call_id in call_ids else None,
+            name=name,
+            response=data if isinstance(data, dict) else {"result": data},
+        )
+    )
 
 
 def _messages_to_sdk(
     messages: list[dict[str, Any]],
 ) -> tuple[str | None, list[types.ContentUnion]]:
-    """Extract system messages and convert the rest to SDK Content objects.
+    """The text of the ``system()`` messages, and the contents.
 
-    Tool results are identified by ``tool_use_id`` (role is ignored) and batched
-    into ``user`` Content with ``function_response`` Parts, matching Gemini's
-    expected format.
+    The results of a turn's tool calls (marked by ``tool_use_id``) go back together, in one
+    ``user`` content (https://ai.google.dev/gemini-api/docs/generate-content/function-calling).
     """
-    system_parts: list[str] = []
+    system: list[str] = []
     contents: list[types.ContentUnion] = []
-    pending_fn_responses: list[types.Part] = []
-
-    def _flush_fn_responses() -> None:
-        if pending_fn_responses:
-            contents.append(types.Content(role="user", parts=list(pending_fn_responses)))
-            pending_fn_responses.clear()
-
+    results: list[types.Part] = []
+    call_ids: set[str] = set()
     for msg in messages:
-        role = msg.get("role", "user")
-
-        # Tool result → FunctionResponse part, batched into user Content
         if msg.get("tool_use_id"):
-            _flush_fn_responses()
-            raw_content = msg.get("content", "")
-            try:
-                response_data = (
-                    json.loads(raw_content) if isinstance(raw_content, str) else raw_content
-                )
-            except (json.JSONDecodeError, TypeError):
-                response_data = raw_content
-            # Gemini FunctionResponse.response must be a dict
-            if not isinstance(response_data, dict):
-                response_data = {"result": response_data}
-            fn_name = msg.get("name", "")
-            if not fn_name:
-                warnings.warn(
-                    "Gemini requires 'name' in tool results. Pass name= to tool_result().",
-                    stacklevel=3,
-                )
-            pending_fn_responses.append(
-                types.Part(
-                    function_response=types.FunctionResponse(
-                        name=fn_name,
-                        response=response_data,
-                    )
-                )
-            )
+            results.append(_function_response(msg, call_ids))
             continue
+        if results:
+            contents.append(types.Content(role="user", parts=results))
+            results = []
+        role = msg.get("role", "user")
         if role == "system":
-            system_parts.append(system_content_text(msg.get("content", "")))
-            continue
-
-        # Assistant with tool_calls → model Content with FunctionCall parts
-        if role == "assistant" and msg.get("tool_calls"):
-            _flush_fn_responses()
-            # Prefer raw Gemini response parts (preserves thought_signature)
-            raw = msg.get("_raw")
-            raw_content = None
-            if raw is not None:
-                candidates = getattr(raw, "candidates", None)
-                if candidates:
-                    raw_content = getattr(candidates[0], "content", None)
-            if raw_content is not None:
-                contents.append(raw_content)
-            else:
-                parts: list[types.Part] = []
-                text = msg.get("content", "")
-                if text:
-                    parts.append(types.Part(text=text))
-                for tc in msg["tool_calls"]:
-                    parts.append(
-                        types.Part(
-                            function_call=types.FunctionCall(
-                                name=tc.get("name", ""),
-                                args=tc.get("input", {}),
-                            )
-                        )
-                    )
-                contents.append(types.Content(role="model", parts=parts))
-            continue
-
-        # Regular message
-        _flush_fn_responses()
-        gemini_role = "model" if role == "assistant" else role
-        raw_content = msg.get("content", "")
-        parts_list = _content_parts_to_gemini(raw_content)
-        contents.append(types.Content(role=gemini_role, parts=parts_list))
-
-    _flush_fn_responses()
-    system_text = "\n\n".join(system_parts) if system_parts else None
-    return system_text, contents
+            system.append(system_content_text(msg.get("content", "")))
+        elif role == "assistant":
+            turn = _model_turn(msg)
+            calls = [part.function_call for part in turn.parts or [] if part.function_call]
+            call_ids = {call.id for call in calls if call.id}
+            contents.append(turn)
+        elif role == "user":
+            contents.append(
+                types.Content(role="user", parts=_content_parts_to_gemini(msg.get("content", "")))
+            )
+        else:
+            raise RequestError(f"Gemini has no {role!r} role")
+    if results:
+        contents.append(types.Content(role="user", parts=results))
+    return ("\n\n".join(system) if system else None), contents
 
 
 def _tool_to_sdk(tool: dict[str, Any]) -> types.FunctionDeclaration:
@@ -243,128 +261,159 @@ def _tool_to_sdk(tool: dict[str, Any]) -> types.FunctionDeclaration:
         )
 
 
-def _build_thinking_config(
-    thinking: bool,
-    thinking_effort: str | None,
-    thinking_budget: int | None,
-    model: str = "",
-) -> types.ThinkingConfig | None:
-    """Build SDK ThinkingConfig, or None if disabled."""
-    if not thinking:
-        return None
-    cfg: dict[str, Any] = {"include_thoughts": True}
-    if model.startswith("gemini-3"):
-        # Gemini 3: use thinking_level string
-        cfg["thinking_level"] = thinking_effort or "high"
+def _server_tool(tool: dict[str, Any]) -> types.Tool:
+    """A server tool the adapter sends as is: its config belongs to C05."""
+    kind = tool["type"]
+    config = set(tool) - {"_server_tool", "type"}
+    if kind not in _SERVER_TOOLS or config:
+        detail = f"config {sorted(config)}" if kind in _SERVER_TOOLS else "no such server tool"
+        raise RequestError(f"Gemini server tool {kind!r}: {detail} is not supported")
+    return _SERVER_TOOLS[kind]
+
+
+def _tools(tools: list[dict[str, Any]]) -> list[types.Tool]:
+    functions = [_tool_to_sdk(tool) for tool in tools if not tool.get("_server_tool")]
+    head = [types.Tool(function_declarations=functions)] if functions else []
+    return head + [_server_tool(tool) for tool in tools if tool.get("_server_tool")]
+
+
+def _tool_config(choice: str) -> types.ToolConfig:
+    if choice in _MODES:
+        calling = types.FunctionCallingConfig(mode=_MODES[choice])
     else:
-        # Gemini 2.5: use thinking_budget tokens
-        if thinking_budget:
-            cfg["thinking_budget"] = thinking_budget
-        elif thinking_effort:
-            cfg["thinking_budget"] = THINKING_EFFORT_BUDGETS.get(
-                thinking_effort, DEFAULT_THINKING_BUDGET
-            )
-        else:
-            cfg["thinking_budget"] = DEFAULT_THINKING_BUDGET
-    return types.ThinkingConfig(**cfg)
+        calling = types.FunctionCallingConfig(
+            mode=types.FunctionCallingConfigMode.ANY, allowed_function_names=[choice]
+        )
+    return types.ToolConfig(function_calling_config=calling)
 
 
-def _extract_usage(usage_meta: Any) -> Usage:
-    """Convert SDK usage metadata to our Usage dataclass."""
-    prompt_input = getattr(usage_meta, "prompt_token_count", 0) or 0
-    tool_input = getattr(usage_meta, "tool_use_prompt_token_count", 0) or 0
-    cache_read = getattr(usage_meta, "cached_content_token_count", 0) or 0
-    reasoning = getattr(usage_meta, "thoughts_token_count", 0) or 0
+# ---------------------------------------------------------------------------
+# Response
+# ---------------------------------------------------------------------------
+
+
+def _extract_usage(usage: types.GenerateContentResponseUsageMetadata) -> Usage:
+    """The toolkit's usage: tool-use prompt tokens are input, thoughts are output."""
+    cache_read = usage.cached_content_token_count or 0
     return Usage(
-        input_tokens=_uncached_input_tokens(prompt_input, cache_read) + tool_input,
-        output_tokens=(getattr(usage_meta, "candidates_token_count", 0) or 0) + reasoning,
+        input_tokens=_uncached_input_tokens(usage.prompt_token_count or 0, cache_read)
+        + (usage.tool_use_prompt_token_count or 0),
+        output_tokens=(usage.candidates_token_count or 0) + (usage.thoughts_token_count or 0),
         cache_read_tokens=cache_read,
     )
 
 
+def _citations(candidate: types.Candidate) -> tuple[Citation, ...]:
+    grounding = candidate.grounding_metadata
+    return tuple(
+        Citation(text="", url=chunk.web.uri or "", title=chunk.web.title or "")
+        for chunk in (grounding.grounding_chunks or [] if grounding else [])
+        if chunk.web
+    )
+
+
 def _parse_sdk_response(
-    response: Any,
+    response: types.GenerateContentResponse,
     model: str,
     *,
     output_schema: OutputSchema | None = None,
 ) -> Response:
-    """Convert ``GenerateContentResponse`` to our ``Response``."""
-    candidates = response.candidates or []
-    if not candidates:
+    """The ``Response`` for a ``GenerateContentResponse`` (the base adds usage and cost)."""
+    if not response.candidates:
         return Response(raw=response, model=model)
-
-    candidate = candidates[0]
+    candidate = response.candidates[0]
     # A candidate cut off by max_tokens while still thinking carries content with no parts.
     parts = (candidate.content.parts if candidate.content else None) or []
-
-    text_parts: list[str] = []
-    tool_calls: list[ToolCall] = []
-    thinking_blocks: list[ThinkingBlock] = []
-
-    for part in parts:
-        if getattr(part, "thought", False) and part.text:
-            thinking_blocks.append(ThinkingBlock(text=part.text))
-        elif part.text is not None and not getattr(part, "thought", False):
-            text_parts.append(part.text)
-        elif part.function_call:
-            fc = part.function_call
-            tool_calls.append(
-                ToolCall(
-                    id=getattr(fc, "id", "") or uuid.uuid4().hex[:24],
-                    name=fc.name,
-                    input=dict(fc.args) if fc.args else {},
-                )
-            )
-
-    text = "".join(text_parts).strip()
-    parsed: Any = None
-    if output_schema and text:
-        try:
-            data = json.loads(text)
-            if output_schema.model_class is not None:
-                parsed = output_schema.model_class.model_validate(data)
-            else:
-                parsed = data
-        except (json.JSONDecodeError, TypeError):
-            logger.warning("Failed to parse structured output as JSON")
-        except Exception:
-            logger.warning("Failed to validate structured output against schema")
-            parsed = json.loads(text)  # fallback to raw dict
-
-    usage = _extract_usage(response.usage_metadata) if response.usage_metadata else Usage()
-    cost = _estimate_response_cost(model, usage)
-
-    finish_reason = ""
-    if candidate.finish_reason:
-        finish_reason = str(candidate.finish_reason).replace("FinishReason.", "")
-
-    # Extract citations from grounding metadata
-    citations: list[Citation] = []
-    grounding = getattr(candidate, "grounding_metadata", None)
-    if grounding:
-        for chunk in getattr(grounding, "grounding_chunks", []) or []:
-            web = getattr(chunk, "web", None)
-            if web:
-                citations.append(
-                    Citation(
-                        text="",
-                        url=getattr(web, "uri", ""),
-                        title=getattr(web, "title", ""),
-                    )
-                )
-
+    text = "".join(part.text for part in parts if part.text is not None and not part.thought)
+    text = text.strip()
     return Response(
         text=text,
-        tool_calls=tuple(tool_calls),
-        thinking=tuple(thinking_blocks),
-        parsed=parsed,
-        usage=usage,
-        cost=cost,
-        stop_reason=finish_reason,
-        model=getattr(response, "model_version", None) or model,
+        tool_calls=tuple(
+            ToolCall(
+                id=part.function_call.id or uuid.uuid4().hex[:24],
+                name=part.function_call.name or "",
+                input=dict(part.function_call.args or {}),
+            )
+            for part in parts
+            if part.function_call
+        ),
+        thinking=tuple(
+            ThinkingBlock(text=part.text) for part in parts if part.thought and part.text
+        ),
+        parsed=parse_structured(text, output_schema) if output_schema and text else None,
+        stop_reason=candidate.finish_reason.value if candidate.finish_reason else "",
+        model=response.model_version or model,
         raw=response,
-        response_id=getattr(response, "response_id", "") or "",
-        citations=tuple(citations),
+        response_id=response.response_id or "",
+        citations=_citations(candidate),
+    )
+
+
+def _chunk_events(chunk: types.GenerateContentResponse) -> list[StreamEvent]:
+    """The text and thought fragments of one streamed chunk."""
+    candidates = chunk.candidates or []
+    content = candidates[0].content if candidates else None
+    events: list[StreamEvent] = []
+    for part in (content.parts if content else None) or []:
+        if part.thought and part.text:
+            events.append(
+                StreamEvent(kind="thinking", thinking=ThinkingBlock(text=part.text), partial=True)
+            )
+        elif part.text:
+            events.append(StreamEvent(kind="text", text=part.text))
+    return events
+
+
+def _joined(chunks: list[types.GenerateContentResponse]) -> types.GenerateContentResponse:
+    """One response from a stream's chunks, which the SDK does not accumulate.
+
+    Every part, in order, with its thought signature; the last finish reason, grounding and
+    usage the stream reported.
+    """
+    candidates = [chunk.candidates[0] for chunk in chunks if chunk.candidates]
+    parts = [
+        part
+        for candidate in candidates
+        if candidate.content is not None
+        for part in candidate.content.parts or []
+    ]
+    last = chunks[-1]
+    return types.GenerateContentResponse(
+        candidates=[
+            types.Candidate(
+                content=types.Content(role="model", parts=parts),
+                finish_reason=next(
+                    (c.finish_reason for c in reversed(candidates) if c.finish_reason), None
+                ),
+                grounding_metadata=next(
+                    (c.grounding_metadata for c in reversed(candidates) if c.grounding_metadata),
+                    None,
+                ),
+            )
+        ],
+        usage_metadata=next(
+            (chunk.usage_metadata for chunk in reversed(chunks) if chunk.usage_metadata), None
+        ),
+        model_version=last.model_version,
+        response_id=last.response_id,
+    )
+
+
+def _http_options(timeout: float | None) -> types.HttpOptions:
+    """One physical attempt (``LLM(RetryConfig(...))`` owns retries, so each is metered), the
+    timeout in milliseconds, and an HTTP transport of the adapter's own.
+
+    Given a transport, the SDK sends through ``httpx`` instead of ``aiohttp``, whose path re-sends
+    a request after a connection error outside any retry option; the event hook marks a request
+    as handed to the transport. The SDK builds and closes the client.
+    """
+    return types.HttpOptions(
+        retry_options=types.HttpRetryOptions(attempts=1),
+        timeout=None if timeout is None else int(timeout * 1000),
+        async_client_args={
+            "transport": httpx.AsyncHTTPTransport(),
+            "event_hooks": {"request": [on_request]},
+        },
     )
 
 
@@ -373,7 +422,9 @@ def _parse_sdk_response(
 # ---------------------------------------------------------------------------
 
 
-class GeminiProvider(LoopAwareClientCache, BaseProvider):
+class GeminiProvider(
+    LoopAwareClientCache, BaseProvider[Prepared[_Generate], types.GenerateContentResponse]
+):
     """Google Gemini provider via the official ``google-genai`` SDK."""
 
     def __init__(
@@ -384,20 +435,21 @@ class GeminiProvider(LoopAwareClientCache, BaseProvider):
         timeout: float | None = None,
     ) -> None:
         self._model = model
-        # google-genai otherwise defaults to five physical attempts. Keep one
-        # so toolkit RetryConfig owns and audits every retry.
-        http_options: dict[str, Any] = {"retry_options": {"attempts": 1}}
-        client_kwargs: dict[str, Any] = {
-            "api_key": api_key,
-            "http_options": http_options,
-        }
-        if timeout is not None:
-            # google-genai expects HttpOptions.timeout in milliseconds.
-            http_options["timeout"] = int(timeout * 1000)
-        self._install_client(lambda: genai.Client(**client_kwargs))
+        self._install_client(
+            lambda: genai.Client(api_key=api_key, http_options=_http_options(timeout))
+        )
 
     async def close(self) -> None:
-        self._client.close()
+        client = self._client
+        await client.aio.aclose()
+        client.close()
+
+    def _models(self) -> AsyncModels:
+        return self._client.aio.models
+
+    def _profile(self) -> _Profile:
+        found = lookup(self._model, _PROFILES)
+        return found.value if found is not None else _CURRENT
 
     async def count_tokens(
         self,
@@ -409,247 +461,137 @@ class GeminiProvider(LoopAwareClientCache, BaseProvider):
         """Count tokens using Gemini's countTokens API."""
         msg_system, contents = _messages_to_sdk(messages)
         effective_system = merge_system_prompts(system, msg_system)
-        cfg_kwargs: dict[str, Any] = {}
-        if effective_system:
-            cfg_kwargs["system_instruction"] = effective_system
-        config = types.CountTokensConfig(**cfg_kwargs) if cfg_kwargs else None
-        try:
-            result = await self._client.aio.models.count_tokens(
+        config = types.CountTokensConfig(system_instruction=effective_system)
+        with self._mapped():
+            result = await self._models().count_tokens(
                 model=self._model, contents=contents, config=config
             )
-            return result.total_tokens or 0
-        except genai_errors.ClientError as exc:
-            raise APIError(exc.code, str(exc)) from exc
-        except genai_errors.ServerError as exc:
-            raise APIError(exc.code, str(exc)) from exc
-        except _NETWORK_ERRORS as exc:
-            raise network_error(exc, timed_out=_timed_out(exc)) from exc
+        return result.total_tokens or 0
 
     # ------------------------------------------------------------------
-    # Internals
+    # The contract
     # ------------------------------------------------------------------
 
-    def _build_config(
-        self,
-        *,
-        system: str | None = None,
-        tools: list[dict[str, Any]] | None = None,
-        **kwargs: Any,
-    ) -> types.GenerateContentConfig:
-        """Build a ``GenerateContentConfig`` from our generic params."""
-        # Extract special params
-        thinking = kwargs.pop("thinking", False)
-        thinking_effort = kwargs.pop("thinking_effort", None)
-        thinking_budget = kwargs.pop("thinking_budget", None)
-        output_schema: OutputSchema | None = kwargs.pop("output_schema", None)
-        tool_choice: str | None = kwargs.pop("tool_choice", None)
-        json_mode: bool = kwargs.pop("json_mode", False)
-        kwargs.pop("logprobs", None)  # Not supported by Gemini
-        kwargs.pop("structured_output_mode", None)  # Anthropic-specific; ignored here
-
-        # Translate max_tokens to Gemini's max_output_tokens
-        if "max_tokens" in kwargs:
-            kwargs["max_output_tokens"] = kwargs.pop("max_tokens")
-
-        # Warn about unknown params
-        unknown = set(kwargs) - _SDK_PARAMS
-        if unknown:
-            warnings.warn(
-                f"Unknown parameter(s) ignored for Gemini: {sorted(unknown)}. "
-                f"Valid: {sorted(_SDK_PARAMS)}",
-                stacklevel=4,
-            )
-        filtered = {k: v for k, v in kwargs.items() if k in _SDK_PARAMS}
-
-        cfg_kwargs: dict[str, Any] = {**filtered}
-
-        if system:
-            cfg_kwargs["system_instruction"] = system
-
-        # Thinking
-        thinking_cfg = _build_thinking_config(
-            thinking, thinking_effort, thinking_budget, self._model
-        )
-        if thinking_cfg:
-            cfg_kwargs["thinking_config"] = thinking_cfg
-
-        # Tools
-        if tools:
-            fn_tools = [t for t in tools if not t.get("_server_tool")]
-            server_tools = [t for t in tools if t.get("_server_tool")]
-            gemini_tools: list[Any] = []
-            if fn_tools:
-                gemini_tools.append(
-                    types.Tool(function_declarations=[_tool_to_sdk(t) for t in fn_tools])
-                )
-            for st in server_tools:
-                st_type = st["type"]
-                if st_type == "web_search":
-                    gemini_tools.append(types.Tool(google_search=types.GoogleSearch()))
-                elif st_type == "code_execution":
-                    gemini_tools.append(types.Tool(code_execution=types.ToolCodeExecution()))
-            if gemini_tools:
-                cfg_kwargs["tools"] = gemini_tools
-
-        # tool_choice
-        if tool_choice is not None:
-            mode_map = {
-                "auto": types.FunctionCallingConfigMode.AUTO,
-                "required": types.FunctionCallingConfigMode.ANY,
-                "none": types.FunctionCallingConfigMode.NONE,
-            }
-            if tool_choice in mode_map:
-                cfg_kwargs["tool_config"] = types.ToolConfig(
-                    function_calling_config=types.FunctionCallingConfig(
-                        mode=mode_map[tool_choice],
-                    )
-                )
-            else:
-                cfg_kwargs["tool_config"] = types.ToolConfig(
-                    function_calling_config=types.FunctionCallingConfig(
-                        mode=types.FunctionCallingConfigMode.ANY,
-                        allowed_function_names=[tool_choice],
-                    )
-                )
-
-        # Structured output
-        if output_schema:
-            cfg_kwargs["response_mime_type"] = "application/json"
-            cfg_kwargs["response_json_schema"] = output_schema.schema
-
-        # json_mode
-        if json_mode:
-            cfg_kwargs["response_mime_type"] = "application/json"
-
-        return types.GenerateContentConfig(**cfg_kwargs)
-
-    # ------------------------------------------------------------------
-    # complete
-    # ------------------------------------------------------------------
-
-    async def complete(
-        self,
-        messages: list[dict[str, Any]],
-        *,
-        system: str | None = None,
-        tools: list[dict[str, Any]] | None = None,
-        **kwargs: Any,
-    ) -> Response:
-        output_schema: OutputSchema | None = kwargs.get("output_schema")
-        msg_system, contents = _messages_to_sdk(messages)
-        effective_system = merge_system_prompts(system, msg_system)
-        config = self._build_config(system=effective_system, tools=tools, **kwargs)
-
-        logger.debug("complete start model=%s messages=%d", self._model, len(messages))
+    def prepare(self, request: Request) -> Prepared[_Generate]:
+        options = parse_options(request.kwargs, _FORWARDED, "Gemini")
+        msg_system, contents = _messages_to_sdk(request.messages)
+        forwarded = dict(options.params)
+        if "max_tokens" in forwarded:
+            forwarded["max_output_tokens"] = forwarded.pop("max_tokens")
+        tools = request.tools or []
+        response_json = options.output_schema is not None or options.json_mode
         try:
-            response = await self._client.aio.models.generate_content(
-                model=self._model,
-                contents=contents,
-                config=config,
+            config = types.GenerateContentConfig(
+                **forwarded,
+                system_instruction=merge_system_prompts(request.system, msg_system),
+                thinking_config=self._thinking(options),
+                tools=_tools(tools) if tools else None,
+                tool_config=_tool_config(options.tool_choice) if options.tool_choice else None,
+                response_mime_type="application/json" if response_json else None,
+                response_json_schema=options.output_schema.schema
+                if options.output_schema
+                else None,
             )
-        except genai_errors.ClientError as exc:
-            if exc.code == 429:
-                retry_after = None
-                if exc.response and hasattr(exc.response, "headers"):
-                    retry_after = exc.response.headers.get("retry-after")
-                raise RateLimitError(
-                    429,
-                    str(exc),
-                    retry_after=_parse_retry_after(retry_after),
-                ) from exc
-            raise APIError(exc.code, str(exc)) from exc
-        except genai_errors.ServerError as exc:
-            raise APIError(exc.code, str(exc)) from exc
-        except _NETWORK_ERRORS as exc:
-            raise network_error(exc, timed_out=_timed_out(exc)) from exc
+        except ValueError as refused:  # the SDK's pydantic validation of the caller's values
+            if isinstance(refused, RequestError):
+                raise
+            raise RequestError(f"the Gemini SDK refused the request: {refused}") from refused
+        params: _Generate = {"model": self._model, "contents": contents, "config": config}
+        return Prepared(params, output_schema=options.output_schema)
 
-        resp = _parse_sdk_response(response, self._model, output_schema=output_schema)
-        logger.debug(
-            "complete done model=%s tokens_in=%d tokens_out=%d",
-            self._model,
-            resp.usage.input_tokens,
-            resp.usage.output_tokens,
+    def _thinking(self, options: Options) -> types.ThinkingConfig | None:
+        """``thinking_effort`` applies on its own (these models think unasked, as in D13/D25);
+        ``thinking=True`` asks for thought summaries and, without an effort, thinks hard."""
+        profile = self._profile()
+        if profile.budget is not None:
+            budget = self._budget(options, profile)
+            if budget is None:
+                return None
+            return types.ThinkingConfig(
+                include_thoughts=options.thinking or None, thinking_budget=budget
+            )
+        if options.thinking_budget is not None:
+            warnings.warn(
+                "thinking_budget is for Gemini 2.5; Gemini 3 takes thinking_effort, ignoring",
+                stacklevel=5,
+            )
+        effort = options.thinking_effort or ("high" if options.thinking else None)
+        if effort is None:
+            return None
+        if effort not in profile.levels:
+            raise RequestError(
+                f"{self._model} takes thinking_effort in {sorted(profile.levels)}, not {effort!r}"
+            )
+        return types.ThinkingConfig(
+            include_thoughts=options.thinking or None,
+            thinking_level=types.ThinkingLevel(effort.upper()),
         )
-        return resp
 
-    # ------------------------------------------------------------------
-    # stream
-    # ------------------------------------------------------------------
-
-    def stream(
-        self,
-        messages: list[dict[str, Any]],
-        *,
-        system: str | None = None,
-        tools: list[dict[str, Any]] | None = None,
-        **kwargs: Any,
-    ) -> tuple[AsyncIterator[str], StreamState]:
-        msg_system, contents = _messages_to_sdk(messages)
-        effective_system = merge_system_prompts(system, msg_system)
-        config = self._build_config(system=effective_system, tools=tools, **kwargs)
-
-        logger.debug("stream start model=%s", self._model)
-        state = StreamState()
-        state.model = self._model
-
-        async def _generate() -> AsyncIterator[str]:
-            try:
-                stream = await self._client.aio.models.generate_content_stream(
-                    model=self._model,
-                    contents=contents,
-                    config=config,
+    def _budget(self, options: Options, profile: _Profile) -> int | None:
+        """A Gemini 2.5 thinking budget: the caller's, checked against the model's range, else
+        the effort's, else the default when thinking is asked for."""
+        low, high = cast("tuple[int, int]", profile.budget)
+        budget = options.thinking_budget
+        if budget is not None:
+            documented = (
+                low <= budget <= high or budget == -1 or (budget == 0 and profile.can_disable)
+            )
+            if not documented:
+                off = ", 0 to turn thinking off" if profile.can_disable else ""
+                raise RequestError(
+                    f"{self._model} takes a thinking_budget from {low} to {high}{off} or -1, "
+                    f"not {budget}"
                 )
-                async for chunk in stream:
-                    # Usage metadata (may appear on any/last chunk)
-                    if chunk.usage_metadata:
-                        state.usage = _extract_usage(chunk.usage_metadata)
+            return budget
+        effort = options.thinking_effort
+        if effort is not None:
+            if effort not in THINKING_EFFORT_BUDGETS:
+                raise RequestError(
+                    f"{self._model} takes thinking_effort in {sorted(THINKING_EFFORT_BUDGETS)}, "
+                    f"not {effort!r}"
+                )
+            return THINKING_EFFORT_BUDGETS[effort]
+        return DEFAULT_THINKING_BUDGET if options.thinking else None
 
-                    candidates = chunk.candidates or []
-                    if not candidates:
-                        continue
+    async def send(self, prepared: Prepared[_Generate]) -> types.GenerateContentResponse:
+        return await self._models().generate_content(**prepared.params)
 
-                    candidate = candidates[0]
-                    parts = (candidate.content.parts if candidate.content else None) or []
+    async def open_stream(
+        self, prepared: Prepared[_Generate]
+    ) -> AsyncIterator[StreamEvent | Done[types.GenerateContentResponse]]:
+        chunks: list[types.GenerateContentResponse] = []
+        async for chunk in await self._models().generate_content_stream(**prepared.params):
+            chunks.append(chunk)
+            for event in _chunk_events(chunk):
+                yield event
+        if chunks:
+            yield Done(_joined(chunks))
 
-                    for part in parts:
-                        if getattr(part, "thought", False) and part.text:
-                            state.thinking.append(ThinkingBlock(text=part.text))
-                        elif part.text is not None and not getattr(part, "thought", False):
-                            yield part.text
-                        elif part.function_call:
-                            fc = part.function_call
-                            state.tool_calls.append(
-                                ToolCall(
-                                    id=getattr(fc, "id", "") or uuid.uuid4().hex[:24],
-                                    name=fc.name or "",
-                                    input=dict(fc.args) if fc.args else {},
-                                )
-                            )
+    def assemble(
+        self, final: types.GenerateContentResponse, prepared: Prepared[_Generate]
+    ) -> Response:
+        return _parse_sdk_response(final, self._model, output_schema=prepared.output_schema)
 
-                    if candidate.finish_reason:
-                        state.stop_reason = str(candidate.finish_reason).replace(
-                            "FinishReason.", ""
-                        )
+    def usage(self, final: types.GenerateContentResponse) -> Usage | None:
+        return _extract_usage(final.usage_metadata) if final.usage_metadata else None
 
-                    state.raw = chunk
-                    model_ver = getattr(chunk, "model_version", None)
-                    if model_ver:
-                        state.model = model_ver
+    def map_error(self, exc: Exception, *, sent: bool) -> ProviderError | None:
+        """The one place that knows the SDK's errors.
 
-            except genai_errors.ClientError as exc:
-                if exc.code == 429:
-                    retry_after = None
-                    if exc.response and hasattr(exc.response, "headers"):
-                        retry_after = exc.response.headers.get("retry-after")
-                    raise RateLimitError(
-                        429,
-                        str(exc),
-                        retry_after=_parse_retry_after(retry_after),
-                    ) from exc
-                raise APIError(exc.code, str(exc)) from exc
-            except genai_errors.ServerError as exc:
-                raise APIError(exc.code, str(exc)) from exc
-            except _NETWORK_ERRORS as exc:
-                raise network_error(exc, timed_out=_timed_out(exc)) from exc
-
-        return _generate(), state
+        Gemini does not bill a request that fails with a 400 or a 500
+        (https://ai.google.dev/gemini-api/docs/billing) and never a 429 (D20); other statuses stay
+        indeterminate. The SDK raises the same errors for an error object inside a 200 stream,
+        whose reply is then not the ``httpx`` response: tokens may already be billed there.
+        """
+        if isinstance(exc, genai_errors.APIError):
+            reply = exc.response if isinstance(exc.response, httpx.Response) else None
+            if exc.code == 429:
+                retry_after = reply.headers.get("retry-after") if reply is not None else None
+                return RateLimitError(429, str(exc), retry_after=_parse_retry_after(retry_after))
+            unbilled = reply is not None and exc.code in _UNBILLED_STATUSES
+            return APIError(
+                exc.code, str(exc), delivery="unbilled" if unbilled else "indeterminate"
+            )
+        if isinstance(exc, httpx.TransportError):
+            return transport_error(exc, not_sent=_NOT_SENT, timeouts=(httpx.TimeoutException,))
+        return refused_or_unread(exc, sent=sent)
