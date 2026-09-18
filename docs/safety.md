@@ -107,7 +107,7 @@ The tools in `ai_arch_toolkit.toolkit.tools.dangerous` execute real side effects
 |------|--------------|--------------|
 | `run_command` | `"shell"` | `"critical"` |
 | `python_repl` | `"python"` | `"high"` |
-| `read_file`, `list_directory`, `search_files` | `"filesystem"` | `"high"` |
+| `csv_read`, `read_file`, `list_directory`, `search_files` | `"filesystem"` | `"high"` |
 | `http_get`, `scrape_text` | `"network"` | `"high"` |
 
 Run through a `ToolGroup`, `execute_tool()` / `async_execute_tool()`, `run_tools()` or an agent without an `approval_handler`, every call to them returns `approval_denied`; supply a handler to let them run (see [Human approval](#human-approval)). Calling the function directly (`read_file("notes.txt")`) bypasses governance entirely.

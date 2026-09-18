@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import math
 import urllib.error
@@ -196,9 +197,12 @@ def ip_lookup(ip: str = "") -> str:
     Uses ip-api.com (free, no API key, max 45 requests/minute).
 
     Args:
-        ip: IP address to look up. Leave empty for your own public IP.
+        ip: Explicit IPv4 or IPv6 address to look up.
     """
-    target = ip or ""
+    try:
+        target = str(ipaddress.ip_address(ip))
+    except ValueError:
+        return "IP lookup failed: provide a valid IPv4 or IPv6 address"
     url = f"http://ip-api.com/json/{target}?fields=status,message,query,country,regionName,city,zip,lat,lon,timezone,isp,org,as"
     try:
         req = urllib.request.Request(url)

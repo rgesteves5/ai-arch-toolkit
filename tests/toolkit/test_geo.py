@@ -6,6 +6,8 @@ import json
 from io import BytesIO
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from ai_arch_toolkit.toolkit.tools._geo import (
     country_info,
     distance_between,
@@ -110,7 +112,7 @@ class TestIpLookup:
                 "message": "invalid query",
             }
         )
-        result = ip_lookup("not-an-ip")
+        result = ip_lookup("8.8.8.8")
         assert "failed" in result.lower()
         assert "invalid query" in result
 
@@ -219,3 +221,12 @@ class TestCountryInfo:
         mock_urlopen.side_effect = TimeoutError()
         result = country_info("Japan")
         assert "failed" in result.lower()
+
+
+@pytest.mark.parametrize("ip", ["", "a b?c", "not-an-ip"])
+@patch("ai_arch_toolkit.toolkit.tools._geo.urllib.request.urlopen")
+def test_ip_lookup_rejects_invalid_ip_before_request(mock_urlopen, ip):
+    mock_urlopen.return_value = _mock_urlopen({"status": "success"})
+    result = ip_lookup(ip)
+    assert "IP lookup failed" in result
+    mock_urlopen.assert_not_called()

@@ -66,7 +66,7 @@ from ai_arch_toolkit.toolkit.tools._internet_archive import (
     internet_archive_item,
     internet_archive_search,
 )
-from ai_arch_toolkit.toolkit.tools._json import csv_read, json_extract
+from ai_arch_toolkit.toolkit.tools._json import json_extract
 from ai_arch_toolkit.toolkit.tools._math import math_eval, unit_convert
 from ai_arch_toolkit.toolkit.tools._mediawiki import (
     mediawiki_page,
@@ -177,7 +177,6 @@ __all__ = [
     "country_info",
     "crossref_search",
     "crossref_work",
-    "csv_read",
     "dailymed_label",
     "dailymed_label_search",
     "datacite_doi",

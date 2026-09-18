@@ -173,7 +173,6 @@ def built_in_tool_registry() -> ToolRegistry:
         base64_decode,
         base64_encode,
         country_info,
-        csv_read,
         date_add,
         date_diff,
         date_format,
@@ -201,6 +200,7 @@ def built_in_tool_registry() -> ToolRegistry:
         wikipedia_search,
     )
     from ai_arch_toolkit.toolkit.tools.dangerous import (
+        csv_read,
         http_get,
         list_directory,
         python_repl,

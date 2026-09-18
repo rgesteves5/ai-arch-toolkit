@@ -9,6 +9,7 @@ from ai_arch_toolkit.toolkit.tools import dangerous
 
 DANGEROUS_TOOL_NAMES = frozenset(
     {
+        "csv_read",
         "http_get",
         "list_directory",
         "python_repl",
@@ -21,6 +22,7 @@ DANGEROUS_TOOL_NAMES = frozenset(
 
 # name -> (capability, risk_level)
 DANGEROUS_TOOL_RISK = {
+    "csv_read": ("filesystem", "high"),
     "http_get": ("network", "high"),
     "list_directory": ("filesystem", "high"),
     "python_repl": ("python", "high"),
@@ -57,3 +59,16 @@ def test_safe_tools_remain_in_default_exports() -> None:
     for name in ("datetime_now", "math_eval", "get_weather", "wikipedia_search"):
         assert name in safe_tools.__all__
         assert hasattr(safe_tools, name)
+
+
+async def test_csv_read_requires_approval(tmp_path) -> None:
+    from ai_arch_toolkit.core import ToolCall, ToolGroup
+    from ai_arch_toolkit.toolkit.tools._json import csv_read
+
+    path = tmp_path / "private.csv"
+    path.write_text("secret\nvalue\n")
+    result = await ToolGroup(csv_read).async_execute(
+        ToolCall(id="csv", name="csv_read", input={"path": str(path)})
+    )
+    assert result.error is not None
+    assert result.error.type == "approval_denied"

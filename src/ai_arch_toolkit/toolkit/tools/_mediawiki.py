@@ -18,6 +18,19 @@ _USER_AGENT = "ai-arch-toolkit/1.0 (https://github.com/ai-arch-toolkit)"
 _MAX_LIMIT = 25
 _TEXT_RE = re.compile(r"^[\w\s,.'()/%:+-]{1,180}$", re.UNICODE)
 _LANG_RE = re.compile(r"^[A-Za-z -]{1,80}$")
+_WIKIMEDIA_DOMAINS = (
+    "wikipedia.org",
+    "wikimedia.org",
+    "wiktionary.org",
+    "wikidata.org",
+    "wikibooks.org",
+    "wikiquote.org",
+    "wikisource.org",
+    "wikiversity.org",
+    "wikivoyage.org",
+    "wikinews.org",
+    "mediawiki.org",
+)
 
 
 @tool
@@ -274,8 +287,17 @@ def _valid_text(value: str) -> bool:
 
 
 def _valid_api_url(value: str) -> bool:
-    parsed = urllib.parse.urlparse(value.strip())
-    return bool(parsed.scheme == "https" and parsed.netloc and parsed.path.endswith("api.php"))
+    try:
+        parsed = urllib.parse.urlparse(value.strip())
+        host = parsed.hostname or ""
+    except ValueError:
+        return False
+    return (
+        parsed.scheme == "https"
+        and parsed.netloc.lower() == host
+        and parsed.path.endswith("api.php")
+        and any(host == domain or host.endswith("." + domain) for domain in _WIKIMEDIA_DOMAINS)
+    )
 
 
 def _bounded(value: int) -> int:

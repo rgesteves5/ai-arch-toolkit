@@ -6,6 +6,8 @@ import json
 from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qs, urlparse
 
+import pytest
+
 from ai_arch_toolkit.toolkit.tools._mediawiki import (
     mediawiki_page,
     mediawiki_search,
@@ -69,3 +71,30 @@ class TestMediaWiki:
         assert "invalid api_url" in mediawiki_search("x", api_url="http://example.com/api.php")
         assert "invalid term" in wiktionary_entry("bad<>")
         mock_urlopen.assert_not_called()
+
+
+@pytest.mark.parametrize("fn", [mediawiki_search, mediawiki_page, mediawiki_sections])
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://169.254.169.254/api.php",
+        "https://localhost:8443/x/api.php",
+        "https://user:pw@en.wikipedia.org/w/api.php",
+        "https://evil.example/api.php",
+        "https://en.wikipedia.org:443/w/api.php",
+        "https://en.wikipedia.org.evil.example/api.php",
+        "https://evilwikipedia.org/api.php",
+    ],
+)
+@patch("ai_arch_toolkit.toolkit.tools._mediawiki.urllib.request.urlopen")
+def test_mediawiki_rejects_untrusted_hosts(mock_urlopen, fn, url):
+    mock_urlopen.return_value = _mock_urlopen({})
+    assert "invalid api_url" in fn("apple", api_url=url)
+    mock_urlopen.assert_not_called()
+
+
+@patch("ai_arch_toolkit.toolkit.tools._mediawiki.urllib.request.urlopen")
+def test_mediawiki_accepts_portuguese_wikipedia(mock_urlopen):
+    mock_urlopen.return_value = _mock_urlopen({"query": {"search": []}})
+    mediawiki_search("apple", api_url="https://pt.wikipedia.org/w/api.php")
+    mock_urlopen.assert_called_once()

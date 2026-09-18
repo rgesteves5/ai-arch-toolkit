@@ -40,7 +40,6 @@ For the conceptual guide (`@tool`, `ToolGroup`, server tools), see [Tools](tools
 **Data** — `_json.py`
 
 - `json_extract` — Extract values from JSON via dot-notation paths
-- `csv_read` — Read CSV files, return formatted table
 
 ---
 
@@ -90,10 +89,13 @@ For the conceptual guide (`@tool`, `ToolGroup`, server tools), see [Tools](tools
 - `wikidata_search` — Search Wikidata entities by label or alias
 - `wikidata_entity` — Get labels, aliases, claims, and Wikipedia links for a Wikidata QID
 - `wikidata_sparql` — Run read-only Wikidata SPARQL SELECT/ASK queries
-- `mediawiki_search` — Search a public MediaWiki API
+- `mediawiki_search` — Search a Wikimedia MediaWiki API
 - `mediawiki_page` — Fetch and lightly clean a MediaWiki page's wikitext
 - `mediawiki_sections` — List sections for a MediaWiki page
 - `wiktionary_entry` — Fetch a Wiktionary entry focused on one language section
+
+The `mediawiki_*` tools accept an `api_url` only on HTTPS Wikimedia domains and their subdomains,
+without credentials or ports.
 
 **Dictionary** — `_dictionary.py`
 
@@ -254,6 +256,7 @@ These execute real side effects and live in the explicit `ai_arch_toolkit.toolki
 - `read_file` — Read file contents with optional line limit
 - `list_directory` — List files/dirs with sizes and types
 - `search_files` — Recursively search for text in files
+- `csv_read` — Read CSV files, return a formatted table
 
 **Shell** — `dangerous`
 

@@ -60,7 +60,12 @@ def _parse_path(path: str) -> list[str | int]:
     return parts
 
 
-@tool
+@tool(
+    capability="filesystem",
+    risk_level="high",
+    requires_approval=True,
+    approval_reason="Reading CSV files can expose secrets or private data.",
+)
 def csv_read(path: str, max_rows: int = _DEFAULT_MAX_ROWS) -> str:
     """Read a CSV file and return it as a formatted table.
 
