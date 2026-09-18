@@ -25,10 +25,6 @@ def client(vendor: str, port: int, *, timeout: float = 2.0) -> LLM:
     base_url = f"http://127.0.0.1:{port}"
     model = "claude-sonnet-4-6" if vendor == "anthropic" else "gpt-4o"
     llm = LLM(model, api_key="local-test", base_url=base_url, max_tokens=32, timeout=timeout)
-    # anthropic 1.6.0 removed temperature. Parameter migration is R02 (recorded in FINDINGS);
-    # use a valid wire request here to isolate R01's error/meter lifecycle.
-    if vendor == "anthropic":
-        llm._defaults.pop("temperature")
     llm._provider._client = llm._provider._client.with_options(max_retries=0)
     return llm
 
@@ -72,7 +68,9 @@ async def test_local_sdk_error_delivery_and_bounded_meter(vendor, path, status):
             assert scope.events()[0].delivery == raised.value.delivery
             assert not scope.has_live_ops(scope.run_span_id)
     assert stats.requests == 1
-    assert json.loads(stats.bodies[0])["model"] == llm._model
+    body = json.loads(stats.bodies[0])
+    assert body["model"] == llm._model
+    assert body["temperature"] == 0.0  # the LLM default reaches the wire through the real SDK
 
 
 @pytest.mark.parametrize("vendor", ("anthropic", "openai"))

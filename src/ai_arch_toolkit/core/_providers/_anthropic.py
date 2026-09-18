@@ -40,8 +40,12 @@ import anthropic  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-# Parameters safe to forward directly to the SDK.
-_SDK_PARAMS = {"temperature", "top_p", "top_k", "stop_sequences", "max_tokens"}
+# Parameters forwarded as SDK arguments.
+_SDK_PARAMS = {"stop_sequences", "max_tokens"}
+
+# anthropic 1.x removed the sampling parameters from its signatures (passing one is a TypeError),
+# but the API still takes them on models before Opus 4.7, so they travel in the request body.
+_SAMPLING_PARAMS = ("temperature", "top_p", "top_k")
 
 # Anthropic server tool type identifiers (versioned by Anthropic).
 _SERVER_TOOL_TYPES: dict[str, str] = {
@@ -314,6 +318,18 @@ def _uses_deprecated_temperature(model: str) -> bool:
     return model.startswith(_TEMPERATURE_DEPRECATED_PREFIXES)
 
 
+def _sampling_body(model: str, params: dict[str, Any], *, thinking: bool) -> dict[str, Any]:
+    """The sampling parameters for ``extra_body``.
+
+    ``temperature`` is dropped for the models that reject it and when thinking is on, which
+    requires the default temperature.
+    """
+    body = {name: params[name] for name in _SAMPLING_PARAMS if name in params}
+    if thinking or _uses_deprecated_temperature(model):
+        body.pop("temperature", None)
+    return body
+
+
 def _extract_usage(sdk_usage: Any) -> Usage:
     """Convert SDK usage object to our Usage dataclass.
 
@@ -489,11 +505,11 @@ class AnthropicProvider(LoopAwareClientCache, BaseProvider):
             )
 
         # Warn about unknown params
-        unknown = set(kwargs) - _SDK_PARAMS
+        unknown = set(kwargs) - _SDK_PARAMS.union(_SAMPLING_PARAMS)
         if unknown:
             warnings.warn(
                 f"Unknown parameter(s) ignored for Anthropic: {sorted(unknown)}. "
-                f"Valid: {sorted(_SDK_PARAMS)}",
+                f"Valid: {sorted(_SDK_PARAMS.union(_SAMPLING_PARAMS))}",
                 stacklevel=4,
             )
         filtered = {k: v for k, v in kwargs.items() if k in _SDK_PARAMS}
@@ -503,8 +519,6 @@ class AnthropicProvider(LoopAwareClientCache, BaseProvider):
             "messages": wire_messages,
             **filtered,
         }
-        if _uses_deprecated_temperature(self._model):
-            sdk_kwargs.pop("temperature", None)
 
         if system:
             sdk_kwargs["system"] = system
@@ -513,8 +527,8 @@ class AnthropicProvider(LoopAwareClientCache, BaseProvider):
         thinking_cfg = _build_thinking_param(thinking, thinking_effort, thinking_budget)
         if thinking_cfg:
             sdk_kwargs["thinking"] = thinking_cfg
-            # Anthropic requires temperature=1 when thinking is enabled
-            sdk_kwargs.pop("temperature", None)
+        if sampling := _sampling_body(self._model, kwargs, thinking=bool(thinking_cfg)):
+            sdk_kwargs["extra_body"] = sampling
 
         # Structured output: native ``output_config`` by default, or schema-in-
         # prompt for schemas that exceed Anthropic's native complexity limit.

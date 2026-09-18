@@ -102,7 +102,9 @@ Específico de cada um (além do que os achados listam):
   `budget_tokens` com `max_tokens = budget + max_tokens` (D20); `tool_choice` forçado em Fable 5.1 e
   Mythos 5.1 levanta `RequestError`; todos os `tool_result` de um turno num só `user`; server tool com
   `name`; ramo 429 em `count_tokens` e batch. Confirma cada regra na documentação oficial antes de a
-  codificar.
+  codificar. Já feito antes da fase (2026-09-18): `temperature`, `top_p` e `top_k` vão em
+  `extra_body`, porque o `anthropic` 1.x os tirou das assinaturas; `_TEMPERATURE_DEPRECATED_PREFIXES`
+  passa para a tabela de perfis.
 
 ### 4. Rede de testes do fio
 

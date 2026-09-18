@@ -150,6 +150,10 @@ capacidades (ver "Por fazer").
 
 ## Por fazer (dono do repositório)
 
+- **Anthropic:** quando houver créditos, correr
+  `uv run pytest tests/integration/test_provider_contracts_live.py -m live_api -k anthropic -q`
+  (usa o `claude-haiku-4-5`, que leva `temperature` no corpo do pedido). Confirma a correcção do
+  `temperature` com o `anthropic` 1.x, que só foi provada com o SDK real em loopback.
 - **xAI:** repor créditos na conta e depois correr `uv run pytest -m live_api -k xai` (custo por
   pedido) e um probe com uma tool cujo parâmetro seja `Any` (schema sem tipo) e com `system=` +
   `system()` ao mesmo tempo — únicas mudanças desta frente que o xAI ainda não confirmou.

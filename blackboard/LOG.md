@@ -197,3 +197,14 @@ na R02: o dono decide se isto passa à frente.
 
 - A pedido do dono, a R01 ficou commitada em `main` em quatro commits: `a16e3f9` tools, `f95c81f`
   F25, `5a0ab3b` núcleo, e o registo. Não publicada. Cada árvore intermédia passa o gate sozinha.
+
+## 2026-09-18 · `temperature` da Anthropic antes do push (Claude, a pedido do dono)
+
+O `anthropic` 1.6.0 do lock tirou `temperature`, `top_p` e `top_k` das assinaturas, e todas as
+chamadas a modelos que ainda os aceitam (Haiku 4.5, Sonnet e Opus 4.5–4.6) davam `TypeError` antes
+de enviar. Passam a ir em `extra_body`, decididos por uma só função; a regra de quando a
+`temperature` cai não mudou. Vermelho primeiro: sete ensaios do SDK real em loopback, sem o contorno
+da fixture, e o teste unitário que afirmava `temperature` como argumento do SDK, corrigido. Gate: 3886
+passed; ruff, formato, pyright e lock limpos. Verificação ao vivo pendente (sem créditos): comando no
+BOARD. Documentação do SDK 1.x confirmada no guia de migração oficial incluído na skill `claude-api`
+(passo 6, "Removed request parameters").

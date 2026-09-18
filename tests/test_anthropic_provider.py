@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import inspect
 import warnings
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from anthropic import types as sdk_types
+from anthropic.resources.messages import AsyncMessages
 from anthropic.types.raw_message_delta_event import Delta
 
 from ai_arch_toolkit.core import LLM, MeterScope
@@ -29,6 +31,11 @@ from ai_arch_toolkit.core._response import OutputSchema, Response, ToolCall, Usa
 # ---------------------------------------------------------------------------
 # Helpers — build fake SDK objects
 # ---------------------------------------------------------------------------
+
+
+def _sdk_accepts(method: str, call_kwargs: dict) -> None:
+    """Every kwarg the adapter sends exists in the installed SDK (a mock client accepts any)."""
+    inspect.signature(getattr(AsyncMessages, method)).bind_partial(None, **call_kwargs)
 
 
 def _sdk_message(
@@ -597,13 +604,15 @@ class TestAnthropicProviderComplete:
         provider._client = mock_client
         result = await provider.complete(
             [{"role": "user", "content": "Hi"}],
+            temperature=0.0,
             thinking=True,
             thinking_effort="high",
         )
         call_kwargs = mock_client.messages.create.call_args[1]
         assert "thinking" in call_kwargs
         assert call_kwargs["thinking"]["type"] == "enabled"
-        assert "temperature" not in call_kwargs  # removed when thinking
+        assert "temperature" not in call_kwargs.get("extra_body", {})  # thinking needs the default
+        _sdk_accepts("create", call_kwargs)
         assert len(result.thinking) == 1
 
     @patch("ai_arch_toolkit.core._providers._anthropic.anthropic")
@@ -757,7 +766,8 @@ class TestAnthropicProviderComplete:
             temperature=0.0,
         )
         call_kwargs = mock_client.messages.create.call_args[1]
-        assert "temperature" not in call_kwargs
+        assert "temperature" not in call_kwargs.get("extra_body", {})
+        _sdk_accepts("create", call_kwargs)
 
     @patch("ai_arch_toolkit.core._providers._anthropic.anthropic")
     async def test_older_models_keep_temperature(self, mock_sdk):
@@ -770,9 +780,13 @@ class TestAnthropicProviderComplete:
         await provider.complete(
             [{"role": "user", "content": "Hi"}],
             temperature=0.2,
+            top_p=0.9,
+            top_k=40,
         )
         call_kwargs = mock_client.messages.create.call_args[1]
-        assert call_kwargs["temperature"] == 0.2
+        # anthropic 1.x removed sampling from its signatures; the API still takes it in the body.
+        assert call_kwargs["extra_body"] == {"temperature": 0.2, "top_p": 0.9, "top_k": 40}
+        _sdk_accepts("create", call_kwargs)
 
     @patch("ai_arch_toolkit.core._providers._anthropic.anthropic")
     async def test_does_not_inject_max_tokens(self, mock_sdk):

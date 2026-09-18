@@ -660,3 +660,15 @@ não uma opinião do controller: com a D16 (sob um meter, todo o modelo tem pre�
 calculá-lo sempre, e o desconhecido sem tecto fica reduzido às server tools. Proposta para a R02: o
 estimador do pior caso passa para o core, é a casa única do tecto de falha e da reserva estrita, e
 desaparece o `Protocol` `FailureBoundController` (`core/_metering/_admission.py`).
+
+## 2026-09-18 · resolução antes do push (Claude, a pedido do dono)
+
+### `anthropic` 1.6.0 e `temperature` → resolvido
+
+`temperature`, `top_p` e `top_k` vão em `extra_body`, a via documentada para o SDK 1.x, e uma só
+função (`_sampling_body` em `core/_providers/_anthropic.py`) decide o que segue: tira a `temperature`
+nos modelos que a recusam e com thinking ligado, como antes. Prova com o SDK real no servidor falso
+em loopback: os sete ensaios Anthropic de `tests/integration/test_attempts_local_sdk.py` correm com
+o `temperature=0.0` por omissão, sem o contorno da fixture, e afirmam que ele chega ao corpo do
+pedido; antes da correcção falhavam com `TypeError`. Os testes unitários passam a ligar os kwargs à
+assinatura instalada do SDK. Falta a verificação ao vivo: não há créditos Anthropic.
