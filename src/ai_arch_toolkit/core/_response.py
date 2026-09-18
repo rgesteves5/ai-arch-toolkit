@@ -4,28 +4,11 @@ from __future__ import annotations
 
 import contextlib
 import json
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass, field
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
-
-def _fail_meter_op(finalizer: Callable[[str], Any]) -> None:
-    """Fail a partially-consumed stream's metered op (unknown cost) before finalizing the partial.
-
-    A stream that wasn't fully drained has partial, provider-dependent usage (some providers report
-    usage only in the final chunk), so its op must not be settled as a clean success. We latch it
-    abandoned (so the settling finalizer skips its ``settle``) and fail it — holds released, call
-    count kept, unknown cost charged. New LLM streams expose an explicit abandonment hook; the
-    ``_meter_op`` lookup remains for compatible custom/legacy finalizers.
-    """
-    abandon = getattr(finalizer, "_stream_abandon", None)
-    if callable(abandon):
-        abandon()
-        return
-    op = getattr(finalizer, "_meter_op", None)
-    if op is not None:
-        op.mark_abandoned()
-        op.fail()
+from ai_arch_toolkit.core._stream_lifecycle import StreamLifecycle, close_async, close_sync
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,15 +200,18 @@ class StreamResponse:
         print(stream.response.cost)
     """
 
-    __slots__ = ("_aiter", "_chunks", "_finalizer", "_partial_parsed", "_response")
+    __slots__ = ("_aiter", "_chunks", "_finalizer", "_lifecycle", "_partial_parsed", "_response")
 
     def __init__(
         self,
         aiter: AsyncIterator[str],
         finalizer: Callable[[str], Response],
+        *,
+        lifecycle: StreamLifecycle | None = None,
     ) -> None:
         self._aiter = aiter
         self._finalizer = finalizer
+        self._lifecycle = lifecycle
         self._response: Response | None = None
         self._chunks: list[str] = []
         self._partial_parsed: Any = None
@@ -246,6 +232,10 @@ class StreamResponse:
             self._response = self._finalizer("".join(self._chunks))
             raise
 
+    def _abandon(self) -> None:
+        if self._lifecycle is not None:
+            self._lifecycle.abandon()
+
     @property
     def response(self) -> Response | None:
         """Available after stream is fully consumed. ``None`` during iteration."""
@@ -261,15 +251,13 @@ class StreamResponse:
 
     async def _close_iterator(self) -> None:
         """Close the lazy provider pipeline without changing response semantics."""
-        close = getattr(self._aiter, "aclose", None)
-        if callable(close):
-            await cast(Callable[[], Awaitable[Any]], close)()
+        await close_async(self._aiter)
 
     async def aclose(self) -> None:
         """Abandon the stream, close provider resources, and retain its partial response."""
         if self._response is not None:
             return
-        _fail_meter_op(self._finalizer)
+        self._abandon()
         await self._close_iterator()
         self._response = self._finalizer("".join(self._chunks))
 
@@ -278,6 +266,7 @@ class StreamResponse:
         # as a clean success (the metered finalizer would settle it, under-recording spend and
         # mislabelling a failed call). Still close the provider pipeline immediately.
         if args and args[0] is not None:
+            self._abandon()
             await self._close_iterator()
             return
         await self.aclose()
@@ -294,17 +283,24 @@ class SyncStreamResponse:
         print(stream.response.cost)
     """
 
-    __slots__ = ("_chunks", "_finalizer", "_iter", "_response")
+    __slots__ = ("_chunks", "_finalizer", "_iter", "_lifecycle", "_response")
 
     def __init__(
         self,
         sync_iter: Iterator[str],
         finalizer: Callable[[str], Response],
+        *,
+        lifecycle: StreamLifecycle | None = None,
     ) -> None:
         self._iter = sync_iter
         self._finalizer = finalizer
+        self._lifecycle = lifecycle
         self._response: Response | None = None
         self._chunks: list[str] = []
+
+    def _abandon(self) -> None:
+        if self._lifecycle is not None:
+            self._lifecycle.abandon()
 
     @property
     def response(self) -> Response | None:
@@ -321,21 +317,20 @@ class SyncStreamResponse:
         return self
 
     def _close_iterator(self) -> None:
-        close = getattr(self._iter, "close", None)
-        if callable(close):
-            close()
+        close_sync(self._iter)
 
     def close(self) -> None:
         """Abandon the stream and retain the response accumulated so far."""
         if self._response is not None:
             return
-        _fail_meter_op(self._finalizer)
+        self._abandon()
         self._close_iterator()
         self._response = self._finalizer("".join(self._chunks))
 
     def __exit__(self, *args: Any) -> None:
         # See StreamResponse.__aexit__: don't settle an exception-interrupted stream as a success.
         if args and args[0] is not None:
+            self._abandon()
             self._close_iterator()
             return
         self.close()
@@ -377,15 +372,18 @@ class RichStreamResponse:
         print(stream.response.cost)
     """
 
-    __slots__ = ("_aiter", "_finalizer", "_response", "_text_chunks")
+    __slots__ = ("_aiter", "_finalizer", "_lifecycle", "_response", "_text_chunks")
 
     def __init__(
         self,
         aiter: AsyncIterator[StreamEvent],
         finalizer: Callable[[str], Response],
+        *,
+        lifecycle: StreamLifecycle | None = None,
     ) -> None:
         self._aiter = aiter
         self._finalizer = finalizer
+        self._lifecycle = lifecycle
         self._response: Response | None = None
         self._text_chunks: list[str] = []
 
@@ -402,6 +400,10 @@ class RichStreamResponse:
             self._response = self._finalizer("".join(self._text_chunks))
             raise
 
+    def _abandon(self) -> None:
+        if self._lifecycle is not None:
+            self._lifecycle.abandon()
+
     @property
     def response(self) -> Response | None:
         """Available after stream is fully consumed. ``None`` during iteration."""
@@ -412,15 +414,13 @@ class RichStreamResponse:
 
     async def _close_iterator(self) -> None:
         """Close the lazy provider pipeline without changing response semantics."""
-        close = getattr(self._aiter, "aclose", None)
-        if callable(close):
-            await cast(Callable[[], Awaitable[Any]], close)()
+        await close_async(self._aiter)
 
     async def aclose(self) -> None:
         """Abandon the stream, close provider resources, and retain its partial response."""
         if self._response is not None:
             return
-        _fail_meter_op(self._finalizer)
+        self._abandon()
         await self._close_iterator()
         self._response = self._finalizer("".join(self._text_chunks))
 
@@ -428,6 +428,7 @@ class RichStreamResponse:
         # See StreamResponse.__aexit__: an exception-interrupted stream must NOT be settled as a
         # clean success. Still close the provider pipeline immediately.
         if args and args[0] is not None:
+            self._abandon()
             await self._close_iterator()
             return
         await self.aclose()
@@ -436,17 +437,24 @@ class RichStreamResponse:
 class SyncRichStreamResponse:
     """Sync-iterable stream of ``StreamEvent`` with finalized ``Response``."""
 
-    __slots__ = ("_finalizer", "_iter", "_response", "_text_chunks")
+    __slots__ = ("_finalizer", "_iter", "_lifecycle", "_response", "_text_chunks")
 
     def __init__(
         self,
         sync_iter: Iterator[StreamEvent],
         finalizer: Callable[[str], Response],
+        *,
+        lifecycle: StreamLifecycle | None = None,
     ) -> None:
         self._iter = sync_iter
         self._finalizer = finalizer
+        self._lifecycle = lifecycle
         self._response: Response | None = None
         self._text_chunks: list[str] = []
+
+    def _abandon(self) -> None:
+        if self._lifecycle is not None:
+            self._lifecycle.abandon()
 
     @property
     def response(self) -> Response | None:
@@ -464,21 +472,20 @@ class SyncRichStreamResponse:
         return self
 
     def _close_iterator(self) -> None:
-        close = getattr(self._iter, "close", None)
-        if callable(close):
-            close()
+        close_sync(self._iter)
 
     def close(self) -> None:
         """Abandon the stream and retain the response accumulated so far."""
         if self._response is not None:
             return
-        _fail_meter_op(self._finalizer)
+        self._abandon()
         self._close_iterator()
         self._response = self._finalizer("".join(self._text_chunks))
 
     def __exit__(self, *args: Any) -> None:
         # See StreamResponse.__aexit__: don't settle an exception-interrupted stream as a success.
         if args and args[0] is not None:
+            self._abandon()
             self._close_iterator()
             return
         self.close()

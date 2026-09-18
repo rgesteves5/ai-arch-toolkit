@@ -22,7 +22,7 @@ def _breached(snapshot: MeterSnapshot, policy: BudgetPolicy) -> tuple[str, ...]:
         ("input_tokens", policy.max_input_tokens, committed_input),
         ("output_tokens", policy.max_output_tokens, snapshot.output_tokens),
         ("total_tokens", policy.max_total_tokens, snapshot.total_tokens),
-        ("cost", policy.max_cost, snapshot.cost.to_float()),
+        ("cost", policy.max_cost, (snapshot.cost + snapshot.uncertain_cost).to_float()),
         ("wall_s", policy.max_wall_s, snapshot.elapsed_s),
     )
     return tuple(dim for dim, cap, current in rows if cap is not None and current >= cap)
@@ -30,7 +30,11 @@ def _breached(snapshot: MeterSnapshot, policy: BudgetPolicy) -> tuple[str, ...]:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class BudgetReport:
-    """What a run consumed, and whether it hit its budget. ``cost`` is the known USD total."""
+    """Known spend and its uncertainty, projected against the run's caps.
+
+    ``cost_at_most`` includes bounded uncertainty; None means some cost is unbounded.
+    ``cost_uncertain`` includes both bounded and unbounded unknowns.
+    """
 
     llm_calls: int
     tool_calls: int
@@ -43,6 +47,12 @@ class BudgetReport:
     elapsed_s: float
     over_budget: bool
     breached: tuple[str, ...]
+
+    cost_at_most: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.cost_at_most is None and not self.cost_uncertain:
+            object.__setattr__(self, "cost_at_most", self.cost)
 
     @classmethod
     def from_snapshot(
@@ -57,8 +67,13 @@ class BudgetReport:
             output_tokens=snapshot.output_tokens,
             total_tokens=snapshot.total_tokens,
             cost=snapshot.cost.to_float(),
+            cost_at_most=(
+                None
+                if snapshot.unknown_cost_count
+                else (snapshot.cost + snapshot.uncertain_cost).to_float()
+            ),
             unknown_cost_count=snapshot.unknown_cost_count,
-            cost_uncertain=snapshot.unknown_cost_count > 0,
+            cost_uncertain=snapshot.unknown_cost_count + snapshot.uncertain_cost_count > 0,
             elapsed_s=snapshot.elapsed_s,
             over_budget=bool(breached),
             breached=breached,
@@ -73,6 +88,7 @@ class BudgetReport:
             "output_tokens": self.output_tokens,
             "total_tokens": self.total_tokens,
             "cost": self.cost,
+            "cost_at_most": self.cost_at_most,
             "unknown_cost_count": self.unknown_cost_count,
             "cost_uncertain": self.cost_uncertain,
             "elapsed_s": self.elapsed_s,

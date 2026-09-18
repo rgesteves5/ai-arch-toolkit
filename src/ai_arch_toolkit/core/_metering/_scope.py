@@ -115,9 +115,14 @@ class MeterScope:
     def controller(self) -> AdmissionController | None:
         return self._controller
 
-    def open(self, request: OperationRequest) -> MeterOperation:
+    def open(
+        self,
+        request: OperationRequest,
+        *,
+        failure_request: Callable[[], OperationRequest] | None = None,
+    ) -> MeterOperation:
         """Reserve an operation against this run's controller (None -> measure-only)."""
-        return self._store.open(request, self._controller)
+        return self._store.open(request, self._controller, failure_request=failure_request)
 
     def open_span(self, scope_type: str, parent_span_id: str | None = None) -> str:
         return self._store.open_span(scope_type, parent_span_id)

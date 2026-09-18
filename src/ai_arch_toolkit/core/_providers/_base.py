@@ -10,6 +10,7 @@ from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from ai_arch_toolkit.core._content import CachePart
+from ai_arch_toolkit.core._exceptions import ProviderTimeout, TransportError
 from ai_arch_toolkit.core._response import Response, StreamEvent, ThinkingBlock, ToolCall, Usage
 
 logger = logging.getLogger(__name__)
@@ -27,13 +28,9 @@ THINKING_EFFORT_BUDGETS: dict[str, int] = {
 DEFAULT_THINKING_BUDGET: int = 10000
 
 
-def network_error(exc: BaseException, *, timed_out: bool) -> OSError:
-    """The builtin error for an SDK's network failure (no HTTP response).
-
-    SDK connection errors are not ``APIError`` and carry no status, so ``LLM`` would neither retry
-    them nor fall back. ``ConnectionError`` and ``TimeoutError`` are what both act on.
-    """
-    return TimeoutError(str(exc)) if timed_out else ConnectionError(str(exc))
+def network_error(exc: BaseException, *, timed_out: bool) -> TransportError | ProviderTimeout:
+    """Normalize an SDK transport failure while preserving builtin exception handlers."""
+    return ProviderTimeout(str(exc)) if timed_out else TransportError(str(exc))
 
 
 def _parse_retry_after(value: str | None) -> float | None:

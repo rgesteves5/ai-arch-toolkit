@@ -52,7 +52,7 @@ def test_failed_llm_event_carries_unknown_cost():
     store, rec = with_sink()
     op = store.open(llm(), None)
     op.mark_started()
-    op.fail()
+    op.fail("indeterminate")
     (ev,) = rec.events
     assert ev.status == "failed" and ev.cost.kind == "unknown"
 
@@ -61,7 +61,7 @@ def test_failed_tool_event_is_free():
     store, rec = with_sink()
     op = store.open(OperationRequest(kind="tool", parent_span_id="run"), None)
     op.mark_started()
-    op.fail()
+    op.fail("indeterminate")
     (ev,) = rec.events
     assert ev.status == "failed" and ev.cost == Cost.known(Money.zero())
 

@@ -6,6 +6,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
+from ai_arch_toolkit.core._exceptions import Delivery
+
 if TYPE_CHECKING:
     from ai_arch_toolkit.core._metering._cost import Cost
     from ai_arch_toolkit.core._metering._store import MeterStore
@@ -89,9 +91,9 @@ class MeterOperation:
         """Record the actual usage and cost (idempotent; ``cost`` must not be estimated)."""
         self._store.settle(self._op_id, usage=usage, cost=cost)
 
-    def fail(self) -> None:
-        """A started operation errored — the count stays, holds are released."""
-        self._store.fail(self._op_id)
+    def fail(self, disposition: Delivery) -> None:
+        """Keep the started count; free unbilled work or bound indeterminate spend."""
+        self._store.fail(self._op_id, disposition)
 
     def abort(self) -> None:
         """A never-started operation is fully released (no count)."""

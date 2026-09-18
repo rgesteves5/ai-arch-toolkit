@@ -1,7 +1,7 @@
 """Run-scoped concurrency limiting for LLM inference.
 
-A global ceiling on how many ``LLM.complete()`` calls hit the model server at
-once, shared across a whole run — every nested flow, agent, and fallback. This
+A global ceiling on complete calls and initial stream dispatches, shared across a whole run —
+every nested flow, agent, and fallback. This
 protects a resource with a hard concurrency limit (a local GPU/CPU, a
 rate-limited endpoint, a connection pool) *regardless of how the orchestration is
 shaped or nested*. It is model-agnostic: it applies to cloud and local models
@@ -39,8 +39,8 @@ def inference_limit(max_concurrent: int) -> Iterator[None]:
             result = agent.run_sync(task)   # never more than 2 concurrent inferences
 
     Nesting is allowed; the innermost scope wins (its own, independent semaphore).
-    ``max_concurrent`` must be >= 1. Streaming calls are not throttled by this
-    limit (they are rarely fanned out); it governs ``complete()`` / ``complete_sync()``.
+    ``max_concurrent`` must be >= 1. Complete calls hold a slot for their whole dispatch.
+    Streams hold it through the first item, releasing it before caller-controlled yields.
     """
     if max_concurrent < 1:
         raise ValueError(f"max_concurrent must be >= 1, got {max_concurrent}")

@@ -32,7 +32,7 @@ class _RaisingProvider:
 
 class _RaisingStreamProvider:
     """Provider whose stream openers raise — to drive a denial *inside* the try block,
-    so the `except self._fallback_on` guard (not the pre-try `_open_stream_op`) is exercised."""
+    so the `except self._fallback_on` guard (not the initial admission) is exercised."""
 
     def __init__(self, exc: BaseException) -> None:
         self._exc = exc
@@ -52,8 +52,8 @@ class _OkProvider:
         )
 
 
-class _FakeFallback:
-    """Minimal fallback-LLM stand-in for the fallback loop (needs ._complete / ._model)."""
+class _FallbackProvider:
+    """Provider double; use an actual LLM so terminality crosses the shared pipeline."""
 
     def __init__(
         self, model: str, *, response: Response | None = None, raises: Exception | None = None
@@ -63,8 +63,7 @@ class _FakeFallback:
         self._raises = raises
         self.called = False
 
-    async def _complete(self, messages, *, follow_fallbacks: bool, **kwargs) -> Response:
-        assert follow_fallbacks is False  # the parent walks the chain; a fallback never does
+    async def complete(self, messages, **kwargs) -> Response:
         self.called = True
         if self._raises is not None:
             raise self._raises
@@ -90,9 +89,9 @@ async def test_complete_fallback_does_not_mask_a_denial():
     # Primary provider-errors -> enters fallbacks; the FIRST fallback is budget-denied. Under a
     # broad fallback_on the denial must escape, NOT be swallowed by a healthy later fallback.
     primary = _real_llm(_RaisingProvider(RuntimeError("primary down")))
-    denied = _FakeFallback("fb-denied", raises=_denial())
-    healthy = _FakeFallback("fb-healthy", response=Response(text="MASKED", usage=Usage()))
-    primary._fallbacks = [denied, healthy]  # type: ignore[assignment]
+    denied = _FallbackProvider("fb-denied", raises=_denial())
+    healthy = _FallbackProvider("fb-healthy", response=Response(text="MASKED", usage=Usage()))
+    primary._fallbacks = [_real_llm(denied), _real_llm(healthy)]
     primary._fallback_on = (Exception,)  # type: ignore[assignment]
 
     with pytest.raises(AdmissionDenied):
@@ -103,8 +102,8 @@ async def test_complete_fallback_does_not_mask_a_denial():
 async def test_complete_primary_denial_does_not_enter_fallbacks():
     # A real budget denial on the PRIMARY (from scope.open) must not trigger the fallback chain.
     primary = _real_llm(_RaisingProvider(RuntimeError("provider must not be reached")))
-    healthy = _FakeFallback("fb", response=Response(text="MASKED", usage=Usage()))
-    primary._fallbacks = [healthy]  # type: ignore[assignment]
+    healthy = _FallbackProvider("fb", response=Response(text="MASKED", usage=Usage()))
+    primary._fallbacks = [_real_llm(healthy)]
     primary._fallback_on = (Exception,)  # type: ignore[assignment]
 
     scope = MeterScope(RunConfig(controller=BudgetController(BudgetPolicy(max_llm_calls=0))))
@@ -132,8 +131,8 @@ async def test_stream_fallback_does_not_mask_a_denial():
     # A denial surfacing from the primary stream opener must escape the `except self._fallback_on`
     # guard under a broad fallback_on — never masked by a healthy later fallback.
     primary = _real_llm(_RaisingStreamProvider(_denial()))
-    healthy = _FakeFallback("fb", response=Response(text="MASKED", usage=Usage()))
-    primary._fallbacks = [healthy]  # type: ignore[assignment]
+    healthy = _FallbackProvider("fb", response=Response(text="MASKED", usage=Usage()))
+    primary._fallbacks = [_real_llm(healthy)]
     primary._fallback_on = (Exception,)  # type: ignore[assignment]
 
     stream = primary.stream("hi")
@@ -146,8 +145,8 @@ async def test_stream_fallback_does_not_mask_a_denial():
 async def test_stream_events_fallback_does_not_mask_a_denial():
     # Same terminality contract for the stream_events path.
     primary = _real_llm(_RaisingStreamProvider(_denial()))
-    healthy = _FakeFallback("fb", response=Response(text="MASKED", usage=Usage()))
-    primary._fallbacks = [healthy]  # type: ignore[assignment]
+    healthy = _FallbackProvider("fb", response=Response(text="MASKED", usage=Usage()))
+    primary._fallbacks = [_real_llm(healthy)]
     primary._fallback_on = (Exception,)  # type: ignore[assignment]
 
     stream = primary.stream_events("hi")

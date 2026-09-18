@@ -12,6 +12,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
+from ai_arch_toolkit.core._exceptions import Delivery
 from ai_arch_toolkit.core._metering._cost import Cost
 from ai_arch_toolkit.core._response import Usage
 
@@ -31,6 +32,7 @@ class UsageEvent:
     status: EventStatus
     usage: Usage
     cost: Cost
+    delivery: Delivery | None = None
     model: str | None = None
     provider: str | None = None
     mode: str | None = None

@@ -21,7 +21,15 @@ from ai_arch_toolkit.core._content import (
     user,
 )
 from ai_arch_toolkit.core._deprecation import deprecated
-from ai_arch_toolkit.core._exceptions import APIError, RateLimitError
+from ai_arch_toolkit.core._exceptions import (
+    APIError,
+    ProviderError,
+    ProviderTimeout,
+    RateLimitError,
+    RequestError,
+    ResponseError,
+    TransportError,
+)
 from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._metering import (
     AdmissionController,
@@ -190,15 +198,19 @@ __all__ = [
     "PolicyDecision",
     "Pricer",
     "PricingRegistry",
+    "ProviderError",
+    "ProviderTimeout",
     "RateLimitError",
     "RateLimitMiddleware",
     "RedactionMode",
     "RedactionPolicy",
     "Redactor",
     "Request",
+    "RequestError",
     "Reservation",
     "ResourceLimits",
     "Response",
+    "ResponseError",
     "Result",
     "RetryConfig",
     "RichStreamResponse",
@@ -226,6 +238,7 @@ __all__ = [
     "TraceCapture",
     "TraceMode",
     "TracingMiddleware",
+    "TransportError",
     "Usage",
     "UsageEvent",
     "UsageSink",

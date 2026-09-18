@@ -196,9 +196,9 @@ async def _run_attempts(
 
 
 def _span_spend(span_id: str | None) -> tuple[float, bool]:
-    """This step's metered spend, projected from its span: ``(known_usd_cost, has_unknown_cost)``.
+    """Project this step's span: ``(bounded_usd_cost, has_unbounded_cost)``.
 
-    ``(0.0, False)`` when unmetered/uncapped. ``has_unknown_cost`` flags spend the cap can't bound,
+    ``(0.0, False)`` when unmetered/uncapped. ``has_unbounded_cost`` flags unbounded spend,
     so the caller fails closed rather than treat it as $0: either a settled-but-unpriced call
     (unknown cost), or a metered op still IN FLIGHT when the step returned (e.g. a stream opened
     but never drained) — its cost isn't committed to the span yet, so the span total is unbounded.
@@ -210,7 +210,7 @@ def _span_spend(span_id: str | None) -> tuple[float, bool]:
         return 0.0, False
     snap = meter.for_span(span_id)
     unbounded = snap.unknown_cost_count > 0 or meter.has_live_ops(span_id)
-    return snap.cost.to_float(), unbounded
+    return (snap.cost + snap.uncertain_cost).to_float(), unbounded
 
 
 async def _run_fallback(step: Step, snapshot: StateSnapshot, t0: float) -> Result:

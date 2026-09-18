@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ai_arch_toolkit.core._exceptions import APIError
+from ai_arch_toolkit.core._exceptions import APIError, ProviderTimeout, TransportError
 from ai_arch_toolkit.core._llm import LLM, PROVIDER_ERRORS
 from ai_arch_toolkit.core._response import Attempt, Response, Usage
 
@@ -187,7 +187,7 @@ class TestCompleteWithFallback:
         p1 = AsyncMock()
         p1.complete.side_effect = APIError(500, "down")
         p2 = AsyncMock()
-        p2.complete.side_effect = ConnectionError("refused")
+        p2.complete.side_effect = TransportError("refused")
         p3 = AsyncMock()
         p3.complete.return_value = _make_response("third")
         mock_create.side_effect = [p1, p2, p3]
@@ -230,7 +230,7 @@ class TestCompleteWithFallback:
         p1 = AsyncMock()
         p1.complete.side_effect = APIError(500, "down")
         p2 = AsyncMock()
-        p2.complete.side_effect = ConnectionError("also down")
+        p2.complete.side_effect = TransportError("also down")
         mock_create.side_effect = [p1, p2]
 
         llm = LLM("model-a", api_key="test", fallback="model-b")
@@ -250,7 +250,7 @@ class TestCompleteWithFallback:
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_connection_error_triggers_fallback(self, mock_create):
         p1 = AsyncMock()
-        p1.complete.side_effect = ConnectionError("refused")
+        p1.complete.side_effect = TransportError("refused")
         p2 = AsyncMock()
         p2.complete.return_value = _make_response("ok")
         mock_create.side_effect = [p1, p2]
@@ -262,7 +262,7 @@ class TestCompleteWithFallback:
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_timeout_error_triggers_fallback(self, mock_create):
         p1 = AsyncMock()
-        p1.complete.side_effect = TimeoutError("timed out")
+        p1.complete.side_effect = ProviderTimeout("timed out")
         p2 = AsyncMock()
         p2.complete.return_value = _make_response("ok")
         mock_create.side_effect = [p1, p2]
@@ -274,7 +274,7 @@ class TestCompleteWithFallback:
     @patch("ai_arch_toolkit.core._llm.create_provider")
     async def test_os_error_triggers_fallback(self, mock_create):
         p1 = AsyncMock()
-        p1.complete.side_effect = OSError("network down")
+        p1.complete.side_effect = TransportError("network down")
         p2 = AsyncMock()
         p2.complete.return_value = _make_response("ok")
         mock_create.side_effect = [p1, p2]
@@ -326,7 +326,7 @@ class TestStreamWithFallback:
         p1 = MagicMock()
         p1.stream.side_effect = APIError(500, "down")
         p2 = MagicMock()
-        p2.stream.side_effect = ConnectionError("also down")
+        p2.stream.side_effect = TransportError("also down")
         mock_create.side_effect = [p1, p2]
 
         llm = LLM("model-a", api_key="test", fallback="model-b")

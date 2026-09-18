@@ -219,12 +219,16 @@ def test_unpriced_fail_closed_denies_after_an_unknown_cost_settles():
     assert not d.admitted and d.denial is not None and d.denial.dimension == "cost"
 
 
-def test_unpriced_fail_closed_denies_a_server_tool_op_before_it_runs():
+def test_soft_budget_admits_server_tool_then_fails_closed_on_unpriced_settlement():
     # Server tools carry a provider-side charge absent from the token counts -> unbounded.
     d = BudgetController(BudgetPolicy(max_cost=1.0)).admit(
         MeterSnapshot(), llm_req(model=MODEL, has_server_tools=True)
     )
-    assert not d.admitted and d.denial is not None and d.denial.dimension == "cost"
+    assert d.admitted
+    following = BudgetController(BudgetPolicy(max_cost=5.0)).admit(
+        MeterSnapshot(unknown_cost_count=1), llm_req(model=MODEL)
+    )
+    assert not following.admitted
 
 
 def test_unpriced_allow_proceeds_despite_an_unknown_cost():

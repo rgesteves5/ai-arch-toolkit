@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from ai_arch_toolkit.core._exceptions import APIError
+from ai_arch_toolkit.core._exceptions import APIError, TransportError
 from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._metering._admission import (
     AdmissionDecision,
@@ -185,7 +185,7 @@ async def test_memory_middleware_injects_and_records_around_a_stream() -> None:
 
 async def test_parent_middleware_wraps_a_fallback_stream_once() -> None:
     spy = _Spy(inject="INJECTED")
-    failing = _Provider(fail_first=1, error=ConnectionError("down"))
+    failing = _Provider(fail_first=1, error=TransportError("down"))
     fallback_provider = _Provider()
     fallback = _llm(fallback_provider)
     llm = _llm(failing, middleware=[spy], fallback=fallback)
@@ -289,7 +289,7 @@ async def test_a_fallback_receives_the_tools_and_kwargs_after_middleware(method:
     )
     fallback_provider = _Provider()
     llm = _llm(
-        _Provider(fail_first=1, error=ConnectionError("down")),
+        _Provider(fail_first=1, error=TransportError("down")),
         middleware=[rewrite],
         fallback=_llm(fallback_provider),
     )

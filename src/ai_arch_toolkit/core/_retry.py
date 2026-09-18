@@ -61,7 +61,7 @@ async def _wait_before_retry(
     """Wait before the next retry, or return ``False`` when retries are exhausted."""
     if not _is_retryable(exc, config) or attempt == config.max_retries:
         return False
-    retry_after = getattr(exc, "retry_after", None)
+    retry_after = exc.retry_after if isinstance(exc, RateLimitError) else None
     delay = _compute_delay(attempt, config, retry_after)
     logger.info(
         "Retry %d/%d after %.1fs (error: %s)",

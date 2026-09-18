@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from ai_arch_toolkit.core._metering._money import Money
 
@@ -100,7 +100,8 @@ class MeterSnapshot:
 
     Committed counts are *started physical attempts*; usage/cost are *settled
     actuals*; ``out_*`` are *reserved but not yet started/settled*. Caps are
-    checked against committed + outstanding, never committed alone.
+    checked against committed + outstanding, never committed alone. ``cost`` is known spend;
+    ``uncertain_cost`` bounds failed spend; ``unknown_cost_count`` counts only unbounded costs.
     """
 
     llm_calls: int = 0
@@ -111,6 +112,8 @@ class MeterSnapshot:
     cache_write_tokens: int = 0
     cost: Money = field(default_factory=Money.zero)
     unknown_cost_count: int = 0
+    uncertain_cost: Money = field(default_factory=Money.zero)
+    uncertain_cost_count: int = 0
     out_llm_calls: int = 0
     out_tool_calls: int = 0
     out_input_tokens: int = 0
@@ -173,3 +176,92 @@ class AdmissionController(Protocol):
     """
 
     def admit(self, snapshot: MeterSnapshot, request: OperationRequest) -> AdmissionDecision: ...
+
+
+@runtime_checkable
+class RequestSizing(Protocol):
+    """An optional controller capability: whether admission needs sized request facts."""
+
+    def wants_request_size(self) -> bool: ...
+
+
+@runtime_checkable
+class FailureBoundController(Protocol):
+    """An optional controller capability: bound the cost of an indeterminate operation."""
+
+    def failure_bound(
+        self, request: OperationRequest, reservation: Reservation
+    ) -> Money | None: ...
+
+
+def limit_denial(
+    snap: MeterSnapshot,
+    limits: ResourceLimits | None,
+    request: OperationRequest,
+    reservation: Reservation,
+) -> AdmissionDenied | None:
+    """Check prospective totals in exact units; also used under the store lock."""
+    if limits is None:
+        return None
+    rows = _count_limits(snap, limits, request, reservation)
+    for dimension, cap, current, attempted in rows:
+        if cap is not None and current + attempted > cap:
+            return AdmissionDenied(
+                dimension=dimension, limit=cap, current=current, attempted=attempted
+            )
+    current_cost = snap.cost + snap.uncertain_cost + snap.out_cost
+    if limits.max_cost is not None and current_cost + reservation.cost > limits.max_cost:
+        return AdmissionDenied(
+            dimension="cost",
+            limit=limits.max_cost.to_float(),
+            current=current_cost.to_float(),
+            attempted=reservation.cost.to_float(),
+        )
+    if limits.max_wall_s is not None and snap.elapsed_s > limits.max_wall_s:
+        return AdmissionDenied(
+            dimension="wall_s", limit=limits.max_wall_s, current=snap.elapsed_s, attempted=0.0
+        )
+    return None
+
+
+def _count_limits(
+    snap: MeterSnapshot,
+    limits: ResourceLimits,
+    request: OperationRequest,
+    reservation: Reservation,
+) -> tuple[tuple[str, int | None, int, int], ...]:
+    return (
+        (
+            "llm_calls",
+            limits.max_llm_calls,
+            snap.llm_calls + snap.out_llm_calls,
+            request.count if request.kind == "llm" else 0,
+        ),
+        (
+            "tool_calls",
+            limits.max_tool_calls,
+            snap.tool_calls + snap.out_tool_calls,
+            request.count if request.kind == "tool" else 0,
+        ),
+        (
+            "input_tokens",
+            limits.max_input_tokens,
+            snap.input_tokens
+            + snap.cache_read_tokens
+            + snap.cache_write_tokens
+            + snap.out_input_tokens,
+            reservation.input_tokens,
+        ),
+        (
+            "output_tokens",
+            limits.max_output_tokens,
+            snap.output_tokens + snap.out_output_tokens,
+            reservation.output_tokens,
+        ),
+        (
+            "total_tokens",
+            limits.max_total_tokens,
+            snap.total_tokens + snap.out_total_tokens,
+            reservation.input_tokens + reservation.output_tokens,
+        ),
+    )

@@ -1,83 +1,33 @@
-"""User-facing LLM class — stateless function: content → content."""
+"""LLM facade: public call signatures and provider configuration."""
 
 from __future__ import annotations
 
-import contextlib
-import dataclasses
-import logging
-import threading
-import time
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Callable
 from typing import Any, ClassVar, Literal, cast
 
-from ai_arch_toolkit.core._concurrency import inference_slot
+from ai_arch_toolkit.core._attempts import Arguments, Execution
 from ai_arch_toolkit.core._content import user
-from ai_arch_toolkit.core._exceptions import APIError
-from ai_arch_toolkit.core._metering._admission import AdmissionDenied, NotMeteredOperationError
-from ai_arch_toolkit.core._metering._cost import Cost
-from ai_arch_toolkit.core._metering._money import Money
-from ai_arch_toolkit.core._metering._operation import MeterOperation, OperationRequest
-from ai_arch_toolkit.core._metering._scope import MeterScope, current_meter, current_span_id
-from ai_arch_toolkit.core._middleware import (
-    Request,
-    _run_aafter,
-    _run_abefore,
-)
-from ai_arch_toolkit.core._pricing import _estimate_response_cost, pricing
+from ai_arch_toolkit.core._exceptions import ProviderError, RequestError
+from ai_arch_toolkit.core._metering._admission import NotMeteredOperationError
+from ai_arch_toolkit.core._metering._scope import current_meter
+from ai_arch_toolkit.core._middleware import Request
 from ai_arch_toolkit.core._providers import _match_provider, create_provider, resolve_provider_name
-from ai_arch_toolkit.core._providers._base import StreamState
 from ai_arch_toolkit.core._response import (
-    Attempt,
     OutputSchema,
     Response,
     RichStreamResponse,
+    StreamEvent,
     StreamResponse,
     SyncRichStreamResponse,
     SyncStreamResponse,
-    Usage,
     _resolve_output_schema,
 )
-from ai_arch_toolkit.core._retry import RetryConfig, _wait_before_retry, with_retry
+from ai_arch_toolkit.core._retry import RetryConfig
 from ai_arch_toolkit.core._sync import _run_sync, _stream_sync
 from ai_arch_toolkit.core._tools import prepare_tools
 from ai_arch_toolkit.core._tools._group import ToolGroup
 
-logger = logging.getLogger(__name__)
-
-
-def _price_or_unknown(pricer: Any, request: OperationRequest, usage: Usage) -> Cost:
-    """Price a settled call defensively. A raising or estimate-returning (foreign) pricer must not
-    turn a successful, already-served response into a failure — fall back to an unknown cost so the
-    op still settles (the store rejects estimates and would otherwise raise out of a success path).
-    """
-    try:
-        cost = pricer.price(request, usage)
-    except Exception:
-        logger.exception("pricer %r raised while pricing a settled call; using unknown", pricer)
-        return Cost.unknown("pricer raised")
-    if cost.kind == "estimated":
-        logger.warning("pricer %r returned an estimate at settle; recording unknown", pricer)
-        return Cost.unknown("pricer returned an estimate at settle")
-    return cost
-
-
-def _settlement_cost(pricer: Any, request: OperationRequest, response: Response) -> Cost:
-    """Prefer an exact provider cost under the default pricer, then estimate from usage.
-
-    An explicitly configured custom pricer remains authoritative. Provider costs are actual
-    per-request charges, while the default registry is only a token-based fallback.
-    """
-    if pricer is pricing and response.provider_cost is not None:
-        return Cost.known(Money.from_usd(response.provider_cost))
-    return _price_or_unknown(pricer, request, response.usage)
-
-
-PROVIDER_ERRORS: tuple[type[Exception], ...] = (
-    APIError,
-    ConnectionError,  # subclass of OSError, listed explicitly for clarity
-    TimeoutError,
-    OSError,
-)
+PROVIDER_ERRORS: tuple[type[Exception], ...] = (ProviderError,)
 
 
 def _normalize_fallbacks(
@@ -122,376 +72,8 @@ def _normalize_fallbacks(
     return all_fbs, owned
 
 
-# Named call options that ``_prepare_provider_kwargs`` turns into provider kwargs, with defaults.
-_CALL_OPTIONS: dict[str, Any] = {
-    "thinking": False,
-    "thinking_effort": None,
-    "thinking_budget": None,
-    "output_schema": None,
-    "tool_choice": None,
-    "json_mode": False,
-    "logprobs": False,
-}
-
-
-def _same_value(left: Any, right: Any) -> bool:
-    try:
-        return left is right or bool(left == right)
-    except Exception:  # an object whose == raises cannot be compared: treat it as changed
-        return False
-
-
-def _fallback_arguments(
-    options: dict[str, Any],
-    extra: dict[str, Any],
-    before: dict[str, Any],
-    after: dict[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    """A fallback's named options and keyword arguments, with middleware's kwarg changes applied.
-
-    ``before``/``after`` are the provider kwargs around the primary's ``abefore`` hooks. A fallback
-    derives its own provider kwargs from its call arguments and its own defaults, so only what
-    middleware changed is carried over — never the primary LLM's defaults.
-    """
-    options, extra = dict(options), dict(extra)
-    for key in before.keys() - after.keys():
-        if key in options:
-            options[key] = _CALL_OPTIONS[key]
-        else:
-            extra.pop(key, None)
-    for key, value in after.items():
-        if key in before and _same_value(before[key], value):
-            continue
-        if key in options:
-            options[key] = value
-        else:
-            extra[key] = value
-    return options, extra
-
-
-class _StreamRun:
-    """Thread-safe lifecycle for one lazily-started stream and all of its retries."""
-
-    __slots__ = (
-        "_lock",
-        "attempts",
-        "finalized",
-        "meter",
-        "model",
-        "retry_number",
-        "started",
-        "started_at",
-        "state",
-        "terminal",
-    )
-
-    def __init__(self, model: str) -> None:
-        self._lock = threading.Lock()
-        self.model = model
-        self.attempts: list[Attempt] = []
-        self.state: StreamState | None = None
-        self.meter: tuple[MeterOperation, OperationRequest, Any] | None = None
-        self.started = False
-        self.started_at = 0.0
-        self.retry_number = 0
-        self.terminal = True
-        self.finalized = True
-
-    def begin(
-        self,
-        retry_number: int,
-        meter: tuple[MeterOperation, OperationRequest, Any] | None,
-    ) -> None:
-        with self._lock:
-            self.state = None
-            self.meter = meter
-            self.started = False
-            self.started_at = time.time()
-            self.retry_number = retry_number
-            self.terminal = False
-            self.finalized = False
-
-    def start_attempt(self) -> bool:
-        """Latch the physical-attempt start and commit its call count; false if abandoned.
-
-        The attempt's operation was reserved (admitted) earlier; it becomes STARTED only here,
-        right before the provider is called, so a stream that never reaches the provider — never
-        iterated, or rejected by middleware — releases its reservation instead of counting.
-        """
-        with self._lock:
-            if self.terminal:
-                return False
-            self.started = True
-            self.started_at = time.time()
-            if self.meter is not None:
-                self.meter[0].mark_started()
-            return True
-
-    def replace_reservation(
-        self,
-        reserved: tuple[MeterOperation, OperationRequest, Any],
-        reopen: Callable[[], tuple[MeterOperation, OperationRequest, Any]],
-    ) -> None:
-        """Swap the unstarted attempt's reservation for one opened by ``reopen``.
-
-        The old reservation is released first, so a strict budget admits the new request on its
-        own. ``AdmissionDenied`` from ``reopen`` propagates and ends the stream with no attempt.
-        """
-        with self._lock:
-            if self.terminal or self.started or self.meter is not reserved:
-                return
-            reserved[0].abort()
-            self.meter = None
-            try:
-                self.meter = reopen()
-            except BaseException:
-                self.terminal = True
-                self.finalized = True
-                raise
-
-    def release(self) -> None:
-        """End a stream that never reached the provider: drop the reservation, no attempt."""
-        with self._lock:
-            if self.finalized or self.started:
-                return
-            if self.meter is not None:
-                self.meter[0].abort()
-                self.meter = None
-            self.terminal = True
-            self.finalized = True
-
-    def set_state(self, state: StreamState) -> None:
-        with self._lock:
-            if not self.terminal:
-                self.state = state
-
-    def succeed(self) -> None:
-        with self._lock:
-            if self.terminal:
-                return
-            usage = self.state.usage if self.state is not None else Usage()
-            self.attempts.append(
-                Attempt(
-                    model=self.model,
-                    status="ok",
-                    usage=usage,
-                    duration=time.time() - self.started_at,
-                    timestamp=self.started_at,
-                    retry_number=self.retry_number,
-                )
-            )
-            self.terminal = True
-
-    def fail(self, exc: BaseException) -> None:
-        with self._lock:
-            if self.terminal:
-                return
-            self.attempts.append(
-                Attempt(
-                    model=self.model,
-                    status="failed",
-                    error=str(exc),
-                    error_type=type(exc).__name__,
-                    status_code=getattr(exc, "status_code", None),
-                    duration=time.time() - self.started_at,
-                    timestamp=self.started_at,
-                    retry_number=self.retry_number,
-                )
-            )
-            if self.meter is not None:
-                self.meter[0].fail()
-            self.terminal = True
-            self.finalized = True
-
-    def abandon(self) -> None:
-        """Fail an observable stream that the consumer did not fully drain."""
-        with self._lock:
-            if self.finalized:
-                return
-            if self.terminal and self.attempts and self.attempts[-1].status == "ok":
-                self.attempts.pop()
-            self.attempts.append(
-                Attempt(
-                    model=self.model,
-                    status="failed",
-                    error="stream abandoned before full consumption",
-                    error_type="StreamAbandoned",
-                    duration=time.time() - self.started_at,
-                    timestamp=self.started_at,
-                    retry_number=self.retry_number,
-                )
-            )
-            if self.meter is not None:
-                self.meter[0].mark_abandoned()
-                self.meter[0].fail()
-            self.terminal = True
-            self.finalized = True
-
-    def finalization_snapshot(
-        self,
-    ) -> tuple[
-        StreamState | None,
-        tuple[MeterOperation, OperationRequest, Any] | None,
-        tuple[Attempt, ...],
-    ]:
-        """Return one stable finalization view shared by async and sync wrappers."""
-        with self._lock:
-            self.finalized = True
-            return self.state, self.meter, tuple(self.attempts)
-
-
-@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
-class _StreamFinalizer:
-    """Callable stream finalizer with explicit lifecycle metadata."""
-
-    callback: Callable[[str], Response]
-    _stream_abandon: Callable[[], None]
-    _stream_attempts: list[Attempt]
-    # Called once async middleware rewrote the request, before the first provider attempt.
-    _stream_refresh: Callable[[], None] | None = None
-    # Called when middleware rejects the request: no provider was ever called.
-    _stream_release: Callable[[], None] | None = None
-
-    def __call__(self, text: str) -> Response:
-        return self.callback(text)
-
-
-@dataclasses.dataclass(slots=True, kw_only=True)
-class _PreparedStream:
-    """A stream request, built when the stream is created and rewritten by async middleware.
-
-    Provider I/O is lazy, so ``abefore`` runs at the first iteration and updates this in place;
-    every provider attempt (retries included) reads it then.
-    """
-
-    normalized: list[dict[str, Any]]
-    system: str | None
-    wire_tools: list[dict[str, Any]] | None
-    provider_kwargs: dict[str, Any]
-
-    def to_request(self, model: str) -> Request:
-        return Request(
-            messages=self.normalized,
-            system=self.system,
-            tools=self.wire_tools,
-            model=model,
-            kwargs=self.provider_kwargs,
-        )
-
-    def apply(self, request: Request) -> None:
-        self.normalized = request.messages
-        self.system = request.system
-        self.wire_tools = request.tools
-        self.provider_kwargs = request.kwargs
-
-
-class _FallbackStreamRun:
-    """Thread-safe active-candidate and prior-attempt state for a middleware/fallback stream."""
-
-    __slots__ = ("_abandoned", "_lock", "final", "owner", "prior_attempts", "stream")
-
-    def __init__(
-        self,
-        owner: LLM,
-        stream: StreamResponse | RichStreamResponse,
-    ) -> None:
-        self._abandoned = False
-        self._lock = threading.Lock()
-        self.owner = owner
-        self.stream = stream
-        self.prior_attempts: list[Attempt] = []
-        # The finished stream's response, after the owner's ``aafter`` hooks ran on it.
-        self.final: Response | None = None
-
-    def activate(
-        self,
-        owner: LLM,
-        stream: StreamResponse | RichStreamResponse,
-    ) -> bool:
-        with self._lock:
-            if self._abandoned:
-                return False
-            self.owner = owner
-            self.stream = stream
-            return True
-
-    def record_attempts(self, attempts: tuple[Attempt, ...]) -> None:
-        with self._lock:
-            self.prior_attempts.extend(attempts)
-
-    def snapshot(
-        self,
-    ) -> tuple[LLM, StreamResponse | RichStreamResponse, tuple[Attempt, ...]]:
-        with self._lock:
-            return self.owner, self.stream, tuple(self.prior_attempts)
-
-    def abandon(self) -> None:
-        """Latch abandonment and stop whichever candidate is currently active."""
-        with self._lock:
-            self._abandoned = True
-            abandon = getattr(self.stream._finalizer, "_stream_abandon", None)
-            if callable(abandon):
-                abandon()
-
-    def release(self) -> None:
-        """Latch abandonment before any provider was called: drop the reservation, no attempt."""
-        with self._lock:
-            self._abandoned = True
-            finalizer = self.stream._finalizer
-            release = getattr(finalizer, "_stream_release", None)
-            if not callable(release):
-                release = getattr(finalizer, "_stream_abandon", None)
-            if callable(release):
-                release()
-
-
-def _content_chars(
-    normalized: list[dict[str, Any]],
-    system: str | None,
-    wire_tools: list[dict[str, Any]] | None,
-    output_schema: Any = None,
-) -> int:
-    """Rough char count of the whole request — a fact for the estimator (over-counts a bit).
-
-    Includes the output schema: it is sent to the model as input, so a large planning/analysis
-    schema meaningfully raises the input-token estimate for a strict reservation.
-    """
-    total = len(system) if system else 0
-    total += len(str(normalized))
-    if wire_tools:
-        total += len(str(wire_tools))
-    if output_schema is not None:
-        total += len(str(output_schema))
-    return total
-
-
-def _count_non_text_parts(normalized: list[dict[str, Any]]) -> int:
-    """Number of non-text content parts (images/documents) across all messages."""
-    count = 0
-    for msg in normalized:
-        content = msg.get("content")
-        if isinstance(content, list):
-            count += sum(
-                1
-                for part in content
-                if isinstance(part, dict) and part.get("type") not in (None, "text")
-            )
-    return count
-
-
-def _has_server_tools(wire_tools: list[dict[str, Any]] | None) -> bool:
-    """Whether any provider-hosted server tool (web_search / code_execution) is present."""
-    return bool(wire_tools) and any(
-        isinstance(t, dict) and t.get("_server_tool") for t in wire_tools
-    )
-
-
 class LLM:
-    """Lightweight LLM client.
-
-    Async-first with convenient sync wrappers.
-    Supports context managers for client reuse.
-    """
+    """Async-first LLM client with convenient sync wrappers and reusable SDK clients."""
 
     def __init__(
         self,
@@ -509,13 +91,7 @@ class LLM:
         fallback_on: tuple[type[Exception], ...] | None = None,
         **kwargs: Any,
     ) -> None:
-        if not (0.0 <= temperature <= 2.0):
-            raise ValueError(f"temperature must be between 0.0 and 2.0, got {temperature}")
-        if not isinstance(max_tokens, int) or max_tokens <= 0:
-            raise ValueError(f"max_tokens must be a positive integer, got {max_tokens}")
-        if timeout is not None and timeout <= 0:
-            raise ValueError(f"timeout must be positive, got {timeout}")
-
+        self._validate_defaults(temperature, max_tokens, timeout)
         self._model = model
         self._timeout = timeout
         self._defaults: dict[str, Any] = {
@@ -526,26 +102,31 @@ class LLM:
         self._provider = create_provider(
             model, provider=provider, api_key=api_key, base_url=base_url, timeout=timeout
         )
-        # Adapter name for metering events. create_provider already routed this model, so this
-        # only fails when that factory was substituted (e.g. by a test double).
-        self._provider_name: str | None
-        try:
-            self._provider_name = resolve_provider_name(
-                model, provider=provider, base_url=base_url
-            )
-        except ValueError:
-            self._provider_name = None
-        if retry is True:
-            self._retry: RetryConfig | None = RetryConfig()
-        elif retry is False:
-            self._retry = None
-        else:
-            self._retry = retry
+        self._provider_name = self._resolve_provider_name(model, provider, base_url)
+        self._retry = RetryConfig() if retry is True else None if retry is False else retry
         self._middleware: list[Any] = list(middleware) if middleware else []
         self._fallback_on = fallback_on or PROVIDER_ERRORS
         self._fallbacks, self._owned_fallbacks = _normalize_fallbacks(
             fallback, api_key=api_key, base_url=base_url, provider=provider
         )
+
+    @staticmethod
+    def _validate_defaults(temperature: float, max_tokens: int, timeout: float | None) -> None:
+        if not (0.0 <= temperature <= 2.0):
+            raise ValueError(f"temperature must be between 0.0 and 2.0, got {temperature}")
+        if not isinstance(max_tokens, int) or max_tokens <= 0:
+            raise ValueError(f"max_tokens must be a positive integer, got {max_tokens}")
+        if timeout is not None and timeout <= 0:
+            raise ValueError(f"timeout must be positive, got {timeout}")
+
+    @staticmethod
+    def _resolve_provider_name(
+        model: str, provider: str | None, base_url: str | None
+    ) -> str | None:
+        try:
+            return resolve_provider_name(model, provider=provider, base_url=base_url)
+        except ValueError:
+            return None
 
     _REPR_DEFAULTS: ClassVar[dict[str, Any]] = {"temperature": 0.0, "max_tokens": 4096}
 
@@ -559,10 +140,6 @@ class LLM:
             fb_models = [fb._model for fb in self._fallbacks]
             parts.append(f"fallback={fb_models!r}")
         return f"LLM({', '.join(parts)})"
-
-    # ------------------------------------------------------------------
-    # Lifecycle
-    # ------------------------------------------------------------------
 
     async def close(self) -> None:
         """Close the underlying provider client(s)."""
@@ -581,10 +158,6 @@ class LLM:
 
     def __exit__(self, *args: Any) -> None:
         _run_sync(self.close())
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
 
     @staticmethod
     def _normalize(messages: str | list[dict[str, Any]] | list) -> list[dict[str, Any]]:
@@ -622,195 +195,62 @@ class LLM:
         """Build kwargs to forward to the provider."""
         kwargs = dict(extra)
         if thinking_effort is not None and not thinking_effort:
-            raise ValueError("thinking_effort must be a non-empty string")
+            raise RequestError("thinking_effort must be a non-empty string")
         if thinking_budget is not None and thinking_budget < 0:
-            raise ValueError(f"thinking_budget must be non-negative, got {thinking_budget}")
+            raise RequestError(f"thinking_budget must be non-negative, got {thinking_budget}")
         if json_mode and output_schema is not None:
-            raise ValueError("json_mode and output_schema are mutually exclusive")
-        if thinking:
-            kwargs["thinking"] = True
-        if thinking_effort is not None:
-            kwargs["thinking_effort"] = thinking_effort
-        if thinking_budget is not None:
-            kwargs["thinking_budget"] = thinking_budget
+            raise RequestError("json_mode and output_schema are mutually exclusive")
+        for name, enabled in {
+            "thinking": thinking,
+            "json_mode": json_mode,
+            "logprobs": logprobs,
+        }.items():
+            if enabled:
+                kwargs[name] = True
+        for name, value in {
+            "thinking_effort": thinking_effort,
+            "thinking_budget": thinking_budget,
+            "tool_choice": tool_choice,
+        }.items():
+            if value is not None:
+                kwargs[name] = value
         if output_schema is not None:
             kwargs["output_schema"] = _resolve_output_schema(output_schema)
-        if tool_choice is not None:
-            kwargs["tool_choice"] = tool_choice
-        if json_mode:
-            kwargs["json_mode"] = True
-        if logprobs:
-            kwargs["logprobs"] = True
         return kwargs
 
-    # ------------------------------------------------------------------
-    # Internal: attempt tracking + fallback helpers
-    # ------------------------------------------------------------------
-
-    async def _try_with_tracking(
+    def _prepare_call(
         self,
-        call: Callable[[], Awaitable[Response]],
-        model: str,
-        retry: RetryConfig | None,
-        attempts: list[Attempt],
-        request: OperationRequest | None = None,
-    ) -> Response:
-        """Execute *call* with optional retry, recording + metering each physical attempt."""
-        retry_number = 0
-
-        async def _tracked() -> Response:
-            nonlocal retry_number
-            t0 = time.time()
-            # One metered op per physical attempt, so retries count against max_llm_calls.
-            # open() may raise AdmissionDenied — terminal by design: with_retry treats it as
-            # non-retryable and it is not a PROVIDER_ERROR, so it never falls back.
-            scope = current_meter()
-            op: MeterOperation | None = (
-                scope.open(request) if scope is not None and request is not None else None
-            )
-            if op is not None:
-                op.mark_started()
-            settled = False
-            try:
-                # Leaf-level inference-concurrency slot (no-op unless inference_limit is
-                # active). Held only around the provider call — never across orchestration.
-                async with inference_slot():
-                    response = await call()
-                attempts.append(
-                    Attempt(
-                        model=model,
-                        status="ok",
-                        usage=response.usage,
-                        duration=time.time() - t0,
-                        timestamp=t0,
-                        retry_number=retry_number,
-                    )
-                )
-                if op is not None and scope is not None and request is not None:
-                    pricer = scope.pricer or pricing
-                    cost = _settlement_cost(pricer, request, response)
-                    op.settle(usage=response.usage, cost=cost)
-                    settled = True
-                return response
-            except Exception as exc:
-                attempts.append(
-                    Attempt(
-                        model=model,
-                        status="failed",
-                        error=str(exc),
-                        error_type=type(exc).__name__,
-                        status_code=getattr(exc, "status_code", None),
-                        duration=time.time() - t0,
-                        timestamp=t0,
-                        retry_number=retry_number,
-                    )
-                )
-                raise
-            finally:
-                # Fail on ANY non-settled exit (incl. cancellation / BaseException) so a started
-                # op is never leaked until scope close; op.fail() is a no-op once settled.
-                if op is not None and not settled:
-                    op.fail()
-                retry_number += 1
-
-        if retry:
-            return await with_retry(_tracked, retry)
-        return await _tracked()
-
-    def _meter_request(
-        self,
-        mode: Literal["complete", "stream"],
-        provider_kwargs: dict[str, Any],
-        *,
-        normalized: list[dict[str, Any]],
+        messages: list[dict[str, Any]],
         system: str | None,
-        wire_tools: list[dict[str, Any]] | None,
-        scope: MeterScope | None = None,
-    ) -> OperationRequest | None:
-        """Build the metering facts for an LLM call, or ``None`` when no scope is bound.
-
-        ``scope`` defaults to the scope bound where this runs.
-        """
-        scope = scope if scope is not None else current_meter()
-        if scope is None:
-            return None
-        # The content-size hint is consumed ONLY by a strict-reserve estimator. Computing it
-        # stringifies the whole request (every message, every base64 image) — so skip it unless the
-        # bound controller says it wants it. Measure-only and soft-budget runs (the common case)
-        # never read it. A controller without a callable wants_request_size gets the hint (safe).
-        controller = scope.controller
-        if controller is None:
-            wants_size = False
-        else:
-            wants = getattr(controller, "wants_request_size", None)
-            wants_size = wants() if callable(wants) else True
-        schema = provider_kwargs.get("output_schema")
-        return OperationRequest(
-            kind="llm",
-            parent_span_id=current_span_id() or scope.run_span_id,
-            mode=mode,
+        tools: list[dict[str, Any]] | None,
+        arguments: Arguments,
+    ) -> Request:
+        """Validate common options before reserving a physical attempt."""
+        return Request(
+            messages=messages,
+            system=system,
+            tools=tools,
             model=self._model,
-            provider=self._provider_name,
-            declared_max_output_tokens=provider_kwargs.get("max_tokens"),
-            content_size_hint=(
-                _content_chars(normalized, system, wire_tools, schema) if wants_size else None
+            kwargs=self._prepare_provider_kwargs(
+                **arguments.options, extra=self._merge_kwargs(**arguments.extra)
             ),
-            non_text_parts=_count_non_text_parts(normalized) if wants_size else 0,
-            has_server_tools=_has_server_tools(wire_tools),
         )
 
-    def _open_stream_op(
-        self,
-        provider_kwargs: dict[str, Any],
-        *,
-        normalized: list[dict[str, Any]],
-        system: str | None,
-        wire_tools: list[dict[str, Any]] | None,
-    ) -> tuple[MeterOperation, OperationRequest, Any] | None:
-        """Open (reserve) a metered op for one stream attempt; ``None`` when unmetered.
-
-        Returns the handle, its request, and the pricer to settle with. ``AdmissionDenied`` from
-        ``open`` propagates (terminal — the stream never starts). The op is started by
-        ``_StreamRun.start_attempt`` when the provider is actually called. The handle carries the
-        store reference, so the finalizer can settle from any thread without re-binding the scope.
-        """
-        request = self._meter_request(
-            "stream", provider_kwargs, normalized=normalized, system=system, wire_tools=wire_tools
-        )
-        scope = current_meter()
-        if scope is None or request is None:
-            return None
-        return scope.open(request), request, scope.pricer or pricing
-
-    async def _try_fallbacks(
+    def _execution(
         self,
         messages: str | list[dict[str, Any]],
         *,
-        attempts: list[Attempt],
-        last_error: Exception,
-        **kwargs: Any,
-    ) -> Response:
-        """Walk the fallback chain: each fallback runs its own middleware, retries and metering.
-
-        The chain is flat, so a fallback does not follow its own chain here — this loop does.
-        """
-        last_exc = last_error
-        for i, fb in enumerate(self._fallbacks):
-            logger.info("Fallback %d/%d: trying %s", i + 1, len(self._fallbacks), fb._model)
-            try:
-                response = await fb._complete(messages, follow_fallbacks=False, **kwargs)
-                # Merge fallback's tracked attempts into ours
-                attempts.extend(response.attempts)
-                return response
-            except self._fallback_on as exc:
-                if isinstance(exc, AdmissionDenied):
-                    raise  # budget/admission denial is terminal — never masked by a later fallback
-                last_exc = exc
-        raise last_exc
-
-    # ------------------------------------------------------------------
-    # Async API
-    # ------------------------------------------------------------------
+        path: Literal["complete", "stream", "stream_events"],
+        system: str | None,
+        tools: list[dict[str, Any]] | ToolGroup | Callable[..., Any] | None,
+        options: dict[str, Any],
+        extra: dict[str, Any],
+    ) -> Execution:
+        arguments = Arguments(options=options, extra=extra)
+        request = self._prepare_call(
+            self._normalize(messages), system, prepare_tools(tools), arguments
+        )
+        return Execution(self, request, arguments, path)
 
     async def complete(
         self,
@@ -828,97 +268,12 @@ class LLM:
         **kwargs: Any,
     ) -> Response:
         """Send messages and return a Response."""
-        return await self._complete(
+        execution = self._execution(
             messages,
-            follow_fallbacks=True,
+            path="complete",
             system=system,
             tools=tools,
-            thinking=thinking,
-            thinking_effort=thinking_effort,
-            thinking_budget=thinking_budget,
-            output_schema=output_schema,
-            tool_choice=tool_choice,
-            json_mode=json_mode,
-            logprobs=logprobs,
-            **kwargs,
-        )
-
-    async def _complete(
-        self,
-        messages: str | list[dict[str, Any]],
-        *,
-        follow_fallbacks: bool,
-        system: str | None = None,
-        tools: list[dict[str, Any]] | ToolGroup | Callable[..., Any] | None = None,
-        thinking: bool = False,
-        thinking_effort: str | None = None,
-        thinking_budget: int | None = None,
-        output_schema: OutputSchema | type | None = None,
-        tool_choice: str | None = None,
-        json_mode: bool = False,
-        logprobs: bool = False,
-        **kwargs: Any,
-    ) -> Response:
-        """``complete``, optionally without this LLM's own fallback chain.
-
-        A parent walking its flat chain calls each fallback with ``follow_fallbacks=False``, so a
-        model that is also in the fallback's own chain is tried once.
-        """
-        normalized = self._normalize(messages)
-        merged = self._merge_kwargs(**kwargs)
-        wire_tools = prepare_tools(tools)
-        provider_kwargs = self._prepare_provider_kwargs(
-            thinking=thinking,
-            thinking_effort=thinking_effort,
-            thinking_budget=thinking_budget,
-            output_schema=output_schema,
-            tool_choice=tool_choice,
-            json_mode=json_mode,
-            logprobs=logprobs,
-            extra=merged,
-        )
-        # Middleware before hooks
-        req: Request | None = None
-        kwargs_before = provider_kwargs
-        if self._middleware:
-            kwargs_before = dict(provider_kwargs)  # hooks may edit request.kwargs in place
-            req = Request(
-                messages=normalized,
-                system=system,
-                tools=wire_tools,
-                model=self._model,
-                kwargs=provider_kwargs,
-            )
-            req = await _run_abefore(self._middleware, req)
-            normalized = req.messages
-            system = req.system
-            wire_tools = req.tools
-            provider_kwargs = req.kwargs
-
-        async def _call() -> Response:
-            return await self._provider.complete(
-                normalized, system=system, tools=wire_tools, **provider_kwargs
-            )
-
-        meter_request = self._meter_request(
-            "complete",
-            provider_kwargs,
-            normalized=normalized,
-            system=system,
-            wire_tools=wire_tools,
-        )
-        attempts: list[Attempt] = []
-
-        try:
-            response = await self._try_with_tracking(
-                _call, self._model, self._retry, attempts, meter_request
-            )
-        except self._fallback_on as primary_err:
-            if isinstance(primary_err, AdmissionDenied):
-                raise  # terminal: never fall back after a budget/admission denial
-            if not (follow_fallbacks and self._fallbacks):
-                raise
-            options = {
+            options={
                 "thinking": thinking,
                 "thinking_effort": thinking_effort,
                 "thinking_budget": thinking_budget,
@@ -926,396 +281,10 @@ class LLM:
                 "tool_choice": tool_choice,
                 "json_mode": json_mode,
                 "logprobs": logprobs,
-            }
-            extra = dict(kwargs)
-            if req is not None:
-                options, extra = _fallback_arguments(
-                    options, extra, kwargs_before, provider_kwargs
-                )
-            # A fallback gets the request as middleware left it: messages, system, tools, kwargs.
-            response = await self._try_fallbacks(
-                normalized,
-                attempts=attempts,
-                last_error=primary_err,
-                system=system,
-                tools=wire_tools if req is not None else tools,
-                **options,
-                **extra,
-            )
-
-        # Middleware after hooks
-        if self._middleware and req is not None:
-            response = await _run_aafter(self._middleware, req, response)
-
-        return dataclasses.replace(response, attempts=tuple(attempts))
-
-    def _build_stream_finalizer(self, state: StreamState) -> Callable[[str], Response]:
-        """Build a finalization callback for stream wrappers."""
-        model = self._model
-
-        def _finalize(text: str) -> Response:
-            usage = state.usage or Usage()
-            provider_cost = state.provider_cost
-            return Response(
-                text=text,
-                tool_calls=tuple(state.tool_calls),
-                thinking=tuple(state.thinking),
-                usage=usage,
-                cost=(
-                    provider_cost
-                    if provider_cost is not None
-                    else _estimate_response_cost(model, usage)
-                ),
-                provider_cost=provider_cost,
-                stop_reason=state.stop_reason,
-                model=state.model or model,
-                raw=state.raw,
-            )
-
-        return _finalize
-
-    def _prepare_stream_request(
-        self,
-        messages: str | list[dict[str, Any]],
-        *,
-        system: str | None,
-        tools: list[dict[str, Any]] | ToolGroup | Callable[..., Any] | None,
-        thinking: bool,
-        thinking_effort: str | None,
-        thinking_budget: int | None,
-        output_schema: OutputSchema | type | None,
-        tool_choice: str | None,
-        json_mode: bool,
-        logprobs: bool,
-        kwargs: dict[str, Any],
-    ) -> _PreparedStream:
-        return _PreparedStream(
-            normalized=self._normalize(messages),
-            system=system,
-            wire_tools=prepare_tools(tools),
-            provider_kwargs=self._prepare_provider_kwargs(
-                thinking=thinking,
-                thinking_effort=thinking_effort,
-                thinking_budget=thinking_budget,
-                output_schema=output_schema,
-                tool_choice=tool_choice,
-                json_mode=json_mode,
-                logprobs=logprobs,
-                extra=self._merge_kwargs(**kwargs),
-            ),
+            },
+            extra=kwargs,
         )
-
-    def _single_stream(
-        self, prepared: _PreparedStream, *, events: bool
-    ) -> StreamResponse | RichStreamResponse:
-        """Build one provider stream with retries before its first observable item.
-
-        Middleware is not run here: the caller (``_stream_with_fallbacks``) runs it once around
-        the whole attempt/fallback chain and rewrites ``prepared`` before the first attempt.
-        """
-        run = _StreamRun(self._model)
-        # Preserve the established stream contract: admission and call-count reservation happen
-        # when the stream object is created, even though provider I/O remains lazy until iteration.
-        creation_scope = current_meter()
-        first_meter = self._open_stream_op(
-            prepared.provider_kwargs,
-            normalized=prepared.normalized,
-            system=prepared.system,
-            wire_tools=prepared.wire_tools,
-        )
-        run.begin(0, first_meter)
-
-        def _refresh_reservation() -> None:
-            # Async middleware ran after the reservation and may have changed its facts (tools,
-            # max_tokens, injected content). Admission and pricing must see the request as sent.
-            scope = creation_scope
-            if first_meter is None or scope is None:
-                return
-            reserved_request, pricer = first_meter[1], first_meter[2]
-            built = self._meter_request(
-                "stream",
-                prepared.provider_kwargs,
-                normalized=prepared.normalized,
-                system=prepared.system,
-                wire_tools=prepared.wire_tools,
-                scope=scope,
-            )
-            if built is None:
-                return
-            request = dataclasses.replace(built, parent_span_id=reserved_request.parent_span_id)
-            if request == reserved_request:
-                return
-
-            def _reopen() -> tuple[MeterOperation, OperationRequest, Any]:
-                return scope.open(request), request, pricer
-
-            run.replace_reservation(first_meter, _reopen)
-
-        async def _items() -> AsyncIterator[Any]:
-            max_retries = self._retry.max_retries if self._retry is not None else 0
-            for retry_number in range(max_retries + 1):
-                if retry_number:
-                    # Admission denials are deliberately outside the retry handler: they must
-                    # never retry or fall back.
-                    meter = self._open_stream_op(
-                        prepared.provider_kwargs,
-                        normalized=prepared.normalized,
-                        system=prepared.system,
-                        wire_tools=prepared.wire_tools,
-                    )
-                    run.begin(retry_number, meter)
-                if not run.start_attempt():
-                    return
-                emitted = False
-                iterator: AsyncIterator[Any] | None = None
-                try:
-                    # Streaming deliberately stays outside inference_limit: unlike complete(),
-                    # its provider call remains live across caller-controlled yields. Holding the
-                    # run semaphore there would let an abandoned stream starve unrelated calls.
-                    if events:
-                        iterator, state = self._provider.stream_events(
-                            prepared.normalized,
-                            system=prepared.system,
-                            tools=prepared.wire_tools,
-                            **prepared.provider_kwargs,
-                        )
-                    else:
-                        iterator, state = self._provider.stream(
-                            prepared.normalized,
-                            system=prepared.system,
-                            tools=prepared.wire_tools,
-                            **prepared.provider_kwargs,
-                        )
-                    run.set_state(state)
-                    try:
-                        first = await iterator.__anext__()
-                    except StopAsyncIteration:
-                        run.succeed()
-                        return
-                    emitted = True
-                    yield first
-                    async for item in iterator:
-                        yield item
-                    run.succeed()
-                    return
-                except Exception as exc:
-                    run.fail(exc)
-                    # Once output is observable, replaying on another attempt would duplicate or
-                    # splice content. Retry is therefore safe only before the first emitted item.
-                    if (
-                        emitted
-                        or self._retry is None
-                        or not await _wait_before_retry(exc, retry_number, self._retry)
-                    ):
-                        raise
-                except BaseException as exc:
-                    run.fail(exc)
-                    raise
-                finally:
-                    close = getattr(iterator, "aclose", None)
-                    if callable(close):
-                        # Closing transport resources is best-effort and must never replace the
-                        # provider outcome that selected retry/fallback behaviour.
-                        with contextlib.suppress(Exception):
-                            await cast(Callable[[], Awaitable[Any]], close)()
-
-        def _finalize(text: str) -> Response:
-            state, meter, attempts = run.finalization_snapshot()
-            state = state or StreamState()
-            response = self._build_stream_finalizer(state)(text)
-            response = dataclasses.replace(response, attempts=attempts)
-            if (
-                meter is not None
-                and attempts
-                and attempts[-1].status == "ok"
-                and not meter[0].abandoned
-            ):
-                op, request, pricer = meter
-                op.settle(
-                    usage=response.usage,
-                    cost=_settlement_cost(pricer, request, response),
-                )
-            return response
-
-        finalizer = _StreamFinalizer(
-            callback=_finalize,
-            _stream_abandon=run.abandon,
-            _stream_attempts=run.attempts,
-            _stream_refresh=_refresh_reservation,
-            _stream_release=run.release,
-        )
-        if events:
-            return RichStreamResponse(_items(), finalizer)
-        return StreamResponse(_items(), finalizer)
-
-    def _stream_with_fallbacks(
-        self,
-        messages: str | list[dict[str, Any]],
-        *,
-        events: bool,
-        system: str | None,
-        tools: list[dict[str, Any]] | ToolGroup | Callable[..., Any] | None,
-        thinking: bool,
-        thinking_effort: str | None,
-        thinking_budget: int | None,
-        output_schema: OutputSchema | type | None,
-        tool_choice: str | None,
-        json_mode: bool,
-        logprobs: bool,
-        kwargs: dict[str, Any],
-        _fallback_ancestry: frozenset[int] = frozenset(),
-    ) -> StreamResponse | RichStreamResponse:
-        """Build this LLM's stream: middleware around the primary stream and its fallbacks.
-
-        Like ``complete()``: async ``abefore`` runs once, before any provider I/O; the primary
-        stream and then each fallback are tried until one produces output; async ``aafter`` runs
-        once on the finished response, before the stream reports completion.
-        """
-        if id(self) in _fallback_ancestry:
-            raise ValueError(f"stream fallback cycle detected at model {self._model!r}")
-        fallback_ancestry = _fallback_ancestry | {id(self)}
-        prepared = self._prepare_stream_request(
-            messages,
-            system=system,
-            tools=tools,
-            thinking=thinking,
-            thinking_effort=thinking_effort,
-            thinking_budget=thinking_budget,
-            output_schema=output_schema,
-            tool_choice=tool_choice,
-            json_mode=json_mode,
-            logprobs=logprobs,
-            kwargs=kwargs,
-        )
-        kwargs_before = dict(prepared.provider_kwargs)  # hooks may edit request.kwargs in place
-        primary = self._single_stream(prepared, events=events)
-        if not self._fallbacks and not self._middleware:
-            return primary
-
-        fallback_run = _FallbackStreamRun(self, primary)
-
-        def _candidate_stream(owner: LLM) -> StreamResponse | RichStreamResponse:
-            if owner is self:
-                return primary
-            # Preserve the candidate LLM's complete fallback policy, middleware nesting, and
-            # retry configuration. Calling _single_stream() here silently truncated A -> B -> C.
-            # It receives this LLM's request after middleware, as complete() fallbacks do.
-            options = {
-                "thinking": thinking,
-                "thinking_effort": thinking_effort,
-                "thinking_budget": thinking_budget,
-                "output_schema": output_schema,
-                "tool_choice": tool_choice,
-                "json_mode": json_mode,
-                "logprobs": logprobs,
-            }
-            extra = dict(kwargs)
-            if self._middleware:
-                options, extra = _fallback_arguments(
-                    options, extra, kwargs_before, prepared.provider_kwargs
-                )
-            return owner._stream_with_fallbacks(
-                prepared.normalized,
-                events=events,
-                system=prepared.system,
-                tools=prepared.wire_tools if self._middleware else tools,
-                kwargs=extra,
-                _fallback_ancestry=fallback_ancestry,
-                **options,
-            )
-
-        async def _items() -> AsyncIterator[Any]:
-            request: Request | None = None
-            if self._middleware:
-                try:
-                    request = await _run_abefore(
-                        self._middleware, prepared.to_request(self._model)
-                    )
-                    prepared.apply(request)
-                    refresh = getattr(primary._finalizer, "_stream_refresh", None)
-                    if callable(refresh):
-                        refresh()  # admit and price the first attempt on the rewritten request
-                except BaseException:
-                    fallback_run.release()  # no provider was called: drop the reservation
-                    raise
-
-            last_exc: Exception | None = None
-            owners = (self, *self._fallbacks)
-            candidate: StreamResponse | RichStreamResponse | None = None
-            try:
-                for index, owner in enumerate(owners):
-                    if index:
-                        logger.info(
-                            "Fallback %s %d/%d: trying %s",
-                            "stream_events" if events else "stream",
-                            index,
-                            len(self._fallbacks),
-                            owner._model,
-                        )
-                    candidate = _candidate_stream(owner)
-                    if not fallback_run.activate(owner, candidate):
-                        abandon = getattr(candidate._finalizer, "_stream_abandon", None)
-                        if callable(abandon):
-                            abandon()
-                        return
-                    try:
-                        first = await candidate.__anext__()
-                    except StopAsyncIteration:
-                        break  # an empty but successful stream
-                    except self._fallback_on as exc:
-                        if isinstance(exc, AdmissionDenied):
-                            raise
-                        attempts = tuple(getattr(candidate._finalizer, "_stream_attempts", ()))
-                        fallback_run.record_attempts(attempts)
-                        last_exc = exc
-                        continue
-                    yield first
-                    # A failure after this point is terminal: some output is already observable.
-                    async for item in candidate:
-                        yield item
-                    break
-                else:
-                    assert last_exc is not None
-                    raise last_exc
-
-                # The active candidate finished: its own finalizer settled the meter.
-                _, finished, prior_attempts = fallback_run.snapshot()
-                response = finished.response
-                assert response is not None
-                response = dataclasses.replace(
-                    response, attempts=prior_attempts + response.attempts
-                )
-                if request is not None:
-                    response = await _run_aafter(self._middleware, request, response)
-                fallback_run.final = response
-            finally:
-                if candidate is not None:
-                    # If the outer stream is abandoned while suspended at a yield, recursively
-                    # close the active candidate and, ultimately, its provider iterator.
-                    with contextlib.suppress(Exception):
-                        await candidate._close_iterator()
-
-        def _finalize(text: str) -> Response:
-            if fallback_run.final is not None:
-                return fallback_run.final
-            # Abandoned before completion: report the active candidate's partial response. The
-            # owner's ``aafter`` hooks only ever see a finished response.
-            _, candidate, prior_attempts = fallback_run.snapshot()
-            response = (
-                candidate.response
-                if candidate.response is not None
-                else candidate._finalizer(text)
-            )
-            return dataclasses.replace(response, attempts=prior_attempts + response.attempts)
-
-        finalizer = _StreamFinalizer(
-            callback=_finalize,
-            _stream_abandon=fallback_run.abandon,
-            _stream_attempts=fallback_run.prior_attempts,
-        )
-        if events:
-            return RichStreamResponse(_items(), finalizer)
-        return StreamResponse(_items(), finalizer)
+        return await execution.complete()
 
     def stream(
         self,
@@ -1332,23 +301,28 @@ class LLM:
         logprobs: bool = False,
         **kwargs: Any,
     ) -> StreamResponse:
-        """Stream text; retry/fallback is safe only before the first emitted chunk."""
-        stream = self._stream_with_fallbacks(
+        """Stream with retry/fallback permitted before the first observable item."""
+        execution = self._execution(
             messages,
-            events=False,
+            path="stream",
             system=system,
             tools=tools,
-            thinking=thinking,
-            thinking_effort=thinking_effort,
-            thinking_budget=thinking_budget,
-            output_schema=output_schema,
-            tool_choice=tool_choice,
-            json_mode=json_mode,
-            logprobs=logprobs,
-            kwargs=kwargs,
+            options={
+                "thinking": thinking,
+                "thinking_effort": thinking_effort,
+                "thinking_budget": thinking_budget,
+                "output_schema": output_schema,
+                "tool_choice": tool_choice,
+                "json_mode": json_mode,
+                "logprobs": logprobs,
+            },
+            extra=kwargs,
         )
-        assert isinstance(stream, StreamResponse)
-        return stream
+        return StreamResponse(
+            cast("AsyncIterator[str]", execution.items()),
+            execution.finalize,
+            lifecycle=execution,
+        )
 
     def stream_events(
         self,
@@ -1365,23 +339,28 @@ class LLM:
         logprobs: bool = False,
         **kwargs: Any,
     ) -> RichStreamResponse:
-        """Stream events; retry/fallback is safe only before the first emitted event."""
-        stream = self._stream_with_fallbacks(
+        """Stream with retry/fallback permitted before the first observable item."""
+        execution = self._execution(
             messages,
-            events=True,
+            path="stream_events",
             system=system,
             tools=tools,
-            thinking=thinking,
-            thinking_effort=thinking_effort,
-            thinking_budget=thinking_budget,
-            output_schema=output_schema,
-            tool_choice=tool_choice,
-            json_mode=json_mode,
-            logprobs=logprobs,
-            kwargs=kwargs,
+            options={
+                "thinking": thinking,
+                "thinking_effort": thinking_effort,
+                "thinking_budget": thinking_budget,
+                "output_schema": output_schema,
+                "tool_choice": tool_choice,
+                "json_mode": json_mode,
+                "logprobs": logprobs,
+            },
+            extra=kwargs,
         )
-        assert isinstance(stream, RichStreamResponse)
-        return stream
+        return RichStreamResponse(
+            cast("AsyncIterator[StreamEvent]", execution.items()),
+            execution.finalize,
+            lifecycle=execution,
+        )
 
     def stream_events_sync(
         self,
@@ -1413,7 +392,9 @@ class LLM:
             **kwargs,
         )
         sync_iter = _stream_sync(lambda: rich_stream._aiter)
-        return SyncRichStreamResponse(sync_iter, rich_stream._finalizer)
+        return SyncRichStreamResponse(
+            sync_iter, rich_stream._finalizer, lifecycle=rich_stream._lifecycle
+        )
 
     async def __call__(
         self,
@@ -1422,10 +403,6 @@ class LLM:
     ) -> Response:
         """Alias for ``complete()``."""
         return await self.complete(messages, **kwargs)
-
-    # ------------------------------------------------------------------
-    # Batch API
-    # ------------------------------------------------------------------
 
     def _reject_batch_under_enforcement(self) -> None:
         """Batch bypasses per-attempt metering; refuse it inside an enforcing budget (fail-closed).
@@ -1466,10 +443,6 @@ class LLM:
         """Synchronous version of ``batch_results()``."""
         return _run_sync(self.batch_results(batch_id))
 
-    # ------------------------------------------------------------------
-    # Token counting
-    # ------------------------------------------------------------------
-
     async def count_tokens(
         self,
         messages: str | list[dict[str, Any]],
@@ -1491,10 +464,6 @@ class LLM:
     ) -> int:
         """Synchronous version of ``count_tokens()``."""
         return _run_sync(self.count_tokens(messages, system=system, tools=tools))
-
-    # ------------------------------------------------------------------
-    # Sync wrappers
-    # ------------------------------------------------------------------
 
     def complete_sync(
         self,
@@ -1558,4 +527,6 @@ class LLM:
             **kwargs,
         )
         sync_iter = _stream_sync(lambda: async_stream._aiter)
-        return SyncStreamResponse(sync_iter, async_stream._finalizer)
+        return SyncStreamResponse(
+            sync_iter, async_stream._finalizer, lifecycle=async_stream._lifecycle
+        )

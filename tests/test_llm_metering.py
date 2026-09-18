@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from ai_arch_toolkit.core._exceptions import APIError
+from ai_arch_toolkit.core._attempts import request_facts
+from ai_arch_toolkit.core._exceptions import APIError, TransportError
 from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._metering._admission import (
     AdmissionDecision,
@@ -17,6 +18,7 @@ from ai_arch_toolkit.core._metering._cost import Cost
 from ai_arch_toolkit.core._metering._money import Money
 from ai_arch_toolkit.core._metering._operation import OperationRequest
 from ai_arch_toolkit.core._metering._scope import MeterScope, RunConfig
+from ai_arch_toolkit.core._middleware import Request
 from ai_arch_toolkit.core._providers._base import StreamState
 from ai_arch_toolkit.core._response import Response, StreamEvent, Usage
 from ai_arch_toolkit.core._retry import RetryConfig
@@ -268,7 +270,7 @@ async def test_stream_enforce_denies_before_the_provider():
 
 
 async def test_stream_provider_failure_is_a_failed_attempt():
-    prov = FakeStreamProvider(error=ConnectionError("down"))  # a PROVIDER_ERROR, no fallbacks
+    prov = FakeStreamProvider(error=TransportError("down"))  # a PROVIDER_ERROR, no fallbacks
     llm = make_stream_llm(prov)
     with MeterScope() as scope, pytest.raises(ConnectionError):
         await _drain(llm.stream("hi"))
@@ -481,7 +483,7 @@ async def test_server_tool_call_is_costed_unknown():
 
 
 def test_content_hint_skipped_unless_a_strict_reserve_wants_it():
-    # Perf (review): _content_chars stringifies the whole request (every message + base64 image);
+    # Perf (review): _request_size stringifies the whole request (every message + base64 image);
     # only a strict-reserve estimator reads content_size_hint, so measure-only and soft-budget runs
     # must skip computing it.
     from ai_arch_toolkit.toolkit.budget import BudgetController, BudgetPolicy
@@ -490,8 +492,9 @@ def test_content_hint_skipped_unless_a_strict_reserve_wants_it():
     msgs = [{"role": "user", "content": "hello world"}]
 
     def hint_under(config: RunConfig):
-        with MeterScope(config):
-            req = llm._meter_request("complete", {}, normalized=msgs, system=None, wire_tools=None)
+        with MeterScope(config) as scope:
+            request = Request(messages=msgs, system=None, tools=None, model=MODEL)
+            req = request_facts(llm, request, "complete", scope)
         assert req is not None
         return req.content_size_hint
 
@@ -513,6 +516,7 @@ async def test_meter_request_tolerates_a_non_callable_wants_request_size():
 
     llm = make_llm(FakeProvider(response=resp(input_tokens=1)))
     msgs = [{"role": "user", "content": "hi"}]
-    with MeterScope(RunConfig(controller=_WeirdController())):  # type: ignore[arg-type]
-        req = llm._meter_request("complete", {}, normalized=msgs, system=None, wire_tools=None)
+    with MeterScope(RunConfig(controller=_WeirdController())) as scope:
+        request = Request(messages=msgs, system=None, tools=None, model=MODEL)
+        req = request_facts(llm, request, "complete", scope)
     assert req is not None and req.content_size_hint is not None  # no crash; hint computed

@@ -305,7 +305,7 @@ def _run_tool_sync(
         return _result_from_exception(current.name, exc, redactor)
     finally:
         if op is not None and not settled:
-            op.fail()  # error / cancellation -> keep the count, release the op
+            op.fail("unbilled")  # error / cancellation -> keep the count, release the op
 
 
 async def _arun_tool(
@@ -362,7 +362,7 @@ async def _arun_tool(
         return _result_from_exception(current.name, exc, redactor)
     finally:
         if op is not None and not settled:
-            op.fail()  # error / cancellation -> keep the count, release the op
+            op.fail("unbilled")  # error / cancellation -> keep the count, release the op
 
 
 # --- Public free functions ----------------------------------------------------

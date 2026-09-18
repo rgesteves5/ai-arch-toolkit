@@ -21,15 +21,18 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 
+from ai_arch_toolkit.core._exceptions import Delivery
 from ai_arch_toolkit.core._metering._admission import (
     AdmissionController,
     AdmissionDenied,
+    FailureBoundController,
     MeterSnapshot,
     Reservation,
     ResourceLimits,
+    limit_denial,
 )
 from ai_arch_toolkit.core._metering._cost import Cost
 from ai_arch_toolkit.core._metering._events import EventStatus, UsageEvent, UsageSink
@@ -65,6 +68,8 @@ class _Counters:
     c_cache_write: int = 0
     c_cost: Money = field(default_factory=Money.zero)
     unknown: int = 0
+    uncertain: Money = field(default_factory=Money.zero)
+    uncertain_count: int = 0
     o_llm: int = 0
     o_tool: int = 0
     o_input: int = 0
@@ -81,19 +86,15 @@ class _Span:
     counters: _Counters = field(default_factory=_Counters)
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class _LiveOp:
-    """A PENDING or STARTED operation's accounting + audit state (mutable, lock-guarded)."""
+    """One admitted operation, retaining its immutable facts and optional failure sizing."""
 
     op_id: str
-    kind: str
-    count: int
+    request: OperationRequest
     reservation: Reservation
-    parent_span_id: str
-    model: str | None = None
-    provider: str | None = None
-    mode: str | None = None
-    metadata: Mapping[str, str | int | float | bool] = field(default_factory=dict)
+    controller: AdmissionController | None
+    failure_request: Callable[[], OperationRequest] | None = None
     started: bool = False
 
 
@@ -101,22 +102,22 @@ class _LiveOp:
 
 
 def _reserve(c: _Counters, op: _LiveOp) -> None:
-    if op.kind == "llm":
-        c.o_llm += op.count
-    elif op.kind == "tool":
-        c.o_tool += op.count
+    if op.request.kind == "llm":
+        c.o_llm += op.request.count
+    elif op.request.kind == "tool":
+        c.o_tool += op.request.count
     c.o_input += op.reservation.input_tokens
     c.o_output += op.reservation.output_tokens
     c.o_cost += op.reservation.cost
 
 
 def _start(c: _Counters, op: _LiveOp) -> None:
-    if op.kind == "llm":
-        c.o_llm -= op.count
-        c.c_llm += op.count
-    elif op.kind == "tool":
-        c.o_tool -= op.count
-        c.c_tool += op.count
+    if op.request.kind == "llm":
+        c.o_llm -= op.request.count
+        c.c_llm += op.request.count
+    elif op.request.kind == "tool":
+        c.o_tool -= op.request.count
+        c.c_tool += op.request.count
 
 
 def _release_holds(c: _Counters, op: _LiveOp) -> None:
@@ -134,30 +135,35 @@ def _settle(c: _Counters, op: _LiveOp, usage: Usage, cost: Cost) -> None:
     if cost.kind == "known":
         assert cost.amount is not None  # guaranteed by Cost.__post_init__
         c.c_cost += cost.amount
-    else:  # unknown -> fail-closed bookkeeping, never silently $0
+    elif cost.at_most is None:
         c.unknown += 1
-
-
-def _fail_started(c: _Counters, op: _LiveOp) -> None:
-    # count stays committed; llm/custom may have unobservable cost; a failed tool is free
-    _release_holds(c, op)
-    if op.kind in ("llm", "custom"):
-        c.unknown += 1
+    else:
+        c.uncertain += cost.at_most
+        c.uncertain_count += 1
 
 
 def _abort(c: _Counters, op: _LiveOp) -> None:
     _release_holds(c, op)
-    if op.kind == "llm":
-        c.o_llm -= op.count
-    elif op.kind == "tool":
-        c.o_tool -= op.count
+    if op.request.kind == "llm":
+        c.o_llm -= op.request.count
+    elif op.request.kind == "tool":
+        c.o_tool -= op.request.count
 
 
-def _fail_cost(kind: str) -> Cost:
-    """Cost ascribed to a non-settling op: Unknown for llm/custom (fail-closed), free for tool."""
-    if kind in ("llm", "custom"):
-        return Cost.unknown("operation did not settle")
-    return _ZERO_COST
+def _fail_cost(op: _LiveOp, delivery: Delivery) -> Cost:
+    """Price a failure outside the store lock; foreign estimation must never break cleanup."""
+    if delivery in ("not_sent", "unbilled") or op.request.kind == "tool":
+        return _ZERO_COST
+    bound = None
+    if isinstance(op.controller, FailureBoundController):
+        try:
+            request = op.request
+            if request.content_size_hint is None and op.failure_request is not None:
+                request = op.failure_request()
+            bound = op.controller.failure_bound(request, op.reservation)
+        except Exception:
+            logger.exception("failure bound could not be estimated")
+    return Cost.unknown("operation did not settle", at_most=bound)
 
 
 def _payload_key(usage: Usage, cost: Cost) -> tuple[object, ...]:
@@ -174,6 +180,7 @@ def _payload_key(usage: Usage, cost: Cost) -> tuple[object, ...]:
         cost.kind,
         cost.amount.pico if cost.amount is not None else None,
         cost.reason,
+        cost.at_most,
     )
 
 
@@ -250,7 +257,7 @@ class MeterStore:
         Caller holds ``self._lock``. O(live ops * span depth) — both tiny in practice.
         """
         for op in self._ops.values():
-            sid: str | None = op.parent_span_id
+            sid: str | None = op.request.parent_span_id
             while sid is not None:
                 if sid == span_id:
                     return True
@@ -291,6 +298,8 @@ class MeterStore:
             cache_write_tokens=c.c_cache_write,
             cost=c.c_cost,
             unknown_cost_count=c.unknown,
+            uncertain_cost=c.uncertain,
+            uncertain_cost_count=c.uncertain_count,
             out_llm_calls=c.o_llm,
             out_tool_calls=c.o_tool,
             out_input_tokens=c.o_input,
@@ -309,7 +318,11 @@ class MeterStore:
 
     # ------------------------------------------------------------------ open
     def open(
-        self, request: OperationRequest, controller: AdmissionController | None
+        self,
+        request: OperationRequest,
+        controller: AdmissionController | None,
+        *,
+        failure_request: Callable[[], OperationRequest] | None = None,
     ) -> MeterOperation:
         """Reserve an operation. Raises :class:`AdmissionDenied` if a cap is (or would be) hit.
 
@@ -337,17 +350,13 @@ class MeterStore:
             op_id = f"op-{self._next_op}"
             op = _LiveOp(
                 op_id=op_id,
-                kind=request.kind,
-                count=request.count,
+                request=request,
                 reservation=reservation,
-                parent_span_id=request.parent_span_id,
-                model=request.model,
-                provider=request.provider,
-                mode=request.mode,
-                metadata=request.metadata,
+                controller=controller,
+                failure_request=failure_request,
             )
             self._ops[op_id] = op
-            self._apply(op.parent_span_id, lambda c: _reserve(c, op))
+            self._apply(op.request.parent_span_id, lambda c: _reserve(c, op))
             return MeterOperation(self, op_id)
 
     def _would_exceed_unlocked(
@@ -357,53 +366,9 @@ class MeterStore:
         reservation: Reservation,
     ) -> AdmissionDenied | None:
         """Re-validate hard caps vs run-level committed + outstanding + this op (lock held)."""
-        if limits is None:
-            return None
-        c = self._spans[_RUN_SPAN].counters
-        add_llm = request.count if request.kind == "llm" else 0
-        add_tool = request.count if request.kind == "tool" else 0
-        committed_tokens = c.c_input + c.c_output + c.c_cache_read + c.c_cache_write
-        rows = (
-            ("llm_calls", limits.max_llm_calls, c.c_llm + c.o_llm, add_llm),
-            ("tool_calls", limits.max_tool_calls, c.c_tool + c.o_tool, add_tool),
-            (
-                "input_tokens",
-                limits.max_input_tokens,
-                c.c_input + c.c_cache_read + c.c_cache_write + c.o_input,
-                reservation.input_tokens,
-            ),
-            (
-                "output_tokens",
-                limits.max_output_tokens,
-                c.c_output + c.o_output,
-                reservation.output_tokens,
-            ),
-            (
-                "total_tokens",
-                limits.max_total_tokens,
-                committed_tokens + c.o_input + c.o_output,
-                reservation.input_tokens + reservation.output_tokens,
-            ),
+        return limit_denial(
+            self._snapshot_of(self._spans[_RUN_SPAN]), limits, request, reservation
         )
-        for dim, cap, current, add in rows:
-            if cap is not None and current + add > cap:
-                return AdmissionDenied(dimension=dim, limit=cap, current=current, attempted=add)
-        if limits.max_cost is not None:
-            current_cost = c.c_cost + c.o_cost
-            if current_cost + reservation.cost > limits.max_cost:
-                return AdmissionDenied(
-                    dimension="cost",
-                    limit=limits.max_cost.to_float(),
-                    current=current_cost.to_float(),
-                    attempted=reservation.cost.to_float(),
-                )
-        if limits.max_wall_s is not None:
-            elapsed = self._clock() - self._started_at
-            if elapsed > limits.max_wall_s:
-                return AdmissionDenied(
-                    dimension="wall_s", limit=limits.max_wall_s, current=elapsed, attempted=0.0
-                )
-        return None
 
     # ------------------------------------------------------------- transitions
     def mark_started(self, op_id: str) -> None:
@@ -412,8 +377,9 @@ class MeterStore:
             op = self._ops.get(op_id)
             if op is None or op.started:
                 return  # terminal/unknown, or already started -> idempotent no-op
-            op.started = True
-            self._apply(op.parent_span_id, lambda c: _start(c, op))
+            op = replace(op, started=True)
+            self._ops[op_id] = op
+            self._apply(op.request.parent_span_id, lambda c: _start(c, op))
 
     def settle(self, op_id: str, *, usage: Usage, cost: Cost) -> None:
         """STARTED -> SETTLED: release holds, record actual usage + cost. Idempotent on replay."""
@@ -427,29 +393,37 @@ class MeterStore:
                 return
             if not op.started:
                 raise ValueError(f"cannot settle operation {op_id} before mark_started()")
-            self._apply(op.parent_span_id, lambda c: _settle(c, op, usage, cost))
+            self._apply(op.request.parent_span_id, lambda c: _settle(c, op, usage, cost))
             event = self._make_event(op, "settled", usage, cost)
             self._terminalize(op, "settled", _payload_key(usage, cost))
         self._dispatch(event)
 
-    def fail(self, op_id: str) -> None:
-        """A started op errored: release holds, keep the count, charge cost-on-fail kind-aware.
+    def fail(self, op_id: str, disposition: Delivery) -> None:
+        """Finalize failed work with a classified cost; pending work is aborted."""
+        self._finish_failure(op_id, "failed", disposition)
 
-        Never raises — runs in error-cleanup paths. A never-started op is fully released.
-        """
-        event = None
-        with self._lock:
-            op = self._ops.get(op_id)
+    def _finish_failure(self, op_id: str, status: EventStatus, delivery: Delivery) -> None:
+        while True:
+            with self._lock:
+                op = self._ops.get(op_id)
             if op is None:
-                return  # terminal/unknown -> no-op (cleanup safety)
-            if op.started:
-                self._apply(op.parent_span_id, lambda c: _fail_started(c, op))
-                event = self._make_event(op, "failed", _NO_USAGE, _fail_cost(op.kind))
-                self._terminalize(op, "failed", None)
-            else:
-                self._apply(op.parent_span_id, lambda c: _abort(c, op))
-                event = self._make_event(op, "aborted", _NO_USAGE, _ZERO_COST)
-                self._terminalize(op, "aborted", None)
+                return
+            cost = _fail_cost(op, delivery) if op.started else _ZERO_COST
+            with self._lock:
+                if self._ops.get(op_id) is not op:
+                    continue
+                if op.started:
+                    self._apply(
+                        op.request.parent_span_id,
+                        lambda c, op=op, cost=cost: _settle(c, op, _NO_USAGE, cost),
+                    )
+                else:
+                    status = "aborted"
+                    delivery = "not_sent"
+                    self._apply(op.request.parent_span_id, lambda c, op=op: _abort(c, op))
+                event = self._make_event(op, status, _NO_USAGE, cost, delivery)
+                self._terminalize(op, status, None)
+                break
         self._dispatch(event)
 
     def abort(self, op_id: str) -> None:
@@ -461,32 +435,26 @@ class MeterStore:
                 return  # terminal/unknown -> no-op
             if op.started:
                 raise ValueError(f"cannot abort started operation {op_id}; use fail()")
-            self._apply(op.parent_span_id, lambda c: _abort(c, op))
+            self._apply(op.request.parent_span_id, lambda c, op=op: _abort(c, op))
             event = self._make_event(op, "aborted", _NO_USAGE, _ZERO_COST)
             self._terminalize(op, "aborted", None)
         self._dispatch(event)
 
     def close(self) -> None:
-        """End the scope: PENDING -> ABORTED, STARTED -> INCOMPLETE (count kept, cost Unknown)."""
-        events: list[UsageEvent] = []
+        """Finalize every live operation; bounds are estimated outside the store lock."""
         with self._lock:
-            for op in list(self._ops.values()):
-                if op.started:
-                    self._apply(op.parent_span_id, lambda c, op=op: _fail_started(c, op))
-                    event = self._make_event(op, "incomplete", _NO_USAGE, _fail_cost(op.kind))
-                    self._terminalize(op, "incomplete", None)
-                else:
-                    self._apply(op.parent_span_id, lambda c, op=op: _abort(c, op))
-                    event = self._make_event(op, "aborted", _NO_USAGE, _ZERO_COST)
-                    self._terminalize(op, "aborted", None)
-                if event is not None:
-                    events.append(event)
-        for event in events:
-            self._dispatch(event)
+            op_ids = tuple(self._ops)
+        for op_id in op_ids:
+            self._finish_failure(op_id, "incomplete", "indeterminate")
 
     # ------------------------------------------------------------- helpers (locked)
     def _make_event(
-        self, op: _LiveOp, status: EventStatus, usage: Usage, cost: Cost
+        self,
+        op: _LiveOp,
+        status: EventStatus,
+        usage: Usage,
+        cost: Cost,
+        delivery: Delivery | None = None,
     ) -> UsageEvent | None:
         """Build the audit event (only when a sink is attached). Caller holds the lock."""
         if not self._sinks:
@@ -495,16 +463,17 @@ class MeterStore:
         return UsageEvent(
             seq=self._seq,
             op_id=op.op_id,
-            span_id=op.parent_span_id,
-            kind=op.kind,  # type: ignore[arg-type]  # op.kind is one of the literal kinds
+            span_id=op.request.parent_span_id,
+            kind=op.request.kind,
             status=status,
+            delivery=delivery,
             usage=usage,
             cost=cost,
-            model=op.model,
-            provider=op.provider,
-            mode=op.mode,
+            model=op.request.model,
+            provider=op.request.provider,
+            mode=op.request.mode,
             at_s=self._clock() - self._started_at,
-            metadata=op.metadata,  # raw; _dispatch redacts OUTSIDE the lock (redactor is foreign)
+            metadata=op.request.metadata,  # _dispatch redacts outside the lock
         )
 
     def _terminalize(self, op: _LiveOp, status: str, payload: tuple[object, ...] | None) -> None:

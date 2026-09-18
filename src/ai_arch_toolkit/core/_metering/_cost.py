@@ -2,7 +2,8 @@
 
 ``unknown`` is distinct from ``known($0)`` in the type system, so an unpriced
 call can never be silently treated as costing zero (the old ``cost or 0.0``
-fail-open). The projection keeps a known-sum plus an unknown count separately
+fail-open). The projection keeps known spend, bounded uncertainty and unbounded unknown counts
+separately
 and never collapses via :meth:`Cost.merged`.
 """
 
@@ -24,12 +25,15 @@ class Cost:
 
     Build via the factories (:meth:`known` / :meth:`estimated` / :meth:`unknown`).
     A ``known``/``estimated`` cost carries an :class:`Money` ``amount`` and no
-    ``reason``; an ``unknown`` cost carries a ``reason`` and no ``amount``.
+    ``reason``; an ``unknown`` cost carries a ``reason`` and no ``amount``. Its optional
+    ``at_most``
+    bounds uncertain spend without representing an actual charge.
     """
 
     kind: CostKind
     amount: Money | None = None
     reason: str | None = None
+    at_most: Money | None = None
 
     def __post_init__(self) -> None:
         if self.kind == "unknown":
@@ -38,6 +42,8 @@ class Cost:
             if not self.reason:
                 raise ValueError("an unknown Cost requires a reason")
         else:
+            if self.at_most is not None:
+                raise ValueError("only unknown Cost can carry at_most")
             if self.amount is None:
                 raise ValueError(f"a {self.kind} Cost requires an amount")
             if self.reason is not None:
@@ -54,9 +60,9 @@ class Cost:
         return cls(kind="estimated", amount=amount)
 
     @classmethod
-    def unknown(cls, reason: str) -> Cost:
-        """A cost that could not be priced (e.g. an unpriced model)."""
-        return cls(kind="unknown", reason=reason)
+    def unknown(cls, reason: str, *, at_most: Money | None = None) -> Cost:
+        """Uncertain spend, optionally bounded (None means unbounded)."""
+        return cls(kind="unknown", reason=reason, at_most=at_most)
 
     @property
     def is_known(self) -> bool:
@@ -70,13 +76,17 @@ class Cost:
         If any component is ``unknown`` the result is ``unknown`` (so fail-closed
         cannot be defeated by hiding an unknown inside a sum); otherwise if any is
         ``estimated`` the result is ``estimated``; otherwise ``known``. The
-        projection never calls this — it tracks a known-sum + an unknown count.
+        projection never calls this — it tracks known and bounded/unbounded uncertain totals.
         """
         if not costs:
             return Cost.known(Money.zero())
         if any(c.kind == "unknown" for c in costs):
             reasons = sorted({c.reason for c in costs if c.kind == "unknown" and c.reason})
-            return Cost.unknown("; ".join(reasons) or "merged with an unknown cost")
+            bounds = [c.at_most if c.kind == "unknown" else c.amount for c in costs]
+            bound = (
+                None if None in bounds else sum((b for b in bounds if b is not None), Money.zero())
+            )
+            return Cost.unknown("; ".join(reasons) or "merged with an unknown cost", at_most=bound)
         total = sum((c.amount for c in costs if c.amount is not None), Money.zero())
         if any(c.kind == "estimated" for c in costs):
             return Cost.estimated(total)

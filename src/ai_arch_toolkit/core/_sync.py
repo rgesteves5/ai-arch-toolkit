@@ -8,9 +8,11 @@ import contextvars
 import logging
 import os
 import threading
-from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterator
 from queue import Full, Queue
 from typing import Any, cast
+
+from ai_arch_toolkit.core._stream_lifecycle import close_async
 
 logger = logging.getLogger(__name__)
 
@@ -176,86 +178,83 @@ def _run_sync[T](coro: Coroutine[Any, Any, T]) -> T:
     return result  # type: ignore[return-value]
 
 
-def _stream_sync[T](async_iterator_factory: Callable[[], AsyncIterator[T]]) -> Iterator[T]:
-    """Bridge an async iterator to a sync one via a thread + queue.
+class _StreamBridge[T]:
+    """Bounded producer/consumer bridge with cancellable transport ownership."""
 
-    ``async_iterator_factory`` is a zero-arg callable that returns an
-    ``AsyncIterator[T]``.  It is invoked inside the background thread's
-    event loop.
+    def __init__(self, factory: Callable[[], AsyncIterator[T]]) -> None:
+        self.factory = factory
+        self.queue: Queue[object] = Queue(maxsize=_STREAM_QUEUE_MAXSIZE)
+        self.stop = threading.Event()
+        self.handle = _TaskHandle()
+        self.context = contextvars.copy_context()
+        self.thread = threading.Thread(target=self._target, daemon=True)
 
-    The queue is bounded, so a slow consumer holds the producer back instead of
-    letting it buffer the whole stream. A consumer that stops early cancels the
-    pending drain, so the source's ``aclose()`` runs at once rather than at its
-    next item. Either way the thread is joined for up to the stream join timeout.
-    """
-    q: Queue[object] = Queue(maxsize=_STREAM_QUEUE_MAXSIZE)
-    stop = threading.Event()
-    handle = _TaskHandle()
-
-    async def _put(item: object) -> bool:
-        # Wait for room without blocking the loop; give up once the consumer is gone.
-        while not stop.is_set():
+    async def _put(self, item: object) -> bool:
+        while not self.stop.is_set():
             try:
-                q.put_nowait(item)
+                self.queue.put_nowait(item)
             except Full:
                 await asyncio.sleep(_STREAM_PUT_INTERVAL)
             else:
                 return True
         return False
 
-    async def _drain() -> None:
-        if not handle.attach():
-            return  # the consumer left before the drain started
-        iterator = async_iterator_factory()
+    async def _drain(self) -> None:
+        if not self.handle.attach():
+            return
+        iterator = self.factory()
         try:
             async for item in iterator:
-                if not await _put(item):
+                if not await self._put(item):
                     break
         finally:
-            handle.detach()  # a consumer leaving now must not interrupt the source's cleanup
-            close = getattr(iterator, "aclose", None)
-            if callable(close):
-                with contextlib.suppress(Exception):
-                    await cast(Callable[[], Awaitable[Any]], close)()
-        await _put(_SENTINEL)
+            self.handle.detach()
+            await close_async(iterator)
+        await self._put(_SENTINEL)
 
-    # The drain always runs in a background thread; carry the caller's context (metering scope,
-    # etc.) into it so the streamed coroutine sees the same ambient state.
-    ctx = contextvars.copy_context()
-
-    def _target() -> None:
+    def _target(self) -> None:
         try:
-            ctx.run(asyncio.run, _drain())
-        except BaseException as e:
-            # Off the loop now, so waiting for room is fine — until the consumer is gone.
-            failure = _SourceError(e)
-            while not stop.is_set():
+            self.context.run(asyncio.run, self._drain())
+        except BaseException as error:
+            failure = _SourceError(error)
+            while not self.stop.is_set():
                 with contextlib.suppress(Full):
-                    q.put(failure, timeout=_STREAM_PUT_INTERVAL)
+                    self.queue.put(failure, timeout=_STREAM_PUT_INTERVAL)
                     return
 
-    thread = threading.Thread(target=_target, daemon=True)
-    thread.start()
-
-    drained = False
-    try:
-        while True:
-            item = q.get()
-            if item is _SENTINEL:
-                break
-            if isinstance(item, _SourceError):
-                raise item.error
-            yield cast(T, item)
-        drained = True
-    finally:
-        stop.set()
+    def _finish(self, drained: bool) -> None:
+        self.stop.set()
         if not drained:
-            handle.cancel()
-        # A generator finalized by the garbage collector on the drain thread cannot join itself.
-        if thread is not threading.current_thread():
-            thread.join(timeout=_stream_join_timeout)
-            if thread.is_alive():
-                logger.warning(
-                    "Stream thread still alive after %ss join timeout",
-                    _stream_join_timeout,
-                )
+            self.handle.cancel()
+        if self.thread is threading.current_thread():
+            return
+        self.thread.join(timeout=_stream_join_timeout)
+        if self.thread.is_alive():
+            logger.warning(
+                "Stream thread still alive after %ss join timeout", _stream_join_timeout
+            )
+
+    def items(self) -> Iterator[T]:
+        self.thread.start()
+        drained = False
+        try:
+            while True:
+                item = self.queue.get()
+                if item is _SENTINEL:
+                    break
+                if isinstance(item, _SourceError):
+                    raise item.error
+                yield cast("T", item)
+            drained = True
+        finally:
+            self._finish(drained)
+
+
+def _stream_sync[T](async_iterator_factory: Callable[[], AsyncIterator[T]]) -> Iterator[T]:
+    """Bridge an async source to a bounded sync iterator, preserving the caller's context.
+
+    A consumer leaving early cancels the drain and closes its source, even while its next item
+    is pending. Cleanup cannot be interrupted once it starts. The worker is joined for up to
+    the configured stream join timeout, unless it is itself the thread closing the iterator.
+    """
+    yield from _StreamBridge(async_iterator_factory).items()

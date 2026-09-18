@@ -111,7 +111,7 @@ def test_fail_keeps_the_count_and_charges_unknown_for_llm():
     store = MeterStore()
     op = store.open(llm(), controller=None)
     op.mark_started()
-    op.fail()
+    op.fail("indeterminate")
     snap = store.snapshot()
     assert snap.llm_calls == 1 and snap.unknown_cost_count == 1
     assert snap.out_llm_calls == 0 and snap.out_cost == Money.zero()
@@ -121,7 +121,7 @@ def test_failed_tool_is_free():
     store = MeterStore()
     op = store.open(tool(), controller=None)
     op.mark_started()
-    op.fail()
+    op.fail("indeterminate")
     snap = store.snapshot()
     assert snap.tool_calls == 1 and snap.unknown_cost_count == 0
 
@@ -129,7 +129,7 @@ def test_failed_tool_is_free():
 def test_fail_before_start_releases_the_count():
     store = MeterStore()
     op = store.open(llm(), controller=None)
-    op.fail()
+    op.fail("indeterminate")
     snap = store.snapshot()
     assert snap.llm_calls == 0 and snap.out_llm_calls == 0
 
@@ -181,7 +181,7 @@ def test_settle_unknown_op_raises():
 
 
 def test_fail_unknown_op_is_silent():
-    MeterStore().fail("op-404")  # cleanup safety: never raises
+    MeterStore().fail("op-404", "indeterminate")  # cleanup safety: never raises
 
 
 # ---------------------------------------------------------------------- close
