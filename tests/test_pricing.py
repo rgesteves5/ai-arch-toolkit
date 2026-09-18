@@ -771,3 +771,30 @@ def test_astra_cost_tiers(is_batch, is_fast, multiplier, tokens):
         / 1_000_000
     )
     assert cost == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("model", ["claude-fable-5-1", "claude-mythos-5-1"])
+@pytest.mark.parametrize("batch,expected", [(False, 60.25), (True, 30.125)])
+def test_claude_51_prices_cache_at_its_own_rate(model, batch, expected):
+    cost = pricing.estimate_cost(
+        model,
+        input_tokens=1_000_000,
+        output_tokens=1_000_000,
+        cache_read_tokens=1_000_000,
+        is_batch=batch,
+    )
+    assert cost == pytest.approx(expected)
+    assert model in pricing.list_models()
+
+
+@pytest.mark.parametrize("batch,expected", [(False, 4.575), (True, 2.2875)])
+def test_gemini_38_has_its_own_promotional_price(batch, expected):
+    cost = pricing.estimate_cost(
+        "gemini-3.8-flash",
+        input_tokens=1_000_000,
+        output_tokens=1_000_000,
+        cache_read_tokens=1_000_000,
+        is_batch=batch,
+    )
+    assert cost == pytest.approx(expected)
+    assert "gemini-3.8-flash" in pricing.list_models()

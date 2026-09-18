@@ -1114,7 +1114,8 @@ class TestContentToSdk:
         parts = [DocumentPart(source="b64data", media_type="application/pdf", name="doc.pdf")]
         result = _content_to_sdk(parts)
         assert result[0]["type"] == "document"
-        assert result[0]["name"] == "doc.pdf"
+        assert result[0]["title"] == "doc.pdf"
+        assert "name" not in result[0]
 
     def test_cache_part(self):
         parts = [CachePart(content="cached text")]

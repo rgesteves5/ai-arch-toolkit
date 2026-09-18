@@ -13,6 +13,28 @@
 
 # ── Claude 5 ──
 
+# Verified 2026-09-18: https://platform.claude.com/docs/en/about-claude/pricing
+[claude-fable-5-1]
+input = 10.0
+output = 50.0
+cache_write = 12.50
+cache_read = 0.25
+batch_input = 5.0
+batch_output = 25.0
+batch_cache_write = 6.25
+batch_cache_read = 0.125
+
+# Verified 2026-09-18: https://platform.claude.com/docs/en/about-claude/pricing
+[claude-mythos-5-1]
+input = 10.0
+output = 50.0
+cache_write = 12.50
+cache_read = 0.25
+batch_input = 5.0
+batch_output = 25.0
+batch_cache_write = 6.25
+batch_cache_read = 0.125
+
 # Opus 5, Sonnet 5, and Fable/Mythos 5 ship with full 1M context at standard
 # pricing (no long-context tier). Fast mode (Opus 5 only) is 2x standard rates.
 [claude-fable-5]
@@ -621,6 +643,16 @@ batch_cache_read = 3.75
 # Note: prices are for text input; audio input is higher on some models.
 # Gemini 1.5 and 2.0 are retired and intentionally absent here.
 # ═══════════════════════════════════════════════════════════════════
+
+# Verified 2026-09-18: https://ai.google.dev/gemini-api/docs/pricing
+# Promotional rates through 2026-12-31.
+["gemini-3.8-flash"]
+input = 0.75
+output = 3.75
+cache_read = 0.075
+batch_input = 0.375
+batch_output = 1.875
+batch_cache_read = 0.0375
 
 # ── Gemini 3.5–3.7 ──
 

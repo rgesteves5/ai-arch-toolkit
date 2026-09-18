@@ -110,7 +110,7 @@ def _content_to_sdk(content: Any) -> list[dict[str, Any]] | str:
                 },
             }
             if part.name:
-                block["name"] = part.name
+                block["title"] = part.name
             blocks.append(block)
         elif isinstance(part, CachePart):
             blocks.append(

@@ -316,13 +316,9 @@ class XAIProvider(LoopAwareClientCache, BaseProvider):
             lambda: xai_sdk.AsyncClient(
                 api_key=api_key,
                 channel_options=[("grpc.enable_retries", 0)],
+                timeout=timeout,
             )
         )
-        if timeout is not None:
-            warnings.warn(
-                "timeout is not directly supported by xAI gRPC client, ignoring",
-                stacklevel=2,
-            )
 
     async def close(self) -> None:
         await self._client.close()

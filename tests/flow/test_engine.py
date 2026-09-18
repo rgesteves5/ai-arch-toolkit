@@ -576,3 +576,22 @@ def test_sync_flow_execution_is_exported_like_flow_execution() -> None:
     for module in (ai_arch_toolkit, toolkit):
         assert getattr(module, "SyncFlowExecution", None) is SyncFlowExecution
         assert "SyncFlowExecution" in module.__all__
+
+
+@pytest.mark.parametrize("mode", ["sequential", "dag"])
+async def test_wall_budget_emits_completed_step_before_denial(mode: str) -> None:
+    flow = Flow(
+        FlowStep(step=_recorder("slow", [], delay=0.1)),
+        FlowStep(step=_recorder("next", []), after=("slow",) if mode == "dag" else ()),
+    )
+    events = [
+        event async for event in flow.iter(State(), budget_policy=BudgetPolicy(max_wall_s=0.05))
+    ]
+    kinds = [event.type for event in events]
+    assert "step_end" in kinds
+    end = next(event for event in events if event.type == "step_end")
+    assert end.step_name == "slow"
+    denied = next(
+        i for i, event in enumerate(events) if event.policy_decision == "budget_exceeded"
+    )
+    assert kinds.index("step_end") < denied

@@ -353,10 +353,10 @@ class _FlowRun:
                 any_executed = True
                 self._record(fs, result, trace)
                 self.state.merge(result)
+                yield _step_end(flow.name, fs.step.name, result)
                 if (stop := self._over_budget()) is not None:
                     yield stop
                     return
-                yield _step_end(flow.name, fs.step.name, result)
                 if result.is_error and self._should_halt(fs):
                     return
 
@@ -431,10 +431,10 @@ class _FlowRun:
                 self._record(fs, result, trace)
                 self.state.merge(result)
                 (failed if result.is_error else completed).add(fs.step.name)
+                yield _step_end(flow.name, fs.step.name, result)
                 if (stop := self._over_budget()) is not None:
                     yield stop
                     return
-                yield _step_end(flow.name, fs.step.name, result)
                 release(fs.step.name)
                 continue
 

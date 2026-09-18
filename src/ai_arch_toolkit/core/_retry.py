@@ -20,7 +20,7 @@ class RetryConfig:
     max_retries: int = 3
     base_delay: float = 1.0
     max_delay: float = 60.0
-    retry_on_status: tuple[int, ...] = (429, 500, 502, 503, 504)
+    retry_on_status: tuple[int, ...] = (429, 500, 502, 503, 504, 529)
 
     def __post_init__(self) -> None:
         if self.max_retries < 0:

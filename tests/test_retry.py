@@ -123,3 +123,11 @@ def test_the_retry_delay_stays_finite_for_very_late_attempts() -> None:
     from ai_arch_toolkit.core._retry import _compute_delay
 
     assert _compute_delay(5_000, RetryConfig(base_delay=1.0, max_delay=3.0), None) <= 3.0
+
+
+@patch("ai_arch_toolkit.core._retry.asyncio.sleep", new_callable=AsyncMock)
+async def test_default_retry_recovers_from_overloaded_529(mock_sleep):
+    factory = AsyncMock(side_effect=[APIError(529, "overloaded"), "ok"])
+    assert await with_retry(factory, RetryConfig()) == "ok"
+    assert factory.await_count == 2
+    mock_sleep.assert_awaited_once()

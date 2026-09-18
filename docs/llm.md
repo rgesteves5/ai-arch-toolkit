@@ -136,7 +136,7 @@ llm = LLM(
         max_retries=3,
         base_delay=1.0,      # exponential backoff
         max_delay=60.0,
-        retry_on_status=(429, 500, 502, 503, 504),
+        retry_on_status=(429, 500, 502, 503, 504, 529),
     ),
 )
 ```

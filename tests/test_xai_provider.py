@@ -347,7 +347,7 @@ class TestXAIProviderComplete:
         XAIProvider("grok-3", "test-key")
 
         client_cls.assert_called_once_with(
-            api_key="test-key", channel_options=[("grpc.enable_retries", 0)]
+            api_key="test-key", channel_options=[("grpc.enable_retries", 0)], timeout=None
         )
 
     async def test_complete(self):
@@ -744,3 +744,11 @@ class TestXAIProviderStream:
         with pytest.raises(RateLimitError):
             async for _ in aiter:
                 pass
+
+
+@patch("ai_arch_toolkit.core._providers._xai.xai_sdk.AsyncClient")
+def test_xai_forwards_timeout(client_cls):
+    XAIProvider("grok-3", "test-key", timeout=2.5)
+    client_cls.assert_called_once_with(
+        api_key="test-key", channel_options=[("grpc.enable_retries", 0)], timeout=2.5
+    )
