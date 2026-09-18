@@ -175,3 +175,21 @@ Só acrescentar. Uma decisão revista ganha uma nova entrada que diz qual substi
   `timeout_s=120` por omissão; R10 — os agentes nunca chamam fornecedores, o dono corre a verificação
   ao vivo; R11 — as tags são do dono; R14 — em vez de desenho aprovado antes do código, cada passo
   leva uma nota de desenho na ficha, sem esperar aprovação.
+
+## D21 · F25: IP explícito; a escolha de transporte de `ip_lookup` fica pendente
+
+- **Contexto:** F25.2 pede validação local e deixa HTTPS em aberto, porque o serviço gratuito escolhido usa HTTP; as regras R00 proíbem rede externa nesta execução.
+- **Decisão (2026-09-18):** exigir um endereço válido explícito antes de construir o URL e preservar o endpoint previsto pela ficha. A escolha de outro serviço/transporte pertence à R03 e fica registada em FINDINGS; não se afirma que o endpoint foi verificado hoje.
+- **Consequência:** desaparece a divulgação implícita do IP da máquina; o risco do transporte HTTP continua conhecido e pendente.
+
+## D22 · Construção na matriz R01 e fronteira de preparação R02
+
+- **Contexto:** a interface BaseProvider actual junta construção/envio em complete() assíncrono; a R01 mantém essa interface e a R02 introduz prepare()+send(). O primeiro duplo da matriz lançava ValueError depois de contar um envio, embora a célula exigisse nenhum envio/operação: não representava construção pura.
+- **Decisão:** a célula RequestError exercita a fronteira pura de preparação da fachada; afirma zero chamadas ao provider e zero operações, sem baixar o contrato. Um erro normalizado not_sent numa operação já iniciada mantém a contagem, como exige a disposição do meter. A função única dispatch é a costura onde a R02 separará a preparação específica dos adaptadores.
+- **Consequência:** a R01 não afirma ter separado os interiores dos SDKs. A matriz mantém o cenário de construção e as recuperações seguintes/steps; a R02 amplia a prova aos erros de preparação dos seis adaptadores, sem mudar a pipeline.
+
+## D23 · Vaga de inferência e delegação de streams
+
+- **Contexto:** a pipeline exige adquirir vaga antes de marcar início, mas uma vaga mantida através de yields controlados pelo consumidor permite a um stream abandonado bloquear complete() e os steps seguintes.
+- **Decisão:** complete mantém a vaga durante a chamada inteira; streams mantêm-na apenas no despacho e espera pelo primeiro item. A vaga é libertada antes de entregar esse item. Cada gerador que delega assume o fecho explícito do gerador delegado, por uma única ferramenta `_managed`.
+- **Consequência:** cancelamento na fila não inicia operação; consumo lento não prende a vaga; abandono fecha imediatamente o transporte em vez de depender de GC. O teste existente de concorrência confirma ambos os contratos.

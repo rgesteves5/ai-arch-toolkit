@@ -627,3 +627,36 @@ No caminho `complete`, `_try_fallbacks` só junta as tentativas do fallback que 
 (`attempts.extend(response.attempts)`); as de um fallback que falhou perdem-se com a excepção. Com
 A → B (falha) → C (ok), `attempts` dá `[A, C]`. O caminho de stream regista-as. Pertence à pipeline
 de tentativa única do plano de robustez.
+
+## 2026-09-18 · R01 (F25.2)
+
+### `ip_lookup`: transporte HTTP gratuito continua pendente
+
+Recusados IPs vazios e inválidos antes de I/O. Mantém-se o endpoint HTTP explicitamente previsto pela F25: a passagem a HTTPS exige escolher outro serviço ou plano e pertence ao refactor de tools. Não houve rede nem verificação externa; o estado do endpoint não foi inferido.
+
+## 2026-09-18 · SDK Anthropic 1.6.0 já não aceita temperature (R02)
+
+- **Reprodução local:** `uv run python -c 'import inspect, anthropic; print(anthropic.__version__); print(inspect.signature(anthropic.resources.messages.AsyncMessages.create))'` mostra 1.6.0 sem temperature. LLM injecta por omissão temperature=0.0; complete e ambos os streams dão `TypeError: AsyncMessages.create() got an unexpected keyword argument 'temperature'`, antes de sair qualquer pedido ao servidor falso dos protótipos. Os mocks de SDK antigos aceitam kwargs arbitrários e ocultam o desvio.
+- **Âmbito:** migração de parâmetros/capacidades do adaptador, explicitamente R02; não se alterou o adaptador nesta fase. Os 7 casos locais Anthropic da R01 retiram o default apenas na fixture, para medir os erros de transporte/HTTP de um pedido válido. Os 7 casos OpenAI não precisam dessa adaptação.
+- **Consequência:** não afirmar que o percurso real Anthropic com defaults já funciona; R02 deve acrescentar prova de pedido por omissão no SDK instalado e corrigir a preparação.
+
+## 2026-09-18 · R01, verificação independente (Claude)
+
+### Um tecto por step sem `BudgetPolicy` continua a falhar depois de um 5xx → decisão do dono (R02)
+
+O protótipo `meter/step_cap.py`, que é a reprodução da linha "Step com `Policy(max_cost=1.0)`" do
+achado impeditivo de 2026-09-17, corre sem `BudgetPolicy` e continua vermelho depois da R01:
+
+```
+uv run python blackboard/prototypes/2026-09-hardening/meter/step_cap.py
+provider calls: 2 | step error: Cost exceeded limit 1.0: a call could not be priced (fail-closed)
+```
+
+Com `flow.run(State(), budget_policy=BudgetPolicy(max_cost=5.0))`, soft ou strict, o step passa
+(`cost_at_most=0.062067`). É o contrato que a ficha R01 fixou ("sem controller não há tecto") e que
+`docs/safety.md` documenta. A D20 diz, no entanto, "o resto fica incerto com tecto", sem condição.
+O tecto de uma falha indeterminada é um facto do pedido (preço do modelo × entrada + `max_tokens`),
+não uma opinião do controller: com a D16 (sob um meter, todo o modelo tem preço), o core pode
+calculá-lo sempre, e o desconhecido sem tecto fica reduzido às server tools. Proposta para a R02: o
+estimador do pior caso passa para o core, é a casa única do tecto de falha e da reserva estrita, e
+desaparece o `Protocol` `FailureBoundController` (`core/_metering/_admission.py`).

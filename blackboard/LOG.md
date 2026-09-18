@@ -168,3 +168,32 @@
   para agentes com contexto limpo: `R01` núcleo de chamadas (começa pela F25), `R02` fornecedores,
   `R03` tools, motor e manutenção. Regras comuns em `R00-rules.md`. D20 fixa as recomendações R1–R15
   como decididas, com os acertos do dono. A frente C fica em espera até ao fim da R03.
+
+## 2026-09-18 · R01 (Codex)
+
+Leitura obrigatória concluída; R01 e F25 reclamadas. Sem operações git, fornecedores ou leitura do `.env`. Começa a F25, com vermelho primeiro e verificações completas por item.
+
+- F25 itens 1–8 aplicados com vermelho primeiro (item 8 só prova documental por leitura). 31 casos novos. Todas as oito verificações R00: lint/formato/pyright/lock limpos; final 3084 passed, 17 failed, 22 deselected. Bloqueio: import csv_read no nanope, árvore proibida pela R00; pedida autorização de um único import. F25.9 bloqueada: preço oficial exige rede externa, proibida. R01 blocked antes dos instrumentos; relatório completo na ficha. D21 regista a escolha de transporte IP pendente. Nada commitado ou chamado ao vivo.
+
+- O dono autorizou a migração do import nanope e a consulta gratuita de páginas oficiais de preços. Import migrado; retomada a R01 pela ordem. As restantes proibições mantêm-se.
+
+- R01 concluída (passos 0–5), F25 também done. Gate final: 3884 passed (+814 sobre 3070), 22 live_api deselected, zero xfail; lint/formato/pyright/lock limpos. Matriz 720/720, conservação/replay, AST e qualidade; 14 ensaios SDK oficiais exclusivamente no servidor falso dos protótipos em 127.0.0.1. Fachada 1561 → 532, fachada+pipeline+ciclo de vida −467 linhas, fonte tocada −263; dívida ruff 172 → 161, C901 core 35 → 29/toolkit 64 → 64. Dois vermelhos da revisão final corrigiram texto não consumido na resposta parcial síncrona. D22 regista construção pura vs futura preparação R02; D23 fixa posse/fecho de streams e vaga inicial. Achado novo: anthropic 1.6.0 rejeita temperature por omissão, reprodução em FINDINGS para R02. Relatório, testes corrigidos, gates e commits propostos na ficha. Sem .env, fornecedores pagos, dependências novas ou operações git. Próximo: dono revê diff e faz commits; R02/R03 continuam todo.
+
+## 2026-09-18 · R01, continuação (Claude)
+
+O Codex ficou sem créditos depois de fechar a ficha, o BOARD e o LOG, e antes da mensagem final.
+Verificação independente: gate R00 repetido, critérios de aceitação medidos e protótipos originais
+`meter/` corridos. Três acabamentos, com nota de desenho na ficha: o servidor falso dos ensaios SDK
+passa de `blackboard/prototypes/` para `tests/integration/fakeserver.py`; entrada `Changed` para o
+`fallback_on` por omissão; uma tentativa abandonada antes de começar levanta `StreamAbandoned` em vez
+de rebentar num `assert` (vermelho primeiro). Gate: 3886 passed, 22 deselected; ruff, formato,
+pyright e lock limpos. Achado novo para decisão do dono: um tecto por step sem `BudgetPolicy` continua
+a falhar depois de um 5xx (`meter/step_cap.py`), por contrato da ficha; proposta para a R02. Por
+verificar: job `floors` do CI com os ensaios SDK novos. Próximo: o dono revê o diff e faz os commits;
+a R02 começa depois, com contexto limpo. Antes de publicar `main`: com o `anthropic` 1.6.0 do lock,
+`claude-haiku-4-5` e `claude-sonnet-4-6` levantam `TypeError` (`temperature`) antes de enviar; só os
+modelos da lista sem `temperature` (Opus 4.7+, família 5) funcionam. A D18 põe a Anthropic em último
+na R02: o dono decide se isto passa à frente.
+
+- A pedido do dono, a R01 ficou commitada em `main` em quatro commits: `a16e3f9` tools, `f95c81f`
+  F25, `5a0ab3b` núcleo, e o registo. Não publicada. Cada árvore intermédia passa o gate sozinha.

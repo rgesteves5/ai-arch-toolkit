@@ -56,7 +56,7 @@ report = result.meter                # BudgetReport (None only if unmetered)
 print(f"Total cost: ${result.total_cost:.4f}")        # == report.cost
 print(f"{report.llm_calls} LLM calls, {report.total_tokens} tokens")
 if report.cost_uncertain:            # some call couldn't be priced -> cost is a lower bound
-    print("(cost undercounts: an unpriced model or server tool was used)")
+    print(f"Cost bound: {report.cost_at_most!r}")  # None if any cost is unbounded
 
 # Per-step timing is still on the trace (per-step cost lives in the meter, not the trace):
 for st in result.trace.steps:
@@ -64,6 +64,18 @@ for st in result.trace.steps:
 ```
 
 `Agent` results expose the same via `agent_result.report` / `.cost` / `.usage`.
+
+`report.cost` is known spend. `report.cost_at_most` adds the retained bounds of indeterminate failed
+attempts; it is `None` if any cost is unbounded. `report.cost_uncertain` is true for either kind of
+uncertainty. Retries and fallback calls each consume a call count. An unbilled 429 contributes zero
+cost; a failed response, transport timeout or abandoned stream can consume a bounded allowance
+without becoming reported spend.
+
+Bounded uncertainty enters `max_cost` and per-step cost checks. `unpriced="fail_closed"` applies
+only to unknowns with no bound. Strict budgets retain the failed operation's own worst-case hold;
+soft budgets estimate the bound at failure. Measure-only runs have no controller to supply a bound.
+Strict reservations also cover tools priced by a custom `Pricer`. Use
+`budget_scope(policy, pricer=...)` to wire the same pricer into reservation and settlement.
 
 ## Run-wide budgets
 

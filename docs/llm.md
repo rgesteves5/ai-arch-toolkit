@@ -108,20 +108,45 @@ billable reasoning/thinking tokens when a provider reports them separately.
 
 ---
 
+## Provider errors
+
+All normalized failures inherit `ProviderError` and carry a typed `delivery` disposition:
+`"not_sent"`, `"unbilled"`, or `"indeterminate"`. Retry decisions use the error type and HTTP status;
+billing uses delivery. The base constructor requires `delivery=`.
+
+| Error | Existing handler remains valid | Detail |
+|---|---|---|
+| `RequestError` | `ValueError` | Common request validation failed before admission (`not_sent`) |
+| `APIError` | `APIError` | Retains `status_code` and `body`; defaults to `indeterminate` |
+| `RateLimitError` | `APIError` | Retains `retry_after`; `unbilled` in this phase |
+| `TransportError` | `ConnectionError` | No usable HTTP response; defaults to `indeterminate` |
+| `ProviderTimeout` | `TimeoutError` | Provider I/O timeout; defaults to `indeterminate` |
+| `ResponseError` | `ProviderError` | An unusable successful response or stream (`indeterminate`) |
+
+The default fallback family is `(ProviderError,)`. `RequestError` remains terminal: retrying the
+same invalid request is not a recovery. Caller cancellation propagates. After the first stream
+item is visible, both retry and fallback are disabled. `complete` delivers only its final result.
+See [failed-call cost accounting](safety.md#failed-llm-calls) for the cost table and bounded uncertainty.
+Provider-specific request construction and response parsing migrate to this error contract in R02.
+
+---
+
 ## Fallback chains
 
 ```python
+from ai_arch_toolkit import LLM, ProviderError
+
 llm = LLM(
     "claude-opus-5",
     fallback=["claude-sonnet-5", "gpt-4o"],
-    fallback_on=(APIError, TimeoutError),  # default
+    fallback_on=(ProviderError,),  # default; includes HTTP and transport errors
 )
 
 # If Opus fails → tries Sonnet → tries GPT-4o
 # response.attempts records what happened at each step
 ```
 
-A string fallback routes by its own model name (a recognizable model fails over to its own provider; a bare tag inherits the parent's connection).
+A string fallback routes by its own model name (a recognizable model fails over to its own provider; a bare tag inherits the parent's connection). `Response.attempts` includes every physical attempt, including failed intermediate fallback models and their retries. A candidate reachable through more than one chain is tried once. Async middleware surrounds the whole chain. `AdmissionDenied` is terminal even with `fallback_on=(Exception,)`.
 
 ---
 
@@ -147,8 +172,8 @@ is therefore the single retry owner: every attempt is metered and appears in
 for that `LLM`. Retries are opt-in; omitting `retry=` performs one attempt.
 Besides the statuses in `retry_on_status` and rate limits, a request that got no
 HTTP response — a refused or dropped connection, a timeout — is retried: the
-adapters raise it as `ConnectionError` or `TimeoutError`, which also trigger
-fallbacks.
+adapters raise `TransportError` or `ProviderTimeout`, which also trigger fallbacks and remain
+catchable as `ConnectionError` or `TimeoutError`.
 Fallbacks supplied as `LLM` objects use their own retry configuration, so pass
 configured instances when fallback models should retry too.
 

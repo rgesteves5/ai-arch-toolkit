@@ -271,15 +271,15 @@ result = flow.run_sync(state)
 
 `BudgetPolicy` caps (all optional, `None` = unlimited): `max_llm_calls`, `max_tool_calls`, `max_input_tokens`, `max_output_tokens`, `max_total_tokens`, `max_cost` (USD), `max_wall_s`. Two knobs shape the cost cap:
 
-- `reserve` (`"none"` default | `"strict"`) — `"strict"` reserves a worst-case token/cost hold *before* each call, failing closed on unpriced models. `"none"` measures and settles only (a soft cost cap can overshoot by at most the one in-flight call).
-- `unpriced` (`"fail_closed"` default | `"allow"`) — under a `max_cost` cap, `"fail_closed"` denies further work once a call's cost can't be known (an unpriced model, or a provider-hosted server tool whose charge isn't in the token counts); `"allow"` proceeds (the cap may undercount).
+- `reserve` (`"none"` default | `"strict"`) — `"strict"` reserves a worst-case token/cost hold *before* each call, including tools with a registered custom price; unknown or raising prices deny admission. `"none"` charges after the outcome (concurrent in-flight calls can overshoot a soft cap).
+- `unpriced` (`"fail_closed"` default | `"allow"`) — under a `max_cost` cap, `"fail_closed"` denies further work after an **unbounded** unknown cost (an unpriced model or provider-hosted server tool). Bounded uncertainty consumes the cap and allows work within the remaining amount. `"allow"` permits unbounded unknowns (the cap may undercount). A soft budget admits a server-tool call; its unpriced settlement then blocks subsequent work.
 
 Enforcement happens **at the charge site**: the meter denies the operation that would breach a cap, the call never happens, and nothing is charged. The denial (`BudgetExceeded`, a neutral `AdmissionDenied`) is terminal; the owning (outermost) flow converts it to `policy_decision="budget_exceeded"` in the trace, so `flow.run()` returns a normal `FlowResult` rather than raising.
 
 How *tight* the cap is depends on the dimension:
 
 - **Call caps are hard** — `max_llm_calls` / `max_tool_calls` are checked against committed + outstanding *counts* under the meter's lock, so they are exact even under concurrent (parallel-DAG) execution: a run can never overshoot them.
-- **Token and cost caps under `reserve="none"` (the default) are soft** — a call is admitted while its token usage / cost is still unknown and only denied *after* it settles, so the total can overshoot `max_input_tokens` / `max_output_tokens` / `max_total_tokens` / `max_cost` by at most the single in-flight call. Use `reserve="strict"` to reserve a worst-case token/cost hold up front and make them hard (it fails closed on unpriced models). An unbounded (unknown) cost fails closed regardless — see `unpriced` above.
+- **Token and cost caps under `reserve="none"` (the default) are soft** — a call is admitted while its token usage / cost is still unknown and only denied *after* it settles, so the total can overshoot `max_input_tokens` / `max_output_tokens` / `max_total_tokens` / `max_cost` by the combined in-flight calls. Use `reserve="strict"` to reserve a worst-case token/cost hold up front and make them hard (it fails closed on unpriced models). An unbounded (unknown) cost fails closed regardless — see `unpriced` above.
 - **Wall-time is checked between steps**, so a single long-running step is not interrupted mid-flight (use `Policy(timeout=...)` for that).
 
 The **meter is the single source of truth** for what a run consumed — read it off the result, never by summing anything yourself:
@@ -287,12 +287,52 @@ The **meter is the single source of truth** for what a run consumed — read it 
 ```python
 report = result.meter            # BudgetReport | None (None only if unmetered)
 report.cost                      # known USD spend
-report.cost_uncertain            # True if some call couldn't be priced (cost undercounts)
+report.cost_at_most              # known + bounded uncertain USD; None if anything is unbounded
+report.cost_uncertain            # True with bounded or unbounded uncertainty
 report.over_budget, report.breached   # which caps were reached
 result.total_cost, result.usage  # convenience: meter cost / token usage
 ```
 
 The same `budget_policy=` works per run — `flow.run_sync(state, budget_policy=...)` overrides the construction-time one (both are ignored when the flow runs nested under an enclosing scope). `Agent.run(task, budget_policy=...)` behaves the same. Outside a Flow, wrap any LLM/tool calls in `budget_scope(BudgetPolicy(...))` (a context manager) and read `scope.snapshot()`.
+
+### Failed LLM calls
+
+Delivery disposition determines cost independently of retry eligibility. This table is the
+failure-matrix contract for `complete`, `stream`, and `stream_events` and their sync wrappers.
+Provider-specific billing policies and preparation are completed in the provider hardening phase.
+
+| Failure | Disposition in this phase | Failed-attempt cost | Automatic recovery |
+|---|---|---|---|
+| Common request validation (`RequestError`) | `not_sent` | Known zero; no operation opens | Fix the request; no provider retry/fallback |
+| HTTP 429 (`RateLimitError`) | `unbilled` | Known zero | Retry or fallback before delivery |
+| HTTP 5xx (`APIError`, including 529) | `indeterminate` | Unknown, bounded with a budget estimator | Retry for configured statuses; fallback before delivery |
+| Other HTTP errors (`APIError`, including 4xx) | `indeterminate` | Unknown, bounded with a budget estimator | Fallback before delivery; retry only for configured statuses |
+| Connection failure (`TransportError`) | `indeterminate` | Unknown, bounded with a budget estimator | Retry or fallback before delivery |
+| Read timeout (`ProviderTimeout`) | `indeterminate` | Unknown, bounded with a budget estimator | Retry or fallback before delivery |
+| Unreadable successful response (`ResponseError`) | `indeterminate` | Unknown, bounded with a budget estimator | Fallback before delivery |
+| Caller cancellation after dispatch | `indeterminate` | Unknown, bounded with a budget estimator | Propagates; a later call or step recovery can run |
+| Error after a stream item | Error's disposition | Unknown for an indeterminate error, bounded with an estimator | Propagates; no replay after delivery |
+| Abandoned stream | `indeterminate` after dispatch | Unknown, bounded with a budget estimator | No automatic replay; a later call can run |
+
+A stream only reserves admission when created. Rejection by middleware, closing it without
+iteration, or cancellation while waiting for an inference slot releases the reservation without
+counting a call. Every **started** attempt counts, including an unbilled 429 or a `not_sent` error
+reported after start. `UsageEvent.delivery` records failed-work classification.
+
+`Cost.unknown(reason, at_most=Money(...))` carries a bound separately from actual spend.
+`MeterSnapshot.cost` sums known costs; `uncertain_cost` and `uncertain_cost_count` sum/count bounded
+unknowns; `unknown_cost_count` counts only unbounded unknowns. Cost checks include known spend,
+bounded uncertainty and outstanding holds. A successful retry adds its actual cost without
+pretending that the failed attempt's bound was a charge.
+
+Under `reserve="strict"`, an indeterminate failure retains its own reservation as its bound.
+Under `reserve="none"`, the controller runs the same estimator on failure, computing request size
+only then. Without a controller, failed indeterminate work remains unbounded. Thus a step with
+`Policy(max_cost=...)` still fails closed after an unbounded measured failure, even if its retry
+succeeded; under an enforcing budget the bounded failed cost enters that step's cap.
+
+Middleware after hooks observe settlement first. Sync stream abandonment uses the captured
+lifecycle handle, so cleanup can run safely from the consumer's thread.
 
 ---
 

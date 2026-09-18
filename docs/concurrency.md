@@ -48,7 +48,9 @@ with inference_limit(2):
 - **Nesting:** the innermost `inference_limit` wins (its own independent
   semaphore); the outer resumes when it exits.
 - **Scope:** governs `complete()` / `complete_sync()` (the path every agent flow
-  uses). Streaming calls are **not** throttled — they are rarely fanned out.
+  uses). Streams acquire a slot for dispatch and waiting for their first item, then release it before
+  yielding. Their remaining caller-controlled consumption does not hold the slot. Cancelling a
+  call in the slot queue releases its admission reservation without starting/counting an attempt.
 - `n` must be `>= 1` (else `ValueError`).
 
 **Use it when** you must not exceed a hard concurrency limit on a shared

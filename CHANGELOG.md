@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Provider failures share `ProviderError` and a typed delivery disposition. New `RequestError`, `TransportError`, `ProviderTimeout`, and `ResponseError` preserve the existing builtin exception handlers.
 - **Meta provider (Muse Spark).** `LLM("muse-spark-1.3")` routes to a new `MetaProvider` that
   drives the Meta Model API's Responses API through the `openai` SDK (Meta ships no SDK), with the
   key from `MODEL_API_KEY` and a new `meta` extra. Requests are stateless and replay the model's
@@ -98,6 +99,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `.env.example` documenting every provider API key; the sync-timeout configuration now validates its inputs.
 
 ### Changed
+- Complete and both stream APIs share one physical-attempt pipeline. Stream lifecycle handles are explicit; public LLM call signatures are unchanged.
+- The default `fallback_on` is `(ProviderError,)` instead of `(APIError, ConnectionError, TimeoutError, OSError)`. The built-in adapters raise `TransportError` or `ProviderTimeout` for network failures, so those still fall back; a raw `OSError` (a missing local file, for example) no longer does. Custom providers should raise the normalized errors.
+- **Breaking:** `MeterOperation.fail` requires a delivery disposition. `unknown_cost_count` counts only unbounded costs; bounded uncertainty consumes caps separately from known spend. `BudgetReport.cost_at_most` reports the combined bound.
+- MediaWiki tools accept only HTTPS Wikimedia domains and subdomains, without credentials or ports.
+- **Breaking:** `csv_read` moves to `toolkit.tools.dangerous` and requires approval in governed execution.
 - **Breaking: provider SDK majors and dependency floors.** The extras now require the current SDK
   majors, each capped at the next one: `anthropic>=1.0,<2`, `openai>=3.0,<4` (the `openai` and
   `meta` extras), `google-genai>=2.0,<3`, `xai-sdk>=1.7,<2`. `anthropic` 1.x and `openai` 3.x moved
@@ -188,6 +194,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `uv lock --upgrade` brought every transitive dependency to its latest compatible version (pydantic 2.13, urllib3 2.7, requests 2.34, websockets 16, xai-sdk 1.12, ruff 0.15.13, …); resolved the four Dependabot alerts.
 
 ### Fixed
+- Failed calls no longer poison enforcing scopes when their cost can be bounded. Rate-limit failures are unbilled; indeterminate failures consume a separate cap allowance, so retries, fallbacks and later steps can proceed within the remaining budget.
+- Cancellation while waiting for an inference slot releases admission without counting or pricing a call. Streams release their slot before yielding to the consumer, and abandonment closes all delegated transport iterators immediately.
+- Attempt history retains failed intermediate fallback models. Settlement still precedes async after hooks, and sync stream cleanup remains safe across threads.
+- Strict budgets reserve custom-priced tools and deny unknown or raising prices before execution. Soft budgets admit server tools and fail closed on subsequent work if settlement is unpriced.
+- Exact Fable/Mythos 5.1 prices use the published cache rate; Gemini 3.8 Flash gains its own promotional token and batch prices.
+- xAI forwards the configured timeout to the SDK instead of ignoring it.
+- Anthropic document blocks send their label as `title`, matching the SDK request schema.
+- Default retry includes Anthropic overload responses (HTTP 529).
+- Flow iteration emits `step_end` for completed steps before wall-budget denial in sequential and single-step DAG waves.
+- `ip_lookup` rejects empty or invalid addresses before I/O instead of querying the host machine IP.
 - **An empty `ToolGroup` is a value, not an absence.** `Agent(spec, llm, ToolGroup())` used to swap
   the empty group for a new one, so tools added to it later (`group.add(...)`) were unknown to the
   agent. An empty per-phase group (`executor_tools`, `solver_tools`, `rollout_tools`) used to fall

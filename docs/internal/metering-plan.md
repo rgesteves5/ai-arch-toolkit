@@ -1,9 +1,11 @@
 # Metering & Budget — Architecture Plan (implementation contract)
 
-> **Status:** design + contract frozen, not yet implemented. Implement against this.
-> Branch: `feat/metering-clean` (clean from `main`). Reference snapshot:
-> `feat/agent-budget` @ `2af0fc7` — **never merge**.
-> This revision integrates a 7-reviewer audit (5 internal persona agents + Codex + ChatGPT).
+> **Status:** historical implementation design. R01 (2026-09-18) supersedes the failed-call
+> accounting in this draft: typed delivery, bounded uncertainty, strict tool pricing and a single
+> attempt pipeline. The current contract is [Cumulative budgets](../safety.md#cumulative-budgets),
+> especially its failed-call table; the phase record is `blackboard/tasks/R01-core-calls.md`.
+> Reference snapshot: `feat/agent-budget` @ `2af0fc7` — **never merge**.
+> This revision integrated a 7-reviewer audit (5 internal persona agents + Codex + ChatGPT).
 
 Replaces the escrow `Ledger` + per-strategy accounting + executor reconciliation with a
 single source of truth: **a neutral meter in `core/`, a budget controller in `toolkit/`.**
