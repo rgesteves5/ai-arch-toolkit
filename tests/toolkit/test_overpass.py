@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from ai_arch_toolkit.toolkit.tools._overpass import overpass_pois, overpass_query
+from tests.toolkit.http_fakes import HTTP_OPEN, respond
 
 _DATA = {
     "elements": [
@@ -20,30 +20,22 @@ _DATA = {
 }
 
 
-def _mock_urlopen(data: dict | str):
-    resp = MagicMock()
-    resp.read.return_value = (data if isinstance(data, str) else json.dumps(data)).encode()
-    resp.__enter__ = lambda s: s
-    resp.__exit__ = MagicMock(return_value=False)
-    return resp
-
-
 class TestOverpass:
-    @patch("ai_arch_toolkit.toolkit.tools._overpass.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_query_and_pois(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(_DATA)
+        mock_urlopen.return_value = respond(_DATA)
 
         result = overpass_query('[out:json];node["amenity"="cafe"](38,-10,39,-9);out tags;')
 
         assert "Cafe A | node/1" in result
 
-        mock_urlopen.return_value = _mock_urlopen(_DATA)
+        mock_urlopen.return_value = respond(_DATA)
         result = overpass_pois("amenity", "cafe", latitude=38.7, longitude=-9.1, radius_m=500)
         assert "amenity=cafe" in result
         body = mock_urlopen.call_args.args[0].data.decode()
         assert "around%3A500%2C38.7%2C-9.1" in body
 
-    @patch("ai_arch_toolkit.toolkit.tools._overpass.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_invalid_options_do_not_call_api(self, mock_urlopen):
         assert "include [out:json]" in overpass_query("node;")
         assert "provide bbox" in overpass_pois("amenity", "cafe")

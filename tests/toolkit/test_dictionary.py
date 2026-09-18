@@ -2,24 +2,16 @@
 
 from __future__ import annotations
 
-import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from ai_arch_toolkit.toolkit.tools._dictionary import define_word
-
-
-def _mock_urlopen(data):
-    resp = MagicMock()
-    resp.read.return_value = json.dumps(data).encode()
-    resp.__enter__ = lambda s: s
-    resp.__exit__ = MagicMock(return_value=False)
-    return resp
+from tests.toolkit.http_fakes import HTTP_OPEN, respond
 
 
 class TestDefineWord:
-    @patch("ai_arch_toolkit.toolkit.tools._dictionary.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_returns_definition(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(
+        mock_urlopen.return_value = respond(
             [
                 {
                     "word": "test",
@@ -38,7 +30,7 @@ class TestDefineWord:
         assert "noun" in result
         assert "procedure" in result
 
-    @patch("ai_arch_toolkit.toolkit.tools._dictionary.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_word_not_found(self, mock_urlopen):
         import urllib.error
         from io import BytesIO

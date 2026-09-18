@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import difflib
 import importlib.resources
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -10,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import unquote, urlparse
 
+from ai_arch_toolkit.toolkit._shape import ShapeError
 from ai_arch_toolkit.toolkit.prompts._errors import (
     PromptIncludeCycleError,
     PromptLoadError,
@@ -23,6 +23,7 @@ from ai_arch_toolkit.toolkit.prompts._layouts import (
     TextLayout,
     XmlLayout,
 )
+from ai_arch_toolkit.toolkit.prompts._manifest_shape import PROMPT_MANIFEST
 from ai_arch_toolkit.toolkit.prompts._sources import (
     KnowledgeSource,
     LiteralSource,
@@ -39,6 +40,7 @@ from ai_arch_toolkit.toolkit.resources import (
     LineRange,
     MarkdownHeading,
     NamedBlock,
+    Resource,
     ResourceError,
     ResourcePolicy,
     ResourceRef,
@@ -47,37 +49,6 @@ from ai_arch_toolkit.toolkit.resources import (
 
 if TYPE_CHECKING:
     from ai_arch_toolkit.toolkit.knowledge import KnowledgeRegistry
-
-_TOP_LEVEL_FIELDS = frozenset(
-    {
-        "description",
-        "extends",
-        "include",
-        "layout",
-        "metadata",
-        "name",
-        "sections",
-        "separator",
-        "variables",
-        "version",
-    }
-)
-_SECTION_FIELDS = frozenset(
-    {
-        "content",
-        "knowledge",
-        "merge",
-        "metadata",
-        "name",
-        "order",
-        "remove",
-        "replace",
-        "sections",
-        "source",
-        "stability",
-        "template",
-    }
-)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -177,6 +148,48 @@ def _load_prompt(
     max_include_depth: int,
 ) -> PromptTemplate:
     canonical = path.expanduser().resolve()
+    resource = _manifest_resource(canonical, resolver, stack, max_include_depth)
+    data: Mapping[str, Any] = resource.data
+
+    def load(value: str) -> PromptTemplate:
+        return _load_prompt(
+            _relative_path(canonical, value),
+            resolver=resolver,
+            knowledge=knowledge,
+            stack=(*stack, canonical),
+            max_include_depth=max_include_depth,
+        )
+
+    extends = data.get("extends")
+    base = load(extends) if extends is not None else None
+    include = data.get("include", ())
+    included = [load(item) for item in ((include,) if isinstance(include, str) else include)]
+    variables = _merge_variables(base, included)
+    for variable in _parse_variables(data.get("variables", {})):
+        variables[variable.name] = variable
+    operations = _parse_sections(
+        data.get("sections", ()),
+        manifest_path=canonical,
+        resolver=resolver,
+        knowledge=knowledge,
+    )
+    sections = _apply_section_operations(
+        _inherited_sections(base, included, canonical), operations, canonical
+    )
+    try:
+        _infer_manifest_variables(sections, variables)
+    except (TypeError, ValueError) as exc:
+        raise PromptValidationError(f"invalid prompt template configuration: {exc}") from exc
+    return _template(data, base, sections, variables, canonical, resource.fingerprint)
+
+
+def _manifest_resource(
+    canonical: Path,
+    resolver: ResourceResolver,
+    stack: tuple[Path, ...],
+    max_include_depth: int,
+) -> Resource:
+    """The manifest file at ``canonical``, read and checked against ``PROMPT_MANIFEST``."""
     if canonical in stack:
         cycle = " -> ".join(str(item) for item in (*stack, canonical))
         raise PromptIncludeCycleError(f"prompt manifest cycle detected: {cycle}")
@@ -186,121 +199,69 @@ def _load_prompt(
         )
     try:
         resource = resolver.resolve(canonical)
-    except ImportError:
-        raise
     except ResourceError as exc:
         raise PromptLoadError(f"could not load prompt manifest {canonical}: {exc}") from exc
-    data = resource.data
-    if not isinstance(data, Mapping):
+    if not isinstance(resource.data, Mapping):
         raise PromptValidationError(f"prompt manifest {canonical} must contain an object")
-    _reject_unknown(data, _TOP_LEVEL_FIELDS, context=f"prompt manifest {canonical}")
-    if data.get("version") != 1:
-        raise PromptValidationError(
-            f"prompt manifest {canonical} must declare version: 1; got {data.get('version')!r}"
-        )
+    try:
+        PROMPT_MANIFEST.check(resource.data)
+    except ShapeError as exc:
+        raise PromptValidationError(f"prompt manifest {canonical}: {exc}") from exc
+    return resource
 
-    next_stack = (*stack, canonical)
-    base: PromptTemplate | None = None
-    extends = data.get("extends")
-    if extends is not None:
-        if not isinstance(extends, str) or not extends:
-            raise PromptValidationError("prompt manifest extends must be a non-empty path string")
-        base = _load_prompt(
-            _relative_path(canonical, extends),
-            resolver=resolver,
-            knowledge=knowledge,
-            stack=next_stack,
-            max_include_depth=max_include_depth,
-        )
 
-    includes_value = data.get("include", ())
-    if isinstance(includes_value, str):
-        includes = (includes_value,)
-    elif isinstance(includes_value, Sequence) and not isinstance(includes_value, bytes):
-        includes = tuple(includes_value)
-    else:
-        raise PromptValidationError("prompt manifest include must be a path or list of paths")
-    included_templates: list[PromptTemplate] = []
-    for include in includes:
-        if not isinstance(include, str) or not include:
-            raise PromptValidationError("prompt manifest include paths must be non-empty strings")
-        included_templates.append(
-            _load_prompt(
-                _relative_path(canonical, include),
-                resolver=resolver,
-                knowledge=knowledge,
-                stack=next_stack,
-                max_include_depth=max_include_depth,
-            )
-        )
-
-    variables = _merge_variables(base, included_templates)
-    local_variables = _parse_variables(data.get("variables", {}), path=canonical)
-    for variable in local_variables:
-        variables[variable.name] = variable
-
+def _inherited_sections(
+    base: PromptTemplate | None, included: Sequence[PromptTemplate], canonical: Path
+) -> tuple[PromptTemplateSection, ...]:
+    """The base manifest's sections, then each included one's; no name twice."""
     sections: list[PromptTemplateSection] = list(base.sections if base else ())
-    section_names = {section.name for section in _walk_template_sections(sections)}
-    for included in included_templates:
-        for section in included.sections:
-            subtree_names = {item.name for item in _walk_template_sections((section,))}
-            if section.name in section_names:
-                duplicated = section.name
-            else:
-                duplicated = next(iter(sorted(subtree_names & section_names)), None)
+    names = {section.name for section in _walk_template_sections(sections)}
+    for template in included:
+        for section in template.sections:
+            subtree = {item.name for item in _walk_template_sections((section,))}
+            duplicated = (
+                section.name if section.name in names else min(subtree & names, default=None)
+            )
             if duplicated is not None:
                 raise PromptValidationError(
                     f"included prompt section {duplicated!r} is duplicated in {canonical}"
                 )
             sections.append(section)
-            section_names.update(subtree_names)
+            names.update(subtree)
+    return tuple(sections)
 
-    operations = _parse_sections(
-        data.get("sections", ()),
-        manifest_path=canonical,
-        resolver=resolver,
-        knowledge=knowledge,
-    )
-    sections = list(_apply_section_operations(tuple(sections), operations, canonical))
 
-    try:
-        _infer_manifest_variables(sections, variables)
-    except (TypeError, ValueError) as exc:
-        raise PromptValidationError(f"invalid prompt template configuration: {exc}") from exc
-    metadata = {
-        **(dict(base.metadata) if base else {}),
-        **_mapping(data.get("metadata", {}), "metadata"),
-    }
+def _template(
+    data: Mapping[str, Any],
+    base: PromptTemplate | None,
+    sections: Sequence[PromptTemplateSection],
+    variables: Mapping[str, PromptVariable],
+    canonical: Path,
+    fingerprint: str,
+) -> PromptTemplate:
+    """The manifest's template: its own fields, falling back to its base's."""
     try:
         layout = (
             _parse_layout(data["layout"])
             if "layout" in data
-            else base.layout
-            if base is not None
-            else None
+            else (base.layout if base is not None else None)
         )
     except PromptValidationError:
         raise
     except (TypeError, ValueError) as exc:
         raise PromptValidationError(f"invalid prompt layout: {exc}") from exc
-    separator = data.get("separator", base.separator if base else "\n\n")
-    if not isinstance(separator, str):
-        raise PromptValidationError("prompt manifest separator must be a string")
-    name = data.get("name", base.name if base else canonical.stem.removesuffix(".prompt"))
-    description = data.get("description", base.description if base else "")
-    if not isinstance(name, str) or not isinstance(description, str):
-        raise PromptValidationError("prompt manifest name and description must be strings")
     template = PromptTemplate(
         sections=tuple(sections),
         variables=tuple(variables.values()),
-        name=name,
-        description=description,
-        separator=separator,
+        name=data.get("name", base.name if base else canonical.stem.removesuffix(".prompt")),
+        description=data.get("description", base.description if base else ""),
+        separator=data.get("separator", base.separator if base else "\n\n"),
         layout=layout,
         metadata={
-            **metadata,
+            **(dict(base.metadata) if base else {}),
+            **data.get("metadata", {}),
             "manifest": str(canonical),
-            "manifest_fingerprint": resource.fingerprint,
+            "manifest_fingerprint": fingerprint,
         },
     )
     try:
@@ -310,28 +271,19 @@ def _load_prompt(
     return template
 
 
-def _parse_variables(value: Any, *, path: Path) -> tuple[PromptVariable, ...]:
-    if not isinstance(value, Mapping):
-        raise PromptValidationError(f"prompt manifest variables must be an object in {path}")
+def _parse_variables(value: Mapping[str, Any]) -> tuple[PromptVariable, ...]:
     variables: list[PromptVariable] = []
     for name, config in value.items():
-        if not isinstance(name, str) or not name:
-            raise PromptValidationError("prompt variable names must be non-empty strings")
-        if isinstance(config, str):
-            config = {"type": config}
-        if not isinstance(config, Mapping):
-            raise PromptValidationError(f"prompt variable {name!r} must be an object or type name")
-        allowed = {"default", "description", "json_schema", "required", "type"}
-        _reject_unknown(config, allowed, context=f"prompt variable {name!r}")
+        declared: Mapping[str, Any] = {"type": config} if isinstance(config, str) else config
         kwargs: dict[str, Any] = {
             "name": name,
-            "value_type": config.get("type", "any"),
-            "required": config.get("required", False),
-            "description": config.get("description", ""),
-            "json_schema": config.get("json_schema"),
+            "value_type": declared.get("type", "any"),
+            "required": declared.get("required", False),
+            "description": declared.get("description", ""),
+            "json_schema": declared.get("json_schema"),
         }
-        if "default" in config:
-            kwargs["default"] = config["default"]
+        if "default" in declared:
+            kwargs["default"] = declared["default"]
         try:
             variables.append(PromptVariable(**kwargs))
         except (TypeError, ValueError) as exc:
@@ -340,83 +292,69 @@ def _parse_variables(value: Any, *, path: Path) -> tuple[PromptVariable, ...]:
 
 
 def _parse_sections(
-    value: Any,
+    value: Sequence[Mapping[str, Any]],
     *,
     manifest_path: Path,
     resolver: ResourceResolver,
     knowledge: KnowledgeRegistry | None,
 ) -> tuple[_SectionOperation, ...]:
-    if not isinstance(value, Sequence) or isinstance(value, str | bytes):
-        raise PromptValidationError("prompt manifest sections must be a list")
     operations: list[_SectionOperation] = []
-    for index, config in enumerate(value):
-        if not isinstance(config, Mapping):
-            raise PromptValidationError(f"prompt section at index {index} must be an object")
-        _reject_unknown(config, _SECTION_FIELDS, context=f"prompt section at index {index}")
-        name = config.get("name")
-        if not isinstance(name, str) or not name:
-            raise PromptValidationError(f"prompt section at index {index} requires a name")
-        remove = config.get("remove", False)
-        replace_flag = config.get("replace", False)
-        merge = config.get("merge", False)
-        if not all(isinstance(flag, bool) for flag in (remove, replace_flag, merge)):
-            raise PromptValidationError(
-                f"section {name!r} remove/replace/merge flags must be booleans"
-            )
-        if remove and replace_flag:
-            raise PromptValidationError(f"section {name!r} cannot both remove and replace")
-        if merge and (remove or replace_flag):
-            raise PromptValidationError(
-                f"section {name!r} cannot combine merge with remove or replace"
-            )
-        if remove:
-            content_fields = {"content", "knowledge", "source", "template"} & set(config)
-            if content_fields:
-                raise PromptValidationError(f"removed section {name!r} cannot define content")
-            if "sections" in config:
-                raise PromptValidationError(f"removed section {name!r} cannot define sections")
+    for config in value:
+        name: str = config["name"]
+        action = _section_action(config)
+        if action == "remove":
             operations.append(_SectionOperation(name=name, action="remove"))
-            continue
-        if merge:
-            extra = sorted(set(config) - {"merge", "name", "sections"})
-            if extra:
-                raise PromptValidationError(
-                    f"merge section {name!r} may only define sections; found: "
-                    + ", ".join(repr(field) for field in extra)
-                )
-            nested = config.get("sections")
-            if not isinstance(nested, Sequence) or isinstance(nested, str | bytes) or not nested:
-                raise PromptValidationError(
-                    f"merge section {name!r} requires a non-empty sections list"
-                )
-            operations.append(
-                _SectionOperation(
-                    name=name,
-                    action="merge",
-                    operations=_parse_sections(
-                        nested,
-                        manifest_path=manifest_path,
-                        resolver=resolver,
-                        knowledge=knowledge,
-                    ),
-                )
+        elif action == "merge":
+            nested = _parse_sections(
+                config["sections"],
+                manifest_path=manifest_path,
+                resolver=resolver,
+                knowledge=knowledge,
             )
-            continue
-        section = _parse_section_definition(
-            config,
-            name=name,
-            manifest_path=manifest_path,
-            resolver=resolver,
-            knowledge=knowledge,
-        )
-        operations.append(
-            _SectionOperation(
+            operations.append(_SectionOperation(name=name, action="merge", operations=nested))
+        else:
+            section = _parse_section_definition(
+                config,
                 name=name,
-                action="replace" if replace_flag else "add",
-                section=section,
+                manifest_path=manifest_path,
+                resolver=resolver,
+                knowledge=knowledge,
             )
-        )
+            operations.append(_SectionOperation(name=name, action=action, section=section))
     return tuple(operations)
+
+
+def _section_action(config: Mapping[str, Any]) -> str:
+    """What a section entry does to the inherited sections: add, replace, remove or merge."""
+    name = config["name"]
+    remove, replace_flag, merge = (
+        config.get(flag, False) for flag in ("remove", "replace", "merge")
+    )
+    if remove and replace_flag:
+        raise PromptValidationError(f"section {name!r} cannot both remove and replace")
+    if merge and (remove or replace_flag):
+        raise PromptValidationError(
+            f"section {name!r} cannot combine merge with remove or replace"
+        )
+    if remove:
+        if {"content", "knowledge", "source", "template"} & set(config):
+            raise PromptValidationError(f"removed section {name!r} cannot define content")
+        if "sections" in config:
+            raise PromptValidationError(f"removed section {name!r} cannot define sections")
+        return "remove"
+    if merge:
+        extra = sorted(set(config) - {"merge", "name", "sections"})
+        if extra:
+            raise PromptValidationError(
+                f"merge section {name!r} may only define sections; found: "
+                + ", ".join(repr(field) for field in extra)
+            )
+        if not config.get("sections"):
+            raise PromptValidationError(
+                f"merge section {name!r} requires a non-empty sections list"
+            )
+        return "merge"
+    return "replace" if replace_flag else "add"
 
 
 def _parse_section_definition(
@@ -443,10 +381,7 @@ def _parse_section_definition(
         engine: str | None = None
         source: LiteralSource | ResourceSource | KnowledgeSource
         if "content" in config:
-            content = config["content"]
-            if not isinstance(content, str):
-                raise PromptValidationError(f"section {name!r} content must be a string")
-            source = LiteralSource(content)
+            source = LiteralSource(config["content"])
         elif "source" in config:
             source = _parse_resource_source(
                 config["source"], manifest_path=manifest_path, resolver=resolver
@@ -469,7 +404,7 @@ def _parse_section_definition(
             order=config.get("order", 0),
             stability=config.get("stability", "static"),
             engine=engine,
-            metadata=_mapping(config.get("metadata", {}), f"section {name!r} metadata"),
+            metadata=config.get("metadata", {}),
             sections=subsections,
         )
     except (PromptLoadError, PromptValidationError):
@@ -479,33 +414,17 @@ def _parse_section_definition(
 
 
 def _parse_subsections(
-    value: Any,
+    value: Sequence[Mapping[str, Any]],
     *,
     parent_name: str,
     manifest_path: Path,
     resolver: ResourceResolver,
     knowledge: KnowledgeRegistry | None,
 ) -> tuple[PromptTemplateSection, ...]:
-    if not isinstance(value, Sequence) or isinstance(value, str | bytes):
-        raise PromptValidationError(f"section {parent_name!r} sections must be a list")
     subsections: list[PromptTemplateSection] = []
-    for index, config in enumerate(value):
-        if not isinstance(config, Mapping):
-            raise PromptValidationError(
-                f"subsection at index {index} of section {parent_name!r} must be an object"
-            )
-        _reject_unknown(config, _SECTION_FIELDS, context=f"subsection of section {parent_name!r}")
-        name = config.get("name")
-        if not isinstance(name, str) or not name:
-            raise PromptValidationError(
-                f"subsection at index {index} of section {parent_name!r} requires a name"
-            )
-        flags = {flag: config.get(flag, False) for flag in ("merge", "remove", "replace")}
-        if not all(isinstance(flag, bool) for flag in flags.values()):
-            raise PromptValidationError(
-                f"section {name!r} remove/replace/merge flags must be booleans"
-            )
-        if any(flags.values()):
+    for config in value:
+        name: str = config["name"]
+        if any(config.get(flag, False) for flag in ("merge", "remove", "replace")):
             raise PromptValidationError(
                 f"subsection {name!r} of section {parent_name!r} cannot use "
                 "remove, replace, or merge flags"
@@ -596,25 +515,13 @@ def _apply_section_operations(
 
 
 def _parse_resource_source(
-    value: Any,
+    value: str | Mapping[str, Any],
     *,
     manifest_path: Path,
     resolver: ResourceResolver,
 ) -> ResourceSource:
-    if isinstance(value, str):
-        config: Mapping[str, Any] = {"path": value}
-    elif isinstance(value, Mapping):
-        config = value
-    else:
-        raise PromptValidationError("prompt section source must be a path or object")
-    _reject_unknown(
-        config,
-        {"media_type", "path", "select", "serialize_as"},
-        context="prompt section source",
-    )
-    path = config.get("path")
-    if not isinstance(path, str) or not path:
-        raise PromptValidationError("prompt section source requires a non-empty path")
+    config: Mapping[str, Any] = {"path": value} if isinstance(value, str) else value
+    path: str = config["path"]
     selector = _parse_selector(config.get("select"))
     try:
         source_ref = (
@@ -645,165 +552,81 @@ def _parse_resource_source(
 
 
 def _parse_template_source(
-    value: Any,
+    value: str | Mapping[str, Any],
     *,
     manifest_path: Path,
     resolver: ResourceResolver,
 ) -> tuple[LiteralSource | ResourceSource, str]:
-    if isinstance(value, str):
-        config: Mapping[str, Any] = {"path": value}
-    elif isinstance(value, Mapping):
-        config = value
-    else:
-        raise PromptValidationError("prompt section template must be a path or object")
-    _reject_unknown(
-        config,
-        {"content", "engine", "path", "select", "serialize_as"},
-        context="prompt section template",
-    )
-    engine = config.get("engine", "string-template")
-    if not isinstance(engine, str):
-        raise PromptValidationError("prompt template engine must be a string")
-    has_path = "path" in config
-    has_content = "content" in config
-    if has_path == has_content:
+    config: Mapping[str, Any] = {"path": value} if isinstance(value, str) else value
+    engine: str = config.get("engine", "string-template")
+    if ("path" in config) == ("content" in config):
         raise PromptValidationError("prompt template must define exactly one of path or content")
-    if has_content:
-        content = config["content"]
-        if not isinstance(content, str):
-            raise PromptValidationError("inline prompt template content must be a string")
-        return LiteralSource(content), engine
-    return (
-        _parse_resource_source(
-            {
-                "path": config["path"],
-                **({"select": config["select"]} if "select" in config else {}),
-                **({"serialize_as": config["serialize_as"]} if "serialize_as" in config else {}),
-            },
-            manifest_path=manifest_path,
-            resolver=resolver,
-        ),
-        engine,
-    )
+    if "content" in config:
+        read = [key for key in ("select", "serialize_as") if config.get(key) is not None]
+        if read:
+            raise PromptValidationError(
+                f"inline prompt template content cannot use {', '.join(read)}: "
+                "they read a template file (path)"
+            )
+        return LiteralSource(config["content"]), engine
+    return _parse_resource_source(
+        {key: config[key] for key in ("path", "select", "serialize_as") if key in config},
+        manifest_path=manifest_path,
+        resolver=resolver,
+    ), engine
 
 
-def _parse_knowledge_source(value: Any, *, registry: KnowledgeRegistry) -> KnowledgeSource:
+def _parse_knowledge_source(
+    value: str | Sequence[str] | Mapping[str, Any], *, registry: KnowledgeRegistry
+) -> KnowledgeSource:
     if isinstance(value, str):
         config: Mapping[str, Any] = {"keys": [value]}
-    elif isinstance(value, Sequence) and not isinstance(value, str | bytes):
-        config = {"keys": value}
     elif isinstance(value, Mapping):
         config = value
     else:
-        raise PromptValidationError("knowledge source must be a key, key list, or object")
-    _reject_unknown(
-        config,
-        {"include_names", "keys", "separator"},
-        context="knowledge source",
-    )
-    keys = config.get("keys")
-    if not isinstance(keys, Sequence) or isinstance(keys, str | bytes):
-        raise PromptValidationError("knowledge source keys must be a list")
+        config = {"keys": value}
     return KnowledgeSource(
         registry=registry,
-        keys=tuple(keys),
+        keys=tuple(config["keys"]),
         separator=config.get("separator", "\n\n---\n\n"),
         include_names=config.get("include_names", False),
     )
 
 
-def _parse_selector(value: Any) -> Any:
+def _parse_selector(value: str | Mapping[str, Any] | None) -> Any:
     if value is None or isinstance(value, str):
         return value
-    if not isinstance(value, Mapping):
-        raise PromptValidationError("resource selector must be a string or object")
-    selector_type = value.get("type")
-    if selector_type == "json_pointer":
-        _reject_unknown(value, {"type", "value"}, context="JSON Pointer selector")
+    kind = value["type"]
+    if kind == "json_pointer":
         return JsonPointer(value.get("value", ""))
-    if selector_type == "heading":
-        _reject_unknown(
-            value,
-            {"heading", "include_heading", "occurrence", "type"},
-            context="Markdown heading selector",
-        )
+    if kind == "heading":
         return MarkdownHeading(
-            heading=value.get("heading", ""),
+            heading=value["heading"],
             occurrence=value.get("occurrence"),
             include_heading=value.get("include_heading", False),
         )
-    if selector_type == "lines":
-        _reject_unknown(value, {"end", "start", "type"}, context="line selector")
-        return LineRange(start=value.get("start", 0), end=value.get("end"))
-    if selector_type == "block":
-        _reject_unknown(
-            value,
-            {"end_marker", "include_markers", "start_marker", "type"},
-            context="named block selector",
-        )
-        return NamedBlock(
-            start_marker=value.get("start_marker", ""),
-            end_marker=value.get("end_marker", ""),
-            include_markers=value.get("include_markers", False),
-        )
-    raise PromptValidationError(
-        "unknown resource selector type; expected one of: block, heading, json_pointer, lines"
+    if kind == "lines":
+        return LineRange(start=value["start"], end=value.get("end"))
+    return NamedBlock(
+        start_marker=value["start_marker"],
+        end_marker=value["end_marker"],
+        include_markers=value.get("include_markers", False),
     )
 
 
-def _parse_layout(value: Any) -> str | PromptLayout | None:
-    if value is None:
+def _parse_layout(value: str | Mapping[str, Any] | None) -> str | PromptLayout | None:
+    if value is None or isinstance(value, str):
         return value
-    if isinstance(value, str):
-        if value not in {"json", "markdown", "text", "xml"}:
-            raise PromptValidationError(
-                "unknown prompt layout; expected one of: json, markdown, text, xml"
-            )
-        return value
-    if not isinstance(value, Mapping):
-        raise PromptValidationError("prompt layout must be a name or object")
-    layout_type = value.get("type")
-    if not isinstance(layout_type, str):
-        raise PromptValidationError("prompt layout object requires a type")
-    if layout_type == "text":
-        _reject_unknown(
-            value,
-            {"after", "before", "between", "separator", "type"},
-            context="text layout",
-        )
+    kind = value["type"]
+    if kind == "text":
         return TextLayout(separator=_parse_separator_policy(value))
-    if layout_type == "markdown":
-        _reject_unknown(
-            value,
-            {
-                "after",
-                "before",
-                "between",
-                "heading_level",
-                "include_headings",
-                "separator",
-                "type",
-            },
-            context="Markdown layout",
-        )
+    if kind == "markdown":
         return MarkdownLayout(
             heading_level=value.get("heading_level", 2),
             separator=_parse_separator_policy(value),
             include_headings=value.get("include_headings", True),
         )
-    if layout_type == "xml":
-        _reject_unknown(
-            value,
-            {
-                "include_stability",
-                "metadata_attributes",
-                "root_tag",
-                "section_tag",
-                "separator",
-                "type",
-            },
-            context="XML layout",
-        )
+    if kind == "xml":
         return XmlLayout(
             root_tag=value.get("root_tag", "prompt"),
             section_tag=value.get("section_tag", "section"),
@@ -811,57 +634,25 @@ def _parse_layout(value: Any) -> str | PromptLayout | None:
             include_stability=value.get("include_stability", False),
             metadata_attributes=tuple(value.get("metadata_attributes", ())),
         )
-    if layout_type == "json":
-        _reject_unknown(
-            value,
-            {"ensure_ascii", "include_stability", "indent", "mode", "type"},
-            context="JSON layout",
-        )
-        return JsonLayout(
-            indent=value.get("indent", 2),
-            include_stability=value.get("include_stability", False),
-            ensure_ascii=value.get("ensure_ascii", False),
-            mode=value.get("mode", "array"),
-        )
-    raise PromptValidationError(
-        "unknown prompt layout type; expected one of: json, markdown, text, xml"
+    return JsonLayout(
+        indent=value.get("indent", 2),
+        include_stability=value.get("include_stability", False),
+        ensure_ascii=value.get("ensure_ascii", False),
+        mode=value.get("mode", "array"),
     )
 
 
 def _parse_separator_policy(config: Mapping[str, Any]) -> str | SeparatorPolicy:
-    separator = config.get("separator", "\n\n")
-    between_value = config.get("between", ())
-    before = _parse_named_separators(config.get("before", {}), context="layout before")
-    after = _parse_named_separators(config.get("after", {}), context="layout after")
-    if not isinstance(between_value, Sequence) or isinstance(between_value, str | bytes):
-        raise PromptValidationError("layout between must be a list of boundary objects")
-    if not between_value and not before and not after:
+    separator: str = config.get("separator", "\n\n")
+    before: dict[str, str] = dict(config.get("before", {}))
+    after: dict[str, str] = dict(config.get("after", {}))
+    between = {
+        (boundary["from"], boundary["to"]): boundary["separator"]
+        for boundary in config.get("between", ())
+    }
+    if not between and not before and not after:
         return separator
-    between: dict[tuple[str, str], str] = {}
-    for boundary in between_value:
-        if not isinstance(boundary, Mapping):
-            raise PromptValidationError("layout boundary must be an object")
-        _reject_unknown(boundary, {"from", "separator", "to"}, context="layout boundary")
-        previous = boundary.get("from")
-        current = boundary.get("to")
-        boundary_separator = boundary.get("separator")
-        if not all(isinstance(item, str) for item in (previous, current, boundary_separator)):
-            raise PromptValidationError("layout boundary from, to, and separator must be strings")
-        assert isinstance(previous, str)
-        assert isinstance(current, str)
-        assert isinstance(boundary_separator, str)
-        between[(previous, current)] = boundary_separator
     return SeparatorPolicy(default=separator, between=between, before=before, after=after)
-
-
-def _parse_named_separators(value: Any, *, context: str) -> dict[str, str]:
-    if not isinstance(value, Mapping):
-        raise PromptValidationError(f"{context} must be an object")
-    if not all(
-        isinstance(name, str) and isinstance(separator, str) for name, separator in value.items()
-    ):
-        raise PromptValidationError(f"{context} must map section names to strings")
-    return dict(value)
 
 
 def _merge_variables(
@@ -904,28 +695,6 @@ def _infer_manifest_variables(
 def _relative_path(manifest_path: Path, value: str) -> Path:
     candidate = Path(value)
     return candidate if candidate.is_absolute() else manifest_path.parent / candidate
-
-
-def _mapping(value: Any, context: str) -> Mapping[str, Any]:
-    if not isinstance(value, Mapping):
-        raise PromptValidationError(f"{context} must be an object")
-    return value
-
-
-def _reject_unknown(
-    value: Mapping[Any, Any],
-    allowed: set[str] | frozenset[str],
-    *,
-    context: str,
-) -> None:
-    unknown = sorted(str(key) for key in value if key not in allowed)
-    if not unknown:
-        return
-    details: list[str] = []
-    for name in unknown:
-        match = difflib.get_close_matches(name, allowed, n=1)
-        details.append(f"{name!r}" + (f" (did you mean {match[0]!r}?)" if match else ""))
-    raise PromptValidationError(f"unknown fields in {context}: {', '.join(details)}")
 
 
 __all__ = ["load_prompt"]

@@ -2,36 +2,33 @@
 
 from __future__ import annotations
 
-import json
-import urllib.error
-import urllib.parse
-import urllib.request
+from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
-_TIMEOUT = 10
+_API = Api(base="https://api.dictionaryapi.dev/api/v2/entries/en", name="Free Dictionary API")
 
 
-@tool
+@tool(capability="network")
 def define_word(word: str) -> str:
     """Look up a word definition using the Free Dictionary API.
 
     Args:
         word: The word to define.
     """
-    url = f"https://api.dictionaryapi.dev/api/v2/entries/en/{urllib.parse.quote(word)}"
     try:
-        req = urllib.request.Request(url)
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-            data = json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
+        return _API.get_json_list(word, parse=lambda data: _definition_text(data, word))
+    except HttpError as e:
+        if e.status == 404:
             return f"Word not found: {word!r}"
-        return f"Dictionary API error: {e.code}"
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
+        if e.status is not None:
+            return f"Dictionary API error: {e.status}"
         return f"Dictionary API failed: {e}"
 
-    if not isinstance(data, list) or not data:
+
+def _definition_text(data: list[Any], word: str) -> str:
+    if not data:
         return f"No definitions found for: {word!r}"
 
     entry = data[0]

@@ -10,7 +10,7 @@ from ai_arch_toolkit.core import tool
 _DATE_FORMATS = ("%Y-%m-%d %H:%M", "%Y-%m-%d")
 
 
-@tool
+@tool(capability="compute")
 def datetime_now(tz: str = "UTC") -> str:
     """Get the current date and time in a given timezone.
 
@@ -30,7 +30,7 @@ def datetime_now(tz: str = "UTC") -> str:
     return f"{now.strftime('%Y-%m-%d %H:%M:%S %Z')} ({now.strftime('%A')})"
 
 
-@tool
+@tool(capability="compute")
 def timezone_convert(time_str: str, from_tz: str, to_tz: str) -> str:
     """Convert a time from one timezone to another.
 
@@ -56,11 +56,14 @@ def timezone_convert(time_str: str, from_tz: str, to_tz: str) -> str:
         return f"Invalid time format: {time_str!r}. Use 'HH:MM' or 'YYYY-MM-DD HH:MM'."
 
     localized = dt.replace(tzinfo=from_zone)
-    converted = localized.astimezone(to_zone)
+    try:
+        converted = localized.astimezone(to_zone)
+    except OverflowError as e:
+        return f"Date out of range: {e}"
     return f"{localized.strftime('%Y-%m-%d %H:%M %Z')} → {converted.strftime('%Y-%m-%d %H:%M %Z')}"
 
 
-@tool
+@tool(capability="compute")
 def date_add(date_str: str, days: int = 0, hours: int = 0, minutes: int = 0) -> str:
     """Add days, hours, and minutes to a date/time string.
 
@@ -75,11 +78,14 @@ def date_add(date_str: str, days: int = 0, hours: int = 0, minutes: int = 0) -> 
         return parsed
     dt, input_format = parsed
 
-    result = dt + timedelta(days=days, hours=hours, minutes=minutes)
+    try:
+        result = dt + timedelta(days=days, hours=hours, minutes=minutes)
+    except OverflowError as e:
+        return f"Date out of range: {e}"
     return _format_datetime(result, input_format, force_datetime=hours != 0 or minutes != 0)
 
 
-@tool
+@tool(capability="compute")
 def date_diff(start: str, end: str, unit: str = "seconds") -> str:
     """Calculate the difference between two date/time strings.
 
@@ -113,7 +119,7 @@ def date_diff(start: str, end: str, unit: str = "seconds") -> str:
     return f"{start} → {end} = {value_str} {unit}"
 
 
-@tool
+@tool(capability="compute")
 def date_format(date_str: str, format_out: str) -> str:
     """Format a date/time string using strftime syntax.
 

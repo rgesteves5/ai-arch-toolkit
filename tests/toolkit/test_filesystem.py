@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from ai_arch_toolkit.core import ApprovalDecision, ApprovalRequest, ToolCall, ToolGroup
 from ai_arch_toolkit.toolkit.tools._filesystem import list_directory, read_file, search_files
 
@@ -117,3 +119,46 @@ class TestReadFileGovernance:
         assert [(r.tool_name, r.capability, r.risk_level) for r in requests] == [
             ("read_file", "filesystem", "high")
         ]
+
+
+class TestBounds:
+    def test_max_lines_is_clamped(self, tmp_path):
+        f = tmp_path / "lines.txt"
+        f.write_text("first\nsecond\n")
+
+        assert read_file(str(f), max_lines=-1).startswith("first\n\n[Truncated")
+
+    def test_a_file_on_one_long_line_is_read_only_up_to_the_limit(self, tmp_path):
+        f = tmp_path / "one_line.txt"
+        f.write_text("x" * 2_000_000)
+
+        result = read_file(str(f))
+
+        assert result.startswith("x" * 100_000 + "\n\n[Truncated")
+        assert len(result) < 100_100
+
+    def test_search_results_trim_long_lines_and_clamp_max_results(self, tmp_path):
+        (tmp_path / "a.txt").write_text("var a = " + "x" * 2_000_000 + "\nvar a\nvar a\n")
+
+        result = search_files(str(tmp_path), "var a", max_results=-5)
+
+        assert len(result) < 1_000
+        assert result.endswith("[Stopped at 1 results]")
+
+    def test_an_os_error_is_an_error_string(self):
+        name = "a" * 100_000
+
+        assert read_file(name).startswith("Cannot read")
+        assert list_directory(name).startswith("Cannot list")
+        assert search_files(name, "x").startswith("Cannot search")
+
+    @pytest.mark.parametrize("pattern", ["", "/etc/*"])
+    def test_an_unusable_pattern_is_an_error_string(self, tmp_path, pattern):
+        assert list_directory(str(tmp_path), pattern).startswith("Invalid pattern")
+
+
+def test_search_skips_binary_files(tmp_path):
+    (tmp_path / "blob.dat").write_bytes(b"\xff\xfe needle \x00")
+    (tmp_path / "notes.txt").write_text("a needle here\n")
+
+    assert search_files(str(tmp_path), "needle") == "notes.txt:1: a needle here"

@@ -2,26 +2,18 @@
 
 from __future__ import annotations
 
-import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from ai_arch_toolkit.toolkit.tools._news import hacker_news
-
-
-def _mock_urlopen(data):
-    resp = MagicMock()
-    resp.read.return_value = json.dumps(data).encode()
-    resp.__enter__ = lambda s: s
-    resp.__exit__ = MagicMock(return_value=False)
-    return resp
+from tests.toolkit.http_fakes import HTTP_OPEN, respond
 
 
 class TestHackerNews:
-    @patch("ai_arch_toolkit.toolkit.tools._news.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_returns_stories(self, mock_urlopen):
         mock_urlopen.side_effect = [
-            _mock_urlopen([100, 200]),
-            _mock_urlopen(
+            respond([100, 200]),
+            respond(
                 {
                     "title": "Show HN: Cool Project",
                     "url": "https://example.com",
@@ -30,7 +22,7 @@ class TestHackerNews:
                     "descendants": 42,
                 }
             ),
-            _mock_urlopen(
+            respond(
                 {
                     "title": "Ask HN: Best Languages?",
                     "url": "https://example2.com",
@@ -48,11 +40,11 @@ class TestHackerNews:
         assert "42 comments" in result
         assert "Top 2" in result
 
-    @patch("ai_arch_toolkit.toolkit.tools._news.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_clamps_count(self, mock_urlopen):
         mock_urlopen.side_effect = [
-            _mock_urlopen([100]),
-            _mock_urlopen(
+            respond([100]),
+            respond(
                 {
                     "title": "Story",
                     "score": 10,
@@ -64,19 +56,19 @@ class TestHackerNews:
         result = hacker_news(count=99)
         assert "Story" in result
 
-    @patch("ai_arch_toolkit.toolkit.tools._news.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_api_failure(self, mock_urlopen):
         mock_urlopen.side_effect = TimeoutError()
         result = hacker_news()
         assert "Failed" in result
 
-    @patch("ai_arch_toolkit.toolkit.tools._news.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_skips_failed_items(self, mock_urlopen):
         # First call returns IDs, second fails, third succeeds
         mock_urlopen.side_effect = [
-            _mock_urlopen([100, 200]),
+            respond([100, 200]),
             TimeoutError(),
-            _mock_urlopen(
+            respond(
                 {
                     "title": "Good Story",
                     "score": 50,

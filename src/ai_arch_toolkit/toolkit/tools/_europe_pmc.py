@@ -3,20 +3,16 @@
 from __future__ import annotations
 
 import html
-import json
 import re
-import urllib.error
-import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
-_BASE_URL = "https://www.ebi.ac.uk/europepmc/webservices/rest"
-_SEARCH_URL = f"{_BASE_URL}/search"
-_TIMEOUT = 15
-_USER_AGENT = "ai-arch-toolkit/1.0 (https://github.com/ai-arch-toolkit)"
+_API = Api(
+    base="https://www.ebi.ac.uk/europepmc/webservices/rest", name="Europe PMC", timeout_s=15
+)
 _MAX_RESULTS_LIMIT = 20
 _ABSTRACT_MAX_CHARS = 1200
 _RESULT_TYPES = {"lite", "core", "idlist"}
@@ -48,7 +44,7 @@ class _EuropePmcArticle:
     full_text_urls: tuple[str, ...]
 
 
-@tool
+@tool(capability="network")
 def europe_pmc_search(
     query: str,
     max_results: int = 5,
@@ -70,33 +66,20 @@ def europe_pmc_search(
     if result_type not in _RESULT_TYPES:
         return "Europe PMC search failed: result_type must be one of lite, core, idlist."
 
+    params = {
+        "query": query,
+        "format": "json",
+        "pageSize": str(_bounded(max_results)),
+        "cursorMark": cursor_mark.strip() or "*",
+        "resultType": result_type,
+    }
     try:
-        data = _fetch_json(
-            _SEARCH_URL,
-            {
-                "query": query,
-                "format": "json",
-                "pageSize": str(_bounded(max_results)),
-                "cursorMark": cursor_mark.strip() or "*",
-                "resultType": result_type,
-            },
-        )
-        articles = _articles_from_search(data)
-    except urllib.error.HTTPError as e:
-        return _http_error("Europe PMC search failed", e)
-    except urllib.error.URLError as e:
-        return f"Europe PMC search failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "Europe PMC search failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"Europe PMC search failed: could not parse API response: {e}"
-
-    if not articles:
-        return f"No Europe PMC results for: {query!r}"
-    return _search_header(query, data) + "\n" + _format_articles(articles, include_abstract=False)
+        return _API.get_json("search", params=params, parse=lambda data: _search_text(data, query))
+    except HttpError as e:
+        return f"Europe PMC search failed: {e}"
 
 
-@tool
+@tool(capability="network")
 def europe_pmc_article(identifier: str, source: str = "") -> str:
     """Fetch article metadata from Europe PMC by PMID, PMCID, DOI, or source ID.
 
@@ -108,37 +91,16 @@ def europe_pmc_article(identifier: str, source: str = "") -> str:
     if query_or_error.startswith("Europe PMC article lookup failed:"):
         return query_or_error
 
+    params = {"query": query_or_error, "format": "json", "pageSize": "1", "resultType": "core"}
     try:
-        data = _fetch_json(
-            _SEARCH_URL,
-            {
-                "query": query_or_error,
-                "format": "json",
-                "pageSize": "1",
-                "resultType": "core",
-            },
+        return _API.get_json(
+            "search", params=params, parse=lambda data: _article_text(data, identifier.strip())
         )
-        articles = _articles_from_search(data)
-    except urllib.error.HTTPError as e:
-        return _http_error("Europe PMC article lookup failed", e)
-    except urllib.error.URLError as e:
-        return f"Europe PMC article lookup failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "Europe PMC article lookup failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"Europe PMC article lookup failed: could not parse API response: {e}"
-
-    if not articles:
-        return f"Europe PMC article not found: {identifier.strip()}"
-    article = articles[0]
-    return f"Europe PMC article {article.source}/{article.id}:\n" + _format_articles(
-        [article],
-        include_index=False,
-        include_abstract=True,
-    )
+    except HttpError as e:
+        return f"Europe PMC article lookup failed: {e}"
 
 
-@tool
+@tool(capability="network")
 def europe_pmc_citations(source: str, identifier: str, max_results: int = 10) -> str:
     """Fetch articles that cite a Europe PMC record.
 
@@ -154,36 +116,48 @@ def europe_pmc_citations(source: str, identifier: str, max_results: int = 10) ->
     if not identifier:
         return "Europe PMC citations failed: identifier cannot be empty."
 
+    record = f"{normalized_source}/{identifier}"
     try:
-        data = _fetch_json(
-            f"{_BASE_URL}/{urllib.parse.quote(normalized_source)}/{urllib.parse.quote(identifier)}/citations",
-            {"format": "json", "pageSize": str(_bounded(max_results))},
+        return _API.get_json(
+            normalized_source,
+            identifier,
+            "citations",
+            params={"format": "json", "pageSize": str(_bounded(max_results))},
+            parse=lambda data: _citations_text(data, record),
         )
-        citations = _citations_from_data(data)
-    except urllib.error.HTTPError as e:
-        return _http_error("Europe PMC citations failed", e)
-    except urllib.error.URLError as e:
-        return f"Europe PMC citations failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "Europe PMC citations failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"Europe PMC citations failed: could not parse API response: {e}"
+    except HttpError as e:
+        return f"Europe PMC citations failed: {e}"
 
-    if not citations:
-        return f"No Europe PMC citations found for {normalized_source}/{identifier}."
-    total = _string(data.get("hitCount")) or str(len(citations))
-    return (
-        f"Europe PMC citations for {normalized_source}/{identifier} "
-        f"(returned {len(citations)}, total {total}):\n"
-        + _format_articles(citations, include_abstract=False)
+
+def _search_text(data: dict[str, Any], query: str) -> str:
+    articles = _articles_from_search(data)
+    if not articles:
+        return f"No Europe PMC results for: {query!r}"
+    return _search_header(query, data) + "\n" + _format_articles(articles, include_abstract=False)
+
+
+def _article_text(data: dict[str, Any], identifier: str) -> str:
+    articles = _articles_from_search(data)
+    if not articles:
+        return f"Europe PMC article not found: {identifier}"
+    article = articles[0]
+    return f"Europe PMC article {article.source}/{article.id}:\n" + _format_articles(
+        [article],
+        include_index=False,
+        include_abstract=True,
     )
 
 
-def _fetch_json(url: str, params: dict[str, str]) -> dict[str, Any]:
-    request_url = f"{url}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(request_url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="replace"))
+def _citations_text(data: dict[str, Any], record: str) -> str:
+    citations = _citations_from_data(data)
+    if not citations:
+        return f"No Europe PMC citations found for {record}."
+    total = _string(data.get("hitCount")) or str(len(citations))
+    return (
+        f"Europe PMC citations for {record} "
+        f"(returned {len(citations)}, total {total}):\n"
+        + _format_articles(citations, include_abstract=False)
+    )
 
 
 def _articles_from_search(data: dict[str, Any]) -> list[_EuropePmcArticle]:
@@ -317,12 +291,6 @@ def _full_text_urls(value: Any) -> tuple[str, ...]:
             if url:
                 urls.append(url)
     return tuple(urls)
-
-
-def _http_error(prefix: str, error: urllib.error.HTTPError) -> str:
-    if error.code == 429:
-        return f"{prefix}: rate limited by Europe PMC (HTTP 429). Try again later."
-    return f"{prefix}: HTTP error {error.code}: {error.reason}"
 
 
 def _bounded(value: int) -> int:

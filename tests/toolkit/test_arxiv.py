@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 from ai_arch_toolkit.toolkit.tools._arxiv import arxiv_paper, arxiv_search
+from tests.toolkit.http_fakes import HTTP_OPEN, respond
 
 _ATOM_FEED = """\
 <?xml version="1.0" encoding="UTF-8"?>
@@ -42,23 +43,15 @@ _EMPTY_FEED = """\
 """
 
 
-def _mock_urlopen(content: str):
-    resp = MagicMock()
-    resp.read.return_value = content.encode()
-    resp.__enter__ = lambda s: s
-    resp.__exit__ = MagicMock(return_value=False)
-    return resp
-
-
 def _called_params(mock_urlopen) -> dict[str, list[str]]:
     request = mock_urlopen.call_args.args[0]
     return parse_qs(urlparse(request.full_url).query)
 
 
 class TestArxivSearch:
-    @patch("ai_arch_toolkit.toolkit.tools._arxiv.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_returns_results(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(_ATOM_FEED)
+        mock_urlopen.return_value = respond(_ATOM_FEED)
 
         result = arxiv_search("transformers", max_results=2)
 
@@ -79,9 +72,9 @@ class TestArxivSearch:
         assert params["sortBy"] == ["relevance"]
         assert params["sortOrder"] == ["descending"]
 
-    @patch("ai_arch_toolkit.toolkit.tools._arxiv.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_filters_category_dates_start_and_caps_max_results(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(_EMPTY_FEED)
+        mock_urlopen.return_value = respond(_EMPTY_FEED)
 
         arxiv_search(
             "language agents",
@@ -101,52 +94,52 @@ class TestArxivSearch:
             'cat:cs.AI AND all:"language agents" AND submittedDate:[202401010000 TO 202401312359]'
         ]
 
-    @patch("ai_arch_toolkit.toolkit.tools._arxiv.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_keeps_advanced_query_syntax(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(_EMPTY_FEED)
+        mock_urlopen.return_value = respond(_EMPTY_FEED)
 
         arxiv_search('ti:"language agents" AND cat:cs.AI')
 
         params = _called_params(mock_urlopen)
         assert params["search_query"] == ['(ti:"language agents" AND cat:cs.AI)']
 
-    @patch("ai_arch_toolkit.toolkit.tools._arxiv.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_no_results(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(_EMPTY_FEED)
+        mock_urlopen.return_value = respond(_EMPTY_FEED)
 
         result = arxiv_search("no such paper")
 
         assert "No arXiv results" in result
 
-    @patch("ai_arch_toolkit.toolkit.tools._arxiv.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_invalid_options_do_not_call_api(self, mock_urlopen):
         result = arxiv_search("test", category="bad category")
 
         assert "invalid category" in result
         mock_urlopen.assert_not_called()
 
-    @patch("ai_arch_toolkit.toolkit.tools._arxiv.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_invalid_date(self, mock_urlopen):
         result = arxiv_search("test", from_date="01-01-2024")
 
         assert "invalid from_date" in result
         mock_urlopen.assert_not_called()
 
-    @patch("ai_arch_toolkit.toolkit.tools._arxiv.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_rejects_negative_start(self, mock_urlopen):
         result = arxiv_search("test", start=-1)
 
         assert "start must be greater than or equal to 0" in result
         mock_urlopen.assert_not_called()
 
-    @patch("ai_arch_toolkit.toolkit.tools._arxiv.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_rejects_reversed_date_range(self, mock_urlopen):
         result = arxiv_search("test", from_date="2024-02-01", to_date="2024-01-01")
 
         assert "from_date must be before or equal to to_date" in result
         mock_urlopen.assert_not_called()
 
-    @patch("ai_arch_toolkit.toolkit.tools._arxiv.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_api_failure(self, mock_urlopen):
         mock_urlopen.side_effect = TimeoutError()
 
@@ -154,9 +147,9 @@ class TestArxivSearch:
 
         assert "timed out" in result.lower()
 
-    @patch("ai_arch_toolkit.toolkit.tools._arxiv.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_parse_failure(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen("<not xml")
+        mock_urlopen.return_value = respond("<not xml")
 
         result = arxiv_search("test")
 
@@ -164,9 +157,9 @@ class TestArxivSearch:
 
 
 class TestArxivPaper:
-    @patch("ai_arch_toolkit.toolkit.tools._arxiv.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_returns_paper_by_url(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(_ATOM_FEED)
+        mock_urlopen.return_value = respond(_ATOM_FEED)
 
         result = arxiv_paper("https://arxiv.org/abs/1706.03762v7")
 
@@ -178,25 +171,25 @@ class TestArxivPaper:
         assert params["id_list"] == ["1706.03762v7"]
         assert params["max_results"] == ["1"]
 
-    @patch("ai_arch_toolkit.toolkit.tools._arxiv.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_normalizes_pdf_url(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(_ATOM_FEED)
+        mock_urlopen.return_value = respond(_ATOM_FEED)
 
         arxiv_paper("https://arxiv.org/pdf/1706.03762v7.pdf")
 
         params = _called_params(mock_urlopen)
         assert params["id_list"] == ["1706.03762v7"]
 
-    @patch("ai_arch_toolkit.toolkit.tools._arxiv.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_invalid_id(self, mock_urlopen):
         result = arxiv_paper("bad id")
 
         assert "invalid arXiv ID" in result
         mock_urlopen.assert_not_called()
 
-    @patch("ai_arch_toolkit.toolkit.tools._arxiv.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_not_found(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(_EMPTY_FEED)
+        mock_urlopen.return_value = respond(_EMPTY_FEED)
 
         result = arxiv_paper("2501.00000")
 

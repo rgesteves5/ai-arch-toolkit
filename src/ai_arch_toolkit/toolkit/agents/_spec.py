@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields
+from types import MappingProxyType
 from typing import Any
 
 from ai_arch_toolkit.core._policy import Policy
@@ -22,6 +23,10 @@ class ReasoningSpec:
     prompt, and limits — not the model or tools, which are runtime objects
     supplied to ``build_flow``. ``knobs`` holds strategy-specific options.
     ``trace_capture`` sets what the compiled flow's trace records (see ``Flow``).
+
+    ``knobs`` and ``llm_kwargs`` are copied and frozen at construction (read-only mappings): the
+    caller's dicts stay theirs, and a built spec cannot change under a running agent. The copy is
+    shallow; a nested value is still the caller's.
     """
 
     strategy: str = "react"
@@ -38,6 +43,8 @@ class ReasoningSpec:
         if self.trace_capture not in TRACE_CAPTURE_MODES:
             msg = f"trace_capture must be 'keys', 'full' or 'none', got {self.trace_capture!r}"
             raise ValueError(msg)
+        object.__setattr__(self, "knobs", MappingProxyType(dict(self.knobs)))
+        object.__setattr__(self, "llm_kwargs", MappingProxyType(dict(self.llm_kwargs)))
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> ReasoningSpec:

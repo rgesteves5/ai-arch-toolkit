@@ -2,24 +2,22 @@
 
 from __future__ import annotations
 
-import json
 import re
-import time
-import urllib.error
-import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
-_API_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
-_TIMEOUT = 15
-_USER_AGENT = "ai-arch-toolkit/1.0 (https://github.com/ai-arch-toolkit)"
+# Spaced for NVD's rate limit on requests without an API key.
+_API = Api(
+    base="https://services.nvd.nist.gov/rest/json/cves/2.0",
+    name="NVD",
+    timeout_s=15,
+    min_interval_s=6.1,
+)
 _MAX_RESULTS_LIMIT = 20
-_NVD_NO_KEY_INTERVAL_SECONDS = 6.1
-_LAST_REQUEST_AT = 0.0
 _CVE_ID_RE = re.compile(r"^CVE-\d{4}-\d{4,}$", re.IGNORECASE)
 _SEVERITIES = {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
 _DESCRIPTION_MAX_CHARS = 900
@@ -41,7 +39,7 @@ class _NvdCve:
     references: tuple[str, ...]
 
 
-@tool
+@tool(capability="network")
 def nvd_cve_search(
     query: str = "",
     cve_id: str = "",
@@ -66,50 +64,24 @@ def nvd_cve_search(
     """
     if start < 0:
         return "NVD CVE search failed: start must be greater than or equal to 0."
-
-    params: dict[str, str] = {
-        "resultsPerPage": str(max(1, min(max_results, _MAX_RESULTS_LIMIT))),
-        "startIndex": str(start),
-    }
-    query = query.strip()
-    normalized_cve = cve_id.strip().upper()
-    cpe_name = cpe_name.strip()
-    severity = cvss_severity.strip().upper()
-
-    if query:
-        params["keywordSearch"] = query
-    if normalized_cve:
-        if not _CVE_ID_RE.fullmatch(normalized_cve):
-            return f"NVD CVE search failed: invalid CVE ID: {cve_id!r}"
-        params["cveId"] = normalized_cve
-    if cpe_name:
-        params["cpeName"] = cpe_name
-    if severity:
-        if severity not in _SEVERITIES:
-            return "NVD CVE search failed: cvss_severity must be LOW, MEDIUM, HIGH, or CRITICAL."
-        params["cvssV3Severity"] = severity
-
+    filters = _search_filters(query, cve_id, cpe_name, cvss_severity)
+    if isinstance(filters, str):
+        return filters
     date_params = _date_params(pub_start_date, pub_end_date)
     if isinstance(date_params, str):
         return date_params
-    params.update(date_params)
-
-    if not any(key in params for key in ("keywordSearch", "cveId", "cpeName", "cvssV3Severity")):
+    if not filters:
         return "NVD CVE search failed: provide query, cve_id, cpe_name, or cvss_severity."
-
+    params = {
+        "resultsPerPage": str(max(1, min(max_results, _MAX_RESULTS_LIMIT))),
+        "startIndex": str(start),
+        **filters,
+        **date_params,
+    }
     try:
-        data = _fetch_json(params)
-        items = data.get("vulnerabilities", [])
-        cves = [_parse_cve(item) for item in items if isinstance(item, dict)]
-        cves = [cve for cve in cves if cve is not None]
-    except urllib.error.HTTPError as e:
-        return _http_error("NVD CVE search failed", e)
-    except urllib.error.URLError as e:
-        return f"NVD CVE search failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "NVD CVE search failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"NVD CVE search failed: could not parse API response: {e}"
+        cves = _API.get_json(params=params, parse=_cves)
+    except HttpError as e:
+        return f"NVD CVE search failed: {e}"
 
     if not cves:
         return "No NVD CVEs found."
@@ -117,7 +89,7 @@ def nvd_cve_search(
     return "NVD CVE results:\n" + _format_cves(cves)
 
 
-@tool
+@tool(capability="network")
 def nvd_cve(cve_id: str) -> str:
     """Fetch NVD metadata for a specific CVE ID.
 
@@ -129,18 +101,9 @@ def nvd_cve(cve_id: str) -> str:
         return f"NVD CVE lookup failed: invalid CVE ID: {cve_id!r}"
 
     try:
-        data = _fetch_json({"cveId": normalized})
-        items = data.get("vulnerabilities", [])
-        cves = [_parse_cve(item) for item in items if isinstance(item, dict)]
-        cves = [cve for cve in cves if cve is not None]
-    except urllib.error.HTTPError as e:
-        return _http_error("NVD CVE lookup failed", e)
-    except urllib.error.URLError as e:
-        return f"NVD CVE lookup failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "NVD CVE lookup failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"NVD CVE lookup failed: could not parse API response: {e}"
+        cves = _API.get_json(params={"cveId": normalized}, parse=_cves)
+    except HttpError as e:
+        return f"NVD CVE lookup failed: {e}"
 
     if not cves:
         return f"NVD CVE not found: {normalized}"
@@ -148,22 +111,29 @@ def nvd_cve(cve_id: str) -> str:
     return f"NVD CVE {normalized}:\n" + _format_cves(cves, include_index=False)
 
 
-def _fetch_json(params: dict[str, str]) -> dict[str, Any]:
-    url = f"{_API_URL}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    _throttle()
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="replace"))
+def _search_filters(
+    query: str, cve_id: str, cpe_name: str, cvss_severity: str
+) -> dict[str, str] | str:
+    """The search's filter parameters, or the error text for an invalid one."""
+    normalized_cve = cve_id.strip().upper()
+    if normalized_cve and not _CVE_ID_RE.fullmatch(normalized_cve):
+        return f"NVD CVE search failed: invalid CVE ID: {cve_id!r}"
+    severity = cvss_severity.strip().upper()
+    if severity and severity not in _SEVERITIES:
+        return "NVD CVE search failed: cvss_severity must be LOW, MEDIUM, HIGH, or CRITICAL."
+    filters = {
+        "keywordSearch": query.strip(),
+        "cveId": normalized_cve,
+        "cpeName": cpe_name.strip(),
+        "cvssV3Severity": severity,
+    }
+    return {key: value for key, value in filters.items() if value}
 
 
-def _throttle() -> None:
-    global _LAST_REQUEST_AT
-
-    now = time.monotonic()
-    elapsed = now - _LAST_REQUEST_AT
-    if elapsed < _NVD_NO_KEY_INTERVAL_SECONDS:
-        time.sleep(_NVD_NO_KEY_INTERVAL_SECONDS - elapsed)
-    _LAST_REQUEST_AT = time.monotonic()
+def _cves(data: dict[str, Any]) -> list[_NvdCve]:
+    items = data.get("vulnerabilities", [])
+    cves = [_parse_cve(item) for item in items if isinstance(item, dict)]
+    return [cve for cve in cves if cve is not None]
 
 
 def _date_params(start: str, end: str) -> dict[str, str] | str:
@@ -312,12 +282,6 @@ def _format_cves(cves: list[_NvdCve], *, include_index: bool = True) -> str:
         lines.append(f"   URL: https://nvd.nist.gov/vuln/detail/{cve.cve_id}")
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks)
-
-
-def _http_error(prefix: str, error: urllib.error.HTTPError) -> str:
-    if error.code == 429:
-        return f"{prefix}: rate limited by NVD (HTTP 429). Try again later."
-    return f"{prefix}: HTTP error {error.code}: {error.reason}"
 
 
 def _float_or_none(value: Any) -> float | None:

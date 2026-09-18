@@ -2,24 +2,24 @@
 
 from __future__ import annotations
 
-import json
 import re
-import urllib.error
-import urllib.parse
-import urllib.request
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
-_BASE_URL = "https://api.ror.org/v2/organizations"
-_TIMEOUT = 20
-_USER_AGENT = "ai-arch-toolkit/1.0 (https://github.com/ai-arch-toolkit)"
+_API = Api(
+    base="https://api.ror.org/v2/organizations",
+    name="ROR",
+    timeout_s=20,
+    status_messages={404: "no matching records found."},
+)
 _MAX_LIMIT = 20
 _TEXT_RE = re.compile(r"^[\w\s,.'()/%:+-]{1,180}$", re.UNICODE)
 _ROR_RE = re.compile(r"^(?:https://ror\.org/)?0[a-z0-9]{8}$", re.IGNORECASE)
 
 
-@tool
+@tool(capability="network")
 def ror_search(
     query: str,
     country: str = "",
@@ -52,17 +52,36 @@ def ror_search(
         type_filter = f"types:{org_type.strip().lower()}"
         params["filter"] = f"{existing},{type_filter}" if existing else type_filter
     try:
-        data = _fetch_json("", params)
-        items = data.get("items", [])
-    except urllib.error.HTTPError as e:
-        return _http_error("ROR search failed", e)
-    except urllib.error.URLError as e:
-        return f"ROR search failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "ROR search failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"ROR search failed: could not parse API response: {e}"
+        return _API.get_json(
+            params=params, parse=lambda data: _search_text(data, query, page, max_results)
+        )
+    except HttpError as e:
+        return f"ROR search failed: {e}"
 
+
+@tool(capability="network")
+def ror_organization(ror_id: str) -> str:
+    """Get ROR organization metadata.
+
+    Args:
+        ror_id: ROR ID or URL, e.g. "https://ror.org/01c27hj86".
+    """
+    normalized = _normalize_ror_id(ror_id)
+    if not normalized:
+        return f"ROR organization lookup failed: invalid ror_id: {ror_id!r}"
+    try:
+        return _API.get_json(
+            normalized,
+            parse=lambda data: "\n".join(
+                [f"ROR organization {normalized}:", *_format_org(data, index=None, details=True)]
+            ),
+        )
+    except HttpError as e:
+        return f"ROR organization lookup failed: {e}"
+
+
+def _search_text(data: dict[str, Any], query: str, page: int, max_results: int) -> str:
+    items = data.get("items", [])
     if not isinstance(items, list) or not items:
         return "No ROR organizations found."
     total = _string(data.get("number_of_results")) or "?"
@@ -75,41 +94,6 @@ def ror_search(
         if isinstance(item, dict):
             lines.extend(_format_org(item, index=index, details=False))
     return "\n".join(lines)
-
-
-@tool
-def ror_organization(ror_id: str) -> str:
-    """Get ROR organization metadata.
-
-    Args:
-        ror_id: ROR ID or URL, e.g. "https://ror.org/01c27hj86".
-    """
-    normalized = _normalize_ror_id(ror_id)
-    if not normalized:
-        return f"ROR organization lookup failed: invalid ror_id: {ror_id!r}"
-    try:
-        data = _fetch_json(f"/{normalized}", {})
-    except urllib.error.HTTPError as e:
-        return _http_error("ROR organization lookup failed", e)
-    except urllib.error.URLError as e:
-        return f"ROR organization lookup failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "ROR organization lookup failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"ROR organization lookup failed: could not parse API response: {e}"
-
-    lines = [f"ROR organization {normalized}:"]
-    lines.extend(_format_org(data, index=None, details=True))
-    return "\n".join(lines)
-
-
-def _fetch_json(path: str, params: dict[str, str]) -> dict[str, Any]:
-    url = f"{_BASE_URL}{path}"
-    if params:
-        url = f"{url}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="replace"))
 
 
 def _format_org(item: dict[str, Any], *, index: int | None, details: bool) -> list[str]:
@@ -198,14 +182,6 @@ def _location(item: dict[str, Any]) -> str:
 def _normalize_ror_id(value: str) -> str:
     text = value.strip().lower().removeprefix("https://ror.org/")
     return text if _ROR_RE.fullmatch(text) else ""
-
-
-def _http_error(prefix: str, error: urllib.error.HTTPError) -> str:
-    if error.code == 404:
-        return f"{prefix}: no matching records found."
-    if error.code == 429:
-        return f"{prefix}: rate limited by ROR (HTTP 429). Try again later."
-    return f"{prefix}: HTTP error {error.code}: {error.reason}"
 
 
 def _valid_text(value: str) -> bool:

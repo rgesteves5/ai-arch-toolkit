@@ -12,9 +12,10 @@ from ai_arch_toolkit.core._state import State
 from ai_arch_toolkit.core._tools._group import ToolGroup
 from ai_arch_toolkit.toolkit.agents._builders import BuildContext, get_strategy
 from ai_arch_toolkit.toolkit.agents._spec import ReasoningSpec
+from ai_arch_toolkit.toolkit.agents.flows._keys import ANSWER, RESPONSE
 from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowResult
 
-__all__ = ["build_flow", "extract_text", "initial_state"]
+__all__ = ["build_flow", "extract_text", "initial_state", "read_answer"]
 
 
 def build_flow(
@@ -40,19 +41,22 @@ def initial_state(spec: ReasoningSpec, task: Content) -> dict[str, Any]:
 
 
 def extract_text(state: State, result: FlowResult) -> str:
-    """Pull a single answer string out of a finished flow run."""
-    answer = state.get("answer")
-    if isinstance(answer, str) and answer.strip():
-        return answer
-    response = state.get("response") or state.get("last_response")
-    if isinstance(response, Response) and response.text:
-        return response.text
-    last_answer = state.get("last_answer")
-    if isinstance(last_answer, str) and last_answer.strip():
-        return last_answer
+    """The run's answer: the text its flow left under ``"answer"``.
+
+    A flow that leaves no answer (one built by hand, or a run that ended before its strategy
+    answered) answers with its last step's value, as a flow nested in another one does.
+    """
+    return read_answer(state, result)[0]
+
+
+def read_answer(state: State, result: FlowResult) -> tuple[str, Response | None]:
+    """The run's answer and the ``Response`` behind it, both from one source (``extract_text``)."""
+    answer = state.get(ANSWER)
+    if answer is not None:
+        response = state.get(RESPONSE)
+        return str(answer), response if isinstance(response, Response) else None
     final = result.final_result
-    if final is not None and final.value is not None:
-        if isinstance(final.value, Response):
-            return final.value.text
-        return str(final.value)
-    return ""
+    value = final.value if final is not None else None
+    if isinstance(value, Response):
+        return value.text, value
+    return ("" if value is None else str(value)), None

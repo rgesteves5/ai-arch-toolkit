@@ -3,18 +3,19 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Unpack
 
 from ai_arch_toolkit.core._content import Content, tool_result, user
 from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._metering._admission import AdmissionDenied
-from ai_arch_toolkit.core._policy import Policy
-from ai_arch_toolkit.core._state import StateSnapshot
+from ai_arch_toolkit.core._response import Response
+from ai_arch_toolkit.core._state import State, StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
 from ai_arch_toolkit.core._tools._result import ToolResult
-from ai_arch_toolkit.core._trace import TraceCapture
-from ai_arch_toolkit.toolkit.budget import BudgetPolicy
+from ai_arch_toolkit.toolkit.agents.flows._common import FlowOptions, nested
+from ai_arch_toolkit.toolkit.agents.flows._keys import ANSWER, MESSAGES, RESPONSE
 from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowStep
 
 
@@ -25,14 +26,11 @@ def react_flow(
     system: str = "",
     max_iterations: int = 10,
     parallel_tool_calls: bool = True,
-    timeout: float | None = None,
-    trace_capture: TraceCapture = "keys",
-    policy: Policy | None = None,
-    budget_policy: BudgetPolicy | None = None,
     llm_kwargs: dict[str, Any] | None = None,
     final_answer_hint: bool = True,
     strip_tools_on_final: bool = False,
     show_turn_counter: bool = False,
+    **options: Unpack[FlowOptions],
 ) -> Flow:
     """Create a ReAct Flow — cyclic LLM reasoning + tool execution.
 
@@ -42,10 +40,6 @@ def react_flow(
         system: System prompt.
         max_iterations: Maximum reasoning iterations.
         parallel_tool_calls: Whether to execute tool calls in parallel.
-        timeout: Wall-clock limit for the whole run, in seconds.
-        trace_capture: What each step's trace records — see ``Flow``.
-        policy: Default policy for each step of the flow.
-        budget_policy: Optional cumulative runtime budget for the flow.
         llm_kwargs: Additional kwargs passed to llm.complete().
         final_answer_hint: On the last turn, inject a message asking the model
             to provide a final text answer without calling tools. Fixes models
@@ -54,12 +48,13 @@ def react_flow(
             model physically cannot call tools. More aggressive than hint alone.
         show_turn_counter: Inject a ``[Turn N/M]`` user message each turn for
             debugging and transparency.
+        **options: The options of the ``Flow`` it builds (``FlowOptions``).
     """
     extra_kwargs = llm_kwargs or {}
 
     async def llm_call(snap: StateSnapshot) -> Result:
         """Call LLM with current messages and tools."""
-        messages: list[dict[str, Any]] = snap.require("messages")
+        messages: list[dict[str, Any]] = snap.require(MESSAGES)
         turn: int = snap.get("turn", 0) + 1
         is_final = turn >= max_iterations
 
@@ -94,7 +89,8 @@ def react_flow(
         return Result(
             value=response,
             artifacts={
-                "response": response,
+                ANSWER: response.text,
+                RESPONSE: response,
                 "has_tool_calls": response.has_tool_calls,
                 "needs_llm_call": False,
                 "turn": turn,
@@ -103,8 +99,8 @@ def react_flow(
 
     async def execute_tools(snap: StateSnapshot) -> Result:
         """Execute tool calls from the LLM response."""
-        response = snap.require("response")
-        messages: list[dict[str, Any]] = snap.require("messages")
+        response = snap.require(RESPONSE)
+        messages: list[dict[str, Any]] = snap.require(MESSAGES)
 
         tool_result_dicts: list[dict[str, Any]] = []
         structured_results: list[ToolResult] = []
@@ -167,7 +163,7 @@ def react_flow(
         return Result(
             value=tool_result_dicts,
             artifacts={
-                "messages": updated_messages,
+                MESSAGES: updated_messages,
                 "has_tool_calls": False,
                 "needs_llm_call": True,
                 "tool_results": structured_results,
@@ -184,11 +180,8 @@ def react_flow(
         FlowStep(step=Step(name="llm_call", fn=llm_call), when=needs_llm),
         FlowStep(step=Step(name="execute_tools", fn=execute_tools), when=has_tool_calls),
         name="react",
-        policy=policy,
-        timeout=timeout,
-        trace_capture=trace_capture,
-        budget_policy=budget_policy,
         max_iterations=max_iterations,
+        **options,
     )
 
 
@@ -199,6 +192,51 @@ def react_initial_state(task: Content) -> dict[str, Any]:
         Dict suitable for State(operational=...).
     """
     return {
-        "messages": [user(task)],
+        MESSAGES: [user(task)],
         "has_tool_calls": False,
     }
+
+
+@dataclass(frozen=True, slots=True)
+class ReactRun:
+    """How a ReAct loop run inside another flow's step ended."""
+
+    answer: str
+    response: Response | None
+    failed: bool
+    """A step of the loop ended in error."""
+
+
+async def run_react(
+    llm: LLM,
+    tools: ToolGroup,
+    task: Content,
+    *,
+    system: str,
+    max_iterations: int,
+    llm_kwargs: dict[str, Any] | None,
+    **options: Unpack[FlowOptions],
+) -> ReactRun:
+    """Run a ReAct loop on ``task`` inside a step of an outer flow, and read how it ended.
+
+    ``options`` are the outer flow's; the loop takes what ``nested`` passes on (the trace
+    capture), so its steps are recorded, as the outer step's children, like the outer ones. It
+    runs under the outer run's meter scope: its calls count against the same budget, and the
+    outer deadline covers it.
+    """
+    flow = react_flow(
+        llm,
+        tools,
+        system=system,
+        max_iterations=max_iterations,
+        llm_kwargs=llm_kwargs,
+        **nested(options),
+    )
+    state = State(operational=react_initial_state(task))
+    result = await flow.run(state)
+    response = state.get(RESPONSE)
+    return ReactRun(
+        answer=state.get(ANSWER, ""),
+        response=response if isinstance(response, Response) else None,
+        failed=any(step.error is not None for step in result.trace.steps if not step.skipped),
+    )

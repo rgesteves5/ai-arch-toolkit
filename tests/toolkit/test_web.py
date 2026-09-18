@@ -3,20 +3,11 @@
 from __future__ import annotations
 
 from io import BytesIO
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from ai_arch_toolkit.core import ApprovalDecision, ApprovalRequest, ToolCall, ToolGroup
 from ai_arch_toolkit.toolkit.tools._web import http_get, scrape_text
-
-
-def _mock_urlopen(content: str, charset: str = "utf-8"):
-    """Create a mock for urllib.request.urlopen."""
-    resp = MagicMock()
-    resp.read.return_value = content.encode(charset)
-    resp.headers.get_content_charset.return_value = charset
-    resp.__enter__ = lambda s: s
-    resp.__exit__ = MagicMock(return_value=False)
-    return resp
+from tests.toolkit.http_fakes import HTTP_OPEN, respond
 
 
 class TestHttpGet:
@@ -24,20 +15,51 @@ class TestHttpGet:
         result = http_get("not-a-url")
         assert "Invalid URL" in result
 
-    @patch("ai_arch_toolkit.toolkit.tools._web.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_fetches_content(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen("Hello World")
+        mock_urlopen.return_value = respond("Hello World")
         result = http_get("https://example.com")
         assert result == "Hello World"
 
-    @patch("ai_arch_toolkit.toolkit.tools._web.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_truncation(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen("x" * 500)
+        mock_urlopen.return_value = respond("x" * 500)
         result = http_get("https://example.com", max_chars=100)
         assert "Truncated" in result
         assert len(result) < 500
 
-    @patch("ai_arch_toolkit.toolkit.tools._web.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
+    def test_a_negative_or_huge_max_chars_is_clamped(self, mock_urlopen):
+        mock_urlopen.return_value = respond("x" * 300_000)
+        assert http_get("https://example.com", max_chars=-1).startswith("x\n\n[Truncated")
+
+        mock_urlopen.return_value = respond("x" * 300_000)
+        result = http_get("https://example.com", max_chars=10**9)
+        assert result.startswith("x" * 100_000 + "\n\n[Truncated")
+
+    @patch(HTTP_OPEN)
+    def test_reads_no_more_of_the_body_than_it_can_return(self, mock_urlopen):
+        body = respond("x" * 3_000_000)
+        mock_urlopen.return_value = body
+
+        http_get("https://example.com", max_chars=100)
+
+        assert body.bytes_read <= 4 * 100 + 1
+
+    @patch(HTTP_OPEN)
+    def test_plain_http_is_still_fetched(self, mock_urlopen):
+        mock_urlopen.return_value = respond("Hello")
+
+        assert http_get("http://example.com/") == "Hello"
+        assert mock_urlopen.call_args.args[0].full_url == "http://example.com/"
+
+    @patch(HTTP_OPEN)
+    def test_credentials_in_the_url_are_refused(self, mock_urlopen):
+        assert "Invalid URL" in http_get("https://user:secret@example.com/")
+        assert "Invalid URL" in scrape_text("https://user:secret@example.com/")
+        mock_urlopen.assert_not_called()
+
+    @patch(HTTP_OPEN)
     def test_http_error(self, mock_urlopen):
         import urllib.error
 
@@ -47,7 +69,7 @@ class TestHttpGet:
         result = http_get("https://example.com")
         assert "404" in result
 
-    @patch("ai_arch_toolkit.toolkit.tools._web.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_timeout(self, mock_urlopen):
         mock_urlopen.side_effect = TimeoutError()
         result = http_get("https://example.com")
@@ -59,28 +81,28 @@ class TestScrapeText:
         result = scrape_text("not-a-url")
         assert "Invalid URL" in result
 
-    @patch("ai_arch_toolkit.toolkit.tools._web.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_strips_html(self, mock_urlopen):
         html = "<html><body><p>Hello</p><script>evil()</script><p>World</p></body></html>"
-        mock_urlopen.return_value = _mock_urlopen(html)
+        mock_urlopen.return_value = respond(html)
         result = scrape_text("https://example.com")
         assert "Hello" in result
         assert "World" in result
         assert "<p>" not in result
         assert "evil()" not in result
 
-    @patch("ai_arch_toolkit.toolkit.tools._web.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_truncation(self, mock_urlopen):
         html = "<p>" + "word " * 2000 + "</p>"
-        mock_urlopen.return_value = _mock_urlopen(html)
+        mock_urlopen.return_value = respond(html)
         result = scrape_text("https://example.com", max_chars=100)
         assert "Truncated" in result
 
 
 class TestHttpGetGovernance:
-    @patch("ai_arch_toolkit.toolkit.tools._web.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_denied_without_approval_handler(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen("Hello World")
+        mock_urlopen.return_value = respond("Hello World")
         call = ToolCall(id="tc_1", name="http_get", input={"url": "https://example.com"})
 
         result = ToolGroup(http_get).execute(call)
@@ -90,9 +112,9 @@ class TestHttpGetGovernance:
         assert result.error.type == "approval_denied"
         mock_urlopen.assert_not_called()
 
-    @patch("ai_arch_toolkit.toolkit.tools._web.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     async def test_fetches_when_handler_approves(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen("Hello World")
+        mock_urlopen.return_value = respond("Hello World")
         requests: list[ApprovalRequest] = []
 
         async def approve(request: ApprovalRequest) -> ApprovalDecision:

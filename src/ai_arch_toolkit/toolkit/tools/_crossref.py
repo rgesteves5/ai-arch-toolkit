@@ -3,20 +3,15 @@
 from __future__ import annotations
 
 import html
-import json
 import re
-import urllib.error
-import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
-_API_URL = "https://api.crossref.org/works"
-_TIMEOUT = 10
-_USER_AGENT = "ai-arch-toolkit/1.0 (https://github.com/ai-arch-toolkit)"
+_API = Api(base="https://api.crossref.org/works", name="Crossref")
 _MAX_RESULTS_LIMIT = 20
 _ABSTRACT_MAX_CHARS = 900
 _VALID_TYPE_FILTER = re.compile(r"^[a-z0-9-]+$")
@@ -42,7 +37,7 @@ class _CrossrefWork:
     links: tuple[str, ...]
 
 
-@tool
+@tool(capability="network")
 def crossref_search(
     query: str,
     max_results: int = 5,
@@ -81,25 +76,16 @@ def crossref_search(
         params["filter"] = filter_value
 
     try:
-        data = _fetch_crossref("", params)
-        items = data.get("message", {}).get("items", [])
-        works = [_parse_work(item) for item in items if isinstance(item, dict)]
-    except urllib.error.HTTPError as e:
-        return f"Crossref search failed: HTTP error {e.code}: {e.reason}"
-    except urllib.error.URLError as e:
-        return f"Crossref search failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "Crossref search failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"Crossref search failed: could not parse API response: {e}"
-
+        works = _API.get_json(params=params, parse=_works)
+    except HttpError as e:
+        return f"Crossref search failed: {e}"
     if not works:
         return f"No Crossref results for: {query!r}"
 
     return f"Crossref results for {query!r}:\n" + _format_works(works, include_abstract=False)
 
 
-@tool
+@tool(capability="network")
 def crossref_work(doi: str) -> str:
     """Fetch Crossref metadata for a specific DOI.
 
@@ -111,22 +97,13 @@ def crossref_work(doi: str) -> str:
         return f"Crossref work lookup failed: invalid DOI: {doi!r}"
 
     try:
-        data = _fetch_crossref(f"/{urllib.parse.quote(normalized, safe='')}", {})
-        message = data.get("message", {})
-        if not isinstance(message, dict):
+        work = _API.get_json(normalized, parse=_work)
+    except HttpError as e:
+        if e.status == 404:
             return f"Crossref work not found: {normalized}"
-        work = _parse_work(message)
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            return f"Crossref work not found: {normalized}"
-        return f"Crossref work lookup failed: HTTP error {e.code}: {e.reason}"
-    except urllib.error.URLError as e:
-        return f"Crossref work lookup failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "Crossref work lookup failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"Crossref work lookup failed: could not parse API response: {e}"
-
+        return f"Crossref work lookup failed: {e}"
+    if work is None:
+        return f"Crossref work not found: {normalized}"
     return f"Crossref work {normalized}:\n" + _format_works(
         [work],
         include_index=False,
@@ -169,14 +146,14 @@ def _parse_date(value: str) -> date | None:
         return None
 
 
-def _fetch_crossref(path: str, params: dict[str, str]) -> dict[str, Any]:
-    query = urllib.parse.urlencode(params)
-    url = f"{_API_URL}{path}"
-    if query:
-        url = f"{url}?{query}"
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-        return json.loads(resp.read())
+def _works(data: dict[str, Any]) -> list[_CrossrefWork]:
+    items = data.get("message", {}).get("items", [])
+    return [_parse_work(item) for item in items if isinstance(item, dict)]
+
+
+def _work(data: dict[str, Any]) -> _CrossrefWork | None:
+    message = data.get("message", {})
+    return _parse_work(message) if isinstance(message, dict) else None
 
 
 def _parse_work(item: dict[str, Any]) -> _CrossrefWork:

@@ -16,7 +16,13 @@ class MergeConflictError(KeyError):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class StateSnapshot:
-    """Immutable view of all State layers."""
+    """Read-only view of all State layers, as they were when it was taken.
+
+    The layers cannot be written through it, and later writes to the State do not show in it. The
+    values inside are shared with the State, not copied: a step must not mutate a list or dict it
+    read here, but return what changes as ``Result.artifacts``. A value mutated in place changes
+    the State for every step after it, siblings in the same wave included.
+    """
 
     current: MappingProxyType[str, Any] = field(default_factory=lambda: MappingProxyType({}))
     operational: MappingProxyType[str, Any] = field(default_factory=lambda: MappingProxyType({}))
@@ -157,7 +163,10 @@ class State:
     # --- Snapshot, fork, merge ---
 
     def snapshot(self) -> StateSnapshot:
-        """Immutable copy of all layers."""
+        """A read-only view of all layers: the layers are copied, the values shared.
+
+        See :class:`StateSnapshot` for what a step may and may not do with it.
+        """
         return StateSnapshot(
             current=MappingProxyType(dict(self._current)),
             operational=MappingProxyType(dict(self._operational)),

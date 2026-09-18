@@ -3,37 +3,40 @@
 from __future__ import annotations
 
 import html
-import json
 import re
-import urllib.error
-import urllib.parse
-import urllib.request
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
 _DEFAULT_API = "https://en.wiktionary.org/w/api.php"
-_TIMEOUT = 15
-_USER_AGENT = "ai-arch-toolkit/1.0 (https://github.com/ai-arch-toolkit)"
+_TIMEOUT_S = 15
+_STATUS_MESSAGES = {404: "no matching records found."}
+_WIKTIONARY = Api(
+    base=_DEFAULT_API, name="MediaWiki", timeout_s=_TIMEOUT_S, status_messages=_STATUS_MESSAGES
+)
 _MAX_LIMIT = 25
 _TEXT_RE = re.compile(r"^[\w\s,.'()/%:+-]{1,180}$", re.UNICODE)
 _LANG_RE = re.compile(r"^[A-Za-z -]{1,80}$")
-_WIKIMEDIA_DOMAINS = (
-    "wikipedia.org",
-    "wikimedia.org",
-    "wiktionary.org",
-    "wikidata.org",
-    "wikibooks.org",
-    "wikiquote.org",
-    "wikisource.org",
-    "wikiversity.org",
-    "wikivoyage.org",
-    "wikinews.org",
-    "mediawiki.org",
+# An api_url from the model must be on one of these hosts, or a subdomain of one.
+_DOMAINS = frozenset(
+    {
+        "wikipedia.org",
+        "wikimedia.org",
+        "wiktionary.org",
+        "wikidata.org",
+        "wikibooks.org",
+        "wikiquote.org",
+        "wikisource.org",
+        "wikiversity.org",
+        "wikivoyage.org",
+        "wikinews.org",
+        "mediawiki.org",
+    }
 )
 
 
-@tool
+@tool(capability="network")
 def mediawiki_search(
     query: str,
     api_url: str = _DEFAULT_API,
@@ -50,7 +53,8 @@ def mediawiki_search(
     """
     if not _valid_text(query):
         return "MediaWiki search failed: invalid query."
-    if not _valid_api_url(api_url):
+    api = _api(api_url)
+    if api is None:
         return "MediaWiki search failed: invalid api_url."
     if offset < 0:
         return "MediaWiki search failed: offset must be greater than or equal to 0."
@@ -64,17 +68,99 @@ def mediawiki_search(
         "utf8": "1",
     }
     try:
-        data = _fetch_json(api_url, params)
-        items = data.get("query", {}).get("search", [])
-    except urllib.error.HTTPError as e:
-        return _http_error("MediaWiki search failed", e)
-    except urllib.error.URLError as e:
-        return f"MediaWiki search failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "MediaWiki search failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"MediaWiki search failed: could not parse API response: {e}"
+        return api.get_json(params=params, parse=lambda data: _search_text(data, query, offset))
+    except HttpError as e:
+        return f"MediaWiki search failed: {e}"
 
+
+@tool(capability="network")
+def mediawiki_page(title: str, api_url: str = _DEFAULT_API, max_chars: int = 1200) -> str:
+    """Fetch and lightly clean a MediaWiki page's wikitext.
+
+    Args:
+        title: Page title.
+        api_url: MediaWiki API endpoint. Defaults to English Wiktionary.
+        max_chars: Maximum cleaned characters to return (200-4000). Defaults to 1200.
+    """
+    if not _valid_text(title):
+        return "MediaWiki page failed: invalid title."
+    api = _api(api_url)
+    if api is None:
+        return "MediaWiki page failed: invalid api_url."
+    try:
+        return api.get_json(
+            params=_parse_params(title.strip(), "wikitext|sections"),
+            parse=lambda data: _page_text(data, title, max_chars),
+        )
+    except HttpError as e:
+        return f"MediaWiki page failed: {e}"
+
+
+@tool(capability="network")
+def mediawiki_sections(title: str, api_url: str = _DEFAULT_API) -> str:
+    """List sections for a MediaWiki page.
+
+    Args:
+        title: Page title.
+        api_url: MediaWiki API endpoint. Defaults to English Wiktionary.
+    """
+    if not _valid_text(title):
+        return "MediaWiki sections failed: invalid title."
+    api = _api(api_url)
+    if api is None:
+        return "MediaWiki sections failed: invalid api_url."
+    try:
+        return api.get_json(
+            params=_parse_params(title.strip(), "sections"),
+            parse=lambda data: _sections_text(data, title),
+        )
+    except HttpError as e:
+        return f"MediaWiki sections failed: {e}"
+
+
+@tool(capability="network")
+def wiktionary_entry(term: str, language: str = "English", max_chars: int = 1600) -> str:
+    """Fetch a Wiktionary entry and focus on one language section.
+
+    Args:
+        term: Wiktionary term/page title.
+        language: Language section to prioritize. Defaults to English.
+        max_chars: Maximum cleaned characters to return (200-4000). Defaults to 1600.
+    """
+    if not _valid_text(term):
+        return "Wiktionary entry failed: invalid term."
+    if not _LANG_RE.fullmatch(language.strip()):
+        return "Wiktionary entry failed: invalid language."
+    try:
+        return _WIKTIONARY.get_json(
+            params=_parse_params(term.strip(), "wikitext|sections"),
+            parse=lambda data: _entry_text(data, term, language.strip(), max_chars),
+        )
+    except HttpError as e:
+        return f"Wiktionary entry failed: {e}"
+
+
+def _api(api_url: str) -> Api | None:
+    """The MediaWiki API at ``api_url``; ``None`` unless it is a Wikimedia ``https://…/api.php``."""
+    try:
+        api = Api.within(
+            api_url.strip(),
+            _DOMAINS,
+            name="MediaWiki",
+            timeout_s=_TIMEOUT_S,
+            status_messages=_STATUS_MESSAGES,
+        )
+    except HttpError:
+        return None
+    return api if api.base.endswith("api.php") else None
+
+
+def _parse_params(title: str, props: str) -> dict[str, str]:
+    return {"action": "parse", "page": title, "prop": props, "format": "json", "utf8": "1"}
+
+
+def _search_text(data: dict[str, Any], query: str, offset: int) -> str:
+    items = data.get("query", {}).get("search", [])
     if not isinstance(items, list) or not items:
         return "No MediaWiki pages found."
     total = _string(data.get("query", {}).get("searchinfo", {}).get("totalhits")) or "?"
@@ -93,30 +179,7 @@ def mediawiki_search(
     return "\n".join(lines)
 
 
-@tool
-def mediawiki_page(title: str, api_url: str = _DEFAULT_API, max_chars: int = 1200) -> str:
-    """Fetch and lightly clean a MediaWiki page's wikitext.
-
-    Args:
-        title: Page title.
-        api_url: MediaWiki API endpoint. Defaults to English Wiktionary.
-        max_chars: Maximum cleaned characters to return (200-4000). Defaults to 1200.
-    """
-    if not _valid_text(title):
-        return "MediaWiki page failed: invalid title."
-    if not _valid_api_url(api_url):
-        return "MediaWiki page failed: invalid api_url."
-    try:
-        data = _parse_page(api_url, title.strip(), props="wikitext|sections")
-    except urllib.error.HTTPError as e:
-        return _http_error("MediaWiki page failed", e)
-    except urllib.error.URLError as e:
-        return f"MediaWiki page failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "MediaWiki page failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"MediaWiki page failed: could not parse API response: {e}"
-
+def _page_text(data: dict[str, Any], title: str, max_chars: int) -> str:
     parse = data.get("parse", {})
     if not isinstance(parse, dict):
         return f"MediaWiki page not found: {title}"
@@ -133,30 +196,8 @@ def mediawiki_page(title: str, api_url: str = _DEFAULT_API, max_chars: int = 120
     return "\n".join(lines)
 
 
-@tool
-def mediawiki_sections(title: str, api_url: str = _DEFAULT_API) -> str:
-    """List sections for a MediaWiki page.
-
-    Args:
-        title: Page title.
-        api_url: MediaWiki API endpoint. Defaults to English Wiktionary.
-    """
-    if not _valid_text(title):
-        return "MediaWiki sections failed: invalid title."
-    if not _valid_api_url(api_url):
-        return "MediaWiki sections failed: invalid api_url."
-    try:
-        data = _parse_page(api_url, title.strip(), props="sections")
-        parse = data.get("parse", {})
-    except urllib.error.HTTPError as e:
-        return _http_error("MediaWiki sections failed", e)
-    except urllib.error.URLError as e:
-        return f"MediaWiki sections failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "MediaWiki sections failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"MediaWiki sections failed: could not parse API response: {e}"
-
+def _sections_text(data: dict[str, Any], title: str) -> str:
+    parse = data.get("parse", {})
     if not isinstance(parse, dict):
         return f"MediaWiki page not found: {title}"
     sections = parse.get("sections", [])
@@ -172,64 +213,21 @@ def mediawiki_sections(title: str, api_url: str = _DEFAULT_API) -> str:
     return "\n".join(lines)
 
 
-@tool
-def wiktionary_entry(term: str, language: str = "English", max_chars: int = 1600) -> str:
-    """Fetch a Wiktionary entry and focus on one language section.
-
-    Args:
-        term: Wiktionary term/page title.
-        language: Language section to prioritize. Defaults to English.
-        max_chars: Maximum cleaned characters to return (200-4000). Defaults to 1600.
-    """
-    if not _valid_text(term):
-        return "Wiktionary entry failed: invalid term."
-    if not _LANG_RE.fullmatch(language.strip()):
-        return "Wiktionary entry failed: invalid language."
-    try:
-        data = _parse_page(_DEFAULT_API, term.strip(), props="wikitext|sections")
-    except urllib.error.HTTPError as e:
-        return _http_error("Wiktionary entry failed", e)
-    except urllib.error.URLError as e:
-        return f"Wiktionary entry failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "Wiktionary entry failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"Wiktionary entry failed: could not parse API response: {e}"
-
+def _entry_text(data: dict[str, Any], term: str, language: str, max_chars: int) -> str:
     parse = data.get("parse", {})
     if not isinstance(parse, dict):
         return f"Wiktionary entry not found: {term}"
     text = _extract_wikitext(parse)
-    focused = _language_section(text, language.strip()) or text
+    focused = _language_section(text, language) or text
     cleaned = _clean_wikitext(focused)
     sections = _section_titles(parse)
     limit = max(200, min(max_chars, 4000))
-    lines = [f"Wiktionary entry {term.strip()} ({language.strip()}):"]
+    lines = [f"Wiktionary entry {term.strip()} ({language}):"]
     if sections:
         lines.append("   available sections: " + "; ".join(sections[:20]))
     if cleaned:
         lines.append(_trim(cleaned, limit))
     return "\n".join(lines)
-
-
-def _parse_page(api_url: str, title: str, *, props: str) -> dict[str, Any]:
-    return _fetch_json(
-        api_url,
-        {
-            "action": "parse",
-            "page": title,
-            "prop": props,
-            "format": "json",
-            "utf8": "1",
-        },
-    )
-
-
-def _fetch_json(api_url: str, params: dict[str, str]) -> dict[str, Any]:
-    url = f"{api_url}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="replace"))
 
 
 def _extract_wikitext(parse: dict[str, Any]) -> str:
@@ -274,30 +272,8 @@ def _strip_html(value: str) -> str:
     return html.unescape(re.sub(r"<[^>]+>", "", value))
 
 
-def _http_error(prefix: str, error: urllib.error.HTTPError) -> str:
-    if error.code == 404:
-        return f"{prefix}: no matching records found."
-    if error.code == 429:
-        return f"{prefix}: rate limited by MediaWiki (HTTP 429). Try again later."
-    return f"{prefix}: HTTP error {error.code}: {error.reason}"
-
-
 def _valid_text(value: str) -> bool:
     return bool(_TEXT_RE.fullmatch(value.strip()))
-
-
-def _valid_api_url(value: str) -> bool:
-    try:
-        parsed = urllib.parse.urlparse(value.strip())
-        host = parsed.hostname or ""
-    except ValueError:
-        return False
-    return (
-        parsed.scheme == "https"
-        and parsed.netloc.lower() == host
-        and parsed.path.endswith("api.php")
-        and any(host == domain or host.endswith("." + domain) for domain in _WIKIMEDIA_DOMAINS)
-    )
 
 
 def _bounded(value: int) -> int:

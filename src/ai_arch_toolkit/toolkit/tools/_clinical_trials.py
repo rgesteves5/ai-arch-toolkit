@@ -2,19 +2,14 @@
 
 from __future__ import annotations
 
-import json
 import re
-import urllib.error
-import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
-_BASE_URL = "https://clinicaltrials.gov/api/v2"
-_TIMEOUT = 10
-_USER_AGENT = "ai-arch-toolkit/1.0 (https://github.com/ai-arch-toolkit)"
+_API = Api(base="https://clinicaltrials.gov/api/v2", name="ClinicalTrials.gov")
 _MAX_RESULTS_LIMIT = 20
 _SUMMARY_MAX_CHARS = 900
 _ELIGIBILITY_MAX_CHARS = 1200
@@ -48,7 +43,7 @@ class _ClinicalTrial:
     references: tuple[str, ...]
 
 
-@tool
+@tool(capability="network")
 def clinical_trials_search(
     query: str = "",
     condition: str = "",
@@ -84,57 +79,24 @@ def clinical_trials_search(
         "format": "json",
         "pageSize": str(max_results),
     }
-
-    if query.strip():
-        params["query.term"] = query.strip()
-    if condition.strip():
-        params["query.cond"] = condition.strip()
-    if intervention.strip():
-        params["query.intr"] = intervention.strip()
-    if location.strip():
-        params["query.locn"] = location.strip()
-    if page_token.strip():
-        params["pageToken"] = page_token.strip()
-
-    normalized_status = _normalize_enum(status)
-    if normalized_status:
-        params["filter.overallStatus"] = normalized_status
-
-    advanced_filters = []
-    normalized_study_type = _normalize_enum(study_type)
-    if normalized_study_type:
-        advanced_filters.append(f"AREA[StudyType]{normalized_study_type}")
-    normalized_phase = _normalize_phase(phase)
-    if normalized_phase:
-        advanced_filters.append(f"AREA[Phase]{normalized_phase}")
-    if advanced_filters:
-        params["filter.advanced"] = " AND ".join(advanced_filters)
+    filters = {
+        "query.term": query.strip(),
+        "query.cond": condition.strip(),
+        "query.intr": intervention.strip(),
+        "query.locn": location.strip(),
+        "pageToken": page_token.strip(),
+        "filter.overallStatus": _normalize_enum(status),
+        "filter.advanced": _advanced_filter(study_type, phase),
+    }
+    params.update({key: value for key, value in filters.items() if value})
 
     try:
-        data = _fetch_json("/studies", params)
-        studies = data.get("studies", [])
-        trials = [_parse_trial(item) for item in studies if isinstance(item, dict)]
-        trials = [trial for trial in trials if trial is not None]
-    except urllib.error.HTTPError as e:
-        return f"ClinicalTrials.gov search failed: HTTP error {e.code}: {e.reason}"
-    except urllib.error.URLError as e:
-        return f"ClinicalTrials.gov search failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "ClinicalTrials.gov search failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"ClinicalTrials.gov search failed: could not parse API response: {e}"
-
-    if not trials:
-        return "No ClinicalTrials.gov studies found."
-
-    result = "ClinicalTrials.gov studies:\n" + _format_trials(trials, include_details=False)
-    next_page_token = str(data.get("nextPageToken", "") or "").strip()
-    if next_page_token:
-        result += f"\n\nNext page token: {next_page_token}"
-    return result
+        return _API.get_json("studies", params=params, parse=_studies_text)
+    except HttpError as e:
+        return f"ClinicalTrials.gov search failed: {e}"
 
 
-@tool
+@tool(capability="network")
 def clinical_trial_study(nct_id: str) -> str:
     """Fetch detailed metadata for a ClinicalTrials.gov study.
 
@@ -146,18 +108,11 @@ def clinical_trial_study(nct_id: str) -> str:
         return f"ClinicalTrials.gov study lookup failed: invalid NCT ID: {nct_id!r}"
 
     try:
-        data = _fetch_json(f"/studies/{normalized}", {"format": "json"})
-        trial = _parse_trial(data)
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
+        trial = _API.get_json("studies", normalized, params={"format": "json"}, parse=_parse_trial)
+    except HttpError as e:
+        if e.status == 404:
             return f"ClinicalTrials.gov study not found: {normalized}"
-        return f"ClinicalTrials.gov study lookup failed: HTTP error {e.code}: {e.reason}"
-    except urllib.error.URLError as e:
-        return f"ClinicalTrials.gov study lookup failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "ClinicalTrials.gov study lookup failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"ClinicalTrials.gov study lookup failed: could not parse API response: {e}"
+        return f"ClinicalTrials.gov study lookup failed: {e}"
 
     if trial is None:
         return f"ClinicalTrials.gov study not found: {normalized}"
@@ -169,11 +124,29 @@ def clinical_trial_study(nct_id: str) -> str:
     )
 
 
-def _fetch_json(path: str, params: dict[str, str]) -> dict[str, Any]:
-    url = f"{_BASE_URL}{path}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="replace"))
+def _advanced_filter(study_type: str, phase: str) -> str:
+    advanced_filters = []
+    normalized_study_type = _normalize_enum(study_type)
+    if normalized_study_type:
+        advanced_filters.append(f"AREA[StudyType]{normalized_study_type}")
+    normalized_phase = _normalize_phase(phase)
+    if normalized_phase:
+        advanced_filters.append(f"AREA[Phase]{normalized_phase}")
+    return " AND ".join(advanced_filters)
+
+
+def _studies_text(data: dict[str, Any]) -> str:
+    studies = data.get("studies", [])
+    trials = [_parse_trial(item) for item in studies if isinstance(item, dict)]
+    found = [trial for trial in trials if trial is not None]
+    if not found:
+        return "No ClinicalTrials.gov studies found."
+
+    result = "ClinicalTrials.gov studies:\n" + _format_trials(found, include_details=False)
+    next_page_token = str(data.get("nextPageToken", "") or "").strip()
+    if next_page_token:
+        result += f"\n\nNext page token: {next_page_token}"
+    return result
 
 
 def _parse_trial(data: dict[str, Any]) -> _ClinicalTrial | None:

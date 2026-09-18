@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Unpack
 
 from ai_arch_toolkit.core._content import Content, user
 from ai_arch_toolkit.core._llm import LLM
-from ai_arch_toolkit.core._policy import Policy
-from ai_arch_toolkit.core._state import State, StateSnapshot
+from ai_arch_toolkit.core._state import StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
-from ai_arch_toolkit.core._trace import TraceCapture
-from ai_arch_toolkit.toolkit.agents.flows._react import react_flow, react_initial_state
-from ai_arch_toolkit.toolkit.budget import BudgetPolicy
+from ai_arch_toolkit.toolkit.agents.flows._common import FlowOptions
+from ai_arch_toolkit.toolkit.agents.flows._keys import ANSWER, RESPONSE, TASK
+from ai_arch_toolkit.toolkit.agents.flows._react import run_react
 from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowStep
 
 
@@ -34,10 +33,7 @@ def generate_review_flow(
     max_cycles: int = 3,
     max_gen_iterations: int = 5,
     max_review_iterations: int = 5,
-    timeout: float | None = None,
-    trace_capture: TraceCapture = "keys",
-    policy: Policy | None = None,
-    budget_policy: BudgetPolicy | None = None,
+    **options: Unpack[FlowOptions],
 ) -> Flow:
     """Create a Generate-Review Flow — configurable generate + review loop.
 
@@ -56,17 +52,14 @@ def generate_review_flow(
         max_cycles: Maximum generate-review cycles.
         max_gen_iterations: Max iterations for inner ReAct during generation.
         max_review_iterations: Max iterations for inner ReAct during review.
-        timeout: Wall-clock limit for the whole run, in seconds.
-        trace_capture: What each step's trace records — see ``Flow``.
-        policy: Default policy for each step of the flow.
-        budget_policy: Optional cumulative runtime budget for the flow.
+        **options: The options of the ``Flow`` it builds (``FlowOptions``).
     """
     gen_extra = gen_kwargs or {}
     review_extra = review_kwargs or {}
 
     async def generate(snap: StateSnapshot) -> Result:
         """Generate an answer, optionally using tools via inner ReAct."""
-        task: str = snap.require("task")
+        task: str = snap.require(TASK)
         feedback: list[str] = snap.get("feedback", [])
 
         system = gen_system
@@ -74,21 +67,18 @@ def generate_review_flow(
             system += "\n\nPrevious feedback:\n" + "\n---\n".join(feedback)
 
         if gen_tools is not None:
-            inner = react_flow(
+            run = await run_react(
                 gen_llm,
                 gen_tools,
+                task,
                 system=system,
                 max_iterations=max_gen_iterations,
                 llm_kwargs=gen_extra or None,
-                trace_capture=trace_capture,
+                **options,
             )
-            state = State(operational=react_initial_state(task))
-            await inner.run(state)  # metered under the shared scope; no manual cost threading
-            response = state.get("response")
-            answer = response.text if response else ""
             return Result(
-                value=answer,
-                artifacts={"last_answer": answer, "last_response": response},
+                value=run.answer,
+                artifacts={"last_answer": run.answer, "last_response": run.response},
             )
 
         response = await gen_llm.complete([user(task)], system=system or None, **gen_extra)
@@ -99,25 +89,23 @@ def generate_review_flow(
 
     async def review(snap: StateSnapshot) -> Result:
         """Review and fact-check the answer, optionally using tools."""
-        task: str = snap.require("task")
+        task: str = snap.require(TASK)
         answer: str = snap.get("last_answer", "")
         feedback: list[str] = list(snap.get("feedback", []))
 
         review_prompt = f"Task: {task}\n\nProposed answer: {answer}\n\nReview this answer."
 
         if review_tools is not None:
-            inner = react_flow(
+            run = await run_react(
                 review_llm,
                 review_tools,
+                review_prompt,
                 system=review_system,
                 max_iterations=max_review_iterations,
                 llm_kwargs=review_extra or None,
-                trace_capture=trace_capture,
+                **options,
             )
-            state = State(operational=react_initial_state(review_prompt))
-            await inner.run(state)  # metered under the shared scope; no manual cost threading
-            response = state.get("response")
-            verdict_text = response.text if response else ""
+            verdict_text = run.answer
         else:
             response = await review_llm.complete(
                 [user(review_prompt)], system=review_system, **review_extra
@@ -127,15 +115,15 @@ def generate_review_flow(
         first_line = verdict_text.strip().split("\n")[0].lower()
         accepted = "accept" in first_line and "unacceptable" not in first_line
 
-        artifacts: dict[str, Any] = {"accepted": accepted}
-        if accepted:
-            artifacts["answer"] = answer
-            artifacts["response"] = snap.get("last_response")
-        else:
+        # The draft just reviewed is the answer so far, accepted or not: out of cycles, it stands.
+        artifacts: dict[str, Any] = {
+            "accepted": accepted,
+            ANSWER: answer,
+            RESPONSE: snap.get("last_response"),
+        }
+        if not accepted:
             feedback.append(verdict_text)
             artifacts["feedback"] = feedback
-            # Keep last_answer accessible as fallback if max_cycles exhausted
-            artifacts["answer"] = answer
 
         return Result(value=verdict_text, artifacts=artifacts)
 
@@ -146,15 +134,12 @@ def generate_review_flow(
         FlowStep(step=Step(name="generate", fn=generate), when=not_accepted),
         FlowStep(step=Step(name="review", fn=review), when=not_accepted),
         name="generate_review",
-        policy=policy,
-        timeout=timeout,
-        trace_capture=trace_capture,
-        budget_policy=budget_policy,
         max_iterations=max_cycles,
+        **options,
     )
 
 
 def generate_review_initial_state(task: Content) -> dict[str, Any]:
     """Create the initial operational state for a generate_review_flow."""
     task_str = task if isinstance(task, str) else str(task)
-    return {"task": task_str, "feedback": [], "accepted": False}
+    return {TASK: task_str, "feedback": [], "accepted": False}

@@ -14,8 +14,9 @@ from ai_arch_toolkit.core._state import State
 from ai_arch_toolkit.core._step import Step
 from ai_arch_toolkit.core._sync import _run_sync
 from ai_arch_toolkit.core._tools._group import ToolGroup
-from ai_arch_toolkit.toolkit.agents._compile import build_flow, extract_text, initial_state
+from ai_arch_toolkit.toolkit.agents._compile import build_flow, initial_state, read_answer
 from ai_arch_toolkit.toolkit.agents._spec import ReasoningSpec
+from ai_arch_toolkit.toolkit.agents.flows._keys import MESSAGES
 from ai_arch_toolkit.toolkit.budget import BudgetPolicy, BudgetReport
 from ai_arch_toolkit.toolkit.flow._executor import FlowExecution
 from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowEvent, FlowResult
@@ -74,7 +75,7 @@ class Agent:
         agent = cls.__new__(cls)
         agent._flow = flow
         if init_state is None:
-            agent._make_state = lambda task: {"messages": [user(task)]}
+            agent._make_state = lambda task: {MESSAGES: [user(task)]}
         elif callable(init_state):
             agent._make_state = init_state
         else:
@@ -175,19 +176,14 @@ class AgentExecution:
 
 
 def _agent_result(flow_result: FlowResult) -> AgentResult:
-    state = flow_result.state
-    response = state.get("response")
-    if response is None:
-        response = state.get("last_response")
-    if not isinstance(response, Response):
-        response = None
+    text, response = read_answer(flow_result.state, flow_result)
     # A cyclic flow can execute the same named step more than once. ``results`` keeps only the
     # latest result per name, so derive errors from the trace or an earlier failed turn would
     # disappear after a later success.
     errors = tuple(record.error for record in flow_result.trace.steps if record.error)
     report = flow_result.meter  # meter-derived (single source of truth); snapshot once, reuse
     return AgentResult(
-        text=extract_text(state, flow_result),
+        text=text,
         response=response,
         flow_result=flow_result,
         usage=flow_result.usage,

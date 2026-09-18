@@ -6,17 +6,16 @@ import math
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Unpack
 
 from ai_arch_toolkit.core._content import Content, user
 from ai_arch_toolkit.core._llm import LLM
-from ai_arch_toolkit.core._policy import Policy
-from ai_arch_toolkit.core._state import State, StateSnapshot
+from ai_arch_toolkit.core._state import StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
-from ai_arch_toolkit.core._trace import TraceCapture
-from ai_arch_toolkit.toolkit.agents.flows._react import react_flow, react_initial_state
-from ai_arch_toolkit.toolkit.budget import BudgetPolicy
+from ai_arch_toolkit.toolkit.agents.flows._common import FlowOptions
+from ai_arch_toolkit.toolkit.agents.flows._keys import ANSWER, RESPONSE, TASK
+from ai_arch_toolkit.toolkit.agents.flows._react import run_react
 from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowStep
 
 _SCORE_RE = re.compile(r"(\d+\.?\d*)")
@@ -75,16 +74,13 @@ def lats_flow(
     reflect_system: str = (
         "Analyze why this answer scored poorly and provide specific feedback for improvement."
     ),
-    timeout: float | None = None,
-    trace_capture: TraceCapture = "keys",
-    policy: Policy | None = None,
-    budget_policy: BudgetPolicy | None = None,
     llm_kwargs: dict[str, Any] | None = None,
     rollout_llm: LLM | None = None,
     rollout_tools: ToolGroup | None = None,
     eval_llm: LLM | None = None,
     solver_llm: LLM | None = None,
     reflector_llm: LLM | None = None,
+    **options: Unpack[FlowOptions],
 ) -> Flow:
     """Create a LATS Flow — MCTS with ReAct rollouts.
 
@@ -99,16 +95,13 @@ def lats_flow(
         evaluator_fn: Optional external evaluator(task, answer) → score.
         evaluator_system: System prompt for LLM-based evaluation.
         reflect_system: System prompt for reflection on low scores.
-        timeout: Wall-clock limit for the whole run, in seconds.
-        trace_capture: What each step's trace records — see ``Flow``.
-        policy: Default policy for each step of the flow.
-        budget_policy: Optional cumulative runtime budget for the flow.
         llm_kwargs: Additional kwargs passed to every phase's LLM call.
         rollout_llm: Override LLM for rollouts.
         rollout_tools: Override tools for rollouts.
         eval_llm: Override LLM for evaluation.
         solver_llm: Override LLM for final solution.
         reflector_llm: Override LLM for reflection.
+        **options: The options of the ``Flow`` it builds (``FlowOptions``).
     """
     inner_llm = rollout_llm or llm
     inner_tools = rollout_tools if rollout_tools is not None else tools
@@ -119,7 +112,7 @@ def lats_flow(
 
     async def mcts_rollout(snap: StateSnapshot) -> Result:
         """One MCTS rollout: select, expand (ReAct), evaluate, backprop."""
-        task: str = snap.require("task")
+        task: str = snap.require(TASK)
         root: _MCTSNode = snap.require("mcts_root")
         rollout_num: int = snap.get("rollout_num", 0)
 
@@ -134,21 +127,16 @@ def lats_flow(
         if leaf.reflection:
             inner_system += f"\n\nPrevious feedback:\n{leaf.reflection}"
 
-        inner = react_flow(
+        run = await run_react(
             inner_llm,
             inner_tools,
+            leaf.state,
             system=inner_system,
             max_iterations=max_react_iterations,
             llm_kwargs=llm_kwargs,
-            trace_capture=trace_capture,
-        )  # no budget_policy: a nested flow inherits the enclosing scope (one cumulative budget)
-
-        inner_initial = react_initial_state(leaf.state)
-        state = State(operational=inner_initial)
-        await inner.run(state)  # metered under the shared scope; no manual cost threading
-
-        response = state.get("response")
-        answer = response.text if response else ""
+            **options,
+        )
+        answer = run.answer
 
         # EVALUATE
         if evaluator_fn is not None:
@@ -199,8 +187,8 @@ def lats_flow(
                 system=system or None,
                 **extra,
             )
-            artifacts["answer"] = sol_response.text
-            artifacts["response"] = sol_response
+            artifacts[ANSWER] = sol_response.text
+            artifacts[RESPONSE] = sol_response
             artifacts["search_done"] = True
             return Result(
                 value=sol_response.text,
@@ -231,8 +219,8 @@ def lats_flow(
                 system=system or None,
                 **extra,
             )
-            artifacts["answer"] = sol_response.text
-            artifacts["response"] = sol_response
+            artifacts[ANSWER] = sol_response.text
+            artifacts[RESPONSE] = sol_response
             artifacts["search_done"] = True
             return Result(
                 value=sol_response.text,
@@ -253,11 +241,8 @@ def lats_flow(
     return Flow(
         FlowStep(step=Step(name="mcts_rollout", fn=mcts_rollout), when=search_not_done),
         name="lats",
-        policy=policy,
-        timeout=timeout,
-        trace_capture=trace_capture,
-        budget_policy=budget_policy,
         max_iterations=max_rollouts,
+        **options,
     )
 
 
@@ -265,7 +250,7 @@ def lats_initial_state(task: Content) -> dict[str, Any]:
     """Create the initial operational state for a lats_flow."""
     task_str = task if isinstance(task, str) else str(task)
     return {
-        "task": task_str,
+        TASK: task_str,
         "mcts_root": _MCTSNode(state=task_str),
         "rollout_num": 0,
         "search_done": False,

@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 from ai_arch_toolkit.toolkit.tools._eurostat import (
@@ -13,6 +12,7 @@ from ai_arch_toolkit.toolkit.tools._eurostat import (
     eurostat_dimensions,
     eurostat_series,
 )
+from tests.toolkit.http_fakes import HTTP_OPEN, respond
 
 _DATAFLOW = {
     "link": {
@@ -57,44 +57,36 @@ _DATASET = {
 }
 
 
-def _mock_urlopen(data: dict | str):
-    resp = MagicMock()
-    resp.read.return_value = (data if isinstance(data, str) else json.dumps(data)).encode()
-    resp.__enter__ = lambda s: s
-    resp.__exit__ = MagicMock(return_value=False)
-    return resp
-
-
 def _params(mock_urlopen):
     return parse_qs(urlparse(mock_urlopen.call_args.args[0].full_url).query)
 
 
 class TestEurostat:
-    @patch("ai_arch_toolkit.toolkit.tools._eurostat.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_dataset_search(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(_DATAFLOW)
+        mock_urlopen.return_value = respond(_DATAFLOW)
 
         result = eurostat_dataset_search("population")
 
         assert "TPS00001 — Population on 1 January" in result
         assert "period: 2014-2025" in result
 
-    @patch("ai_arch_toolkit.toolkit.tools._eurostat.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_dataset_dimensions_and_series(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(_DATASET)
+        mock_urlopen.return_value = respond(_DATASET)
         assert "Population description" in eurostat_dataset("TPS00001")
 
-        mock_urlopen.return_value = _mock_urlopen(_DATASET)
+        mock_urlopen.return_value = respond(_DATASET)
         assert "geo — Geopolitical entity" in eurostat_dimensions("TPS00001")
 
-        mock_urlopen.return_value = _mock_urlopen(_DATASET)
+        mock_urlopen.return_value = respond(_DATASET)
         result = eurostat_series("TPS00001", filters="geo=PT", last_time_periods=1)
         assert "10 | freq=A, geo=PT, time=2025" in result
         assert _params(mock_urlopen)["geo"] == ["PT"]
 
-    @patch("ai_arch_toolkit.toolkit.tools._eurostat.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_compare_and_validation(self, mock_urlopen):
-        mock_urlopen.side_effect = [_mock_urlopen(_DATASET), _mock_urlopen(_DATASET)]
+        mock_urlopen.side_effect = [respond(_DATASET), respond(_DATASET)]
 
         result = eurostat_compare("TPS00001", "PT,ES")
 

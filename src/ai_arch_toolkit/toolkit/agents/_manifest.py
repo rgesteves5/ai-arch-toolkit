@@ -20,7 +20,8 @@ from types import MappingProxyType
 from typing import Any
 
 from ai_arch_toolkit.core import OutputSchema, Policy
-from ai_arch_toolkit.core._trace import TRACE_CAPTURE_MODES
+from ai_arch_toolkit.toolkit._shape import ShapeError
+from ai_arch_toolkit.toolkit.agents._manifest_shape import AGENT_MANIFEST, REACT_KNOBS
 from ai_arch_toolkit.toolkit.agents._spec import ReasoningSpec
 from ai_arch_toolkit.toolkit.budget import BudgetPolicy
 
@@ -34,82 +35,6 @@ __all__ = [
 
 _SUFFIXES = (".agent.yaml", ".agent.yml", ".agent.json", ".agent.toml")
 _RENDERED_SUFFIXES = (".prompt.yaml", ".prompt.yml", ".prompt.json", ".prompt.toml", *_SUFFIXES)
-_TOP_LEVEL_FIELDS = frozenset(
-    {
-        "description",
-        "extends",
-        "id",
-        "limits",
-        "metadata",
-        "model",
-        "output",
-        "override_policy",
-        "phase",
-        "profiles",
-        "prompts",
-        "result_adapter",
-        "strategy",
-        "tools",
-        "version",
-    }
-)
-_PROFILE_FIELDS = _TOP_LEVEL_FIELDS - {"extends", "id", "profiles", "version"}
-_STRATEGY_FIELDS = frozenset(
-    {
-        "final_answer_hint",
-        "knobs",
-        "llm_kwargs",
-        "max_iterations",
-        "name",
-        "parallel_tool_calls",
-        "phases",
-        "show_turn_counter",
-        "strip_tools_on_final",
-        "system",
-        "timeout",
-        "trace_capture",
-    }
-)
-_MODEL_FIELDS = frozenset(
-    {
-        "base_url",
-        "max_tokens",
-        "model",
-        "profile",
-        "provider",
-        "structured_output_mode",
-        "temperature",
-    }
-)
-_PHASE_FIELDS = frozenset({"model", "system", "system_file"})
-_PROMPT_FIELDS = frozenset(
-    {
-        "input_adapter",
-        "request_template",
-        "request_variables",
-        "system",
-        "system_manifest",
-        "user",
-    }
-)
-_REQUEST_VARIABLE_FIELDS = frozenset({"optional", "required"})
-_OUTPUT_FIELDS = frozenset({"schema"})
-_TOOLS_FIELDS = frozenset({"factory", "manifest"})
-_LIMIT_FIELDS = frozenset(
-    {
-        "max_cost",
-        "max_input_tokens",
-        "max_llm_calls",
-        "max_output_tokens",
-        "max_total_tokens",
-        "max_tool_calls",
-        "max_wall_s",
-        "reserve",
-        "timeout_seconds",
-        "unpriced",
-    }
-)
-_OVERRIDE_FIELDS = frozenset({"allow", "deny"})
 _PATH_FIELDS = (
     ("prompts", "request_template"),
     ("prompts", "system_manifest"),
@@ -178,34 +103,27 @@ class ResolvedAgentManifest:
         file that changed since the manifest was loaded raises instead of running
         unaudited content.
         """
-        strategy = _mapping(self.data.get("strategy", {}), "strategy")
-        knobs = dict(_mapping(strategy.get("knobs", {}), "strategy.knobs"))
-        for field in (
-            "final_answer_hint",
-            "parallel_tool_calls",
-            "show_turn_counter",
-            "strip_tools_on_final",
-        ):
-            if field in strategy:
+        strategy = _section(self.data, "strategy")
+        knobs = dict(_section(strategy, "knobs"))
+        for field in REACT_KNOBS:
+            if _given(strategy, field) is not None:
                 knobs[field] = strategy[field]
-        for name, value in _mapping(strategy.get("phases", {}), "strategy.phases").items():
-            phase = _mapping(value, f"strategy.phases.{name}")
-            if "system" in phase:
-                knobs[f"{name}_system"] = str(phase["system"])
-            elif "system_file" in phase:
-                knobs[f"{name}_system"] = self._read_phase_prompt(name, str(phase["system_file"]))
-        limits = _mapping(self.data.get("limits", {}), "limits")
-        timeout = strategy.get("timeout", limits.get("timeout_seconds"))
-        configured_system = strategy.get("system", "")
+        for name, phase in _section(strategy, "phases").items():
+            if _given(phase, "system") is not None:
+                knobs[f"{name}_system"] = phase["system"]
+            elif _given(phase, "system_file") is not None:
+                knobs[f"{name}_system"] = self._read_phase_prompt(name, phase["system_file"])
+        limits = _section(self.data, "limits")
+        timeout = _given(strategy, "timeout", _given(limits, "timeout_seconds"))
         return ReasoningSpec(
-            strategy=str(strategy.get("name", "react")),
-            system=system if system is not None else str(configured_system),
-            max_iterations=int(strategy.get("max_iterations", 10)),
+            strategy=_given(strategy, "name", "react"),
+            system=system if system is not None else _given(strategy, "system", ""),
+            max_iterations=_given(strategy, "max_iterations", 10),
             knobs=knobs,
             policy=policy,
             timeout=float(timeout) if timeout is not None else None,
-            trace_capture=strategy.get("trace_capture", "keys"),
-            llm_kwargs=dict(_mapping(strategy.get("llm_kwargs", {}), "strategy.llm_kwargs")),
+            trace_capture=_given(strategy, "trace_capture", "keys"),
+            llm_kwargs=dict(_section(strategy, "llm_kwargs")),
             output_schema=output_schema,
         )
 
@@ -240,13 +158,11 @@ class ResolvedAgentManifest:
         application resolves into runtime LLMs (directly, or via
         ``agent_from_manifest``'s ``llm_factory``).
         """
-        strategy = _mapping(self.data.get("strategy", {}), "strategy")
         models: dict[str, dict[str, Any]] = {}
-        for name, value in _mapping(strategy.get("phases", {}), "strategy.phases").items():
-            phase = _mapping(value, f"strategy.phases.{name}")
-            model = phase.get("model")
+        for name, phase in _section(_section(self.data, "strategy"), "phases").items():
+            model = _given(phase, "model")
             if model is not None:
-                models[str(name)] = _thaw(model)
+                models[name] = _thaw(model)
         return models
 
     def budget_policy(self) -> BudgetPolicy | None:
@@ -256,7 +172,7 @@ class ResolvedAgentManifest:
         duplicated into the budget. ``None`` means the manifest declares no budget
         settings, so callers can omit the policy entirely.
         """
-        limits = _mapping(self.data.get("limits", {}), "limits")
+        limits = _section(self.data, "limits")
         fields = (
             "max_wall_s",
             "max_llm_calls",
@@ -268,7 +184,7 @@ class ResolvedAgentManifest:
             "reserve",
             "unpriced",
         )
-        values = {field: limits[field] for field in fields if field in limits}
+        values = {field: limits[field] for field in fields if _given(limits, field) is not None}
         return BudgetPolicy(**values) if values else None
 
     def with_overrides(self, overrides: Mapping[str, Any] | None) -> ResolvedAgentManifest:
@@ -324,13 +240,10 @@ def load_agent_manifest(
     )
     profiles = merged.pop("profiles", {})
     if profile is not None:
-        profile_map = _mapping(profiles, "profiles")
-        if profile not in profile_map:
-            known = ", ".join(sorted(str(name) for name in profile_map)) or "(none)"
+        if profile not in profiles:
+            known = ", ".join(sorted(profiles)) or "(none)"
             raise AgentManifestError(f"unknown agent profile {profile!r}; known: {known}")
-        selected = _mapping(profile_map[profile], f"profiles.{profile}")
-        _validate_profile(selected, source)
-        merged = _deep_merge(merged, dict(selected))
+        merged = _deep_merge(merged, profiles[profile])
 
     _apply_overrides(merged, dict(overrides or {}))
     return _finalize_manifest(
@@ -458,162 +371,43 @@ def _read_manifest(path: Path) -> dict[str, Any]:
 
 
 def _validate_manifest(data: Mapping[str, Any], path: Path, *, resolved: bool) -> None:
-    _reject_unknown(data, _TOP_LEVEL_FIELDS, f"agent manifest {path}")
-    version = data.get("version")
-    if isinstance(version, bool) or not isinstance(version, int) or version != 1:
-        raise AgentManifestError(
-            f"agent manifest {path} must declare integer version: 1; got {version!r}"
-        )
+    """Check a manifest's shape (``AGENT_MANIFEST``), then the rules between its fields."""
+    try:
+        AGENT_MANIFEST.check(data)
+    except ShapeError as exc:
+        raise AgentManifestError(f"agent manifest {path}: {exc}") from exc
     if resolved and "extends" in data:
         raise AgentManifestError(f"resolved agent manifest {path} still contains extends")
-    _optional_string(data, "id", f"agent manifest {path}")
-    _optional_string(data, "phase", f"agent manifest {path}")
-    _optional_string(data, "description", f"agent manifest {path}")
-    _optional_string(data, "result_adapter", f"agent manifest {path}")
-    _extends(data)
-
-    strategy = _optional_mapping(data, "strategy", path)
-    if strategy is not None:
-        _reject_unknown(strategy, _STRATEGY_FIELDS, "strategy")
-        _optional_string(strategy, "name", "strategy")
-        _positive_int(strategy, "max_iterations", "strategy")
-        _positive_number(strategy, "timeout", "strategy")
-        trace_capture = strategy.get("trace_capture")
-        if trace_capture is not None and trace_capture not in TRACE_CAPTURE_MODES:
-            raise AgentManifestError("strategy.trace_capture must be 'keys', 'full' or 'none'")
-        for field in (
-            "final_answer_hint",
-            "parallel_tool_calls",
-            "show_turn_counter",
-            "strip_tools_on_final",
-        ):
-            _optional_bool(strategy, field, "strategy")
-        for field in ("knobs", "llm_kwargs"):
-            if field in strategy:
-                _mapping(strategy[field], f"strategy.{field}")
-        _validate_phases(strategy)
-
-    model = _optional_mapping(data, "model", path)
-    if model is not None:
-        _validate_model_section(model, "model")
-
-    prompts = _optional_mapping(data, "prompts", path)
-    if prompts is not None:
-        _reject_unknown(prompts, _PROMPT_FIELDS, "prompts")
-        for field in _PROMPT_FIELDS - {"request_variables"}:
-            _optional_string(prompts, field, "prompts")
-        variables = prompts.get("request_variables")
-        if variables is not None:
-            variables_map = _mapping(variables, "prompts.request_variables")
-            _reject_unknown(variables_map, _REQUEST_VARIABLE_FIELDS, "prompts.request_variables")
-            for field in _REQUEST_VARIABLE_FIELDS:
-                if field in variables_map:
-                    _string_sequence(variables_map[field], f"prompts.request_variables.{field}")
-
-    output = _optional_mapping(data, "output", path)
-    if output is not None:
-        _reject_unknown(output, _OUTPUT_FIELDS, "output")
-        _optional_string(output, "schema", "output")
-    tools = _optional_mapping(data, "tools", path)
-    if tools is not None:
-        _reject_unknown(tools, _TOOLS_FIELDS, "tools")
-        _optional_string(tools, "factory", "tools")
-        _optional_string(tools, "manifest", "tools")
-    limits = _optional_mapping(data, "limits", path)
-    if limits is not None:
-        _reject_unknown(limits, _LIMIT_FIELDS, "limits")
-        _nonnegative_number(limits, "max_cost", "limits")
-        for field in ("max_wall_s", "timeout_seconds"):
-            _positive_number(limits, field, "limits")
-        for field in (
-            "max_input_tokens",
-            "max_llm_calls",
-            "max_output_tokens",
-            "max_tool_calls",
-            "max_total_tokens",
-        ):
-            _nonnegative_int(limits, field, "limits")
-        for field in ("reserve", "unpriced"):
-            _optional_string(limits, field, "limits")
-        reserve = limits.get("reserve")
-        if reserve is not None and reserve not in {"none", "strict"}:
-            raise AgentManifestError("limits.reserve must be 'none' or 'strict'")
-        unpriced = limits.get("unpriced")
-        if unpriced is not None and unpriced not in {"fail_closed", "allow"}:
-            raise AgentManifestError("limits.unpriced must be 'fail_closed' or 'allow'")
-    override_policy = _optional_mapping(data, "override_policy", path)
-    if override_policy is not None:
-        _reject_unknown(override_policy, _OVERRIDE_FIELDS, "override_policy")
-        for field in _OVERRIDE_FIELDS:
-            if field in override_policy:
-                _string_sequence(override_policy[field], f"override_policy.{field}")
-    if "metadata" in data:
-        _mapping(data["metadata"], "metadata")
-    if "profiles" in data:
-        profiles = _mapping(data["profiles"], "profiles")
-        for name, value in profiles.items():
-            if not isinstance(name, str) or not name:
-                raise AgentManifestError("agent profile names must be non-empty strings")
-            profile = _mapping(value, f"profiles.{name}")
-            _validate_profile(profile, path)
+    _check_phases(_section(data, "strategy"), "strategy")
+    for name, profile in _section(data, "profiles").items():
+        _check_phases(_section(profile, "strategy"), f"profiles.{name}.strategy")
 
 
-def _validate_model_section(model: Mapping[str, Any], context: str) -> None:
-    _reject_unknown(model, _MODEL_FIELDS, context)
-    for field in ("base_url", "model", "profile", "provider", "structured_output_mode"):
-        _optional_string(model, field, context)
-    _positive_int(model, "max_tokens", context)
-    if "temperature" in model:
-        value = model["temperature"]
-        if not _is_number(value) or not 0 <= float(value) <= 2:
-            raise AgentManifestError(f"{context}.temperature must be a number between 0 and 2")
-
-
-def _validate_phases(strategy: Mapping[str, Any]) -> None:
-    """Validate the ``strategy.phases`` section shape (loader-level, registry-agnostic)."""
-    phases = strategy.get("phases")
-    if phases is None:
-        return
-    phases_map = _mapping(phases, "strategy.phases")
-    knobs = strategy.get("knobs")
-    knob_map = knobs if isinstance(knobs, Mapping) else {}
-    for name, value in phases_map.items():
-        if not isinstance(name, str) or not name:
-            raise AgentManifestError("strategy.phases names must be non-empty strings")
-        context = f"strategy.phases.{name}"
-        phase = _mapping(value, context)
-        _reject_unknown(phase, _PHASE_FIELDS, context)
-        for field in ("system", "system_file"):
-            _optional_string(phase, field, context)
-        if "system" in phase and "system_file" in phase:
+def _check_phases(strategy: Mapping[str, Any], where: str) -> None:
+    """A phase prompt is given once, as text: not in two fields, not as a manifest file."""
+    knobs = _section(strategy, "knobs")
+    for name, phase in _section(strategy, "phases").items():
+        context = f"{where}.phases.{name}"
+        given = [field for field in ("system", "system_file") if _given(phase, field) is not None]
+        if len(given) == 2:
             raise AgentManifestError(f"{context} must declare system or system_file, not both")
-        file_value = phase.get("system_file")
-        if isinstance(file_value, str) and file_value.endswith(_RENDERED_SUFFIXES):
+        if _given(phase, "system_file", "").endswith(_RENDERED_SUFFIXES):
             raise AgentManifestError(
                 f"{context}.system_file must reference verbatim prompt text, not a "
                 "prompt/agent manifest; render templates in the application and "
                 "declare the result"
             )
-        if ("system" in phase or "system_file" in phase) and f"{name}_system" in knob_map:
+        if given and f"{name}_system" in knobs:
             raise AgentManifestError(
-                f"{context} and strategy.knobs.{name}_system are both set; "
+                f"{context} and {where}.knobs.{name}_system are both set; "
                 "declare the phase prompt in one place"
             )
-        model = phase.get("model")
-        if model is not None:
-            _validate_model_section(_mapping(model, f"{context}.model"), f"{context}.model")
-
-
-def _validate_profile(data: Mapping[str, Any], path: Path) -> None:
-    _reject_unknown(data, _PROFILE_FIELDS, f"agent profile in {path}")
-    candidate = {"version": 1, **dict(data)}
-    _validate_manifest(candidate, path, resolved=False)
 
 
 def _apply_overrides(data: dict[str, Any], overrides: Mapping[str, Any]) -> None:
-    policy = _mapping(data.get("override_policy", {}), "override_policy")
-    allow = _string_sequence(policy.get("allow", ()), "override_policy.allow")
-    deny = _string_sequence(policy.get("deny", ()), "override_policy.deny")
+    policy = _section(data, "override_policy")
+    allow = tuple(_given(policy, "allow", ()))
+    deny = tuple(_given(policy, "deny", ()))
     items = list(overrides.items())
     for path, _value in items:
         if not isinstance(path, str) or not path:
@@ -763,16 +557,9 @@ def _portable_config(data: Mapping[str, Any], roots: tuple[Path, ...]) -> dict[s
 
 
 def _extends(data: Mapping[str, Any]) -> tuple[str, ...]:
+    """The manifests ``data`` extends, in order (its shape is checked)."""
     value = data.get("extends", ())
-    if isinstance(value, str):
-        entries = (value,)
-    elif isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
-        entries = tuple(value)
-    else:
-        raise AgentManifestError("agent manifest extends must be a path or list of paths")
-    if any(not isinstance(entry, str) or not entry for entry in entries):
-        raise AgentManifestError("agent manifest extends paths must be non-empty strings")
-    return entries
+    return (value,) if isinstance(value, str) else tuple(value)
 
 
 def _deep_merge(base: Mapping[str, Any], child: Mapping[str, Any]) -> dict[str, Any]:
@@ -785,76 +572,16 @@ def _deep_merge(base: Mapping[str, Any], child: Mapping[str, Any]) -> dict[str, 
     return merged
 
 
-def _reject_unknown(data: Mapping[str, Any], allowed: frozenset[str], context: str) -> None:
-    unknown = sorted(str(field) for field in set(data) - allowed)
-    if unknown:
-        raise AgentManifestError(f"{context} contains unknown fields: {', '.join(unknown)}")
+def _section(data: Mapping[str, Any], name: str) -> Mapping[str, Any]:
+    """The object under ``name``: empty when it is absent or ``null`` (not set)."""
+    value = data.get(name)
+    return {} if value is None else value
 
 
-def _optional_mapping(data: Mapping[str, Any], field: str, path: Path) -> Mapping[str, Any] | None:
-    value = data.get(field)
-    if value is None:
-        return None
-    return _mapping(value, f"{field} in {path}")
-
-
-def _mapping(value: Any, context: str) -> Mapping[str, Any]:
-    if not isinstance(value, Mapping):
-        raise AgentManifestError(f"{context} must be an object")
-    return value
-
-
-def _optional_string(data: Mapping[str, Any], field: str, context: str) -> None:
-    value = data.get(field)
-    if value is not None and (not isinstance(value, str) or not value):
-        raise AgentManifestError(f"{context}.{field} must be a non-empty string")
-
-
-def _string_sequence(value: Any, context: str) -> tuple[str, ...]:
-    if isinstance(value, str) or not isinstance(value, Sequence):
-        raise AgentManifestError(f"{context} must be a list of strings")
-    entries = tuple(value)
-    if any(not isinstance(entry, str) or not entry for entry in entries):
-        raise AgentManifestError(f"{context} must contain only non-empty strings")
-    return entries
-
-
-def _optional_bool(data: Mapping[str, Any], field: str, context: str) -> None:
-    value = data.get(field)
-    if value is not None and not isinstance(value, bool):
-        raise AgentManifestError(f"{context}.{field} must be a boolean")
-
-
-def _positive_int(data: Mapping[str, Any], field: str, context: str) -> None:
-    value = data.get(field)
-    if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 1):
-        raise AgentManifestError(f"{context}.{field} must be a positive integer")
-
-
-def _nonnegative_int(data: Mapping[str, Any], field: str, context: str) -> None:
-    value = data.get(field)
-    if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 0):
-        raise AgentManifestError(f"{context}.{field} must be a non-negative integer")
-
-
-def _positive_number(data: Mapping[str, Any], field: str, context: str) -> None:
-    value = data.get(field)
-    if value is not None and (
-        not _is_number(value) or not math.isfinite(float(value)) or float(value) <= 0
-    ):
-        raise AgentManifestError(f"{context}.{field} must be a finite positive number")
-
-
-def _nonnegative_number(data: Mapping[str, Any], field: str, context: str) -> None:
-    value = data.get(field)
-    if value is not None and (
-        not _is_number(value) or not math.isfinite(float(value)) or float(value) < 0
-    ):
-        raise AgentManifestError(f"{context}.{field} must be a finite non-negative number")
-
-
-def _is_number(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+def _given(data: Mapping[str, Any], name: str, default: Any = None) -> Any:
+    """``data[name]``, or ``default`` when it is absent or ``null`` (not set)."""
+    value = data.get(name)
+    return default if value is None else value
 
 
 def _covers(entry: str, path: str) -> bool:

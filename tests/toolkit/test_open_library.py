@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import urllib.error
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 from ai_arch_toolkit.toolkit.tools._open_library import (
@@ -12,6 +11,7 @@ from ai_arch_toolkit.toolkit.tools._open_library import (
     open_library_search,
     open_library_work,
 )
+from tests.toolkit.http_fakes import HTTP_OPEN, respond
 
 _SEARCH_DOC = {
     "key": "/works/OL27448W",
@@ -55,17 +55,6 @@ _ISBN = {
 }
 
 
-def _mock_urlopen(data: dict | str):
-    resp = MagicMock()
-    if isinstance(data, dict):
-        resp.read.return_value = json.dumps(data).encode()
-    else:
-        resp.read.return_value = data.encode()
-    resp.__enter__ = lambda s: s
-    resp.__exit__ = MagicMock(return_value=False)
-    return resp
-
-
 def _called_request(mock_urlopen):
     return mock_urlopen.call_args.args[0]
 
@@ -75,9 +64,9 @@ def _called_params(mock_urlopen) -> dict[str, list[str]]:
 
 
 class TestOpenLibrarySearch:
-    @patch("ai_arch_toolkit.toolkit.tools._open_library.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_returns_results(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen({"docs": [_SEARCH_DOC]})
+        mock_urlopen.return_value = respond({"docs": [_SEARCH_DOC]})
 
         result = open_library_search("lord rings", max_results=2)
 
@@ -95,9 +84,9 @@ class TestOpenLibrarySearch:
         assert params["limit"] == ["2"]
         assert params["offset"] == ["0"]
 
-    @patch("ai_arch_toolkit.toolkit.tools._open_library.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_filters_and_caps_max_results(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen({"docs": []})
+        mock_urlopen.return_value = respond({"docs": []})
 
         open_library_search(
             "",
@@ -117,15 +106,15 @@ class TestOpenLibrarySearch:
         assert params["subject"] == ["science fiction"]
         assert params["isbn"] == ["9780441172719"]
 
-    @patch("ai_arch_toolkit.toolkit.tools._open_library.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_invalid_options_do_not_call_api(self, mock_urlopen):
         assert "provide query" in open_library_search("")
         assert "start must be greater than or equal to 0" in open_library_search("test", start=-1)
         mock_urlopen.assert_not_called()
 
-    @patch("ai_arch_toolkit.toolkit.tools._open_library.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_parse_failure(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen("not json")
+        mock_urlopen.return_value = respond("not json")
 
         result = open_library_search("test")
 
@@ -133,9 +122,9 @@ class TestOpenLibrarySearch:
 
 
 class TestOpenLibraryWork:
-    @patch("ai_arch_toolkit.toolkit.tools._open_library.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_returns_work_by_url(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(_WORK)
+        mock_urlopen.return_value = respond(_WORK)
 
         result = open_library_work("https://openlibrary.org/works/OL27448W")
 
@@ -149,14 +138,14 @@ class TestOpenLibraryWork:
         request = _called_request(mock_urlopen)
         assert urlparse(request.full_url).path == "/works/OL27448W.json"
 
-    @patch("ai_arch_toolkit.toolkit.tools._open_library.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_invalid_work_id(self, mock_urlopen):
         result = open_library_work("OL123M")
 
         assert "invalid work_id" in result
         mock_urlopen.assert_not_called()
 
-    @patch("ai_arch_toolkit.toolkit.tools._open_library.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_not_found(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.HTTPError(
             url="https://openlibrary.org/works/OL000W.json",
@@ -172,9 +161,9 @@ class TestOpenLibraryWork:
 
 
 class TestOpenLibraryIsbn:
-    @patch("ai_arch_toolkit.toolkit.tools._open_library.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_returns_isbn(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(_ISBN)
+        mock_urlopen.return_value = respond(_ISBN)
 
         result = open_library_isbn("978-0140328721")
 
@@ -187,7 +176,7 @@ class TestOpenLibraryIsbn:
         assert "Works: /works/OL45804W" in result
         assert "Description: A story about a clever fox." in result
 
-    @patch("ai_arch_toolkit.toolkit.tools._open_library.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_invalid_isbn(self, mock_urlopen):
         result = open_library_isbn("bad")
 

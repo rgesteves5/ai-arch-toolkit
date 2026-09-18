@@ -13,14 +13,54 @@ from ai_arch_toolkit.core import tool
 # Safe math evaluator
 # ---------------------------------------------------------------------------
 
+# Big-integer arithmetic runs in C holding the GIL: no timeout can stop it, not even the
+# executor's. So each operation that can grow a number estimates its result first, and refuses
+# one too large to print (str() of an int already refuses more than 4300 digits, ~14 300 bits).
+_MAX_EXPRESSION_CHARS = 1000
+_MAX_RESULT_BITS = 15_000
+_MAX_ROUND_DIGITS = 1000
+
+
+def _refuse_over(bits: float) -> None:
+    if bits > _MAX_RESULT_BITS:
+        msg = f"result too large (over {_MAX_RESULT_BITS} bits)"
+        raise ValueError(msg)
+
+
+def _power(base: Any, exponent: Any, modulus: Any = None) -> Any:
+    whole = isinstance(base, int) and isinstance(exponent, int)
+    if modulus is None and whole and exponent > 0 and abs(base) > 1:
+        _refuse_over(exponent * math.log2(abs(base)))
+    return pow(base, exponent) if modulus is None else pow(base, exponent, modulus)
+
+
+def _multiply(left: Any, right: Any) -> Any:
+    if isinstance(left, int) and isinstance(right, int):
+        _refuse_over(abs(left).bit_length() + abs(right).bit_length())
+    return left * right
+
+
+def _factorial(n: Any) -> Any:
+    if isinstance(n, int) and n > 1:
+        _refuse_over(math.lgamma(n + 1) / math.log(2))
+    return math.factorial(n)
+
+
+def _round(number: Any, ndigits: Any = None) -> Any:
+    if isinstance(ndigits, int) and abs(ndigits) > _MAX_ROUND_DIGITS:
+        msg = f"round() ndigits must be within ±{_MAX_ROUND_DIGITS}"
+        raise ValueError(msg)
+    return round(number, ndigits)
+
+
 _OPERATORS: dict[type, Any] = {
     ast.Add: operator.add,
     ast.Sub: operator.sub,
-    ast.Mult: operator.mul,
+    ast.Mult: _multiply,
     ast.Div: operator.truediv,
     ast.FloorDiv: operator.floordiv,
     ast.Mod: operator.mod,
-    ast.Pow: operator.pow,
+    ast.Pow: _power,
     ast.USub: operator.neg,
     ast.UAdd: operator.pos,
 }
@@ -35,7 +75,7 @@ _CONSTANTS: dict[str, float] = {
 _FUNCTIONS: dict[str, Any] = {
     "sqrt": math.sqrt,
     "abs": abs,
-    "round": round,
+    "round": _round,
     "sin": math.sin,
     "cos": math.cos,
     "tan": math.tan,
@@ -48,11 +88,11 @@ _FUNCTIONS: dict[str, Any] = {
     "exp": math.exp,
     "ceil": math.ceil,
     "floor": math.floor,
-    "factorial": math.factorial,
+    "factorial": _factorial,
     "gcd": math.gcd,
     "min": min,
     "max": max,
-    "pow": pow,
+    "pow": _power,
 }
 
 
@@ -76,7 +116,7 @@ def _safe_eval(node: ast.AST) -> float:
     raise ValueError(f"Unsupported expression: {ast.dump(node)}")
 
 
-@tool
+@tool(capability="compute")
 def math_eval(expression: str) -> str:
     """Safely evaluate a mathematical expression.
 
@@ -84,10 +124,14 @@ def math_eval(expression: str) -> str:
     Constants: pi, e, tau, inf.
     Functions: sqrt, abs, round, sin, cos, tan, asin, acos, atan,
                log, log2, log10, exp, ceil, floor, factorial, gcd, min, max, pow.
+    An expression longer than 1000 characters, or one whose result would be too large to print,
+    is refused before it is computed.
 
     Args:
         expression: A math expression, e.g. "sqrt(144) + 3 * pi".
     """
+    if len(expression) > _MAX_EXPRESSION_CHARS:
+        return f"Error: expression longer than {_MAX_EXPRESSION_CHARS} characters"
     # Allow ^ as power operator
     expression = expression.replace("^", "**")
     try:
@@ -97,7 +141,14 @@ def math_eval(expression: str) -> str:
         if isinstance(result, float) and result == int(result) and not math.isinf(result):
             return str(int(result))
         return str(result)
-    except (ValueError, TypeError, SyntaxError, ZeroDivisionError, OverflowError) as e:
+    except (
+        ValueError,
+        TypeError,
+        SyntaxError,
+        ArithmeticError,
+        RecursionError,
+        MemoryError,
+    ) as e:
         return f"Error: {e}"
 
 
@@ -280,7 +331,7 @@ def _convert_temperature(value: float, from_u: str, to_u: str) -> float | None:
     return c + 273.15
 
 
-@tool
+@tool(capability="compute")
 def unit_convert(value: float, from_unit: str, to_unit: str) -> str:
     """Convert a value between units.
 

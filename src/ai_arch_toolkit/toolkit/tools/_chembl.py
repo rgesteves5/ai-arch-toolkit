@@ -2,24 +2,25 @@
 
 from __future__ import annotations
 
-import json
 import re
-import urllib.error
-import urllib.parse
-import urllib.request
+from collections.abc import Callable
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
-_BASE_URL = "https://www.ebi.ac.uk/chembl/api/data"
-_TIMEOUT = 20
-_USER_AGENT = "ai-arch-toolkit/1.0 (https://github.com/ai-arch-toolkit)"
+_API = Api(
+    base="https://www.ebi.ac.uk/chembl/api/data",
+    name="ChEMBL",
+    timeout_s=20,
+    status_messages={404: "no matching records found."},
+)
 _MAX_LIMIT = 25
 _TEXT_RE = re.compile(r"^[\w\s,.'()/%:+-]{1,180}$", re.UNICODE)
 _CHEMBL_RE = re.compile(r"^CHEMBL\d+$", re.IGNORECASE)
 
 
-@tool
+@tool(capability="network")
 def chembl_molecule_search(query: str, max_results: int = 10, offset: int = 0) -> str:
     """Search ChEMBL molecules by name, synonym, or text.
 
@@ -32,34 +33,17 @@ def chembl_molecule_search(query: str, max_results: int = 10, offset: int = 0) -
         return "ChEMBL molecule search failed: invalid query."
     if offset < 0:
         return "ChEMBL molecule search failed: offset must be greater than or equal to 0."
-    try:
-        data = _fetch_json(
-            "/molecule/search.json",
-            {"q": query.strip(), "limit": str(_bounded(max_results)), "offset": str(offset)},
-        )
-        items = data.get("molecules", [])
-    except urllib.error.HTTPError as e:
-        return _http_error("ChEMBL molecule search failed", e)
-    except urllib.error.URLError as e:
-        return f"ChEMBL molecule search failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "ChEMBL molecule search failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"ChEMBL molecule search failed: could not parse API response: {e}"
-
-    if not isinstance(items, list) or not items:
-        return "No ChEMBL molecules found."
-    total = _string(data.get("page_meta", {}).get("total_count")) or "?"
-    lines = [
-        f"ChEMBL molecules for {query!r} (returned {len(items)}, total {total}, offset {offset}):"
-    ]
-    for index, item in enumerate(items, start=1):
-        if isinstance(item, dict):
-            lines.extend(_format_molecule(item, index=index, compact=True))
-    return "\n".join(lines)
+    params = {"q": query.strip(), "limit": str(_bounded(max_results)), "offset": str(offset)}
+    header = f"ChEMBL molecules for {query!r}"
+    return _fetch(
+        "ChEMBL molecule search failed",
+        ("molecule", "search.json"),
+        params,
+        lambda data: _page(data, "molecules", header, offset, _compact_molecule),
+    )
 
 
-@tool
+@tool(capability="network")
 def chembl_molecule(chembl_id: str) -> str:
     """Get ChEMBL molecule metadata.
 
@@ -69,23 +53,17 @@ def chembl_molecule(chembl_id: str) -> str:
     normalized = chembl_id.strip().upper()
     if not _CHEMBL_RE.fullmatch(normalized):
         return f"ChEMBL molecule lookup failed: invalid chembl_id: {chembl_id!r}"
-    try:
-        data = _fetch_json(f"/molecule/{normalized}.json", {})
-    except urllib.error.HTTPError as e:
-        return _http_error("ChEMBL molecule lookup failed", e)
-    except urllib.error.URLError as e:
-        return f"ChEMBL molecule lookup failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "ChEMBL molecule lookup failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"ChEMBL molecule lookup failed: could not parse API response: {e}"
-
-    lines = [f"ChEMBL molecule {normalized}:"]
-    lines.extend(_format_molecule(data, index=None, compact=False))
-    return "\n".join(lines)
+    return _fetch(
+        "ChEMBL molecule lookup failed",
+        ("molecule", f"{normalized}.json"),
+        {},
+        lambda data: "\n".join(
+            [f"ChEMBL molecule {normalized}:", *_format_molecule(data, index=None, compact=False)]
+        ),
+    )
 
 
-@tool
+@tool(capability="network")
 def chembl_target_search(query: str, max_results: int = 10, offset: int = 0) -> str:
     """Search ChEMBL biological targets.
 
@@ -98,34 +76,17 @@ def chembl_target_search(query: str, max_results: int = 10, offset: int = 0) -> 
         return "ChEMBL target search failed: invalid query."
     if offset < 0:
         return "ChEMBL target search failed: offset must be greater than or equal to 0."
-    try:
-        data = _fetch_json(
-            "/target/search.json",
-            {"q": query.strip(), "limit": str(_bounded(max_results)), "offset": str(offset)},
-        )
-        items = data.get("targets", [])
-    except urllib.error.HTTPError as e:
-        return _http_error("ChEMBL target search failed", e)
-    except urllib.error.URLError as e:
-        return f"ChEMBL target search failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "ChEMBL target search failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"ChEMBL target search failed: could not parse API response: {e}"
-
-    if not isinstance(items, list) or not items:
-        return "No ChEMBL targets found."
-    total = _string(data.get("page_meta", {}).get("total_count")) or "?"
-    lines = [
-        f"ChEMBL targets for {query!r} (returned {len(items)}, total {total}, offset {offset}):"
-    ]
-    for index, item in enumerate(items, start=1):
-        if isinstance(item, dict):
-            lines.extend(_format_target(item, index=index))
-    return "\n".join(lines)
+    params = {"q": query.strip(), "limit": str(_bounded(max_results)), "offset": str(offset)}
+    header = f"ChEMBL targets for {query!r}"
+    return _fetch(
+        "ChEMBL target search failed",
+        ("target", "search.json"),
+        params,
+        lambda data: _page(data, "targets", header, offset, _format_target),
+    )
 
 
-@tool
+@tool(capability="network")
 def chembl_target(chembl_id: str) -> str:
     """Get ChEMBL target metadata.
 
@@ -135,31 +96,15 @@ def chembl_target(chembl_id: str) -> str:
     normalized = chembl_id.strip().upper()
     if not _CHEMBL_RE.fullmatch(normalized):
         return f"ChEMBL target lookup failed: invalid chembl_id: {chembl_id!r}"
-    try:
-        data = _fetch_json(f"/target/{normalized}.json", {})
-    except urllib.error.HTTPError as e:
-        return _http_error("ChEMBL target lookup failed", e)
-    except urllib.error.URLError as e:
-        return f"ChEMBL target lookup failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "ChEMBL target lookup failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"ChEMBL target lookup failed: could not parse API response: {e}"
-
-    lines = [f"ChEMBL target {normalized}:"]
-    lines.extend(_format_target(data, index=None))
-    components = data.get("target_components", [])
-    if isinstance(components, list) and components:
-        names = [
-            _string(component.get("accession")) or _string(component.get("component_id"))
-            for component in components
-            if isinstance(component, dict)
-        ]
-        lines.append(f"   components: {', '.join(name for name in names if name) or '?'}")
-    return "\n".join(lines)
+    return _fetch(
+        "ChEMBL target lookup failed",
+        ("target", f"{normalized}.json"),
+        {},
+        lambda data: _target_text(data, normalized),
+    )
 
 
-@tool
+@tool(capability="network")
 def chembl_activity_search(
     molecule_chembl_id: str = "",
     target_chembl_id: str = "",
@@ -176,71 +121,109 @@ def chembl_activity_search(
         max_results: Number of activities to return (1-25). Defaults to 10.
         offset: Zero-based result offset. Defaults to 0.
     """
-    if not any((molecule_chembl_id.strip(), target_chembl_id.strip())):
-        return "ChEMBL activity search failed: provide molecule_chembl_id or target_chembl_id."
-    if molecule_chembl_id and not _CHEMBL_RE.fullmatch(molecule_chembl_id.strip()):
-        return "ChEMBL activity search failed: invalid molecule_chembl_id."
-    if target_chembl_id and not _CHEMBL_RE.fullmatch(target_chembl_id.strip()):
-        return "ChEMBL activity search failed: invalid target_chembl_id."
-    if standard_type and not _valid_text(standard_type):
-        return "ChEMBL activity search failed: invalid standard_type."
-    if offset < 0:
-        return "ChEMBL activity search failed: offset must be greater than or equal to 0."
-
+    problem = _activity_problem(molecule_chembl_id, target_chembl_id, standard_type, offset)
+    if problem:
+        return f"ChEMBL activity search failed: {problem}"
     params = {"limit": str(_bounded(max_results)), "offset": str(offset)}
-    if molecule_chembl_id.strip():
-        params["molecule_chembl_id"] = molecule_chembl_id.strip().upper()
-    if target_chembl_id.strip():
-        params["target_chembl_id"] = target_chembl_id.strip().upper()
-    if standard_type.strip():
-        params["standard_type"] = standard_type.strip()
-    try:
-        data = _fetch_json("/activity.json", params)
-        items = data.get("activities", [])
-    except urllib.error.HTTPError as e:
-        return _http_error("ChEMBL activity search failed", e)
-    except urllib.error.URLError as e:
-        return f"ChEMBL activity search failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "ChEMBL activity search failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"ChEMBL activity search failed: could not parse API response: {e}"
+    filters = {
+        "molecule_chembl_id": molecule_chembl_id.strip().upper(),
+        "target_chembl_id": target_chembl_id.strip().upper(),
+        "standard_type": standard_type.strip(),
+    }
+    params.update({key: value for key, value in filters.items() if value})
+    return _fetch(
+        "ChEMBL activity search failed",
+        ("activity.json",),
+        params,
+        lambda data: _page(data, "activities", "ChEMBL activities", offset, _format_activity),
+    )
 
+
+def _fetch(
+    failure: str,
+    segments: tuple[str, ...],
+    params: dict[str, str],
+    render: Callable[[dict[str, Any]], str],
+) -> str:
+    try:
+        return _API.get_json(*segments, params=params, parse=render)
+    except HttpError as e:
+        return f"{failure}: {e}"
+
+
+def _activity_problem(molecule_id: str, target_id: str, standard_type: str, offset: int) -> str:
+    if not any((molecule_id.strip(), target_id.strip())):
+        return "provide molecule_chembl_id or target_chembl_id."
+    if molecule_id and not _CHEMBL_RE.fullmatch(molecule_id.strip()):
+        return "invalid molecule_chembl_id."
+    if target_id and not _CHEMBL_RE.fullmatch(target_id.strip()):
+        return "invalid target_chembl_id."
+    if standard_type and not _valid_text(standard_type):
+        return "invalid standard_type."
+    if offset < 0:
+        return "offset must be greater than or equal to 0."
+    return ""
+
+
+_NOTHING_FOUND = {
+    "molecules": "No ChEMBL molecules found.",
+    "targets": "No ChEMBL targets found.",
+    "activities": "No ChEMBL activities found.",
+}
+
+
+def _page(
+    data: dict[str, Any],
+    key: str,
+    header: str,
+    offset: int,
+    format_item: Callable[..., list[str]],
+) -> str:
+    items = data.get(key, [])
     if not isinstance(items, list) or not items:
-        return "No ChEMBL activities found."
+        return _NOTHING_FOUND[key]
     total = _string(data.get("page_meta", {}).get("total_count")) or "?"
-    lines = [f"ChEMBL activities (returned {len(items)}, total {total}, offset {offset}):"]
+    lines = [f"{header} (returned {len(items)}, total {total}, offset {offset}):"]
     for index, item in enumerate(items, start=1):
-        if not isinstance(item, dict):
-            continue
-        value = " ".join(
-            part
-            for part in (
-                _string(item.get("standard_relation")),
-                _string(item.get("standard_value")),
-                _string(item.get("standard_units")),
-            )
-            if part
-        )
-        lines.append(
-            f"{index}. {_string(item.get('molecule_chembl_id'))} -> "
-            f"{_string(item.get('target_chembl_id'))} | "
-            f"{_string(item.get('standard_type'))}: {value or '?'}"
-        )
-        lines.append(
-            f"   assay: {_string(item.get('assay_chembl_id')) or '?'} | "
-            f"document: {_string(item.get('document_chembl_id')) or '?'}"
-        )
+        if isinstance(item, dict):
+            lines.extend(format_item(item, index=index))
     return "\n".join(lines)
 
 
-def _fetch_json(path: str, params: dict[str, str]) -> dict[str, Any]:
-    url = f"{_BASE_URL}{path}"
-    if params:
-        url = f"{url}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="replace"))
+def _compact_molecule(item: dict[str, Any], *, index: int) -> list[str]:
+    return _format_molecule(item, index=index, compact=True)
+
+
+def _target_text(data: dict[str, Any], chembl_id: str) -> str:
+    lines = [f"ChEMBL target {chembl_id}:", *_format_target(data, index=None)]
+    components = data.get("target_components", [])
+    if isinstance(components, list) and components:
+        names = [
+            _string(component.get("accession")) or _string(component.get("component_id"))
+            for component in components
+            if isinstance(component, dict)
+        ]
+        lines.append(f"   components: {', '.join(name for name in names if name) or '?'}")
+    return "\n".join(lines)
+
+
+def _format_activity(item: dict[str, Any], *, index: int) -> list[str]:
+    value = " ".join(
+        part
+        for part in (
+            _string(item.get("standard_relation")),
+            _string(item.get("standard_value")),
+            _string(item.get("standard_units")),
+        )
+        if part
+    )
+    return [
+        f"{index}. {_string(item.get('molecule_chembl_id'))} -> "
+        f"{_string(item.get('target_chembl_id'))} | "
+        f"{_string(item.get('standard_type'))}: {value or '?'}",
+        f"   assay: {_string(item.get('assay_chembl_id')) or '?'} | "
+        f"document: {_string(item.get('document_chembl_id')) or '?'}",
+    ]
 
 
 def _format_molecule(item: dict[str, Any], *, index: int | None, compact: bool) -> list[str]:
@@ -297,14 +280,6 @@ def _format_target(item: dict[str, Any], *, index: int | None) -> list[str]:
         )
     )
     return lines
-
-
-def _http_error(prefix: str, error: urllib.error.HTTPError) -> str:
-    if error.code == 404:
-        return f"{prefix}: no matching records found."
-    if error.code == 429:
-        return f"{prefix}: rate limited by ChEMBL (HTTP 429). Try again later."
-    return f"{prefix}: HTTP error {error.code}: {error.reason}"
 
 
 def _valid_text(value: str) -> bool:

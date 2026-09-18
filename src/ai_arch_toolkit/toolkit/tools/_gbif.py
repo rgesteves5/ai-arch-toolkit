@@ -2,25 +2,26 @@
 
 from __future__ import annotations
 
-import json
 import re
-import urllib.error
-import urllib.parse
-import urllib.request
+from collections.abc import Callable
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
-_BASE_URL = "https://api.gbif.org/v1"
-_TIMEOUT = 15
-_USER_AGENT = "ai-arch-toolkit/1.0 (https://github.com/ai-arch-toolkit)"
+_API = Api(
+    base="https://api.gbif.org/v1",
+    name="GBIF",
+    timeout_s=15,
+    status_messages={404: "no matching records found."},
+)
 _MAX_LIMIT = 50
 _TEXT_RE = re.compile(r"^[\w\s,.'()/-]{1,160}$", re.UNICODE)
 _KEY_RE = re.compile(r"^\d+$")
 _CODE_RE = re.compile(r"^[A-Za-z_ -]{0,80}$")
 
 
-@tool
+@tool(capability="network")
 def gbif_species_match(name: str, rank: str = "", kingdom: str = "") -> str:
     """Resolve a scientific name to the best GBIF taxon match.
 
@@ -42,37 +43,14 @@ def gbif_species_match(name: str, rank: str = "", kingdom: str = "") -> str:
     if kingdom.strip():
         params["kingdom"] = kingdom.strip()
     try:
-        data = _fetch_json("/species/match", params)
-    except urllib.error.HTTPError as e:
-        return _http_error("GBIF species match failed", e)
-    except urllib.error.URLError as e:
-        return f"GBIF species match failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "GBIF species match failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"GBIF species match failed: could not parse API response: {e}"
-
-    usage_key = _string(data.get("usageKey"))
-    if not usage_key:
-        return "No GBIF species match found."
-    status = _string(data.get("status"))
-    match_type = _string(data.get("matchType"))
-    lines = [
-        f"GBIF species match for {name!r}:",
-        f"{_string(data.get('scientificName')) or _string(data.get('canonicalName'))}",
-        f"   usageKey: {usage_key} | status: {status} | match: {match_type}",
-    ]
-    rank_text = _string(data.get("rank"))
-    confidence = _string(data.get("confidence"))
-    if rank_text or confidence:
-        lines.append(f"   rank: {rank_text or '?'} | confidence: {confidence or '?'}")
-    classification = _classification(data)
-    if classification:
-        lines.append(f"   classification: {classification}")
-    return "\n".join(lines)
+        return _API.get_json(
+            "species", "match", params=params, parse=lambda data: _match_text(data, name)
+        )
+    except HttpError as e:
+        return f"GBIF species match failed: {e}"
 
 
-@tool
+@tool(capability="network")
 def gbif_species_search(
     query: str,
     rank: str = "",
@@ -107,29 +85,19 @@ def gbif_species_search(
         params["rank"] = rank.strip().upper()
     if highertaxon_key.strip():
         params["highertaxonKey"] = highertaxon_key.strip()
+    header = f"GBIF taxa for {query!r}"
     try:
-        data = _fetch_json("/species/search", params)
-        results = data.get("results", [])
-    except urllib.error.HTTPError as e:
-        return _http_error("GBIF species search failed", e)
-    except urllib.error.URLError as e:
-        return f"GBIF species search failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "GBIF species search failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"GBIF species search failed: could not parse API response: {e}"
-
-    if not isinstance(results, list) or not results:
-        return "No GBIF taxa found."
-    total = _string(data.get("count")) or "?"
-    lines = [f"GBIF taxa for {query!r} (returned {len(results)}, total {total}, offset {offset}):"]
-    for index, item in enumerate(results, start=1):
-        if isinstance(item, dict):
-            lines.extend(_format_taxon(item, index=index))
-    return "\n".join(lines)
+        return _API.get_json(
+            "species",
+            "search",
+            params=params,
+            parse=lambda data: _page(data, header, offset, "No GBIF taxa found.", _format_taxon),
+        )
+    except HttpError as e:
+        return f"GBIF species search failed: {e}"
 
 
-@tool
+@tool(capability="network")
 def gbif_species(taxon_key: str) -> str:
     """Get GBIF taxon metadata by taxon key.
 
@@ -140,22 +108,16 @@ def gbif_species(taxon_key: str) -> str:
     if not _KEY_RE.fullmatch(key):
         return f"GBIF species lookup failed: invalid taxon_key: {taxon_key!r}"
     try:
-        data = _fetch_json(f"/species/{key}", {})
-    except urllib.error.HTTPError as e:
-        return _http_error("GBIF species lookup failed", e)
-    except urllib.error.URLError as e:
-        return f"GBIF species lookup failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "GBIF species lookup failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"GBIF species lookup failed: could not parse API response: {e}"
-
-    lines = [f"GBIF taxon {key}:"]
-    lines.extend(_format_taxon(data, index=None))
-    return "\n".join(lines)
+        return _API.get_json(
+            "species",
+            key,
+            parse=lambda data: "\n".join([f"GBIF taxon {key}:", *_format_taxon(data, index=None)]),
+        )
+    except HttpError as e:
+        return f"GBIF species lookup failed: {e}"
 
 
-@tool
+@tool(capability="network")
 def gbif_occurrence_search(
     taxon_key: str = "",
     country: str = "",
@@ -190,61 +152,86 @@ def gbif_occurrence_search(
         "offset": str(offset),
         "hasCoordinate": str(has_coordinate).lower(),
     }
-    if taxon_key.strip():
-        params["taxonKey"] = taxon_key.strip()
-    if country.strip():
-        params["country"] = country.strip().upper()
-    if year.strip():
-        params["year"] = year.strip()
+    filters = {
+        "taxonKey": taxon_key.strip(),
+        "country": country.strip().upper(),
+        "year": year.strip(),
+    }
+    params.update({key: value for key, value in filters.items() if value})
     try:
-        data = _fetch_json("/occurrence/search", params)
-        results = data.get("results", [])
-    except urllib.error.HTTPError as e:
-        return _http_error("GBIF occurrence search failed", e)
-    except urllib.error.URLError as e:
-        return f"GBIF occurrence search failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "GBIF occurrence search failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"GBIF occurrence search failed: could not parse API response: {e}"
+        return _API.get_json(
+            "occurrence",
+            "search",
+            params=params,
+            parse=lambda data: _page(
+                data, "GBIF occurrences", offset, "No GBIF occurrences found.", _format_occurrence
+            ),
+        )
+    except HttpError as e:
+        return f"GBIF occurrence search failed: {e}"
 
-    if not isinstance(results, list) or not results:
-        return "No GBIF occurrences found."
-    total = _string(data.get("count")) or "?"
-    lines = [f"GBIF occurrences (returned {len(results)}, total {total}, offset {offset}):"]
-    for index, item in enumerate(results, start=1):
-        if not isinstance(item, dict):
-            continue
-        name = _string(item.get("scientificName")) or _string(item.get("species"))
-        key = _string(item.get("key"))
-        lines.append(f"{index}. {name} | occurrence key: {key}")
-        place = ", ".join(
-            part
-            for part in (
-                _string(item.get("locality")),
-                _string(item.get("stateProvince")),
-                _string(item.get("country")),
-            )
-            if part
-        )
-        coords = _coords(item)
-        event_date = _string(item.get("eventDate")) or _string(item.get("year"))
-        lines.append(
-            f"   date: {event_date or '?'} | place: {place or '?'} | coords: {coords or '?'}"
-        )
-        dataset = _string(item.get("datasetName"))
-        if dataset:
-            lines.append(f"   dataset: {dataset}")
+
+def _match_text(data: dict[str, Any], name: str) -> str:
+    usage_key = _string(data.get("usageKey"))
+    if not usage_key:
+        return "No GBIF species match found."
+    status = _string(data.get("status"))
+    match_type = _string(data.get("matchType"))
+    lines = [
+        f"GBIF species match for {name!r}:",
+        f"{_string(data.get('scientificName')) or _string(data.get('canonicalName'))}",
+        f"   usageKey: {usage_key} | status: {status} | match: {match_type}",
+    ]
+    rank_text = _string(data.get("rank"))
+    confidence = _string(data.get("confidence"))
+    if rank_text or confidence:
+        lines.append(f"   rank: {rank_text or '?'} | confidence: {confidence or '?'}")
+    classification = _classification(data)
+    if classification:
+        lines.append(f"   classification: {classification}")
     return "\n".join(lines)
 
 
-def _fetch_json(path: str, params: dict[str, str]) -> dict[str, Any]:
-    url = f"{_BASE_URL}{path}"
-    if params:
-        url = f"{url}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="replace"))
+def _page(
+    data: dict[str, Any],
+    header: str,
+    offset: int,
+    nothing_found: str,
+    format_item: Callable[..., list[str]],
+) -> str:
+    results = data.get("results", [])
+    if not isinstance(results, list) or not results:
+        return nothing_found
+    total = _string(data.get("count")) or "?"
+    lines = [f"{header} (returned {len(results)}, total {total}, offset {offset}):"]
+    for index, item in enumerate(results, start=1):
+        if isinstance(item, dict):
+            lines.extend(format_item(item, index=index))
+    return "\n".join(lines)
+
+
+def _format_occurrence(item: dict[str, Any], *, index: int) -> list[str]:
+    name = _string(item.get("scientificName")) or _string(item.get("species"))
+    key = _string(item.get("key"))
+    place = ", ".join(
+        part
+        for part in (
+            _string(item.get("locality")),
+            _string(item.get("stateProvince")),
+            _string(item.get("country")),
+        )
+        if part
+    )
+    coords = _coords(item)
+    event_date = _string(item.get("eventDate")) or _string(item.get("year"))
+    lines = [
+        f"{index}. {name} | occurrence key: {key}",
+        f"   date: {event_date or '?'} | place: {place or '?'} | coords: {coords or '?'}",
+    ]
+    dataset = _string(item.get("datasetName"))
+    if dataset:
+        lines.append(f"   dataset: {dataset}")
+    return lines
 
 
 def _format_taxon(item: dict[str, Any], *, index: int | None) -> list[str]:
@@ -279,14 +266,6 @@ def _coords(item: dict[str, Any]) -> str:
     lat = _string(item.get("decimalLatitude"))
     lon = _string(item.get("decimalLongitude"))
     return f"{lat}, {lon}" if lat and lon else ""
-
-
-def _http_error(prefix: str, error: urllib.error.HTTPError) -> str:
-    if error.code == 404:
-        return f"{prefix}: no matching records found."
-    if error.code == 429:
-        return f"{prefix}: rate limited by GBIF (HTTP 429). Try again later."
-    return f"{prefix}: HTTP error {error.code}: {error.reason}"
 
 
 def _valid_text(value: str) -> bool:

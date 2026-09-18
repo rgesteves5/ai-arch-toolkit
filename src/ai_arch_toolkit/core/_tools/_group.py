@@ -9,10 +9,11 @@ from typing import Any
 from ai_arch_toolkit.core._response import ToolCall
 from ai_arch_toolkit.core._server_tools import ServerTool
 from ai_arch_toolkit.core._tools._approval import ApprovalHandler
-from ai_arch_toolkit.core._tools._definition import ToolDefinition
+from ai_arch_toolkit.core._tools._definition import ToolDefinition, check_bounds
 from ai_arch_toolkit.core._tools._executor import (
     _arun_tool,
     _definition_for,
+    _Limits,
     _run_tool_sync,
 )
 from ai_arch_toolkit.core._tools._governance import (
@@ -31,7 +32,9 @@ class ToolGroup:
     ``async_execute`` run a single governed pipeline and return a structured
     :class:`ToolResult`. Governance is configured at construction — an optional
     approval handler, extra pre-execution ``gates`` (e.g. dangerous-tool
-    blocking, dry-run), and a call-count budget (``max_calls``).
+    blocking, dry-run), a call-count budget (``max_calls``), and ceilings on each
+    tool's ``max_output_chars`` and ``timeout_s``: the stricter of the group's and
+    the tool's own applies, so a group tightens its tools and never widens them.
 
     Usage::
 
@@ -42,7 +45,7 @@ class ToolGroup:
             text = result.to_model_text()
     """
 
-    __slots__ = ("_defs", "_gates", "_max_calls", "_redactor", "_run_state")
+    __slots__ = ("_ceiling", "_defs", "_gates", "_max_calls", "_redactor", "_run_state")
 
     def __init__(
         self,
@@ -50,7 +53,11 @@ class ToolGroup:
         approval_handler: ApprovalHandler | None = None,
         gates: Sequence[ToolGate] = (),
         max_calls: int | None = None,
+        max_output_chars: int | None = None,
+        timeout_s: float | None = None,
     ) -> None:
+        check_bounds(max_output_chars, timeout_s)
+        self._ceiling = _Limits(max_output_chars, timeout_s)
         self._defs: dict[str, ToolDefinition] = {}
         for fn in fns:
             self.add(fn)
@@ -122,6 +129,7 @@ class ToolGroup:
             run_state=self._run_state,
             max_calls=self._max_calls,
             redactor=self._redactor,
+            ceiling=self._ceiling,
         )
 
     async def async_execute(self, tool_call: ToolCall) -> ToolResult:
@@ -140,6 +148,7 @@ class ToolGroup:
             run_state=self._run_state,
             max_calls=self._max_calls,
             redactor=self._redactor,
+            ceiling=self._ceiling,
         )
 
     def __contains__(self, name: str) -> bool:

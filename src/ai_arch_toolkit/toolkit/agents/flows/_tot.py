@@ -4,16 +4,15 @@ from __future__ import annotations
 
 import re
 from collections import deque
-from typing import Any, Literal
+from typing import Any, Literal, Unpack
 
 from ai_arch_toolkit.core._content import Content, user
 from ai_arch_toolkit.core._llm import LLM
-from ai_arch_toolkit.core._policy import Policy
 from ai_arch_toolkit.core._state import StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
-from ai_arch_toolkit.core._trace import TraceCapture
-from ai_arch_toolkit.toolkit.budget import BudgetPolicy
+from ai_arch_toolkit.toolkit.agents.flows._common import FlowOptions
+from ai_arch_toolkit.toolkit.agents.flows._keys import ANSWER, RESPONSE, TASK
 from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowStep
 
 _NUMBERED_RE = re.compile(r"^\d+\.\s+(.+)", re.MULTILINE)
@@ -33,14 +32,11 @@ def tot_flow(
         "Evaluate the following reasoning step for the given task. "
         "Respond with a single score between 0.0 and 1.0."
     ),
-    timeout: float | None = None,
-    trace_capture: TraceCapture = "keys",
-    policy: Policy | None = None,
-    budget_policy: BudgetPolicy | None = None,
     llm_kwargs: dict[str, Any] | None = None,
     gen_llm: LLM | None = None,
     eval_llm: LLM | None = None,
     solver_llm: LLM | None = None,
+    **options: Unpack[FlowOptions],
 ) -> Flow:
     """Create a Tree of Thoughts Flow — DFS/BFS search over reasoning paths.
 
@@ -53,14 +49,11 @@ def tot_flow(
         max_iterations: Maximum search iterations.
         strategy: Search strategy — 'dfs' or 'bfs'.
         evaluator_system: System prompt for scoring thoughts.
-        timeout: Wall-clock limit for the whole run, in seconds.
-        trace_capture: What each step's trace records — see ``Flow``.
-        policy: Default policy for each step of the flow.
-        budget_policy: Optional cumulative runtime budget for the flow.
         llm_kwargs: Additional kwargs passed to every phase's LLM call.
         gen_llm: Override LLM for generating candidate thoughts.
         eval_llm: Override LLM for evaluating thoughts.
         solver_llm: Override LLM for final solution.
+        **options: The options of the ``Flow`` it builds (``FlowOptions``).
     """
     generator_llm = gen_llm or llm
     evaluator_llm = eval_llm or llm
@@ -69,7 +62,7 @@ def tot_flow(
 
     async def search_step(snap: StateSnapshot) -> Result:
         """One iteration of tree search: select, generate, evaluate, expand."""
-        task: str = snap.require("task")
+        task: str = snap.require(TASK)
         frontier: deque[tuple[str, int]] = snap.require("frontier")
         iteration: int = snap.get("iteration", 0)
 
@@ -99,8 +92,8 @@ def tot_flow(
             return Result(
                 value=response.text,
                 artifacts={
-                    "answer": response.text,
-                    "response": response,
+                    ANSWER: response.text,
+                    RESPONSE: response,
                     "search_done": True,
                     "frontier": frontier,
                     "iteration": iteration + 1,
@@ -170,8 +163,8 @@ def tot_flow(
             return Result(
                 value=response.text,
                 artifacts={
-                    "answer": response.text,
-                    "response": response,
+                    ANSWER: response.text,
+                    RESPONSE: response,
                     "search_done": True,
                     "frontier": frontier,
                     "iteration": iteration + 1,
@@ -200,11 +193,8 @@ def tot_flow(
     return Flow(
         FlowStep(step=Step(name="search_step", fn=search_step), when=search_not_done),
         name="tot",
-        policy=policy,
-        timeout=timeout,
-        trace_capture=trace_capture,
-        budget_policy=budget_policy,
         max_iterations=max_iterations,
+        **options,
     )
 
 
@@ -212,7 +202,7 @@ def tot_initial_state(task: Content) -> dict[str, Any]:
     """Create the initial operational state for a tot_flow."""
     task_str = task if isinstance(task, str) else str(task)
     return {
-        "task": task_str,
+        TASK: task_str,
         "frontier": deque([(task_str, 0)]),
         "search_done": False,
         "iteration": 0,

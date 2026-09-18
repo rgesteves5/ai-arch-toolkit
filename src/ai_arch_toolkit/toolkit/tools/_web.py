@@ -3,23 +3,29 @@
 from __future__ import annotations
 
 import html.parser
-import urllib.error
-import urllib.request
 from io import StringIO
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.toolkit.tools._http import HttpError, Page, fetch_page
 
 _DEFAULT_MAX_CHARS = 8000
-_DEFAULT_TIMEOUT = 10
-_USER_AGENT = "ai-arch-toolkit/1.0 (https://github.com/ai-arch-toolkit)"
+_MAX_CHARS_LIMIT = 100_000
+# A page's text is a fraction of its HTML: read this much HTML whatever max_chars asks for.
+_SCRAPE_MAX_BYTES = 2_000_000
+# UTF-8 needs at most four bytes a character.
+_BYTES_PER_CHAR = 4
 
 
-def _fetch(url: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
-    """Fetch URL content as text."""
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        charset = resp.headers.get_content_charset() or "utf-8"
-        return resp.read().decode(charset, errors="replace")
+def _clamp(max_chars: int) -> int:
+    return max(1, min(max_chars, _MAX_CHARS_LIMIT))
+
+
+def _cut(text: str, max_chars: int, page: Page) -> str:
+    """``text`` up to ``max_chars``, marked when the page had more than what is returned."""
+    if len(text) <= max_chars and page.complete:
+        return text
+    total = f"{len(text)} total chars" if page.complete else "the page is longer"
+    return text[:max_chars] + f"\n\n[Truncated — {total}]"
 
 
 class _HTMLTextExtractor(html.parser.HTMLParser):
@@ -63,22 +69,15 @@ def http_get(url: str, max_chars: int = _DEFAULT_MAX_CHARS) -> str:
     """Fetch a URL and return the raw response text.
 
     Args:
-        url: The URL to fetch (must start with http:// or https://).
-        max_chars: Maximum characters to return. Defaults to 8000.
+        url: The URL to fetch (http:// or https://). Redirects stay on its host.
+        max_chars: Maximum characters to return (1-100000). Defaults to 8000.
     """
-    if not url.startswith(("http://", "https://")):
-        return f"Invalid URL: {url!r}. Must start with http:// or https://."
+    max_chars = _clamp(max_chars)
     try:
-        content = _fetch(url)
-    except urllib.error.HTTPError as e:
-        return f"HTTP error {e.code}: {e.reason}"
-    except urllib.error.URLError as e:
-        return f"URL error: {e.reason}"
-    except TimeoutError:
-        return f"Request timed out for {url}"
-    if len(content) > max_chars:
-        return content[:max_chars] + f"\n\n[Truncated — {len(content)} total chars]"
-    return content
+        page = fetch_page(url, max_bytes=max_chars * _BYTES_PER_CHAR)
+    except HttpError as e:
+        return str(e)
+    return _cut(page.text, max_chars, page)
 
 
 @tool(
@@ -91,24 +90,14 @@ def scrape_text(url: str, max_chars: int = _DEFAULT_MAX_CHARS) -> str:
     """Fetch a web page and extract visible text (HTML tags stripped).
 
     Args:
-        url: The URL to fetch (must start with http:// or https://).
-        max_chars: Maximum characters to return. Defaults to 8000.
+        url: The URL to fetch (http:// or https://). Redirects stay on its host.
+        max_chars: Maximum characters to return (1-100000). Defaults to 8000.
     """
-    if not url.startswith(("http://", "https://")):
-        return f"Invalid URL: {url!r}. Must start with http:// or https://."
+    max_chars = _clamp(max_chars)
     try:
-        raw_html = _fetch(url)
-    except urllib.error.HTTPError as e:
-        return f"HTTP error {e.code}: {e.reason}"
-    except urllib.error.URLError as e:
-        return f"URL error: {e.reason}"
-    except TimeoutError:
-        return f"Request timed out for {url}"
-
+        page = fetch_page(url, max_bytes=_SCRAPE_MAX_BYTES)
+    except HttpError as e:
+        return str(e)
     extractor = _HTMLTextExtractor()
-    extractor.feed(raw_html)
-    text = extractor.get_text()
-
-    if len(text) > max_chars:
-        return text[:max_chars] + f"\n\n[Truncated — {len(text)} total chars]"
-    return text
+    extractor.feed(page.text)
+    return _cut(extractor.get_text(), max_chars, page)

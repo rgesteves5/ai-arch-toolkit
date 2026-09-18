@@ -2,21 +2,27 @@
 
 from __future__ import annotations
 
-import json
 import re
-import urllib.error
 import urllib.parse
-import urllib.request
 import xml.etree.ElementTree as ET
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
-_RXNAV_URL = "https://rxnav.nlm.nih.gov/REST"
-_DAILYMED_URL = "https://dailymed.nlm.nih.gov/dailymed/services/v2"
+_RXNAV = Api(
+    base="https://rxnav.nlm.nih.gov/REST",
+    name="RxNorm",
+    timeout_s=20,
+    status_messages={404: "no matching records found."},
+)
+_DAILYMED = Api(
+    base="https://dailymed.nlm.nih.gov/dailymed/services/v2",
+    name="DailyMed",
+    timeout_s=20,
+    status_messages={404: "no matching records found."},
+)
 _DAILYMED_PAGE_URL = "https://dailymed.nlm.nih.gov/dailymed/drugInfo.cfm"
-_TIMEOUT = 20
-_USER_AGENT = "ai-arch-toolkit/1.0 (https://github.com/ai-arch-toolkit)"
 _MAX_LIMIT = 25
 _TEXT_RE = re.compile(r"^[\w\s,.'()/%:+-]{1,180}$", re.UNICODE)
 _RXCUI_RE = re.compile(r"^\d{1,12}$")
@@ -25,7 +31,7 @@ _SETID_RE = re.compile(r"^[A-Fa-f0-9-]{32,40}$")
 _NS = {"v3": "urn:hl7-org:v3"}
 
 
-@tool
+@tool(capability="network")
 def rxnorm_drug_search(name: str) -> str:
     """Search RxNorm drug concepts by name.
 
@@ -35,35 +41,21 @@ def rxnorm_drug_search(name: str) -> str:
     if not _valid_text(name):
         return "RxNorm drug search failed: invalid name."
     try:
-        data = _fetch_rxnav("/drugs.json", {"name": name.strip()})
-        groups = data.get("drugGroup", {}).get("conceptGroup", [])
-    except urllib.error.HTTPError as e:
-        return _http_error("RxNorm drug search failed", "RxNorm", e)
-    except urllib.error.URLError as e:
-        return f"RxNorm drug search failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "RxNorm drug search failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"RxNorm drug search failed: could not parse API response: {e}"
-
-    concepts = []
-    if isinstance(groups, list):
-        for group in groups:
-            if isinstance(group, dict):
-                for concept in group.get("conceptProperties", []) or []:
-                    if isinstance(concept, dict):
-                        concepts.append((group.get("tty"), concept))
-    if not concepts:
-        return "No RxNorm drug concepts found."
-    lines = [f"RxNorm concepts for {name!r}:"]
-    for index, (tty, concept) in enumerate(concepts[:_MAX_LIMIT], start=1):
-        concept_name = _string(concept.get("name"))
-        rxcui = _string(concept.get("rxcui"))
-        lines.append(f"{index}. {concept_name} | RxCUI: {rxcui} | TTY: {_string(tty)}")
-    return "\n".join(lines)
+        return _RXNAV.get_json(
+            "drugs.json",
+            params={"name": name.strip()},
+            parse=lambda data: _concepts_text(
+                data.get("drugGroup", {}).get("conceptGroup", []),
+                header=f"RxNorm concepts for {name!r}:",
+                nothing="No RxNorm drug concepts found.",
+                limit=_MAX_LIMIT,
+            ),
+        )
+    except HttpError as e:
+        return f"RxNorm drug search failed: {e}"
 
 
-@tool
+@tool(capability="network")
 def rxnorm_concept(rxcui: str) -> str:
     """Get RxNorm concept properties by RxCUI.
 
@@ -74,38 +66,17 @@ def rxnorm_concept(rxcui: str) -> str:
     if not _RXCUI_RE.fullmatch(normalized):
         return f"RxNorm concept lookup failed: invalid rxcui: {rxcui!r}"
     try:
-        data = _fetch_rxnav(f"/rxcui/{normalized}/properties.json", {})
-        props = data.get("properties", {})
-    except urllib.error.HTTPError as e:
-        return _http_error("RxNorm concept lookup failed", "RxNorm", e)
-    except urllib.error.URLError as e:
-        return f"RxNorm concept lookup failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "RxNorm concept lookup failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"RxNorm concept lookup failed: could not parse API response: {e}"
-
-    if not isinstance(props, dict) or not props:
-        return f"RxNorm concept not found: {normalized}"
-    lines = [f"RxNorm concept {normalized}:"]
-    lines.append(_string(props.get("name")) or "(no name)")
-    lines.append(
-        "   "
-        + " | ".join(
-            [
-                f"TTY: {_string(props.get('tty')) or '?'}",
-                f"language: {_string(props.get('language')) or '?'}",
-                f"suppress: {_string(props.get('suppress')) or '?'}",
-            ]
+        return _RXNAV.get_json(
+            "rxcui",
+            normalized,
+            "properties.json",
+            parse=lambda data: _concept_text(data, normalized),
         )
-    )
-    synonym = _string(props.get("synonym"))
-    if synonym:
-        lines.append(f"   synonym: {synonym}")
-    return "\n".join(lines)
+    except HttpError as e:
+        return f"RxNorm concept lookup failed: {e}"
 
 
-@tool
+@tool(capability="network")
 def rxnorm_related(rxcui: str, tty: str = "", max_results: int = 20) -> str:
     """Get related RxNorm concepts.
 
@@ -121,35 +92,23 @@ def rxnorm_related(rxcui: str, tty: str = "", max_results: int = 20) -> str:
         return "RxNorm related lookup failed: invalid tty."
     params = {"tty": tty.strip()} if tty.strip() else {}
     try:
-        data = _fetch_rxnav(f"/rxcui/{normalized}/related.json", params)
-        groups = data.get("relatedGroup", {}).get("conceptGroup", [])
-    except urllib.error.HTTPError as e:
-        return _http_error("RxNorm related lookup failed", "RxNorm", e)
-    except urllib.error.URLError as e:
-        return f"RxNorm related lookup failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "RxNorm related lookup failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"RxNorm related lookup failed: could not parse API response: {e}"
-
-    concepts = []
-    if isinstance(groups, list):
-        for group in groups:
-            if isinstance(group, dict):
-                for concept in group.get("conceptProperties", []) or []:
-                    if isinstance(concept, dict):
-                        concepts.append((group.get("tty"), concept))
-    if not concepts:
-        return f"No RxNorm related concepts found for {normalized}."
-    lines = [f"RxNorm related concepts for {normalized}:"]
-    for index, (group_tty, concept) in enumerate(concepts[: _bounded(max_results)], start=1):
-        concept_name = _string(concept.get("name"))
-        rxcui = _string(concept.get("rxcui"))
-        lines.append(f"{index}. {concept_name} | RxCUI: {rxcui} | TTY: {_string(group_tty)}")
-    return "\n".join(lines)
+        return _RXNAV.get_json(
+            "rxcui",
+            normalized,
+            "related.json",
+            params=params,
+            parse=lambda data: _concepts_text(
+                data.get("relatedGroup", {}).get("conceptGroup", []),
+                header=f"RxNorm related concepts for {normalized}:",
+                nothing=f"No RxNorm related concepts found for {normalized}.",
+                limit=_bounded(max_results),
+            ),
+        )
+    except HttpError as e:
+        return f"RxNorm related lookup failed: {e}"
 
 
-@tool
+@tool(capability="network")
 def rxnorm_ndcs(rxcui: str) -> str:
     """List NDC product codes associated with an RxNorm concept.
 
@@ -160,25 +119,14 @@ def rxnorm_ndcs(rxcui: str) -> str:
     if not _RXCUI_RE.fullmatch(normalized):
         return f"RxNorm NDC lookup failed: invalid rxcui: {rxcui!r}"
     try:
-        data = _fetch_rxnav(f"/rxcui/{normalized}/ndcs.json", {})
-        ndcs = data.get("ndcGroup", {}).get("ndcList", {}).get("ndc", [])
-    except urllib.error.HTTPError as e:
-        return _http_error("RxNorm NDC lookup failed", "RxNorm", e)
-    except urllib.error.URLError as e:
-        return f"RxNorm NDC lookup failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "RxNorm NDC lookup failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"RxNorm NDC lookup failed: could not parse API response: {e}"
-
-    if not isinstance(ndcs, list) or not ndcs:
-        return f"No RxNorm NDCs found for {normalized}."
-    return f"RxNorm NDCs for {normalized}:\n" + "\n".join(
-        f"{index}. {_string(ndc)}" for index, ndc in enumerate(ndcs[:_MAX_LIMIT], start=1)
-    )
+        return _RXNAV.get_json(
+            "rxcui", normalized, "ndcs.json", parse=lambda data: _ndcs_text(data, normalized)
+        )
+    except HttpError as e:
+        return f"RxNorm NDC lookup failed: {e}"
 
 
-@tool
+@tool(capability="network")
 def dailymed_label_search(
     drug_name: str = "",
     ndc: str = "",
@@ -207,17 +155,90 @@ def dailymed_label_search(
     if ndc.strip():
         params["ndc"] = ndc.strip()
     try:
-        data = _fetch_dailymed_json("/spls.json", params)
-        items = data.get("data", [])
-    except urllib.error.HTTPError as e:
-        return _http_error("DailyMed label search failed", "DailyMed", e)
-    except urllib.error.URLError as e:
-        return f"DailyMed label search failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "DailyMed label search failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"DailyMed label search failed: could not parse API response: {e}"
+        return _DAILYMED.get_json(
+            "spls.json", params=params, parse=lambda data: _labels_text(data, page)
+        )
+    except HttpError as e:
+        return f"DailyMed label search failed: {e}"
 
+
+@tool(capability="network")
+def dailymed_label(setid: str, max_sections: int = 12) -> str:
+    """Get DailyMed SPL label metadata and section titles by set ID.
+
+    Args:
+        setid: DailyMed SPL set ID from dailymed_label_search.
+        max_sections: Number of section titles to return (1-25). Defaults to 12.
+    """
+    normalized = setid.strip()
+    if not _SETID_RE.fullmatch(normalized):
+        return f"DailyMed label lookup failed: invalid setid: {setid!r}"
+    try:
+        return _DAILYMED.get_text(
+            "spls",
+            f"{normalized}.xml",
+            parse=lambda xml_text: _label_text(xml_text, normalized, max_sections),
+        )
+    except HttpError as e:
+        return f"DailyMed label lookup failed: {e}"
+
+
+def _concepts_text(groups: Any, *, header: str, nothing: str, limit: int) -> str:
+    concepts = _concepts(groups)
+    if not concepts:
+        return nothing
+    lines = [header]
+    for index, (tty, concept) in enumerate(concepts[:limit], start=1):
+        concept_name = _string(concept.get("name"))
+        rxcui = _string(concept.get("rxcui"))
+        lines.append(f"{index}. {concept_name} | RxCUI: {rxcui} | TTY: {_string(tty)}")
+    return "\n".join(lines)
+
+
+def _concepts(groups: Any) -> list[tuple[Any, dict[str, Any]]]:
+    concepts = []
+    if isinstance(groups, list):
+        for group in groups:
+            if isinstance(group, dict):
+                for concept in group.get("conceptProperties", []) or []:
+                    if isinstance(concept, dict):
+                        concepts.append((group.get("tty"), concept))
+    return concepts
+
+
+def _concept_text(data: dict[str, Any], rxcui: str) -> str:
+    props = data.get("properties", {})
+    if not isinstance(props, dict) or not props:
+        return f"RxNorm concept not found: {rxcui}"
+    lines = [f"RxNorm concept {rxcui}:"]
+    lines.append(_string(props.get("name")) or "(no name)")
+    lines.append(
+        "   "
+        + " | ".join(
+            [
+                f"TTY: {_string(props.get('tty')) or '?'}",
+                f"language: {_string(props.get('language')) or '?'}",
+                f"suppress: {_string(props.get('suppress')) or '?'}",
+            ]
+        )
+    )
+    synonym = _string(props.get("synonym"))
+    if synonym:
+        lines.append(f"   synonym: {synonym}")
+    return "\n".join(lines)
+
+
+def _ndcs_text(data: dict[str, Any], rxcui: str) -> str:
+    ndcs = data.get("ndcGroup", {}).get("ndcList", {}).get("ndc", [])
+    if not isinstance(ndcs, list) or not ndcs:
+        return f"No RxNorm NDCs found for {rxcui}."
+    return f"RxNorm NDCs for {rxcui}:\n" + "\n".join(
+        f"{index}. {_string(ndc)}" for index, ndc in enumerate(ndcs[:_MAX_LIMIT], start=1)
+    )
+
+
+def _labels_text(data: dict[str, Any], page: int) -> str:
+    items = data.get("data", [])
     if not isinstance(items, list) or not items:
         return "No DailyMed labels found."
     meta = data.get("metadata", {})
@@ -233,30 +254,11 @@ def dailymed_label_search(
     return "\n".join(lines)
 
 
-@tool
-def dailymed_label(setid: str, max_sections: int = 12) -> str:
-    """Get DailyMed SPL label metadata and section titles by set ID.
-
-    Args:
-        setid: DailyMed SPL set ID from dailymed_label_search.
-        max_sections: Number of section titles to return (1-25). Defaults to 12.
-    """
-    normalized = setid.strip()
-    if not _SETID_RE.fullmatch(normalized):
-        return f"DailyMed label lookup failed: invalid setid: {setid!r}"
-    try:
-        xml_text = _fetch_dailymed_text(f"/spls/{normalized}.xml", {})
-    except urllib.error.HTTPError as e:
-        return _http_error("DailyMed label lookup failed", "DailyMed", e)
-    except urllib.error.URLError as e:
-        return f"DailyMed label lookup failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "DailyMed label lookup failed: request timed out."
+def _label_text(xml_text: str, setid: str, max_sections: int) -> str:
     try:
         root = ET.fromstring(xml_text)
     except ET.ParseError as e:
-        return f"DailyMed label lookup failed: could not parse XML response: {e}"
-
+        raise HttpError(f"could not parse XML response: {e}") from e
     title = _xml_text(root.find("v3:title", _NS))
     effective = _xml_attr(root.find("v3:effectiveTime", _NS), "value")
     org = _first_text(root.findall(".//v3:representedOrganization/v3:name", _NS))
@@ -264,50 +266,16 @@ def dailymed_label(setid: str, max_sections: int = 12) -> str:
         _xml_text(section.find("v3:title", _NS)) for section in root.findall(".//v3:section", _NS)
     ]
     sections = [section for section in sections if section][: _bounded(max_sections)]
-    lines = [f"DailyMed label {normalized}:", title or "(no title)"]
+    lines = [f"DailyMed label {setid}:", title or "(no title)"]
     if effective or org:
         lines.append(
             f"   effective: {_format_date(effective) or '?'} | organization: {org or '?'}"
         )
-    url = f"{_DAILYMED_PAGE_URL}?setid={urllib.parse.quote(normalized)}"
+    url = f"{_DAILYMED_PAGE_URL}?setid={urllib.parse.quote(setid)}"
     lines.append(f"   DailyMed: {url}")
     if sections:
         lines.append("   sections: " + "; ".join(sections))
     return "\n".join(lines)
-
-
-def _fetch_rxnav(path: str, params: dict[str, str]) -> dict[str, Any]:
-    url = f"{_RXNAV_URL}{path}"
-    if params:
-        url = f"{url}?{urllib.parse.urlencode(params)}"
-    return _fetch_json(url)
-
-
-def _fetch_dailymed_json(path: str, params: dict[str, str]) -> dict[str, Any]:
-    return json.loads(_fetch_dailymed_text(path, params))
-
-
-def _fetch_dailymed_text(path: str, params: dict[str, str]) -> str:
-    url = f"{_DAILYMED_URL}{path}"
-    if params:
-        url = f"{url}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-        return resp.read().decode("utf-8", errors="replace")
-
-
-def _fetch_json(url: str) -> dict[str, Any]:
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="replace"))
-
-
-def _http_error(prefix: str, api_name: str, error: urllib.error.HTTPError) -> str:
-    if error.code == 404:
-        return f"{prefix}: no matching records found."
-    if error.code == 429:
-        return f"{prefix}: rate limited by {api_name} (HTTP 429). Try again later."
-    return f"{prefix}: HTTP error {error.code}: {error.reason}"
 
 
 def _valid_text(value: str) -> bool:

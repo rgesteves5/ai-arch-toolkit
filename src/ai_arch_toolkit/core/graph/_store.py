@@ -5,28 +5,32 @@ from __future__ import annotations
 import dataclasses
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
-from ai_arch_toolkit.core._persistence import atomic_write_json, load_json_object
+from ai_arch_toolkit.core._persistence import load_json_object
 from ai_arch_toolkit.core._sync import _run_sync
 from ai_arch_toolkit.core.graph._backends import GraphAlgorithms, GraphBackend
+from ai_arch_toolkit.core.graph._facade import GraphFacade, check_payload, edges_from
 from ai_arch_toolkit.core.graph._types import Direction, Edge, Node, NodeID, NodeType
 
 _GRAPH_SCHEMA_VERSION = 1
 
 
-class Graph:
+class Graph(GraphFacade[Node[Any]]):
     """General-purpose graph facade with type indexing, persistence, and sync wrappers.
 
     Delegates storage to a ``GraphBackend`` and optionally exposes graph
-    algorithms when the backend implements ``GraphAlgorithms``.
+    algorithms when the backend implements ``GraphAlgorithms``. The node and edge surface is
+    :class:`GraphFacade`'s, shared with the memory ``GraphStore``.
     """
 
-    __slots__ = ("_backend", "_type_index")
+    __slots__ = ("_backend",)
+
+    _schema_version: ClassVar[int] = _GRAPH_SCHEMA_VERSION
 
     def __init__(self, backend: GraphBackend) -> None:
+        super().__init__(backend)
         self._backend = backend
-        self._type_index: dict[str, set[NodeID]] = {}
 
     # --- Properties ---
 
@@ -34,70 +38,7 @@ class Graph:
     def backend(self) -> GraphBackend:
         return self._backend
 
-    @property
-    def has_algorithms(self) -> bool:
-        return isinstance(self._backend, GraphAlgorithms)
-
     # --- Async node ops ---
-
-    async def add(self, node: Node[Any]) -> Node[Any]:
-        """Add a node to the graph."""
-        await self._backend.add_node(node)
-        self._type_index.setdefault(node.type, set()).add(node.id)
-        return node
-
-    async def get(self, node_id: NodeID) -> Node[Any] | None:
-        """Get a node by ID."""
-        return await self._backend.get_node(node_id)
-
-    async def update(self, node_id: NodeID, **attrs: Any) -> Node[Any] | None:
-        """Update node attributes."""
-        old = await self._backend.get_node(node_id)
-        if old is None:
-            return None
-        updated = await self._backend.update_node(node_id, **attrs)
-        if updated is None:
-            return None
-        if "type" in attrs:
-            old_type_set = self._type_index.get(old.type)
-            if old_type_set:
-                old_type_set.discard(node_id)
-            self._type_index.setdefault(updated.type, set()).add(node_id)
-        return updated
-
-    async def remove(self, node_id: NodeID) -> bool:
-        """Remove a node."""
-        node = await self._backend.get_node(node_id)
-        if node is None:
-            return False
-        removed = await self._backend.remove_node(node_id)
-        if removed:
-            type_set = self._type_index.get(node.type)
-            if type_set:
-                type_set.discard(node_id)
-        return removed
-
-    async def list(
-        self, *, type: NodeType | None = None, limit: int | None = None
-    ) -> Sequence[Node[Any]]:
-        """List nodes, using type index for O(k) lookup when available."""
-        if type is not None and type in self._type_index:
-            ids = self._type_index[type]
-            nodes: list[Node[Any]] = []
-            for nid in ids:
-                node = await self._backend.get_node(nid)
-                if node is not None:
-                    nodes.append(node)
-                    if limit is not None and len(nodes) >= limit:
-                        break
-            return nodes
-        return await self._backend.list_nodes(type=type, limit=limit)
-
-    async def count(self, *, type: NodeType | None = None) -> int:
-        """Count nodes, using type index when available."""
-        if type is not None and type in self._type_index:
-            return len(self._type_index[type])
-        return await self._backend.count_nodes(type=type)
 
     async def has(self, node_id: NodeID) -> bool:
         """Check if a node exists."""
@@ -123,38 +64,6 @@ class Graph:
 
     # --- Async edge ops ---
 
-    async def connect(
-        self,
-        source: NodeID,
-        target: NodeID,
-        relation: str,
-        *,
-        weight: float = 1.0,
-        metadata: dict[str, Any] | None = None,
-    ) -> Edge:
-        """Create an edge between two nodes."""
-        edge = Edge(
-            source=source,
-            target=target,
-            relation=relation,
-            weight=weight,
-            metadata=metadata or {},
-        )
-        await self._backend.add_edge(edge)
-        return edge
-
-    async def edges(
-        self,
-        node_id: NodeID,
-        *,
-        direction: Direction = "out",
-        relation: str | None = None,
-    ) -> Sequence[Edge]:
-        return await self._backend.get_edges(node_id, direction=direction, relation=relation)
-
-    async def disconnect(self, source: NodeID, target: NodeID, relation: str) -> bool:
-        return await self._backend.remove_edge(source, target, relation)
-
     async def get_edges_between(
         self, source: NodeID, target: NodeID, *, relation: str | None = None
     ) -> Sequence[Edge]:
@@ -177,11 +86,6 @@ class Graph:
         return result
 
     # --- Async traversal + algorithms ---
-
-    async def neighbors(
-        self, node_id: NodeID, *, depth: int = 1, relation: str | None = None
-    ) -> Sequence[Node[Any]]:
-        return await self._backend.neighbors(node_id, depth=depth, relation=relation)
 
     async def bfs(self, start: NodeID, *, relation: str | None = None) -> Sequence[Node[Any]]:
         if not isinstance(self._backend, GraphAlgorithms):
@@ -318,66 +222,14 @@ class Graph:
 
     # --- Async bulk ---
 
-    async def clear(self, *, type: NodeType | None = None) -> int:
-        """Clear nodes from the graph."""
-        count = await self._backend.clear(type=type)
-        if type is None:
-            self._type_index.clear()
-        else:
-            self._type_index.pop(type, None)
-        return count
-
-    async def add_many(self, nodes: Sequence[Node[Any]]) -> int:
-        """Add multiple nodes. Returns count added."""
-        count = 0
-        for node in nodes:
-            await self.add(node)
-            count += 1
-        return count
-
-    async def remove_many(self, node_ids: Sequence[NodeID]) -> int:
-        """Remove multiple nodes. Returns count removed."""
-        count = 0
-        for nid in node_ids:
-            if await self.remove(nid):
-                count += 1
-        return count
-
     # --- Async persistence ---
 
-    async def to_dict(self) -> dict[str, Any]:
-        """Serialize all nodes and edges to a dict."""
-        all_nodes = await self._backend.list_nodes()
-        nodes_data: list[dict[str, Any]] = []
-        edges_data: list[dict[str, Any]] = []
-        for node in all_nodes:
-            # Serialize content: use asdict for dataclasses, pass through otherwise
-            if dataclasses.is_dataclass(node.content) and not isinstance(node.content, type):
-                content = dataclasses.asdict(node.content)
-            else:
-                content = node.content
-            nd: dict[str, Any] = {
-                "id": node.id,
-                "type": node.type,
-                "content": content,
-                "metadata": node.metadata,
-            }
-            nodes_data.append(nd)
-            for edge in await self._backend.get_edges(node.id, direction="out"):
-                edges_data.append(
-                    {
-                        "source": edge.source,
-                        "target": edge.target,
-                        "relation": edge.relation,
-                        "weight": edge.weight,
-                        "metadata": edge.metadata,
-                    }
-                )
-        return {
-            "schema_version": _GRAPH_SCHEMA_VERSION,
-            "nodes": nodes_data,
-            "edges": edges_data,
-        }
+    def _node_record(self, node: Node[Any]) -> dict[str, Any]:
+        # A dataclass content is saved as its fields; anything else as it is.
+        content = node.content
+        if dataclasses.is_dataclass(content) and not isinstance(content, type):
+            content = dataclasses.asdict(content)
+        return {"id": node.id, "type": node.type, "content": content, "metadata": node.metadata}
 
     @classmethod
     async def from_dict(
@@ -388,43 +240,22 @@ class Graph:
         content_loader: Callable[[Any], Any] | None = None,
     ) -> Graph:
         """Deserialize a dict into a Graph."""
-        _validate_graph_payload(data)
+        check_payload(data, "Graph", _GRAPH_SCHEMA_VERSION, _check_graph_node)
         graph = cls(backend)
-        nodes: list[Node[Any]] = []
-        edges: list[Edge] = []
-        for nd in data["nodes"]:
-            content = nd.get("content")
-            if content_loader is not None:
-                content = content_loader(content)
-            nodes.append(
-                Node(
-                    id=nd["id"],
-                    type=nd.get("type", "default"),
-                    content=content,
-                    metadata=nd.get("metadata", {}),
-                )
+        load = content_loader or (lambda content: content)
+        nodes = [  # all built first: a failing content_loader leaves the backend untouched
+            Node(
+                id=nd["id"],
+                type=nd.get("type", "default"),
+                content=load(nd.get("content")),
+                metadata=nd.get("metadata", {}),
             )
-        for ed in data["edges"]:
-            edges.append(
-                Edge(
-                    source=ed["source"],
-                    target=ed["target"],
-                    relation=ed["relation"],
-                    weight=ed.get("weight", 1.0),
-                    metadata=ed.get("metadata", {}),
-                )
-            )
-
-        for node in nodes:
-            await graph.add(node)
-        for edge in edges:
+            for nd in data["nodes"]
+        ]
+        await graph.add_many(nodes)
+        for edge in edges_from(data["edges"]):
             await backend.add_edge(edge)
         return graph
-
-    async def save(self, path: str | Path) -> None:
-        """Save the graph to a JSON file."""
-        data = await self.to_dict()
-        atomic_write_json(path, data)
 
     @classmethod
     async def load(
@@ -598,38 +429,8 @@ class Graph:
         return _run_sync(cls.load(path, backend, content_loader=content_loader))
 
 
-def _validate_graph_payload(data: dict[str, Any]) -> None:
-    version = data.get("schema_version", 0)
-    if not isinstance(version, int):
-        raise ValueError("Graph payload schema_version must be an integer")
-    if version > _GRAPH_SCHEMA_VERSION:
-        raise ValueError(
-            f"Unsupported graph schema_version {version}; "
-            f"maximum supported is {_GRAPH_SCHEMA_VERSION}"
-        )
-    if version < 0:
-        raise ValueError(f"Unsupported graph schema_version {version}")
-
-    nodes = data.get("nodes")
-    edges = data.get("edges")
-    if not isinstance(nodes, list):
-        raise ValueError("Graph payload must contain a 'nodes' list")
-    if not isinstance(edges, list):
-        raise ValueError("Graph payload must contain an 'edges' list")
-
-    for index, node in enumerate(nodes):
-        if not isinstance(node, dict):
-            raise ValueError(f"Graph node at index {index} must be an object")
-        if "id" not in node:
-            raise ValueError(f"Graph node at index {index} missing required field 'id'")
-        if "metadata" in node and not isinstance(node["metadata"], dict):
-            raise ValueError(f"Graph node {node['id']!r} metadata must be an object")
-
-    for index, edge in enumerate(edges):
-        if not isinstance(edge, dict):
-            raise ValueError(f"Graph edge at index {index} must be an object")
-        for field in ("source", "target", "relation"):
-            if field not in edge:
-                raise ValueError(f"Graph edge at index {index} missing required field {field!r}")
-        if "metadata" in edge and not isinstance(edge["metadata"], dict):
-            raise ValueError(f"Graph edge at index {index} metadata must be an object")
+def _check_graph_node(index: int, node: dict[str, Any]) -> None:
+    if "id" not in node:
+        raise ValueError(f"Graph node at index {index} missing required field 'id'")
+    if "metadata" in node and not isinstance(node["metadata"], dict):
+        raise ValueError(f"Graph node {node['id']!r} metadata must be an object")

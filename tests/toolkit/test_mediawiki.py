@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -14,14 +13,7 @@ from ai_arch_toolkit.toolkit.tools._mediawiki import (
     mediawiki_sections,
     wiktionary_entry,
 )
-
-
-def _mock_urlopen(data: dict | str):
-    resp = MagicMock()
-    resp.read.return_value = (data if isinstance(data, str) else json.dumps(data)).encode()
-    resp.__enter__ = lambda s: s
-    resp.__exit__ = MagicMock(return_value=False)
-    return resp
+from tests.toolkit.http_fakes import HTTP_OPEN, respond
 
 
 def _params(mock_urlopen):
@@ -29,9 +21,9 @@ def _params(mock_urlopen):
 
 
 class TestMediaWiki:
-    @patch("ai_arch_toolkit.toolkit.tools._mediawiki.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_search(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(
+        mock_urlopen.return_value = respond(
             {
                 "query": {
                     "searchinfo": {"totalhits": 1},
@@ -46,7 +38,7 @@ class TestMediaWiki:
         assert "A fruit" in result
         assert _params(mock_urlopen)["action"] == ["query"]
 
-    @patch("ai_arch_toolkit.toolkit.tools._mediawiki.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_page_sections_and_wiktionary(self, mock_urlopen):
         payload = {
             "parse": {
@@ -55,18 +47,18 @@ class TestMediaWiki:
                 "sections": [{"index": "1", "line": "English", "level": "2"}],
             }
         }
-        mock_urlopen.return_value = _mock_urlopen(payload)
+        mock_urlopen.return_value = respond(payload)
         assert "A fruit." in mediawiki_page("apple")
 
-        mock_urlopen.return_value = _mock_urlopen(payload)
+        mock_urlopen.return_value = respond(payload)
         assert "1. English | level: 2" in mediawiki_sections("apple")
 
-        mock_urlopen.return_value = _mock_urlopen(payload)
+        mock_urlopen.return_value = respond(payload)
         result = wiktionary_entry("apple")
         assert "Wiktionary entry apple (English):" in result
         assert "Noun:" in result
 
-    @patch("ai_arch_toolkit.toolkit.tools._mediawiki.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_invalid_options_do_not_call_api(self, mock_urlopen):
         assert "invalid api_url" in mediawiki_search("x", api_url="http://example.com/api.php")
         assert "invalid term" in wiktionary_entry("bad<>")
@@ -86,15 +78,15 @@ class TestMediaWiki:
         "https://evilwikipedia.org/api.php",
     ],
 )
-@patch("ai_arch_toolkit.toolkit.tools._mediawiki.urllib.request.urlopen")
+@patch(HTTP_OPEN)
 def test_mediawiki_rejects_untrusted_hosts(mock_urlopen, fn, url):
-    mock_urlopen.return_value = _mock_urlopen({})
+    mock_urlopen.return_value = respond({})
     assert "invalid api_url" in fn("apple", api_url=url)
     mock_urlopen.assert_not_called()
 
 
-@patch("ai_arch_toolkit.toolkit.tools._mediawiki.urllib.request.urlopen")
+@patch(HTTP_OPEN)
 def test_mediawiki_accepts_portuguese_wikipedia(mock_urlopen):
-    mock_urlopen.return_value = _mock_urlopen({"query": {"search": []}})
+    mock_urlopen.return_value = respond({"query": {"search": []}})
     mediawiki_search("apple", api_url="https://pt.wikipedia.org/w/api.php")
     mock_urlopen.assert_called_once()

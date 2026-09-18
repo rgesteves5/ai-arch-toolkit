@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from ai_arch_toolkit.toolkit.tools._weather import (
     get_forecast,
@@ -12,15 +11,7 @@ from ai_arch_toolkit.toolkit.tools._weather import (
     get_weather_by_coords,
     weather_units,
 )
-
-
-def _mock_urlopen(data: dict):
-    resp = MagicMock()
-    resp.read.return_value = json.dumps(data).encode()
-    resp.__enter__ = lambda s: s
-    resp.__exit__ = MagicMock(return_value=False)
-    return resp
-
+from tests.toolkit.http_fakes import HTTP_OPEN, respond
 
 _GEOCODE_RESPONSE = {
     "results": [{"latitude": 35.6762, "longitude": 139.6503, "name": "Tokyo", "country": "Japan"}]
@@ -51,11 +42,11 @@ _FORECAST = {
 
 
 class TestGetWeather:
-    @patch("ai_arch_toolkit.toolkit.tools._weather.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_returns_weather(self, mock_urlopen):
         mock_urlopen.side_effect = [
-            _mock_urlopen(_GEOCODE_RESPONSE),
-            _mock_urlopen(_CURRENT_WEATHER),
+            respond(_GEOCODE_RESPONSE),
+            respond(_CURRENT_WEATHER),
         ]
         result = get_weather("Tokyo")
         assert "Tokyo" in result
@@ -63,13 +54,13 @@ class TestGetWeather:
         assert "Mainly clear" in result
         assert "65%" in result
 
-    @patch("ai_arch_toolkit.toolkit.tools._weather.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_city_not_found(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen({"results": None})
+        mock_urlopen.return_value = respond({"results": None})
         result = get_weather("Nonexistentville")
         assert "not found" in result.lower()
 
-    @patch("ai_arch_toolkit.toolkit.tools._weather.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_api_error(self, mock_urlopen):
         mock_urlopen.side_effect = TimeoutError()
         result = get_weather("Tokyo")
@@ -77,9 +68,9 @@ class TestGetWeather:
 
 
 class TestGetWeatherByCoords:
-    @patch("ai_arch_toolkit.toolkit.tools._weather.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_returns_weather(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(_CURRENT_WEATHER)
+        mock_urlopen.return_value = respond(_CURRENT_WEATHER)
         result = get_weather_by_coords(35.6762, 139.6503)
         assert "35.6762, 139.6503" in result
         assert "22.5" in result
@@ -87,33 +78,33 @@ class TestGetWeatherByCoords:
 
 
 class TestWeatherUnits:
-    @patch("ai_arch_toolkit.toolkit.tools._weather.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_converts_to_fahrenheit(self, mock_urlopen):
         mock_urlopen.side_effect = [
-            _mock_urlopen(_GEOCODE_RESPONSE),
-            _mock_urlopen(_CURRENT_WEATHER),
+            respond(_GEOCODE_RESPONSE),
+            respond(_CURRENT_WEATHER),
         ]
         result = weather_units("Tokyo", unit="f")
         assert "72.5" in result
         assert "69.8" in result
         assert "mph" in result
 
-    @patch("ai_arch_toolkit.toolkit.tools._weather.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_invalid_unit(self, mock_urlopen):
         mock_urlopen.side_effect = [
-            _mock_urlopen(_GEOCODE_RESPONSE),
-            _mock_urlopen(_CURRENT_WEATHER),
+            respond(_GEOCODE_RESPONSE),
+            respond(_CURRENT_WEATHER),
         ]
         result = weather_units("Tokyo", unit="k")
         assert "Invalid unit" in result
 
 
 class TestGetForecast:
-    @patch("ai_arch_toolkit.toolkit.tools._weather.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_returns_forecast(self, mock_urlopen):
         mock_urlopen.side_effect = [
-            _mock_urlopen(_GEOCODE_RESPONSE),
-            _mock_urlopen(_FORECAST),
+            respond(_GEOCODE_RESPONSE),
+            respond(_FORECAST),
         ]
         result = get_forecast("Tokyo", days=2)
         assert "Tokyo" in result
@@ -122,11 +113,11 @@ class TestGetForecast:
         assert "Clear sky" in result
         assert "Overcast" in result
 
-    @patch("ai_arch_toolkit.toolkit.tools._weather.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_clamps_days(self, mock_urlopen):
         mock_urlopen.side_effect = [
-            _mock_urlopen(_GEOCODE_RESPONSE),
-            _mock_urlopen(_FORECAST),
+            respond(_GEOCODE_RESPONSE),
+            respond(_FORECAST),
         ]
         # days=99 should be clamped to 7
         result = get_forecast("Tokyo", days=99)
@@ -134,9 +125,9 @@ class TestGetForecast:
 
 
 class TestGetForecastByCoords:
-    @patch("ai_arch_toolkit.toolkit.tools._weather.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_returns_forecast(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(_FORECAST)
+        mock_urlopen.return_value = respond(_FORECAST)
         result = get_forecast_by_coords(35.6762, 139.6503, days=2)
         assert "35.6762, 139.6503" in result
         assert "2026-02-27" in result

@@ -3,18 +3,16 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Unpack
 
 from ai_arch_toolkit.core._content import Content, user
 from ai_arch_toolkit.core._llm import LLM
-from ai_arch_toolkit.core._policy import Policy
-from ai_arch_toolkit.core._state import State, StateSnapshot
+from ai_arch_toolkit.core._state import StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
-from ai_arch_toolkit.core._trace import TraceCapture
-from ai_arch_toolkit.toolkit.agents.flows._common import substitute_tools
-from ai_arch_toolkit.toolkit.agents.flows._react import react_flow, react_initial_state
-from ai_arch_toolkit.toolkit.budget import BudgetPolicy
+from ai_arch_toolkit.toolkit.agents.flows._common import FlowOptions, substitute_tools
+from ai_arch_toolkit.toolkit.agents.flows._keys import ANSWER, RESPONSE, TASK
+from ai_arch_toolkit.toolkit.agents.flows._react import run_react
 from ai_arch_toolkit.toolkit.flow._flow import Flow
 
 _STEP_RE = re.compile(r"^\d+\.\s+(.+)", re.MULTILINE)
@@ -36,15 +34,12 @@ def plan_execute_flow(
         "You are a solving agent. Given the task, plan, and results "
         "from each step, provide the final answer."
     ),
-    timeout: float | None = None,
-    trace_capture: TraceCapture = "keys",
-    policy: Policy | None = None,
-    budget_policy: BudgetPolicy | None = None,
     llm_kwargs: dict[str, Any] | None = None,
     planner_llm: LLM | None = None,
     exec_llm: LLM | None = None,
     exec_tools: ToolGroup | None = None,
     solver_llm: LLM | None = None,
+    **options: Unpack[FlowOptions],
 ) -> Flow:
     """Create a PlanExecute Flow — plan, execute each step via ReAct, solve.
 
@@ -54,6 +49,8 @@ def plan_execute_flow(
     override the default LLM and tools per phase. A ``{tools}`` token in
     ``planner_system`` is replaced with the executor's rendered tool catalog;
     a prompt without the token is never modified.
+
+    ``options`` are the options of the ``Flow`` it builds (``FlowOptions``).
     """
     plan_llm = planner_llm or llm
     inner_llm = exec_llm or llm
@@ -66,7 +63,7 @@ def plan_execute_flow(
 
     async def plan_and_execute(snap: StateSnapshot) -> Result:
         """Plan, execute each step, and optionally replan."""
-        task: str = snap.require("task")
+        task: str = snap.require(TASK)
         plan_text = ""
         step_results: list[str] = []
 
@@ -90,26 +87,17 @@ def plan_execute_flow(
                 if prev_results:
                     inner_system += f"\n\nPrevious results:\n{prev_results}"
 
-                inner = react_flow(
+                run = await run_react(
                     inner_llm,
                     inner_tools,
+                    step_desc,
                     system=inner_system,
                     max_iterations=max_iterations_per_step,
                     llm_kwargs=llm_kwargs,
-                    trace_capture=trace_capture,
+                    **options,
                 )
-
-                state = State(operational=react_initial_state(step_desc))
-                result = await inner.run(state)
-
-                inner_response = state.get("response")
-                answer = inner_response.text if inner_response else ""
-                step_results.append(answer)
-
-                if result.trace.steps and any(
-                    st.error is not None for st in result.trace.steps if not st.skipped
-                ):
-                    any_failed = True
+                step_results.append(run.answer)
+                any_failed = any_failed or run.failed
 
             # CHECK REPLAN
             if not any_failed or _attempt >= max_replans:
@@ -125,7 +113,7 @@ def plan_execute_flow(
 
     async def solve(snap: StateSnapshot) -> Result:
         """Synthesize final answer from task, plan, and results."""
-        task: str = snap.require("task")
+        task: str = snap.require(TASK)
         plan_text: str = snap.get("plan_text", "")
         step_results: list[str] = snap.get("step_results", [])
 
@@ -139,21 +127,18 @@ def plan_execute_flow(
 
         return Result(
             value=response.text,
-            artifacts={"answer": response.text, "response": response},
+            artifacts={ANSWER: response.text, RESPONSE: response},
         )
 
     return Flow(
         Step(name="plan_and_execute", fn=plan_and_execute),
         Step(name="solve", fn=solve),
         name="plan_execute",
-        policy=policy,
-        timeout=timeout,
-        trace_capture=trace_capture,
-        budget_policy=budget_policy,
+        **options,
     )
 
 
 def plan_execute_initial_state(task: Content) -> dict[str, Any]:
     """Create the initial operational state for a plan_execute_flow."""
     task_str = task if isinstance(task, str) else str(task)
-    return {"task": task_str}
+    return {TASK: task_str}

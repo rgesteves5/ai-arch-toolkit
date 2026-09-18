@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import urllib.error
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 from ai_arch_toolkit.toolkit.tools._open_food_facts import (
@@ -13,6 +12,7 @@ from ai_arch_toolkit.toolkit.tools._open_food_facts import (
     open_food_facts_product,
     open_food_facts_search,
 )
+from tests.toolkit.http_fakes import HTTP_OPEN, respond
 
 _PRODUCT = {
     "code": "3017620422003",
@@ -41,17 +41,6 @@ _PRODUCT = {
 }
 
 
-def _mock_urlopen(data: dict | str):
-    resp = MagicMock()
-    if isinstance(data, dict):
-        resp.read.return_value = json.dumps(data).encode()
-    else:
-        resp.read.return_value = data.encode()
-    resp.__enter__ = lambda s: s
-    resp.__exit__ = MagicMock(return_value=False)
-    return resp
-
-
 def _called_request(mock_urlopen):
     return mock_urlopen.call_args.args[0]
 
@@ -61,10 +50,9 @@ def _called_params(mock_urlopen) -> dict[str, list[str]]:
 
 
 class TestOpenFoodFactsProduct:
-    @patch("ai_arch_toolkit.toolkit.tools._open_food_facts._throttle")
-    @patch("ai_arch_toolkit.toolkit.tools._open_food_facts.urllib.request.urlopen")
-    def test_returns_product_by_barcode(self, mock_urlopen, _mock_throttle):
-        mock_urlopen.return_value = _mock_urlopen({"status": 1, "product": _PRODUCT})
+    @patch(HTTP_OPEN)
+    def test_returns_product_by_barcode(self, mock_urlopen):
+        mock_urlopen.return_value = respond({"status": 1, "product": _PRODUCT})
 
         result = open_food_facts_product("3017 6204 22003")
 
@@ -83,16 +71,15 @@ class TestOpenFoodFactsProduct:
         assert urlparse(request.full_url).path == "/api/v2/product/3017620422003.json"
         assert "product_name" in _called_params(mock_urlopen)["fields"][0]
 
-    @patch("ai_arch_toolkit.toolkit.tools._open_food_facts._throttle")
-    @patch("ai_arch_toolkit.toolkit.tools._open_food_facts.urllib.request.urlopen")
-    def test_product_not_found(self, mock_urlopen, _mock_throttle):
-        mock_urlopen.return_value = _mock_urlopen({"status": 0})
+    @patch(HTTP_OPEN)
+    def test_product_not_found(self, mock_urlopen):
+        mock_urlopen.return_value = respond({"status": 0})
 
         result = open_food_facts_product("12345678")
 
         assert "not found" in result.lower()
 
-    @patch("ai_arch_toolkit.toolkit.tools._open_food_facts.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_invalid_barcode_does_not_call_api(self, mock_urlopen):
         assert "invalid barcode" in open_food_facts_product("abc")
         assert "invalid barcode" in open_food_facts_product("123")
@@ -100,10 +87,9 @@ class TestOpenFoodFactsProduct:
 
 
 class TestOpenFoodFactsNutrition:
-    @patch("ai_arch_toolkit.toolkit.tools._open_food_facts._throttle")
-    @patch("ai_arch_toolkit.toolkit.tools._open_food_facts.urllib.request.urlopen")
-    def test_returns_nutrition_summary(self, mock_urlopen, _mock_throttle):
-        mock_urlopen.return_value = _mock_urlopen({"status": 1, "product": _PRODUCT})
+    @patch(HTTP_OPEN)
+    def test_returns_nutrition_summary(self, mock_urlopen):
+        mock_urlopen.return_value = respond({"status": 1, "product": _PRODUCT})
 
         result = open_food_facts_nutrition("3017620422003")
 
@@ -114,16 +100,15 @@ class TestOpenFoodFactsNutrition:
         assert "Allergens: milk, nuts" in result
         assert "Ingredients: Sugar, palm oil, hazelnuts, cocoa." in result
 
-    @patch("ai_arch_toolkit.toolkit.tools._open_food_facts.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_invalid_nutrition_barcode_does_not_call_api(self, mock_urlopen):
         assert "invalid barcode" in open_food_facts_nutrition("abc")
         mock_urlopen.assert_not_called()
 
 
 class TestOpenFoodFactsCompare:
-    @patch("ai_arch_toolkit.toolkit.tools._open_food_facts._throttle")
-    @patch("ai_arch_toolkit.toolkit.tools._open_food_facts.urllib.request.urlopen")
-    def test_compares_products(self, mock_urlopen, _mock_throttle):
+    @patch(HTTP_OPEN)
+    def test_compares_products(self, mock_urlopen):
         second = {
             **_PRODUCT,
             "code": "3168930010265",
@@ -133,8 +118,8 @@ class TestOpenFoodFactsCompare:
             "nutriments": {"energy-kcal_100g": 462, "sugars_100g": 12, "salt_100g": 0},
         }
         mock_urlopen.side_effect = [
-            _mock_urlopen({"status": 1, "product": _PRODUCT}),
-            _mock_urlopen({"status": 1, "product": second}),
+            respond({"status": 1, "product": _PRODUCT}),
+            respond({"status": 1, "product": second}),
         ]
 
         result = open_food_facts_compare("3017620422003,3168930010265")
@@ -146,7 +131,7 @@ class TestOpenFoodFactsCompare:
         assert "Nutri-Score: B" in result
         assert mock_urlopen.call_count == 2
 
-    @patch("ai_arch_toolkit.toolkit.tools._open_food_facts.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_invalid_compare_options_do_not_call_api(self, mock_urlopen):
         assert "invalid barcode" in open_food_facts_compare("abc")
         assert "at most 5" in open_food_facts_compare("1234,1235,1236,1237,1238,1239")
@@ -154,10 +139,9 @@ class TestOpenFoodFactsCompare:
 
 
 class TestOpenFoodFactsSearch:
-    @patch("ai_arch_toolkit.toolkit.tools._open_food_facts._throttle")
-    @patch("ai_arch_toolkit.toolkit.tools._open_food_facts.urllib.request.urlopen")
-    def test_returns_search_results(self, mock_urlopen, _mock_throttle):
-        mock_urlopen.return_value = _mock_urlopen(
+    @patch(HTTP_OPEN)
+    def test_returns_search_results(self, mock_urlopen):
+        mock_urlopen.return_value = respond(
             {"count": 10, "page": 2, "page_count": 1, "page_size": 1, "products": [_PRODUCT]}
         )
 
@@ -184,16 +168,15 @@ class TestOpenFoodFactsSearch:
         assert params["page_size"] == ["1"]
         assert params["page"] == ["2"]
 
-    @patch("ai_arch_toolkit.toolkit.tools._open_food_facts.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_invalid_search_options_do_not_call_api(self, mock_urlopen):
         assert "provide product_name" in open_food_facts_search()
         assert "page must" in open_food_facts_search(product_name="test", page=0)
         assert "invalid filter value" in open_food_facts_search(product_name="bad<>")
         mock_urlopen.assert_not_called()
 
-    @patch("ai_arch_toolkit.toolkit.tools._open_food_facts._throttle")
-    @patch("ai_arch_toolkit.toolkit.tools._open_food_facts.urllib.request.urlopen")
-    def test_rate_limit_and_parse_failure(self, mock_urlopen, _mock_throttle):
+    @patch(HTTP_OPEN)
+    def test_rate_limit_and_parse_failure(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.HTTPError(
             url="https://world.openfoodfacts.org/api/v2/search",
             code=503,
@@ -205,5 +188,5 @@ class TestOpenFoodFactsSearch:
         assert "global rate limit" in open_food_facts_search(product_name="test")
 
         mock_urlopen.side_effect = None
-        mock_urlopen.return_value = _mock_urlopen("not json")
+        mock_urlopen.return_value = respond("not json")
         assert "could not parse" in open_food_facts_search(product_name="test")

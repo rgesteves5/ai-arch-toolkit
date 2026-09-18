@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from ai_arch_toolkit.core._policy import Policy
 from ai_arch_toolkit.core._retry import RetryConfig
 from ai_arch_toolkit.core._state import StateSnapshot
@@ -224,3 +226,183 @@ def test_the_step_backoff_stays_finite_for_very_late_attempts() -> None:
     policy = Policy(retry=RetryConfig(base_delay=1.0, max_delay=3.0))
 
     assert _compute_backoff(5_000, policy) <= 3.0
+
+
+# --- Every decision path of the attempt loop, pinned before and after its rewrite ----------------
+
+
+def _scripted(*outcomes: Result | Exception | float) -> Step:
+    """A step that plays one outcome a call: a Result, a raised exception, or a sleep (seconds)."""
+    queue = list(outcomes)
+
+    async def fn(snap: StateSnapshot) -> Result:
+        outcome = queue.pop(0)
+        if isinstance(outcome, float):
+            await asyncio.sleep(outcome)
+            return Result(value="slept")
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    return Step(name="s", fn=fn)
+
+
+def _fallback_step(value: str = "fb", *, sleep: float = 0.0, fails: bool = False) -> Step:
+    async def fn(snap: StateSnapshot) -> Result:
+        if sleep:
+            await asyncio.sleep(sleep)
+        if fails:
+            raise RuntimeError("fallback broke")
+        return Result(value=value)
+
+    return Step(name="fallback", fn=fn, policy=Policy(timeout=0.01) if sleep else None)
+
+
+_OK = Result(value="ok")
+_LOW = Result(value="low", confidence=0.1)
+_BAD = Result(error="bad")
+_ONE_RETRY = RetryConfig(max_retries=1, base_delay=1e-9, max_delay=1e-9)
+
+_PATHS = {
+    "ok": ((_OK,), Policy(), ("ok", None), (), 1),
+    "error then ok": ((_BAD, _OK), Policy(retry=_ONE_RETRY), ("ok", None), ("retry",), 2),
+    "raise then ok": (
+        (RuntimeError("x"), _OK),
+        Policy(retry=_ONE_RETRY),
+        ("ok", None),
+        ("retry",),
+        2,
+    ),
+    "exhausted halt": (
+        (_BAD, _BAD),
+        Policy(retry=_ONE_RETRY),
+        (None, "bad"),
+        ("retry", "halt"),
+        2,
+    ),
+    "exhausted continue": (
+        (_BAD,),
+        Policy(on_exhausted="continue"),
+        (None, "bad"),
+        (),
+        1,
+    ),
+    "exhausted fallback": (
+        (_BAD,),
+        Policy(on_exhausted="fallback", fallback=_fallback_step()),
+        ("fb", None),
+        ("fallback",),
+        1,
+    ),
+    "exhausted fallback missing": (
+        (_BAD,),
+        Policy(on_exhausted="fallback"),
+        (None, "bad"),
+        (),
+        1,
+    ),
+    "timeout halt, never retried": (
+        (1.0, _OK),
+        Policy(timeout=0.01, retry=_ONE_RETRY),
+        (None, "Step timed out"),
+        ("timeout",),
+        1,
+    ),
+    "timeout fallback": (
+        (1.0,),
+        Policy(timeout=0.01, on_timeout="fallback", fallback=_fallback_step()),
+        ("fb", None),
+        ("timeout", "fallback"),
+        1,
+    ),
+    "timeout fallback missing": (
+        (1.0,),
+        Policy(timeout=0.01, on_timeout="fallback"),
+        (None, "Step timed out"),
+        ("timeout",),
+        1,
+    ),
+    "low confidence retried": (
+        (_LOW, _OK),
+        Policy(confidence_threshold=0.5, retry=_ONE_RETRY),
+        ("ok", None),
+        ("low_confidence", "retry"),
+        2,
+    ),
+    "low confidence on the last attempt": (
+        (_LOW,),
+        Policy(confidence_threshold=0.5),
+        ("low", None),
+        ("low_confidence",),
+        1,
+    ),
+    "low confidence fallback": (
+        (_LOW,),
+        Policy(confidence_threshold=0.5, on_low_confidence="fallback", fallback=_fallback_step()),
+        ("fb", None),
+        ("low_confidence", "fallback"),
+        1,
+    ),
+    "low confidence fallback missing": (
+        (_LOW,),
+        Policy(confidence_threshold=0.5, on_low_confidence="fallback"),
+        ("low", None),
+        ("low_confidence",),
+        1,
+    ),
+    "low confidence escalated": (
+        (_LOW,),
+        Policy(confidence_threshold=0.5, on_low_confidence="escalate"),
+        ("low", None),
+        ("low_confidence", "escalate"),
+        1,
+    ),
+    "escalation skips the cost check": (
+        (Result(value="low", confidence=0.1, cost=5.0),),
+        Policy(confidence_threshold=0.5, on_low_confidence="escalate", max_cost=1.0),
+        ("low", None),
+        ("low_confidence", "escalate"),
+        1,
+    ),
+    "cost exceeded": (
+        (Result(value="dear", cost=5.0),),
+        Policy(max_cost=1.0),
+        (None, "Cost exceeded limit 1.0: cost 5.0"),
+        ("cost_exceeded",),
+        1,
+    ),
+    "fallback times out": (
+        (_BAD,),
+        Policy(on_exhausted="fallback", fallback=_fallback_step(sleep=1.0)),
+        (None, "Fallback timed out"),
+        ("fallback",),
+        1,
+    ),
+    "fallback raises": (
+        (_BAD,),
+        Policy(on_exhausted="fallback", fallback=_fallback_step(fails=True)),
+        (None, "Fallback failed: fallback broke"),
+        ("fallback",),
+        1,
+    ),
+}
+
+
+@pytest.mark.parametrize("path", sorted(_PATHS))
+async def test_every_decision_path_of_the_attempt_loop(path: str) -> None:
+    outcomes, policy, (value, error), decisions, attempts = _PATHS[path]
+
+    result, trace = await execute_step(_scripted(*outcomes), StateSnapshot(), policy=policy)
+
+    assert (result.value, result.error) == (value, error)
+    assert trace.policy_decisions == decisions
+    assert trace.attempts == attempts
+
+
+async def test_a_step_without_fallback_uses_the_policys_and_its_own_wins() -> None:
+    own = Step(name="s", fn=_scripted(_BAD).fn, fallback=_fallback_step("own"))
+    policy = Policy(on_exhausted="fallback", fallback=_fallback_step("policy"))
+
+    result, _ = await execute_step(own, StateSnapshot(), policy=policy)
+
+    assert result.value == "own"

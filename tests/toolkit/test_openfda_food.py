@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-import json
 import urllib.error
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 from ai_arch_toolkit.toolkit.tools._openfda_food import (
     openfda_food_recall,
     openfda_food_recall_search,
 )
+from tests.toolkit.http_fakes import HTTP_OPEN, respond
 
 _RECALL = {
     "recall_number": "F-2473-2016",
@@ -31,17 +31,6 @@ _RECALL = {
 }
 
 
-def _mock_urlopen(data: dict | str):
-    resp = MagicMock()
-    if isinstance(data, dict):
-        resp.read.return_value = json.dumps(data).encode()
-    else:
-        resp.read.return_value = data.encode()
-    resp.__enter__ = lambda s: s
-    resp.__exit__ = MagicMock(return_value=False)
-    return resp
-
-
 def _called_request(mock_urlopen):
     return mock_urlopen.call_args.args[0]
 
@@ -51,9 +40,9 @@ def _called_params(mock_urlopen) -> dict[str, list[str]]:
 
 
 class TestOpenFdaFoodRecallSearch:
-    @patch("ai_arch_toolkit.toolkit.tools._openfda_food.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_returns_recalls(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(
+        mock_urlopen.return_value = respond(
             {"meta": {"results": {"total": 1}}, "results": [_RECALL]}
         )
 
@@ -81,7 +70,7 @@ class TestOpenFdaFoodRecallSearch:
         assert 'classification.exact:"Class I"' in params["search"][0]
         assert "report_date:[20160101 TO 20161231]" in params["search"][0]
 
-    @patch("ai_arch_toolkit.toolkit.tools._openfda_food.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_invalid_search_options_do_not_call_api(self, mock_urlopen):
         assert "provide query" in openfda_food_recall_search()
         assert "skip must" in openfda_food_recall_search(query="x", skip=-1)
@@ -92,7 +81,7 @@ class TestOpenFdaFoodRecallSearch:
         )
         mock_urlopen.assert_not_called()
 
-    @patch("ai_arch_toolkit.toolkit.tools._openfda_food.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_not_found_and_parse_failure(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.HTTPError(
             url="https://api.fda.gov/food/enforcement.json",
@@ -104,14 +93,14 @@ class TestOpenFdaFoodRecallSearch:
         assert "no matching records" in openfda_food_recall_search(query="missing")
 
         mock_urlopen.side_effect = None
-        mock_urlopen.return_value = _mock_urlopen("not json")
+        mock_urlopen.return_value = respond("not json")
         assert "could not parse" in openfda_food_recall_search(query="x")
 
 
 class TestOpenFdaFoodRecall:
-    @patch("ai_arch_toolkit.toolkit.tools._openfda_food.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_returns_recall(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(
+        mock_urlopen.return_value = respond(
             {"meta": {"results": {"total": 1}}, "results": [_RECALL]}
         )
 
@@ -124,7 +113,7 @@ class TestOpenFdaFoodRecall:
 
         assert _called_params(mock_urlopen)["search"] == ['recall_number:"F-2473-2016"']
 
-    @patch("ai_arch_toolkit.toolkit.tools._openfda_food.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_invalid_recall_number(self, mock_urlopen):
         assert "invalid recall_number" in openfda_food_recall("bad")
         mock_urlopen.assert_not_called()

@@ -2,19 +2,14 @@
 
 from __future__ import annotations
 
-import json
 import re
-import urllib.error
-import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
-_SEARCH_URL = "https://www.ebi.ac.uk/ols4/api/search"
-_TIMEOUT = 15
-_USER_AGENT = "ai-arch-toolkit/1.0 (https://github.com/ai-arch-toolkit; research tool)"
+_API = Api(base="https://www.ebi.ac.uk/ols4/api/search", name="EMBL-EBI OLS", timeout_s=15)
 _MAX_RESULTS_LIMIT = 20
 _TERM_RE = re.compile(r"^(FOODON[:_]\d{7,}|[A-Za-z]+[:_]\d+)$", re.IGNORECASE)
 _DESCRIPTION_MAX_CHARS = 700
@@ -33,7 +28,7 @@ class _FoodOnTerm:
     descriptions: tuple[str, ...]
 
 
-@tool
+@tool(capability="network")
 def foodon_search(query: str, max_results: int = 10, start: int = 0) -> str:
     """Search FoodOn food ontology terms via EMBL-EBI OLS.
 
@@ -49,27 +44,15 @@ def foodon_search(query: str, max_results: int = 10, start: int = 0) -> str:
         return "FoodOn search failed: start must be greater than or equal to 0."
 
     try:
-        data = _fetch_search(query, max_results=max_results, start=start)
-        terms = _terms_from_data(data)
-    except urllib.error.HTTPError as e:
-        return _http_error("FoodOn search failed", e)
-    except urllib.error.URLError as e:
-        return f"FoodOn search failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "FoodOn search failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"FoodOn search failed: could not parse API response: {e}"
-
-    if not terms:
-        return f"No FoodOn terms found for: {query!r}"
-    total = _string(data.get("response", {}).get("numFound")) or "?"
-    return (
-        f"FoodOn terms for {query!r} (start {start}, returned {len(terms)}, total {total}):\n"
-        + _format_terms(terms)
-    )
+        return _API.get_json(
+            params=_search_params(query, max_results=max_results, start=start),
+            parse=lambda data: _search_text(data, query, start),
+        )
+    except HttpError as e:
+        return f"FoodOn search failed: {e}"
 
 
-@tool
+@tool(capability="network")
 def foodon_term(term_id: str) -> str:
     """Fetch a FoodOn ontology term by OBO ID.
 
@@ -81,17 +64,36 @@ def foodon_term(term_id: str) -> str:
         return f"FoodOn term lookup failed: invalid term_id: {term_id!r}"
 
     try:
-        data = _fetch_search(normalized, max_results=5, start=0)
-        terms = [term for term in _terms_from_data(data) if term.obo_id.upper() == normalized]
-    except urllib.error.HTTPError as e:
-        return _http_error("FoodOn term lookup failed", e)
-    except urllib.error.URLError as e:
-        return f"FoodOn term lookup failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "FoodOn term lookup failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"FoodOn term lookup failed: could not parse API response: {e}"
+        return _API.get_json(
+            params=_search_params(normalized, max_results=5, start=0),
+            parse=lambda data: _term_text(data, normalized),
+        )
+    except HttpError as e:
+        return f"FoodOn term lookup failed: {e}"
 
+
+def _search_params(query: str, *, max_results: int, start: int) -> dict[str, str]:
+    return {
+        "q": query,
+        "ontology": "foodon",
+        "rows": str(max(1, min(max_results, _MAX_RESULTS_LIMIT))),
+        "start": str(start),
+    }
+
+
+def _search_text(data: dict[str, Any], query: str, start: int) -> str:
+    terms = _terms_from_data(data)
+    if not terms:
+        return f"No FoodOn terms found for: {query!r}"
+    total = _string(data.get("response", {}).get("numFound")) or "?"
+    return (
+        f"FoodOn terms for {query!r} (start {start}, returned {len(terms)}, total {total}):\n"
+        + _format_terms(terms)
+    )
+
+
+def _term_text(data: dict[str, Any], normalized: str) -> str:
+    terms = [term for term in _terms_from_data(data) if term.obo_id.upper() == normalized]
     if not terms:
         return f"FoodOn term not found: {normalized}"
     return f"FoodOn term {normalized}:\n" + _format_terms(
@@ -99,19 +101,6 @@ def foodon_term(term_id: str) -> str:
         include_index=False,
         include_full_description=True,
     )
-
-
-def _fetch_search(query: str, *, max_results: int, start: int) -> dict[str, Any]:
-    params = {
-        "q": query,
-        "ontology": "foodon",
-        "rows": str(max(1, min(max_results, _MAX_RESULTS_LIMIT))),
-        "start": str(start),
-    }
-    url = f"{_SEARCH_URL}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="replace"))
 
 
 def _terms_from_data(data: dict[str, Any]) -> list[_FoodOnTerm]:
@@ -167,12 +156,6 @@ def _format_terms(
             lines.append(f"   IRI: {term.iri}")
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks)
-
-
-def _http_error(prefix: str, error: urllib.error.HTTPError) -> str:
-    if error.code == 429:
-        return f"{prefix}: rate limited by EMBL-EBI OLS (HTTP 429). Try again later."
-    return f"{prefix}: HTTP error {error.code}: {error.reason}"
 
 
 def _string_tuple(value: Any) -> tuple[str, ...]:

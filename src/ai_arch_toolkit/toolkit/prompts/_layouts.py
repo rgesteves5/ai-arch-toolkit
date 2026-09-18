@@ -295,7 +295,8 @@ class MarkdownLayout:
         return LayoutResult(text="".join(parts), spans=tuple(spans), layout=self.name)
 
 
-_XML_TAG = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
+XML_TAG = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
+JSON_LAYOUT_MODES = ("array", "object")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -311,7 +312,7 @@ class XmlLayout:
 
     def __post_init__(self) -> None:
         for field_name, value in (("root_tag", self.root_tag), ("section_tag", self.section_tag)):
-            if not isinstance(value, str) or not _XML_TAG.fullmatch(value):
+            if not isinstance(value, str) or not XML_TAG.fullmatch(value):
                 raise ValueError(f"XmlLayout.{field_name} is not a valid XML tag: {value!r}")
         if not isinstance(self.separator, str):
             raise TypeError("XmlLayout.separator must be a string")
@@ -411,7 +412,7 @@ class JsonLayout:
             raise TypeError("JsonLayout.include_stability must be a boolean")
         if not isinstance(self.ensure_ascii, bool):
             raise TypeError("JsonLayout.ensure_ascii must be a boolean")
-        if self.mode not in {"array", "object"}:
+        if self.mode not in JSON_LAYOUT_MODES:
             raise ValueError("JsonLayout.mode must be 'array' or 'object'")
 
     def _dumps(self, value: str) -> str:

@@ -312,8 +312,8 @@ def test_include_depth_is_limited(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("payload", "message"),
     [
-        ({}, "version: 1"),
-        ({"version": 2}, "version: 1"),
+        ({}, "missing 'version'"),
+        ({"version": 2}, "version must be 1"),
         ({"version": 1, "sectons": []}, "did you mean 'sections'"),
         ({"version": 1, "sections": {}}, "sections must be a list"),
         (

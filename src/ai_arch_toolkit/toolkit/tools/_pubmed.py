@@ -3,28 +3,23 @@
 from __future__ import annotations
 
 import html
-import json
-import time
-import urllib.error
-import urllib.parse
-import urllib.request
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
-_BASE_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
-_ESEARCH_URL = f"{_BASE_URL}/esearch.fcgi"
-_EFETCH_URL = f"{_BASE_URL}/efetch.fcgi"
-_TIMEOUT = 10
-_USER_AGENT = "ai-arch-toolkit/1.0 (https://github.com/ai-arch-toolkit)"
-_TOOL_NAME = "ai_arch_toolkit"
+# NCBI asks clients without an API key for at most three requests a second.
+_EUTILS = Api(
+    base="https://eutils.ncbi.nlm.nih.gov/entrez/eutils",
+    name="NCBI E-utilities",
+    min_interval_s=0.34,
+    params={"tool": "ai_arch_toolkit"},
+)
 _MAX_RESULTS_LIMIT = 20
 _ABSTRACT_MAX_CHARS = 900
-_MIN_REQUEST_INTERVAL_SECONDS = 0.34
-_LAST_REQUEST_AT = 0.0
 _SORT_VALUES = {
     "relevance": "relevance",
     "pub_date": "pub date",
@@ -49,7 +44,7 @@ class _PubmedArticle:
     keywords: tuple[str, ...]
 
 
-@tool
+@tool(capability="network")
 def pubmed_search(
     query: str,
     max_results: int = 5,
@@ -96,22 +91,12 @@ def pubmed_search(
     params.update(date_params)
 
     try:
-        data = _fetch_json(_ESEARCH_URL, params)
-        id_list = data.get("esearchresult", {}).get("idlist", [])
-        pmids = [str(pmid).strip() for pmid in id_list if str(pmid).strip()]
+        pmids = _EUTILS.get_json("esearch.fcgi", params=params, parse=_pmids)
         if not pmids:
             return f"No PubMed results for: {query!r}"
-        articles = _fetch_articles(pmids)
-    except urllib.error.HTTPError as e:
-        return f"PubMed search failed: HTTP error {e.code}: {e.reason}"
-    except urllib.error.URLError as e:
-        return f"PubMed search failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "PubMed search failed: request timed out."
-    except json.JSONDecodeError as e:
-        return f"PubMed search failed: could not parse API response: {e}"
-    except ET.ParseError as e:
-        return f"PubMed search failed: could not parse article XML: {e}"
+        articles = _articles(pmids)
+    except HttpError as e:
+        return f"PubMed search failed: {e}"
 
     if not articles:
         return f"No PubMed article metadata found for: {query!r}"
@@ -119,7 +104,7 @@ def pubmed_search(
     return f"PubMed results for {query!r}:\n" + _format_articles(articles, include_abstract=False)
 
 
-@tool
+@tool(capability="network")
 def pubmed_article(pmid: str) -> str:
     """Fetch PubMed metadata for a specific article by PMID.
 
@@ -131,15 +116,9 @@ def pubmed_article(pmid: str) -> str:
         return f"PubMed article lookup failed: invalid PMID: {pmid!r}"
 
     try:
-        articles = _fetch_articles([normalized])
-    except urllib.error.HTTPError as e:
-        return f"PubMed article lookup failed: HTTP error {e.code}: {e.reason}"
-    except urllib.error.URLError as e:
-        return f"PubMed article lookup failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "PubMed article lookup failed: request timed out."
-    except ET.ParseError as e:
-        return f"PubMed article lookup failed: could not parse article XML: {e}"
+        articles = _articles([normalized])
+    except HttpError as e:
+        return f"PubMed article lookup failed: {e}"
 
     if not articles:
         return f"PubMed article not found: {normalized}"
@@ -187,47 +166,21 @@ def _format_ncbi_date(value: date) -> str:
     return f"{value:%Y/%m/%d}"
 
 
-def _fetch_json(url: str, params: dict[str, str]) -> dict[str, Any]:
-    text = _fetch_text(url, params)
-    return json.loads(text)
+def _pmids(data: dict[str, Any]) -> list[str]:
+    id_list = data.get("esearchresult", {}).get("idlist", [])
+    return [str(pmid).strip() for pmid in id_list if str(pmid).strip()]
 
 
-def _fetch_articles(pmids: list[str]) -> list[_PubmedArticle]:
-    xml_text = _fetch_text(
-        _EFETCH_URL,
-        {
-            "db": "pubmed",
-            "id": ",".join(pmids),
-            "retmode": "xml",
-        },
-    )
-    return _parse_pubmed_xml(xml_text)
-
-
-def _fetch_text(url: str, params: dict[str, str]) -> str:
-    params = {
-        **params,
-        "tool": _TOOL_NAME,
-    }
-    request_url = f"{url}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(request_url, headers={"User-Agent": _USER_AGENT})
-    _throttle()
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-        return resp.read().decode("utf-8", errors="replace")
-
-
-def _throttle() -> None:
-    global _LAST_REQUEST_AT
-
-    now = time.monotonic()
-    elapsed = now - _LAST_REQUEST_AT
-    if elapsed < _MIN_REQUEST_INTERVAL_SECONDS:
-        time.sleep(_MIN_REQUEST_INTERVAL_SECONDS - elapsed)
-    _LAST_REQUEST_AT = time.monotonic()
+def _articles(pmids: list[str]) -> list[_PubmedArticle]:
+    params = {"db": "pubmed", "id": ",".join(pmids), "retmode": "xml"}
+    return _EUTILS.get_text("efetch.fcgi", params=params, parse=_parse_pubmed_xml)
 
 
 def _parse_pubmed_xml(xml_text: str) -> list[_PubmedArticle]:
-    root = ET.fromstring(xml_text)
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError as e:
+        raise HttpError(f"could not parse article XML: {e}") from e
     articles: list[_PubmedArticle] = []
     for node in root.findall(".//PubmedArticle"):
         article = _parse_article(node)

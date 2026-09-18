@@ -8,6 +8,8 @@ from ai_arch_toolkit.core import tool
 
 _DEFAULT_TIMEOUT = 30
 _DEFAULT_MAX_OUTPUT = 8000
+_MAX_TIMEOUT = 600
+_MAX_OUTPUT = 100_000
 
 
 @tool(
@@ -25,9 +27,11 @@ def run_command(
 
     Args:
         command: The shell command to execute.
-        timeout: Maximum seconds to wait. Defaults to 30.
-        max_output: Maximum characters of output to return. Defaults to 8000.
+        timeout: Maximum seconds to wait (1-600). Defaults to 30.
+        max_output: Maximum characters of output to return (1-100000). Defaults to 8000.
     """
+    timeout = max(1, min(timeout, _MAX_TIMEOUT))
+    max_output = max(1, min(max_output, _MAX_OUTPUT))
     try:
         result = subprocess.run(
             command,
@@ -38,7 +42,7 @@ def run_command(
         )
     except subprocess.TimeoutExpired:
         return f"Command timed out after {timeout}s: {command}"
-    except OSError as e:
+    except (OSError, ValueError) as e:  # ValueError: a null byte in the command
         return f"Failed to execute: {e}"
 
     output_parts: list[str] = []

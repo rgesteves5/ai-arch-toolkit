@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 from ai_arch_toolkit.toolkit.tools._chembl import (
@@ -13,6 +12,7 @@ from ai_arch_toolkit.toolkit.tools._chembl import (
     chembl_target,
     chembl_target_search,
 )
+from tests.toolkit.http_fakes import HTTP_OPEN, respond
 
 _MOLECULE = {
     "molecule_chembl_id": "CHEMBL25",
@@ -32,44 +32,36 @@ _TARGET = {
 }
 
 
-def _mock_urlopen(data: dict | str):
-    resp = MagicMock()
-    resp.read.return_value = (data if isinstance(data, str) else json.dumps(data)).encode()
-    resp.__enter__ = lambda s: s
-    resp.__exit__ = MagicMock(return_value=False)
-    return resp
-
-
 def _params(mock_urlopen):
     return parse_qs(urlparse(mock_urlopen.call_args.args[0].full_url).query)
 
 
 class TestChembl:
-    @patch("ai_arch_toolkit.toolkit.tools._chembl.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_molecule_tools(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(
+        mock_urlopen.return_value = respond(
             {"page_meta": {"total_count": 1}, "molecules": [_MOLECULE]}
         )
         assert "ASPIRIN | id: CHEMBL25" in chembl_molecule_search("aspirin")
 
-        mock_urlopen.return_value = _mock_urlopen(_MOLECULE)
+        mock_urlopen.return_value = respond(_MOLECULE)
         result = chembl_molecule("chembl25")
         assert "SMILES:" in result
         assert "MW: 180.16" in result
 
-    @patch("ai_arch_toolkit.toolkit.tools._chembl.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_target_and_activity_tools(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(
+        mock_urlopen.return_value = respond(
             {"page_meta": {"total_count": 1}, "targets": [_TARGET]}
         )
         assert "Cyclooxygenase | id: CHEMBL2094253" in chembl_target_search("COX")
 
-        mock_urlopen.return_value = _mock_urlopen(
+        mock_urlopen.return_value = respond(
             {**_TARGET, "target_components": [{"accession": "P23219"}]}
         )
         assert "components: P23219" in chembl_target("CHEMBL2094253")
 
-        mock_urlopen.return_value = _mock_urlopen(
+        mock_urlopen.return_value = respond(
             {
                 "page_meta": {"total_count": 1},
                 "activities": [
@@ -88,7 +80,7 @@ class TestChembl:
         assert "IC50: 10 nM" in result
         assert _params(mock_urlopen)["standard_type"] == ["IC50"]
 
-    @patch("ai_arch_toolkit.toolkit.tools._chembl.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_invalid_options_do_not_call_api(self, mock_urlopen):
         assert "provide molecule" in chembl_activity_search()
         assert "invalid chembl_id" in chembl_molecule("bad")

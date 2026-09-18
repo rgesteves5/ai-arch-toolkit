@@ -101,98 +101,124 @@ async def _run_attempts(
 ) -> tuple[Result, int]:
     """The retry/timeout/confidence/cost loop. ``span_id`` scopes this step's metered cost."""
     max_attempts = policy.retry.max_retries + 1
-    attempts = 0
-    result: Result | None = None
-
-    for attempt in range(max_attempts):
-        attempts = attempt + 1
-        try:
-            if policy.timeout is not None:
-                result = await asyncio.wait_for(step.fn(snapshot), timeout=policy.timeout)
-            else:
-                result = await step.fn(snapshot)
-        except TimeoutError:
+    for attempt in range(1, max_attempts + 1):
+        retry_left = attempt < max_attempts
+        result = await _attempt(step, snapshot, policy, t0)
+        if result is None:  # timed out: never retried
             record("timeout")
-            if policy.on_timeout == "fallback":
-                fb = step.fallback or (policy.fallback if policy else None)
-                if fb is not None:
-                    record("fallback")
-                    result = await _run_fallback(fb, snapshot, t0)
-                    break
-            result = Result(error="Step timed out", duration=time.monotonic() - t0)
-            break
-        except AdmissionDenied:
-            raise  # budget/admission denial is terminal — never retried, never an error Result
-        except Exception as exc:
-            result = Result(error=str(exc), duration=time.monotonic() - t0)
-
-        if result is not None and result.is_ok:
-            # Check confidence threshold
-            if (
-                policy.confidence_threshold is not None
-                and result.confidence is not None
-                and result.confidence < policy.confidence_threshold
-            ):
-                record("low_confidence")
-                if policy.on_low_confidence == "retry" and attempt < max_attempts - 1:
-                    record("retry")
-                    await asyncio.sleep(_compute_backoff(attempt, policy))
-                    result = None
-                    continue
-                elif policy.on_low_confidence == "fallback":
-                    fb = step.fallback or policy.fallback
-                    if fb is not None:
-                        record("fallback")
-                        result = await _run_fallback(fb, snapshot, t0)
-                        break
-                elif policy.on_low_confidence == "escalate":
-                    record("escalate")
-                    break
-            # Check cost limit — the step's manual annotation plus its metered span spend. Fail
-            # CLOSED if that span incurred an unbounded (unknown) cost: an unpriced model or a
-            # server tool can't be bounded, so a max_cost step must not pass (decision #4).
-            if policy.max_cost is not None:
-                span_cost, cost_unknown = _span_spend(span_id)
-                effective_cost = result.cost + span_cost
-                if cost_unknown or effective_cost > policy.max_cost:
-                    record("cost_exceeded")
-                    detail = (
-                        "a call could not be priced (fail-closed)"
-                        if cost_unknown
-                        else f"cost {effective_cost}"
-                    )
-                    result = Result(
-                        error=f"Cost exceeded limit {policy.max_cost}: {detail}",
-                        cost=effective_cost,
-                        duration=time.monotonic() - t0,
-                    )
-                    break
-            break
-
-        # Error path — retry or exhaust
-        if result is not None and result.is_error:
-            if attempt < max_attempts - 1:
-                record("retry")
-                await asyncio.sleep(_compute_backoff(attempt, policy))
-                result = None
+            fallback = await _fallback(step, policy, snapshot, t0, record, policy.on_timeout)
+            return fallback or Result(
+                error="Step timed out", duration=time.monotonic() - t0
+            ), attempt
+        if result.is_error:
+            if retry_left:
+                await _retry(attempt, policy, record)
                 continue
-            # Exhausted
-            if policy.on_exhausted == "fallback":
-                fb = step.fallback or policy.fallback
-                if fb is not None:
-                    record("fallback")
-                    result = await _run_fallback(fb, snapshot, t0)
-                    break
-            elif policy.on_exhausted == "continue":
-                break
-            else:
-                record("halt")
-                break
+            return await _exhausted(result, step, policy, snapshot, t0, record), attempt
+        if _low_confidence(result, policy):
+            record("low_confidence")
+            if policy.on_low_confidence == "retry" and retry_left:
+                await _retry(attempt, policy, record)
+                continue
+            if policy.on_low_confidence == "escalate":
+                record("escalate")
+                return result, attempt
+            fallback = await _fallback(
+                step, policy, snapshot, t0, record, policy.on_low_confidence
+            )
+            if fallback is not None:
+                return fallback, attempt
+        return _within_cost(result, policy, span_id, t0, record), attempt
+    return Result(error="No result produced", duration=time.monotonic() - t0), max_attempts
 
-    if result is None:
-        result = Result(error="No result produced", duration=time.monotonic() - t0)
 
-    return result, attempts
+async def _attempt(
+    step: Step, snapshot: StateSnapshot, policy: Policy, t0: float
+) -> Result | None:
+    """One call of the step: its result, an error result if it raised, ``None`` if it timed out."""
+    try:
+        if policy.timeout is None:
+            return await step.fn(snapshot)
+        return await asyncio.wait_for(step.fn(snapshot), timeout=policy.timeout)
+    except TimeoutError:
+        return None
+    except AdmissionDenied:
+        raise  # budget/admission denial is terminal — never retried, never an error Result
+    except Exception as exc:
+        return Result(error=str(exc), duration=time.monotonic() - t0)
+
+
+async def _retry(attempt: int, policy: Policy, record: Callable[[PolicyDecision], None]) -> None:
+    record("retry")
+    await asyncio.sleep(_compute_backoff(attempt - 1, policy))
+
+
+async def _fallback(
+    step: Step,
+    policy: Policy,
+    snapshot: StateSnapshot,
+    t0: float,
+    record: Callable[[PolicyDecision], None],
+    strategy: str,
+) -> Result | None:
+    """The fallback's result when ``strategy`` says to fall back and there is one to run."""
+    fallback = step.fallback or policy.fallback
+    if strategy != "fallback" or fallback is None:
+        return None
+    record("fallback")
+    return await _run_fallback(fallback, snapshot, t0)
+
+
+async def _exhausted(
+    result: Result,
+    step: Step,
+    policy: Policy,
+    snapshot: StateSnapshot,
+    t0: float,
+    record: Callable[[PolicyDecision], None],
+) -> Result:
+    """The last attempt failed: fall back, continue, or halt, as the policy says."""
+    if policy.on_exhausted == "halt":
+        record("halt")
+        return result
+    fallback = await _fallback(step, policy, snapshot, t0, record, policy.on_exhausted)
+    return fallback or result
+
+
+def _low_confidence(result: Result, policy: Policy) -> bool:
+    threshold = policy.confidence_threshold
+    return (
+        threshold is not None and result.confidence is not None and result.confidence < threshold
+    )
+
+
+def _within_cost(
+    result: Result,
+    policy: Policy,
+    span_id: str | None,
+    t0: float,
+    record: Callable[[PolicyDecision], None],
+) -> Result:
+    """``result``, or a cost error when it and the step's metered spend pass ``max_cost``.
+
+    Fails CLOSED when the span incurred an unbounded (unknown) cost: an unpriced model or a server
+    tool cannot be bounded, so a ``max_cost`` step must not pass.
+    """
+    if policy.max_cost is None:
+        return result
+    span_cost, cost_unknown = _span_spend(span_id)
+    effective_cost = result.cost + span_cost
+    if not cost_unknown and effective_cost <= policy.max_cost:
+        return result
+    record("cost_exceeded")
+    detail = (
+        "a call could not be priced (fail-closed)" if cost_unknown else f"cost {effective_cost}"
+    )
+    return Result(
+        error=f"Cost exceeded limit {policy.max_cost}: {detail}",
+        cost=effective_cost,
+        duration=time.monotonic() - t0,
+    )
 
 
 def _span_spend(span_id: str | None) -> tuple[float, bool]:

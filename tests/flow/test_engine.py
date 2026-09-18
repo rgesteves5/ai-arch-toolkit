@@ -21,6 +21,7 @@ from ai_arch_toolkit.toolkit.agents import Agent, ReasoningSpec
 from ai_arch_toolkit.toolkit.budget import BudgetPolicy
 from ai_arch_toolkit.toolkit.flow import Flow, FlowEvent, FlowResult, FlowStep, Scope
 from tests.fake_provider import fake_llm
+from tests.flow.event_grammar import check_grammar
 
 _MODEL = "claude-sonnet-4-6"  # priced in _default_pricing.toml
 
@@ -51,6 +52,15 @@ def _recorder(name: str, ran: list[str], delay: float = 0.0, artifacts: Any = No
 
 def _boom(*_args: Any) -> Any:
     raise ZeroDivisionError("boom")
+
+
+async def _checked_events(flow: Flow, state: State | None = None, **kw: Any) -> list[FlowEvent]:
+    """Iterate a run to its end; its events must follow the grammar and tell the trace's story."""
+    execution = flow.iter(state if state is not None else State(), **kw)
+    events = [event async for event in execution]
+    assert execution.result is not None
+    check_grammar(events, execution.result.trace)
+    return events
 
 
 # --------------------------------------------------------------------------------------- 8a
@@ -128,7 +138,7 @@ async def test_orchestration_errors_are_reported_by_iter(mode: str, hook: str) -
     ran: list[str] = []
     flow = _flow_with_failing_hook(mode, hook, ran)
 
-    events = [event async for event in flow.iter(State(operational={"x": 1}))]
+    events = await _checked_events(flow, State(operational={"x": 1}))
 
     failed = [e for e in events if e.type == "step_end" and e.step_name == "b"]
     assert failed and failed[0].error is not None and "boom" in failed[0].error
@@ -262,8 +272,13 @@ async def test_retry_event_arrives_while_the_step_is_still_running() -> None:
     flow = Flow(Step(name="flaky", fn=flaky, policy=policy), name="f")
 
     arrivals: dict[str, float] = {}
-    async for event in flow.iter(State()):
+    events: list[FlowEvent] = []
+    execution = flow.iter(State())
+    async for event in execution:
         arrivals.setdefault(event.type, time.monotonic())
+        events.append(event)
+    assert execution.result is not None
+    check_grammar(events, execution.result.trace)
 
     assert arrivals["step_end"] - arrivals["retry"] >= 0.3
 
@@ -283,7 +298,7 @@ async def test_agent_iter_exposes_the_agent_result() -> None:
 
 
 async def _event_types(flow: Flow) -> list[FlowEvent]:
-    return [event async for event in flow.iter(State())]
+    return await _checked_events(flow)
 
 
 async def test_step_timeout_is_streamed_as_a_timeout_event() -> None:
@@ -564,9 +579,7 @@ async def test_wall_budget_emits_completed_step_before_denial(mode: str) -> None
         FlowStep(step=_recorder("slow", [], delay=0.1)),
         FlowStep(step=_recorder("next", []), after=("slow",) if mode == "dag" else ()),
     )
-    events = [
-        event async for event in flow.iter(State(), budget_policy=BudgetPolicy(max_wall_s=0.05))
-    ]
+    events = await _checked_events(flow, budget_policy=BudgetPolicy(max_wall_s=0.05))
     kinds = [event.type for event in events]
     assert "step_end" in kinds
     end = next(event for event in events if event.type == "step_end")
@@ -575,3 +588,47 @@ async def test_wall_budget_emits_completed_step_before_denial(mode: str) -> None
         i for i, event in enumerate(events) if event.policy_decision == "budget_exceeded"
     )
     assert kinds.index("step_end") < denied
+
+
+# ------------------------------------------------------------------------------ immutability (D20)
+
+
+def _appends_in_place(name: str) -> Step:
+    """Breaks the snapshot contract on purpose: mutates a list it read instead of returning it."""
+
+    async def fn(snap: StateSnapshot) -> Result:
+        snap["log"].append(name)
+        return Result(value=name)
+
+    return Step(name=name, fn=fn)
+
+
+@pytest.mark.parametrize("mode", ["sequential", "parallel wave"])
+async def test_a_step_behaves_the_same_in_a_parallel_wave_and_in_sequence(mode: str) -> None:
+    # The snapshot is a read-only view whose values are shared with the state: a step that
+    # mutates one in place changes the state, in every mode. (It used to be lost in a wave.)
+    after = () if mode == "sequential" else ("before",)  # no `after` at all: a sequential flow
+    flow = Flow(
+        FlowStep(step=_recorder("before", [])),
+        FlowStep(step=_appends_in_place("a"), after=after),
+        FlowStep(step=_recorder("sibling", []), after=after),
+        name="f",
+    )
+    assert flow.is_dag == (mode == "parallel wave")
+    state = State(operational={"log": []})
+
+    await flow.run(state)
+
+    assert state["log"] == ["a"]
+
+
+async def test_the_snapshot_cannot_be_written_through_and_misses_later_writes() -> None:
+    state = State(operational={"log": [], "n": 1})
+    snapshot = state.snapshot()
+
+    with pytest.raises(TypeError):
+        snapshot.operational["n"] = 2
+    state["n"] = 3
+
+    assert snapshot["n"] == 1
+    assert snapshot["log"] is state["log"]  # values are shared, not copied

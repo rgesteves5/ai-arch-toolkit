@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ai_arch_toolkit.toolkit.agents.flows._common import FlowOptions
 from ai_arch_toolkit.toolkit.agents.flows._generate_review import (
     generate_review_flow,
     generate_review_initial_state,
@@ -28,6 +29,7 @@ from ai_arch_toolkit.toolkit.agents.flows._self_discovery import (
 from ai_arch_toolkit.toolkit.agents.flows._tot import tot_flow, tot_initial_state
 
 __all__ = [
+    "FlowOptions",
     "generate_review_flow",
     "generate_review_initial_state",
     "lats_flow",

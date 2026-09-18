@@ -2,19 +2,11 @@
 
 from __future__ import annotations
 
-import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 from ai_arch_toolkit.toolkit.tools._who_gho import who_indicator, who_indicators, who_series
-
-
-def _mock_urlopen(data: dict | str):
-    resp = MagicMock()
-    resp.read.return_value = (data if isinstance(data, str) else json.dumps(data)).encode()
-    resp.__enter__ = lambda s: s
-    resp.__exit__ = MagicMock(return_value=False)
-    return resp
+from tests.toolkit.http_fakes import HTTP_OPEN, respond
 
 
 def _params(mock_urlopen):
@@ -22,9 +14,9 @@ def _params(mock_urlopen):
 
 
 class TestWhoGho:
-    @patch("ai_arch_toolkit.toolkit.tools._who_gho.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_indicators_and_indicator(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(
+        mock_urlopen.return_value = respond(
             {"value": [{"IndicatorCode": "WHOSIS_000001", "IndicatorName": "Life expectancy"}]}
         )
 
@@ -33,7 +25,7 @@ class TestWhoGho:
         assert "WHOSIS_000001 — Life expectancy" in result
         assert "$filter" in _params(mock_urlopen)
 
-        mock_urlopen.return_value = _mock_urlopen(
+        mock_urlopen.return_value = respond(
             {
                 "value": [
                     {
@@ -46,9 +38,9 @@ class TestWhoGho:
         )
         assert "WHO GHO indicator WHOSIS_000001:" in who_indicator("WHOSIS_000001")
 
-    @patch("ai_arch_toolkit.toolkit.tools._who_gho.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_series_and_validation(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(
+        mock_urlopen.return_value = respond(
             {
                 "value": [
                     {

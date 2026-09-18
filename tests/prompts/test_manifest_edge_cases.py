@@ -36,12 +36,12 @@ def test_manifest_rejects_invalid_depth_and_missing_file(tmp_path: Path) -> None
     ("field", "value", "message"),
     [
         ("extends", [], "extends must be a non-empty"),
-        ("include", 1, "include must be a path"),
-        ("include", [""], "include paths must be non-empty"),
+        ("include", 1, "include must be a non-empty string or a list"),
+        ("include", [""], r"include\[0\] must be a non-empty string"),
         ("variables", [], "variables must be an object"),
         ("separator", 1, "separator must be a string"),
-        ("name", 1, "name and description must be strings"),
-        ("description", [], "name and description must be strings"),
+        ("name", 1, "name must be a string"),
+        ("description", [], "description must be a string"),
         ("metadata", [], "metadata must be an object"),
     ],
 )
@@ -56,9 +56,9 @@ def test_invalid_top_level_values_are_contextual(
 @pytest.mark.parametrize(
     ("variables", "message"),
     [
-        ({"value": 7}, "object or type name"),
-        ({"value": {"type": "date"}}, "invalid prompt variable"),
-        ({"value": {"required": "yes"}}, "invalid prompt variable"),
+        ({"value": 7}, r"variables\.value must be one of 'any', .* or an object"),
+        ({"value": {"type": "date"}}, r"variables\.value\.type must be one of 'any'"),
+        ({"value": {"required": "yes"}}, r"variables\.value\.required must be a boolean"),
         ({"value": {"descripton": "typo"}}, "did you mean 'description'"),
     ],
 )
@@ -88,14 +88,23 @@ def test_variable_type_shorthand_and_default_are_supported(tmp_path: Path) -> No
 @pytest.mark.parametrize(
     ("section", "message"),
     [
-        (1, "at index 0 must be an object"),
-        ({"content": "x"}, "requires a name"),
-        ({"name": "x", "content": "x", "remove": 1}, "flags must be booleans"),
+        (1, r"sections\[0\] must be an object"),
+        ({"content": "x"}, r"sections\[0\] is missing 'name'"),
+        ({"name": "x", "content": "x", "remove": 1}, r"sections\[0\]\.remove must be a boolean"),
         ({"name": "x"}, "exactly one"),
-        ({"name": "x", "content": 1}, "content must be a string"),
-        ({"name": "x", "content": "x", "order": "first"}, "invalid prompt section"),
-        ({"name": "x", "content": "x", "stability": "daily"}, "invalid prompt section"),
-        ({"name": "x", "content": "x", "metadata": []}, "metadata must be an object"),
+        ({"name": "x", "content": 1}, r"sections\[0\]\.content must be a string"),
+        (
+            {"name": "x", "content": "x", "order": "first"},
+            r"sections\[0\]\.order must be an integer",
+        ),
+        (
+            {"name": "x", "content": "x", "stability": "daily"},
+            r"sections\[0\]\.stability must be one of 'static', 'session', 'request'",
+        ),
+        (
+            {"name": "x", "content": "x", "metadata": []},
+            r"sections\[0\]\.metadata must be an object",
+        ),
         ({"name": "x", "content": "x", "oder": 1}, "did you mean 'order'"),
     ],
 )
@@ -108,22 +117,35 @@ def test_invalid_section_declarations(tmp_path: Path, section: object, message: 
 @pytest.mark.parametrize(
     ("source", "message"),
     [
-        (1, "source must be a path or object"),
-        ({}, "source requires a non-empty path"),
-        ({"path": "data.json", "selector": "/x"}, "unknown fields"),
-        ({"path": "data.json", "select": 7}, "selector must be a string or object"),
-        ({"path": "data.json", "select": {"type": "csv"}}, "unknown resource selector"),
+        (1, r"sections\[0\]\.source must be a non-empty string or an object"),
+        ({}, r"sections\[0\]\.source is missing 'path'"),
+        (
+            {"path": "data.json", "selector": "/x"},
+            r"source has unknown fields: 'selector' \(did you mean 'select'\?\)",
+        ),
+        ({"path": "data.json", "select": 7}, r"source\.select must be a string or an object"),
+        (
+            {"path": "data.json", "select": {"type": "csv"}},
+            r"select\.type must be one of 'json_pointer', 'heading', 'lines', 'block'",
+        ),
         (
             {"path": "data.json", "select": {"type": "json_pointer", "value": 1}},
-            "invalid prompt section",
+            r"select\.value must be a string",
         ),
         (
             {"path": "data.json", "select": {"type": "lines", "start": -1}},
-            "invalid prompt section",
+            r"select\.start must be a positive integer",
         ),
         (
             {"path": "data.json", "select": {"type": "block", "start_marker": ""}},
-            "invalid prompt section",
+            r"select is missing 'end_marker'",
+        ),
+        (
+            {
+                "path": "data.json",
+                "select": {"type": "block", "start_marker": "", "end_marker": "x"},
+            },
+            r"select\.start_marker must be a non-empty string",
         ),
     ],
 )
@@ -140,12 +162,13 @@ def test_invalid_resource_sources(tmp_path: Path, source: object, message: str) 
 @pytest.mark.parametrize(
     ("template", "message"),
     [
-        (1, "template must be a path or object"),
+        (1, r"sections\[0\]\.template must be a non-empty string or an object"),
         ({}, "exactly one of path or content"),
         ({"path": "x.md", "content": "x"}, "exactly one of path or content"),
-        ({"content": 1}, "content must be a string"),
-        ({"content": "x", "engine": 1}, "engine must be a string"),
+        ({"content": 1}, r"template\.content must be a string"),
+        ({"content": "x", "engine": 1}, r"template\.engine must be a non-empty string"),
         ({"content": "x", "engine": "unknown"}, "unknown template engine"),
+        ({"content": "x", "select": "/a"}, "inline prompt template content cannot use select"),
     ],
 )
 def test_invalid_template_sources(tmp_path: Path, template: object, message: str) -> None:
@@ -160,12 +183,12 @@ def test_invalid_template_sources(tmp_path: Path, template: object, message: str
 @pytest.mark.parametrize(
     ("knowledge", "message"),
     [
-        (1, "key, key list, or object"),
-        ({}, "keys must be a list"),
-        ({"keys": [""]}, "invalid prompt section"),
-        ({"keys": ["x"], "separator": 1}, "invalid prompt section"),
-        ({"keys": ["x"], "include_names": 1}, "invalid prompt section"),
-        ({"keys": ["x"], "names": True}, "unknown fields"),
+        (1, r"sections\[0\]\.knowledge must be a non-empty string, a list or an object"),
+        ({}, r"knowledge is missing 'keys'"),
+        ({"keys": [""]}, r"knowledge\.keys\[0\] must be a non-empty string"),
+        ({"keys": ["x"], "separator": 1}, r"knowledge\.separator must be a string"),
+        ({"keys": ["x"], "include_names": 1}, r"knowledge\.include_names must be a boolean"),
+        ({"keys": ["x"], "names": True}, r"knowledge has unknown fields: 'names'"),
     ],
 )
 def test_invalid_knowledge_sources(tmp_path: Path, knowledge: object, message: str) -> None:
@@ -181,20 +204,26 @@ def test_invalid_knowledge_sources(tmp_path: Path, knowledge: object, message: s
 @pytest.mark.parametrize(
     ("layout", "message"),
     [
-        ("csv", "unknown prompt layout"),
-        (1, "layout must be a name or object"),
-        ({}, "requires a type"),
-        ({"type": "csv"}, "unknown prompt layout type"),
-        ({"type": "text", "separator": 1}, "invalid prompt layout"),
-        ({"type": "text", "between": {}}, "between must be a list"),
-        ({"type": "text", "between": [1]}, "boundary must be an object"),
+        ("csv", "layout must be one of 'text', 'markdown', 'xml', 'json'"),
+        (1, "layout must be one of 'text', 'markdown', 'xml', 'json' or an object"),
+        ({}, "layout is missing 'type'"),
+        ({"type": "csv"}, r"layout\.type must be one of 'text', 'markdown', 'xml', 'json'"),
+        ({"type": "text", "separator": 1}, r"layout\.separator must be a string"),
+        ({"type": "text", "between": {}}, r"layout\.between must be a list"),
+        ({"type": "text", "between": [1]}, r"layout\.between\[0\] must be an object"),
         (
             {"type": "text", "between": [{"from": "a", "to": "b", "separator": 1}]},
-            "from, to, and separator must be strings",
+            r"layout\.between\[0\]\.separator must be a string",
         ),
-        ({"type": "markdown", "heading_level": 7}, "invalid prompt layout"),
-        ({"type": "xml", "root_tag": "bad tag"}, "invalid prompt layout"),
-        ({"type": "json", "indent": "two"}, "invalid prompt layout"),
+        (
+            {"type": "markdown", "heading_level": 7},
+            r"layout\.heading_level must be an integer between 1 and 6",
+        ),
+        (
+            {"type": "xml", "root_tag": "bad tag"},
+            r"layout\.root_tag must be a non-empty string matching",
+        ),
+        ({"type": "json", "indent": "two"}, r"layout\.indent must be a non-negative integer"),
     ],
 )
 def test_invalid_layouts(tmp_path: Path, layout: object, message: str) -> None:

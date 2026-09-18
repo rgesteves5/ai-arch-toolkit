@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import urllib.error
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 from ai_arch_toolkit.toolkit.tools._europe_pmc import (
@@ -12,6 +11,7 @@ from ai_arch_toolkit.toolkit.tools._europe_pmc import (
     europe_pmc_citations,
     europe_pmc_search,
 )
+from tests.toolkit.http_fakes import HTTP_OPEN, respond
 
 _ARTICLE = {
     "id": "26017442",
@@ -51,17 +51,6 @@ _CITATION = {
 }
 
 
-def _mock_urlopen(data: dict | str):
-    resp = MagicMock()
-    if isinstance(data, dict):
-        resp.read.return_value = json.dumps(data).encode()
-    else:
-        resp.read.return_value = data.encode()
-    resp.__enter__ = lambda s: s
-    resp.__exit__ = MagicMock(return_value=False)
-    return resp
-
-
 def _called_request(mock_urlopen):
     return mock_urlopen.call_args.args[0]
 
@@ -71,9 +60,9 @@ def _called_params(mock_urlopen) -> dict[str, list[str]]:
 
 
 class TestEuropePmcSearch:
-    @patch("ai_arch_toolkit.toolkit.tools._europe_pmc.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_returns_search_results(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(_SEARCH)
+        mock_urlopen.return_value = respond(_SEARCH)
 
         result = europe_pmc_search(
             "deep learning", max_results=2, cursor_mark="*", result_type="core"
@@ -95,7 +84,7 @@ class TestEuropePmcSearch:
         assert params["cursorMark"] == ["*"]
         assert params["resultType"] == ["core"]
 
-    @patch("ai_arch_toolkit.toolkit.tools._europe_pmc.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_invalid_search_options_do_not_call_api(self, mock_urlopen):
         assert "query cannot be empty" in europe_pmc_search("")
         assert "result_type must" in europe_pmc_search("test", result_type="full")
@@ -103,9 +92,9 @@ class TestEuropePmcSearch:
 
 
 class TestEuropePmcArticle:
-    @patch("ai_arch_toolkit.toolkit.tools._europe_pmc.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_returns_article_by_pmid_and_source(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(_SEARCH)
+        mock_urlopen.return_value = respond(_SEARCH)
 
         result = europe_pmc_article("26017442", source="MED")
 
@@ -117,15 +106,15 @@ class TestEuropePmcArticle:
         assert params["query"] == ["SRC:MED AND EXT_ID:26017442"]
         assert params["resultType"] == ["core"]
 
-    @patch("ai_arch_toolkit.toolkit.tools._europe_pmc.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_article_query_by_doi(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(_SEARCH)
+        mock_urlopen.return_value = respond(_SEARCH)
 
         europe_pmc_article("10.1038/nature14539")
 
         assert _called_params(mock_urlopen)["query"] == ['DOI:"10.1038/nature14539"']
 
-    @patch("ai_arch_toolkit.toolkit.tools._europe_pmc.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_invalid_article_options_do_not_call_api(self, mock_urlopen):
         assert "identifier cannot be empty" in europe_pmc_article("")
         assert "invalid source" in europe_pmc_article("26017442", source="bad!")
@@ -133,9 +122,9 @@ class TestEuropePmcArticle:
 
 
 class TestEuropePmcCitations:
-    @patch("ai_arch_toolkit.toolkit.tools._europe_pmc.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_returns_citations(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(
+        mock_urlopen.return_value = respond(
             {"hitCount": 1, "citationList": {"citation": [_CITATION]}}
         )
 
@@ -151,17 +140,15 @@ class TestEuropePmcCitations:
         )
         assert _called_params(mock_urlopen)["pageSize"] == ["2"]
 
-    @patch("ai_arch_toolkit.toolkit.tools._europe_pmc.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_citations_no_results(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(
-            {"hitCount": 0, "citationList": {"citation": []}}
-        )
+        mock_urlopen.return_value = respond({"hitCount": 0, "citationList": {"citation": []}})
 
         result = europe_pmc_citations("MED", "missing")
 
         assert "No Europe PMC citations found" in result
 
-    @patch("ai_arch_toolkit.toolkit.tools._europe_pmc.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_api_and_parse_failures(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.HTTPError(
             url="https://www.ebi.ac.uk/europepmc/webservices/rest/search",
@@ -173,5 +160,5 @@ class TestEuropePmcCitations:
         assert "rate limited" in europe_pmc_search("test")
 
         mock_urlopen.side_effect = None
-        mock_urlopen.return_value = _mock_urlopen("not json")
+        mock_urlopen.return_value = respond("not json")
         assert "could not parse" in europe_pmc_search("test")

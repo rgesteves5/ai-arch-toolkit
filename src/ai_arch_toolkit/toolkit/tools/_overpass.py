@@ -2,24 +2,24 @@
 
 from __future__ import annotations
 
-import json
 import re
-import urllib.error
-import urllib.parse
-import urllib.request
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
-_API_URL = "https://overpass-api.de/api/interpreter"
-_TIMEOUT = 35
-_USER_AGENT = "ai-arch-toolkit/1.0 (https://github.com/ai-arch-toolkit)"
+_API = Api(
+    base="https://overpass-api.de/api/interpreter",
+    name="Overpass",
+    timeout_s=35,
+    status_messages={504: "Overpass query timed out upstream (HTTP 504)."},
+)
 _MAX_LIMIT = 50
 _TAG_RE = re.compile(r"^[A-Za-z0-9_:-]{1,80}$")
 _VALUE_RE = re.compile(r"^[\w\s,.'()/%:+-]{1,120}$", re.UNICODE)
 
 
-@tool
+@tool(capability="network")
 def overpass_query(query: str, max_results: int = 25) -> str:
     """Run a bounded Overpass QL query and summarize returned OSM elements.
 
@@ -31,27 +31,16 @@ def overpass_query(query: str, max_results: int = 25) -> str:
         return "Overpass query failed: query must be 1-4000 characters."
     if "[out:" not in query or "out" not in query:
         return "Overpass query failed: include [out:json] and an out statement."
-    try:
-        data = _fetch_overpass(query)
-        elements = _elements(data)
-    except urllib.error.HTTPError as e:
-        return _http_error("Overpass query failed", e)
-    except urllib.error.URLError as e:
-        return f"Overpass query failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "Overpass query failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"Overpass query failed: could not parse API response: {e}"
-
-    if not elements:
-        return "No Overpass elements found."
-    page = elements[: _bounded(max_results)]
-    return _format_elements(
-        page, header=f"Overpass elements (returned {len(page)} of {len(elements)}):"
+    return _run(
+        query,
+        max_results,
+        failure="Overpass query failed",
+        label="Overpass elements",
+        nothing="No Overpass elements found.",
     )
 
 
-@tool
+@tool(capability="network")
 def overpass_pois(
     tag_key: str,
     tag_value: str = "",
@@ -94,39 +83,31 @@ def overpass_pois(
         ");"
         "out center tags;"
     )
+    return _run(
+        query,
+        max_results,
+        failure="Overpass POI search failed",
+        label="Overpass POIs",
+        nothing="No Overpass POIs found.",
+    )
+
+
+def _run(query: str, max_results: int, *, failure: str, label: str, nothing: str) -> str:
     try:
-        data = _fetch_overpass(query)
-        elements = _elements(data)
-    except urllib.error.HTTPError as e:
-        return _http_error("Overpass POI search failed", e)
-    except urllib.error.URLError as e:
-        return f"Overpass POI search failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "Overpass POI search failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"Overpass POI search failed: could not parse API response: {e}"
+        return _API.post_form(
+            form={"data": query},
+            parse=lambda data: _summary(data, max_results, label=label, nothing=nothing),
+        )
+    except HttpError as e:
+        return f"{failure}: {e}"
 
+
+def _summary(data: dict[str, Any], max_results: int, *, label: str, nothing: str) -> str:
+    elements = _elements(data)
     if not elements:
-        return "No Overpass POIs found."
+        return nothing
     page = elements[: _bounded(max_results)]
-    return _format_elements(
-        page, header=f"Overpass POIs (returned {len(page)} of {len(elements)}):"
-    )
-
-
-def _fetch_overpass(query: str) -> dict[str, Any]:
-    body = urllib.parse.urlencode({"data": query}).encode()
-    req = urllib.request.Request(
-        _API_URL,
-        data=body,
-        headers={
-            "Content-Type": "application/x-www-form-urlencoded",
-            "User-Agent": _USER_AGENT,
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="replace"))
+    return _format_elements(page, header=f"{label} (returned {len(page)} of {len(elements)}):")
 
 
 def _area_clause(
@@ -187,14 +168,6 @@ def _coords(item: dict[str, Any]) -> tuple[str, str]:
         lat = _string(item["center"].get("lat"))
         lon = _string(item["center"].get("lon"))
     return lat, lon
-
-
-def _http_error(prefix: str, error: urllib.error.HTTPError) -> str:
-    if error.code == 429:
-        return f"{prefix}: rate limited by Overpass (HTTP 429). Try again later."
-    if error.code == 504:
-        return f"{prefix}: Overpass query timed out upstream (HTTP 504)."
-    return f"{prefix}: HTTP error {error.code}: {error.reason}"
 
 
 def _bounded(value: int) -> int:

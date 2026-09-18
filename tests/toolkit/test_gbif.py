@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 from ai_arch_toolkit.toolkit.tools._gbif import (
@@ -12,14 +11,7 @@ from ai_arch_toolkit.toolkit.tools._gbif import (
     gbif_species_match,
     gbif_species_search,
 )
-
-
-def _mock_urlopen(data: dict | str):
-    resp = MagicMock()
-    resp.read.return_value = (data if isinstance(data, str) else json.dumps(data)).encode()
-    resp.__enter__ = lambda s: s
-    resp.__exit__ = MagicMock(return_value=False)
-    return resp
+from tests.toolkit.http_fakes import HTTP_OPEN, respond
 
 
 def _params(mock_urlopen):
@@ -27,9 +19,9 @@ def _params(mock_urlopen):
 
 
 class TestGbif:
-    @patch("ai_arch_toolkit.toolkit.tools._gbif.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_species_match(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(
+        mock_urlopen.return_value = respond(
             {
                 "usageKey": 5219404,
                 "scientificName": "Puma concolor",
@@ -47,21 +39,21 @@ class TestGbif:
         assert "classification: Animalia > Puma" in result
         assert _params(mock_urlopen)["name"] == ["Puma concolor"]
 
-    @patch("ai_arch_toolkit.toolkit.tools._gbif.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_species_search_and_lookup(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(
+        mock_urlopen.return_value = respond(
             {"count": 1, "results": [{"key": 1, "scientificName": "Puma", "rank": "GENUS"}]}
         )
         assert "Puma | key: 1" in gbif_species_search("Puma", rank="GENUS")
 
-        mock_urlopen.return_value = _mock_urlopen(
+        mock_urlopen.return_value = respond(
             {"key": 1, "scientificName": "Puma", "rank": "GENUS", "status": "ACCEPTED"}
         )
         assert "GBIF taxon 1:" in gbif_species("1")
 
-    @patch("ai_arch_toolkit.toolkit.tools._gbif.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_occurrence_search_and_validation(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(
+        mock_urlopen.return_value = respond(
             {
                 "count": 1,
                 "results": [

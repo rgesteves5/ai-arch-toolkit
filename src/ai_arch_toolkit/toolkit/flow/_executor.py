@@ -324,187 +324,137 @@ class _FlowRun:
     # ---------------------------------------------------------------------------- modes
 
     async def _run_sequential(self) -> AsyncGenerator[FlowEvent]:
+        """Each step is a wave of one; a cyclic flow repeats its steps while any of them runs."""
         flow = self.flow
         cyclic = any(fs.when is not None for fs in flow.steps)
-        iteration = 0
-        while True:
-            if cyclic and flow.max_iterations is not None and iteration >= flow.max_iterations:
-                return
-            any_executed = False
+        limit = flow.max_iterations if cyclic else None
+        passes = 0
+        while limit is None or passes < limit:
+            ran = False
             for fs in flow.steps:
-                if (stop := self._over_budget()) is not None:
-                    yield stop
-                    return
-                self._check_deadline()
-                try:
-                    scoped = self._scoped(fs, self.state.snapshot())
-                    if fs.when is not None and not self._condition(fs, scoped):
-                        yield self._record_skip(fs, "condition not met")
-                        continue
-                except _OrchestrationError as error:
-                    for event in self._record_orchestration_error(fs, error):
-                        yield event
-                    return
-
-                task = self._spawn(fs, scoped)
-                async for event in self._wait([task]):
+                wave = _Wave([fs])
+                async for event in self._run_wave(wave):
                     yield event
-                result, trace = task.result()
-                any_executed = True
-                self._record(fs, result, trace)
-                self.state.merge(result)
-                yield _step_end(flow.name, fs.step.name, result)
-                if (stop := self._over_budget()) is not None:
-                    yield stop
+                if wave.stopped or any(self._halts(fs, result) for _, fs, result in wave.finished):
                     return
-                if result.is_error and self._should_halt(fs):
-                    return
-
-            if not cyclic or not any_executed:
+                ran = ran or bool(wave.finished)
+            if not cyclic or not ran:
                 return
-            iteration += 1
+            passes += 1
 
     async def _run_dag(self) -> AsyncGenerator[FlowEvent]:
-        flow = self.flow
-        step_map = {fs.step.name: fs for fs in flow.steps}
-        in_degree = {fs.step.name: len(fs.after) for fs in flow.steps}
-        dependents: dict[str, list[str]] = {fs.step.name: [] for fs in flow.steps}
-        for fs in flow.steps:
-            for dep in fs.after:
-                dependents[dep].append(fs.step.name)
-        completed: set[str] = set()
-        failed: set[str] = set()
-        skipped: set[str] = set()
-
-        def release(name: str) -> None:
-            for dependent in dependents[name]:
-                in_degree[dependent] -= 1
-
-        while len(completed) + len(failed) + len(skipped) < len(flow.steps):
-            ready = [
-                name
-                for name, degree in in_degree.items()
-                if degree == 0 and name not in completed and name not in failed
-                if name not in skipped
-            ]
-            if not ready:
-                break
-
-            wave: list[FlowStep] = []
-            for name in ready:
-                fs = step_map[name]
-                reason = _check_skip_propagation(fs, failed, skipped)
-                if reason is None and fs.when is not None:
-                    try:
-                        if not self._condition(fs, self._scoped(fs, self.state.snapshot())):
-                            reason = "condition not met"
-                    except _OrchestrationError as error:
-                        for event in self._record_orchestration_error(fs, error):
-                            yield event
-                        return
-                if reason is not None:
-                    skipped.add(name)
-                    yield self._record_skip(fs, reason)
-                    release(name)
+        """Each set of steps whose dependencies have ended runs as one wave."""
+        graph = _Graph(self.flow)
+        while ready := graph.ready():
+            wave = _Wave([])
+            for fs in ready:
+                reason = _check_skip_propagation(fs, graph.failed, graph.skipped)
+                if reason is None:
+                    wave.steps.append(fs)
                     continue
-                wave.append(fs)
-            if not wave:
+                graph.skip(fs)
+                yield self._record_skip(fs, reason)
+            if not wave.steps:
                 continue
-
-            if (stop := self._over_budget()) is not None:
-                yield stop
+            async for event in self._run_wave(wave):
+                yield event
+            if wave.stopped:
                 return
-            self._check_deadline()
+            graph.settle(wave)
 
-            if len(wave) == 1:
-                fs = wave[0]
-                try:
-                    scoped = self._scoped(fs, self.state.snapshot())
-                except _OrchestrationError as error:
-                    for event in self._record_orchestration_error(fs, error):
-                        yield event
-                    return
-                task = self._spawn(fs, scoped)
-                async for event in self._wait([task]):
-                    yield event
-                result, trace = task.result()
-                self._record(fs, result, trace)
-                self.state.merge(result)
-                (failed if result.is_error else completed).add(fs.step.name)
-                yield _step_end(flow.name, fs.step.name, result)
-                if (stop := self._over_budget()) is not None:
-                    yield stop
-                    return
-                release(fs.step.name)
-                continue
+    async def _run_wave(self, wave: _Wave) -> AsyncGenerator[FlowEvent]:
+        """Launch a wave's steps together; ``wave.stopped`` when the run must end after it.
 
-            # A parallel wave: each step reads its own fork, so siblings never see each other's
-            # writes; every result is merged once the whole wave has finished.
-            launches: list[tuple[FlowStep, StateSnapshot]] = []
-            for fs in wave:
-                try:
-                    launches.append((fs, self._scoped(fs, self.state.fork().snapshot())))
-                except _OrchestrationError as error:
-                    for event in self._record_orchestration_error(fs, error):
-                        yield event
-                    return
-            semaphore = (
-                asyncio.Semaphore(flow.max_parallelism)
-                if flow.max_parallelism is not None
-                else None
-            )
-            tasks = [
-                self._spawn(fs, scoped, semaphore=semaphore, announce_end=True)
-                for fs, scoped in launches
-            ]
+        Every check that can stop a run between steps lives here: the wall-time budget before and
+        after the wave, the run's deadline, and each step's ``Scope`` and ``when``.
+        """
+        if (stop := self._over_budget()) is not None:
+            wave.stopped = True
+            yield stop
+            return
+        self._check_deadline()
+        snapshot = self.state.snapshot()
+        launches: list[tuple[FlowStep, StateSnapshot]] = []
+        for fs in wave.steps:
             try:
-                async for event in self._wait(tasks):
+                scoped = self._prepare(fs, snapshot)
+            except _OrchestrationError as error:
+                wave.stopped = True
+                for event in self._record_orchestration_error(fs, error):
                     yield event
-            except _FlowTimeout:
-                # Like a denial, a timeout keeps the siblings that finished before it.
-                on_time: list[Result] = []
-                for (fs, _), task in zip(launches, tasks, strict=True):
-                    if task.done() and not task.cancelled() and task.exception() is None:
-                        result, trace = task.result()
-                        self._record(fs, result, trace)
-                        on_time.append(result)
-                if on_time:
-                    self.state.merge(*on_time)
-                raise
-
-            denial: AdmissionDenied | None = None
-            finished: list[Result] = []
-            for (fs, _), task in zip(launches, tasks, strict=True):
-                error = task.exception()
-                if error is not None:
-                    if isinstance(error, AdmissionDenied):
-                        denial = denial or error  # terminal, but only after keeping the siblings
-                        continue
-                    raise error
-                result, trace = task.result()
-                self._record(fs, result, trace)
-                finished.append(result)
-                (failed if result.is_error else completed).add(fs.step.name)
-                release(fs.step.name)
-            if finished:
-                self.state.merge(*finished)
-            if denial is not None:
-                raise denial
-            if (stop := self._over_budget()) is not None:
-                yield stop
                 return
+            if scoped is None:
+                wave.skipped.append(fs)
+                yield self._record_skip(fs, "condition not met")
+            else:
+                launches.append((fs, scoped))
+        if launches:
+            async for event in self._launch(wave, launches):
+                yield event
+            if (stop := self._over_budget()) is not None:
+                wave.stopped = True
+                yield stop
+
+    async def _launch(
+        self, wave: _Wave, launches: list[tuple[FlowStep, StateSnapshot]]
+    ) -> AsyncGenerator[FlowEvent]:
+        """Run the steps, each announcing its end as it finishes; the last one merges the wave.
+
+        A budget denial is terminal, but only once the siblings have finished and been kept; a
+        timeout keeps the siblings that finished before it.
+        """
+        limit = self.flow.max_parallelism
+        semaphore = asyncio.Semaphore(limit) if limit is not None else None
+        tasks = {
+            self._spawn(fs, scoped, semaphore): (index, fs)
+            for index, (fs, scoped) in enumerate(launches)
+        }
+        wave.pending = len(tasks)
+
+        def settle(task: _StepTask) -> list[FlowEvent]:
+            return self._settle(wave, task, *tasks[task])
+
+        try:
+            async for event in self._wait(list(tasks), settle):
+                yield event
+        except _FlowTimeout:
+            self._merge(wave)
+            raise
+        if wave.denial is not None:
+            raise wave.denial
+
+    def _settle(self, wave: _Wave, task: _StepTask, index: int, fs: FlowStep) -> list[FlowEvent]:
+        """A step that finished: its end recorded, and the wave merged if it was the last."""
+        wave.pending -= 1
+        error = task.exception()
+        events: list[FlowEvent] = []
+        if isinstance(error, AdmissionDenied):
+            wave.denial = wave.denial or error
+        elif error is not None:
+            raise error
+        else:
+            result, trace = task.result()
+            wave.finished.append((index, fs, result))
+            events.append(self._ended(fs, result, trace))
+        if wave.pending == 0:
+            self._merge(wave)
+        return events
+
+    def _merge(self, wave: _Wave) -> None:
+        """Fold the wave's finished results into the state once, in launch order."""
+        if wave.merged:
+            return
+        wave.merged = True
+        finished = [result for _, _, result in sorted(wave.finished, key=lambda item: item[0])]
+        if finished:
+            self.state.merge(*finished)
 
     # ---------------------------------------------------------------------------- steps
 
     def _spawn(
-        self,
-        fs: FlowStep,
-        scoped: StateSnapshot,
-        *,
-        semaphore: asyncio.Semaphore | None = None,
-        announce_end: bool = False,
+        self, fs: FlowStep, scoped: StateSnapshot, semaphore: asyncio.Semaphore | None
     ) -> _StepTask:
-        task = asyncio.create_task(self._step(fs, scoped, semaphore, announce_end))
+        task = asyncio.create_task(self._step(fs, scoped, semaphore))
         self._running[task] = fs.step.name
         task.add_done_callback(self._forget)
         return task
@@ -513,20 +463,14 @@ class _FlowRun:
         self._running.pop(task, None)
 
     async def _step(
-        self,
-        fs: FlowStep,
-        scoped: StateSnapshot,
-        semaphore: asyncio.Semaphore | None,
-        announce_end: bool,
+        self, fs: FlowStep, scoped: StateSnapshot, semaphore: asyncio.Semaphore | None
     ) -> tuple[Result, StepTrace]:
         if semaphore is None:
-            return await self._execute(fs, scoped, announce_end)
+            return await self._execute(fs, scoped)
         async with semaphore:
-            return await self._execute(fs, scoped, announce_end)
+            return await self._execute(fs, scoped)
 
-    async def _execute(
-        self, fs: FlowStep, scoped: StateSnapshot, announce_end: bool
-    ) -> tuple[Result, StepTrace]:
+    async def _execute(self, fs: FlowStep, scoped: StateSnapshot) -> tuple[Result, StepTrace]:
         flow_name = self.flow.name
         name = fs.step.name
         self._emit(FlowEvent(type="step_start", flow_name=flow_name, step_name=name))
@@ -549,8 +493,6 @@ class _FlowRun:
             _child_traces.reset(token)
         if children:
             trace = replace(trace, children=_link_children(name, children))
-        if announce_end:
-            self._emit(_step_end(flow_name, name, result))
         return result, trace
 
     def _emit(self, event: FlowEvent) -> None:
@@ -558,19 +500,31 @@ class _FlowRun:
         if self._signal is not None:
             self._signal.set()
 
-    async def _wait(self, tasks: list[_StepTask]) -> AsyncGenerator[FlowEvent]:
-        """Yield events as they arrive until every task is done, within the run's deadline."""
+    async def _wait(
+        self, tasks: list[_StepTask], settle: Callable[[_StepTask], list[FlowEvent]]
+    ) -> AsyncGenerator[FlowEvent]:
+        """Yield the steps' events as they arrive, and each step's end as it finishes.
+
+        Within the run's deadline: a steady stream of events never postpones it.
+        """
         signal = self._signal
         assert signal is not None
         loop = asyncio.get_running_loop()
-        pending: set[asyncio.Future[Any]] = set(tasks)
+        pending = list(tasks)
         while True:
             while self._events:
                 yield self._events.popleft()
+            finished = [task for task in pending if task.done()]
+            if finished:
+                for task in finished:
+                    pending.remove(task)
+                    for event in settle(task):
+                        yield event
+                continue  # other steps ran while those were consumed: drain again before waiting
             if not pending:
                 return
             if self.deadline is not None and loop.time() >= self.deadline:
-                raise _FlowTimeout  # a steady stream of events must not postpone the deadline
+                raise _FlowTimeout
             signal.clear()  # no await since the drain above, so no event can slip past
             timeout = None if self.deadline is None else max(0.0, self.deadline - loop.time())
             waiter = asyncio.ensure_future(signal.wait())
@@ -580,11 +534,17 @@ class _FlowRun:
                 )
             finally:
                 waiter.cancel()
-            pending.difference_update(done)
             if not done:
                 raise _FlowTimeout
 
     # ---------------------------------------------------------------------------- bookkeeping
+
+    def _prepare(self, fs: FlowStep, snapshot: StateSnapshot) -> StateSnapshot | None:
+        """The step's scoped snapshot, or ``None`` when its ``when`` says not to run it."""
+        scoped = self._scoped(fs, snapshot)
+        if fs.when is not None and not self._condition(fs, scoped):
+            return None
+        return scoped
 
     def _scoped(self, fs: FlowStep, snapshot: StateSnapshot) -> StateSnapshot:
         scope = fs.scope or fs.step.scope or self.flow.scope
@@ -600,9 +560,17 @@ class _FlowRun:
         except Exception as exc:
             raise _OrchestrationError("condition", exc) from exc
 
-    def _record(self, fs: FlowStep, result: Result, trace: StepTrace) -> None:
+    def _ended(self, fs: FlowStep, result: Result, trace: StepTrace) -> FlowEvent:
+        """Record how a step ended and announce it: the one place a ``step_end`` is made."""
         self.traces.append(trace)
         self.results[fs.step.name] = result
+        return FlowEvent(
+            type="step_end",
+            flow_name=self.flow.name,
+            step_name=fs.step.name,
+            result=result,
+            error=result.error,
+        )
 
     def _record_skip(self, fs: FlowStep, reason: str) -> FlowEvent:
         self.traces.append(
@@ -619,22 +587,17 @@ class _FlowRun:
         name = fs.step.name
         message = f"{error} (step {name!r})"
         result = Result(error=message)
-        self.results[name] = result
         output_result, output_keys = capture_result(result.to_dict(), self.flow.trace_capture)
-        self.traces.append(
-            StepTrace(
-                name=name,
-                output_result=output_result,
-                output_keys=output_keys,
-                error=message,
-                policy_decisions=("halt",),
-                started_at=time.monotonic(),
-            )
+        trace = StepTrace(
+            name=name,
+            output_result=output_result,
+            output_keys=output_keys,
+            error=message,
+            policy_decisions=("halt",),
+            started_at=time.monotonic(),
         )
-        return (
-            FlowEvent(type="step_start", flow_name=self.flow.name, step_name=name),
-            _step_end(self.flow.name, name, result),
-        )
+        start = FlowEvent(type="step_start", flow_name=self.flow.name, step_name=name)
+        return start, self._ended(fs, result, trace)
 
     def _record_timeout(self) -> str:
         in_flight = sorted(name for task, name in self._running.items() if not task.done())
@@ -655,10 +618,10 @@ class _FlowRun:
         )
         return message
 
-    def _should_halt(self, fs: FlowStep) -> bool:
-        """Whether an error result stops the flow (the step's policy, else the flow's)."""
+    def _halts(self, fs: FlowStep, result: Result) -> bool:
+        """Whether a sequential flow stops here: an error, under a policy that halts on it."""
         policy = fs.step.policy or self.flow.policy
-        return policy is None or policy.on_exhausted == "halt"
+        return result.is_error and (policy is None or policy.on_exhausted == "halt")
 
     def _check_deadline(self) -> None:
         if self.deadline is not None and asyncio.get_running_loop().time() >= self.deadline:
@@ -685,16 +648,6 @@ class _FlowRun:
 # --------------------------------------------------------------------------------------------
 # Helpers
 # --------------------------------------------------------------------------------------------
-
-
-def _step_end(flow_name: str, step_name: str, result: Result) -> FlowEvent:
-    return FlowEvent(
-        type="step_end",
-        flow_name=flow_name,
-        step_name=step_name,
-        result=result,
-        error=result.error,
-    )
 
 
 def _decision_event(flow_name: str, step_name: str, decision: PolicyDecision) -> FlowEvent:
@@ -725,6 +678,63 @@ def _link_children(step_name: str, children: list[StepTrace]) -> tuple[StepTrace
     if len(children) == 1 and children[0].name == step_name:
         return children[0].children
     return tuple(children)
+
+
+class _Wave:
+    """Steps launched together: sequential mode's one step, or a DAG's ready set."""
+
+    __slots__ = ("denial", "finished", "merged", "pending", "skipped", "steps", "stopped")
+
+    def __init__(self, steps: list[FlowStep]) -> None:
+        self.steps = steps
+        self.finished: list[tuple[int, FlowStep, Result]] = []  # launch index, step, result
+        self.skipped: list[FlowStep] = []
+        self.denial: AdmissionDenied | None = None
+        self.pending = 0
+        self.merged = False
+        self.stopped = False
+
+
+class _Graph:
+    """A DAG flow's schedule: what each step waits for, and how each one ended."""
+
+    __slots__ = ("completed", "dependents", "failed", "skipped", "steps", "waiting")
+
+    def __init__(self, flow: Flow) -> None:
+        self.steps = {fs.step.name: fs for fs in flow.steps}
+        self.waiting = {fs.step.name: len(fs.after) for fs in flow.steps}
+        self.dependents: dict[str, list[str]] = {name: [] for name in self.steps}
+        for fs in flow.steps:
+            for dep in fs.after:
+                self.dependents[dep].append(fs.step.name)
+        self.completed: set[str] = set()
+        self.failed: set[str] = set()
+        self.skipped: set[str] = set()
+
+    def ready(self) -> list[FlowStep]:
+        """The steps not yet run whose dependencies have all ended."""
+        ended = self.completed | self.failed | self.skipped
+        return [
+            self.steps[name]
+            for name, waiting in self.waiting.items()
+            if waiting == 0 and name not in ended
+        ]
+
+    def skip(self, fs: FlowStep) -> None:
+        self.skipped.add(fs.step.name)
+        self._release(fs.step.name)
+
+    def settle(self, wave: _Wave) -> None:
+        """Record how the wave's steps ended and release their dependents."""
+        for _, fs, result in wave.finished:
+            (self.failed if result.is_error else self.completed).add(fs.step.name)
+            self._release(fs.step.name)
+        for fs in wave.skipped:
+            self.skip(fs)
+
+    def _release(self, name: str) -> None:
+        for dependent in self.dependents[name]:
+            self.waiting[dependent] -= 1
 
 
 def _check_skip_propagation(fs: FlowStep, failed: set[str], skipped: set[str]) -> str | None:

@@ -2,21 +2,21 @@
 
 from __future__ import annotations
 
-import json
 import re
-import urllib.error
 import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
-_API_URL = "https://www.wikidata.org/w/api.php"
-_ENTITY_DATA_URL = "https://www.wikidata.org/wiki/Special:EntityData"
-_SPARQL_URL = "https://query.wikidata.org/sparql"
-_TIMEOUT = 15
-_USER_AGENT = "ai-arch-toolkit/1.0 (https://github.com/ai-arch-toolkit; research tool)"
+_API = Api(base="https://www.wikidata.org/w/api.php", name="Wikidata", timeout_s=15)
+_ENTITY_DATA = Api(
+    base="https://www.wikidata.org/wiki/Special:EntityData", name="Wikidata", timeout_s=15
+)
+_SPARQL = Api(
+    base="https://query.wikidata.org/sparql", name="Wikidata Query Service", timeout_s=15
+)
 _MAX_RESULTS_LIMIT = 20
 _QID_RE = re.compile(r"^Q\d+$", re.IGNORECASE)
 _LANG_RE = re.compile(r"^[a-z][a-z0-9-]{0,15}$", re.IGNORECASE)
@@ -50,7 +50,7 @@ class _WikidataEntity:
     wikidata_url: str
 
 
-@tool
+@tool(capability="network")
 def wikidata_search(query: str, max_results: int = 5, language: str = "en") -> str:
     """Search Wikidata entities using the public Wikidata API.
 
@@ -67,30 +67,19 @@ def wikidata_search(query: str, max_results: int = 5, language: str = "en") -> s
         return f"Wikidata search failed: invalid language: {language!r}"
 
     max_results = max(1, min(max_results, _MAX_RESULTS_LIMIT))
+    params = {
+        "action": "wbsearchentities",
+        "search": query,
+        "language": language,
+        "uselang": language,
+        "type": "item",
+        "limit": str(max_results),
+        "format": "json",
+    }
     try:
-        data = _fetch_json(
-            _API_URL,
-            {
-                "action": "wbsearchentities",
-                "search": query,
-                "language": language,
-                "uselang": language,
-                "type": "item",
-                "limit": str(max_results),
-                "format": "json",
-            },
-        )
-        items = data.get("search", [])
-        results = [_parse_search_result(item) for item in items if isinstance(item, dict)]
-        results = [item for item in results if item is not None]
-    except urllib.error.HTTPError as e:
-        return f"Wikidata search failed: HTTP error {e.code}: {e.reason}"
-    except urllib.error.URLError as e:
-        return f"Wikidata search failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "Wikidata search failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"Wikidata search failed: could not parse API response: {e}"
+        results = _API.get_json(params=params, parse=_search_results)
+    except HttpError as e:
+        return f"Wikidata search failed: {e}"
 
     if not results:
         return f"No Wikidata results for: {query!r}"
@@ -98,7 +87,7 @@ def wikidata_search(query: str, max_results: int = 5, language: str = "en") -> s
     return f"Wikidata results for {query!r}:\n" + _format_search_results(results)
 
 
-@tool
+@tool(capability="network")
 def wikidata_entity(qid: str, language: str = "en") -> str:
     """Fetch a Wikidata entity by QID.
 
@@ -114,26 +103,20 @@ def wikidata_entity(qid: str, language: str = "en") -> str:
         return f"Wikidata entity lookup failed: invalid language: {language!r}"
 
     try:
-        data = _fetch_json(f"{_ENTITY_DATA_URL}/{normalized}.json", {})
-        entity_data = data.get("entities", {}).get(normalized)
-        if not isinstance(entity_data, dict) or "missing" in entity_data:
+        entity = _ENTITY_DATA.get_json(
+            f"{normalized}.json", parse=lambda data: _entity(data, normalized, language)
+        )
+    except HttpError as e:
+        if e.status == 404:
             return f"Wikidata entity not found: {normalized}"
-        entity = _parse_entity(normalized, entity_data, language)
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            return f"Wikidata entity not found: {normalized}"
-        return f"Wikidata entity lookup failed: HTTP error {e.code}: {e.reason}"
-    except urllib.error.URLError as e:
-        return f"Wikidata entity lookup failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "Wikidata entity lookup failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"Wikidata entity lookup failed: could not parse API response: {e}"
+        return f"Wikidata entity lookup failed: {e}"
+    if entity is None:
+        return f"Wikidata entity not found: {normalized}"
 
     return f"Wikidata entity {normalized}:\n" + _format_entity(entity)
 
 
-@tool
+@tool(capability="network")
 def wikidata_sparql(query: str, max_results: int = 20) -> str:
     """Run a read-only Wikidata SPARQL SELECT or ASK query.
 
@@ -157,16 +140,28 @@ def wikidata_sparql(query: str, max_results: int = 20) -> str:
         sparql = f"{query}\nLIMIT {max_results}"
 
     try:
-        data = _fetch_json(_SPARQL_URL, {"query": sparql, "format": "json"})
-    except urllib.error.HTTPError as e:
-        return f"Wikidata SPARQL failed: HTTP error {e.code}: {e.reason}"
-    except urllib.error.URLError as e:
-        return f"Wikidata SPARQL failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "Wikidata SPARQL failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"Wikidata SPARQL failed: could not parse API response: {e}"
+        return _SPARQL.get_json(
+            params={"query": sparql, "format": "json"},
+            parse=lambda data: _sparql_text(data, max_results),
+        )
+    except HttpError as e:
+        return f"Wikidata SPARQL failed: {e}"
 
+
+def _search_results(data: dict[str, Any]) -> list[_WikidataSearchResult]:
+    items = data.get("search", [])
+    results = [_parse_search_result(item) for item in items if isinstance(item, dict)]
+    return [item for item in results if item is not None]
+
+
+def _entity(data: dict[str, Any], qid: str, language: str) -> _WikidataEntity | None:
+    entity_data = data.get("entities", {}).get(qid)
+    if not isinstance(entity_data, dict) or "missing" in entity_data:
+        return None
+    return _parse_entity(qid, entity_data, language)
+
+
+def _sparql_text(data: dict[str, Any], max_results: int) -> str:
     if "boolean" in data:
         return f"Wikidata SPARQL result: {data['boolean']}"
 
@@ -179,14 +174,6 @@ def wikidata_sparql(query: str, max_results: int = 20) -> str:
         return "Wikidata SPARQL returned no rows."
 
     return "Wikidata SPARQL rows:\n" + _format_sparql_rows(variables, results[:max_results])
-
-
-def _fetch_json(url: str, params: dict[str, str]) -> dict[str, Any]:
-    if params:
-        url = f"{url}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="replace"))
 
 
 def _parse_search_result(data: dict[str, Any]) -> _WikidataSearchResult | None:

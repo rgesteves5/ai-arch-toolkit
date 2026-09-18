@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import urllib.error
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 from ai_arch_toolkit.toolkit.tools._nvd import nvd_cve, nvd_cve_search
+from tests.toolkit.http_fakes import HTTP_OPEN, respond
 
 _CVE = {
     "cve": {
@@ -28,23 +28,14 @@ _CVE = {
 }
 
 
-def _mock_urlopen(data):
-    resp = MagicMock()
-    resp.read.return_value = json.dumps(data).encode()
-    resp.__enter__ = lambda s: s
-    resp.__exit__ = MagicMock(return_value=False)
-    return resp
-
-
 def _called_params(mock_urlopen) -> dict[str, list[str]]:
     return parse_qs(urlparse(mock_urlopen.call_args.args[0].full_url).query)
 
 
 class TestNvdCveSearch:
-    @patch("ai_arch_toolkit.toolkit.tools._nvd._throttle")
-    @patch("ai_arch_toolkit.toolkit.tools._nvd.urllib.request.urlopen")
-    def test_returns_results(self, mock_urlopen, _mock_throttle):
-        mock_urlopen.return_value = _mock_urlopen({"vulnerabilities": [_CVE]})
+    @patch(HTTP_OPEN)
+    def test_returns_results(self, mock_urlopen):
+        mock_urlopen.return_value = respond({"vulnerabilities": [_CVE]})
 
         result = nvd_cve_search(
             query="log4j",
@@ -70,7 +61,7 @@ class TestNvdCveSearch:
         assert params["pubStartDate"] == ["2021-12-01T00:00:00.000"]
         assert params["pubEndDate"] == ["2021-12-31T23:59:59.999"]
 
-    @patch("ai_arch_toolkit.toolkit.tools._nvd.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_invalid_options_do_not_call_api(self, mock_urlopen):
         assert "provide query" in nvd_cve_search()
         assert "invalid CVE ID" in nvd_cve_search(cve_id="CVE-bad")
@@ -82,9 +73,8 @@ class TestNvdCveSearch:
         )
         mock_urlopen.assert_not_called()
 
-    @patch("ai_arch_toolkit.toolkit.tools._nvd._throttle")
-    @patch("ai_arch_toolkit.toolkit.tools._nvd.urllib.request.urlopen")
-    def test_rate_limited(self, mock_urlopen, _mock_throttle):
+    @patch(HTTP_OPEN)
+    def test_rate_limited(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.HTTPError(
             url="https://services.nvd.nist.gov/rest/json/cves/2.0",
             code=429,
@@ -99,10 +89,9 @@ class TestNvdCveSearch:
 
 
 class TestNvdCve:
-    @patch("ai_arch_toolkit.toolkit.tools._nvd._throttle")
-    @patch("ai_arch_toolkit.toolkit.tools._nvd.urllib.request.urlopen")
-    def test_returns_cve(self, mock_urlopen, _mock_throttle):
-        mock_urlopen.return_value = _mock_urlopen({"vulnerabilities": [_CVE]})
+    @patch(HTTP_OPEN)
+    def test_returns_cve(self, mock_urlopen):
+        mock_urlopen.return_value = respond({"vulnerabilities": [_CVE]})
 
         result = nvd_cve("cve-2021-44228")
 
@@ -110,7 +99,7 @@ class TestNvdCve:
         assert "Apache Log4j vulnerability" in result
         assert _called_params(mock_urlopen)["cveId"] == ["CVE-2021-44228"]
 
-    @patch("ai_arch_toolkit.toolkit.tools._nvd.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_invalid_cve_id(self, mock_urlopen):
         result = nvd_cve("bad")
 

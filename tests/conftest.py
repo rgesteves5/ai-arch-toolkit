@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import socket
 from collections.abc import Callable, Iterator
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -10,6 +12,7 @@ import pytest
 
 from ai_arch_toolkit.core._middleware import Request
 from ai_arch_toolkit.core._providers._base import Prepared
+from ai_arch_toolkit.toolkit.tools import _http
 from tests.wire_contract import ADAPTERS, WireLog
 
 
@@ -89,3 +92,39 @@ def wire_log(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) ->
     marker = request.node.get_closest_marker("wire_contract")
     if found := log.unexpected(marker.kwargs["tolerate"] if marker else ()):
         pytest.fail("requests outside the SDK's contract:\n  " + "\n  ".join(found), pytrace=False)
+
+
+# --- Toolkit tool tests run offline ---------------------------------------------------------
+#
+# They simulate the network at the tools' one seam, ``_http._open`` (see ``tests/toolkit/
+# http_fakes.py``); a test that forgets to meets a blocked socket, and the tool returns its error
+# string instead of making a real call. These fixtures live here and not in a
+# ``tests/toolkit/conftest.py``: pytest 9.1 drops a directory conftest's fixtures when a command
+# line interleaves that directory's files with other directories' (measured in R03).
+
+_TOOLKIT_TESTS = Path(__file__).resolve().parent / "toolkit"
+
+
+def _refuse(*_args: object, **_kwargs: object) -> None:
+    msg = "network access is blocked in toolkit tests"
+    raise OSError(msg)
+
+
+@pytest.fixture(autouse=True)
+def _toolkit_sockets_blocked(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if request.path.is_relative_to(_TOOLKIT_TESTS):
+        monkeypatch.setattr(socket.socket, "connect", _refuse)
+        monkeypatch.setattr(socket.socket, "connect_ex", _refuse)
+        monkeypatch.setattr(socket, "create_connection", _refuse)
+        monkeypatch.setattr(socket, "getaddrinfo", _refuse)
+
+
+@pytest.fixture(autouse=True)
+def throttle_waits(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """The tools' throttle waits, in seconds, recorded instead of slept (in toolkit tests)."""
+    waits: list[float] = []
+    if request.path.is_relative_to(_TOOLKIT_TESTS):
+        monkeypatch.setattr(_http, "_THROTTLE", _http._Throttle(sleep=waits.append))
+    return waits

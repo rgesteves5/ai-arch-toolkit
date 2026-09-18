@@ -2,18 +2,13 @@
 
 from __future__ import annotations
 
-import json
-import urllib.error
-import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
-_API_URL = "https://api.datacite.org/dois"
-_TIMEOUT = 15
-_USER_AGENT = "ai-arch-toolkit/1.0 (https://github.com/ai-arch-toolkit)"
+_API = Api(base="https://api.datacite.org/dois", name="DataCite", timeout_s=15)
 _MAX_RESULTS_LIMIT = 20
 _DESCRIPTION_MAX_CHARS = 900
 
@@ -35,7 +30,7 @@ class _DataCiteDoi:
     related_identifiers: tuple[str, ...]
 
 
-@tool
+@tool(capability="network")
 def datacite_search(
     query: str,
     resource_type: str = "",
@@ -65,18 +60,9 @@ def datacite_search(
         params["resource-type-id"] = resource_type.strip().lower()
 
     try:
-        data = _fetch_json(_API_URL, params)
-        items = data.get("data", [])
-        dois = [_parse_doi(item) for item in items if isinstance(item, dict)]
-        dois = [doi for doi in dois if doi is not None]
-    except urllib.error.HTTPError as e:
-        return _http_error("DataCite search failed", e)
-    except urllib.error.URLError as e:
-        return f"DataCite search failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "DataCite search failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"DataCite search failed: could not parse API response: {e}"
+        dois = _API.get_json(params=params, parse=_records)
+    except HttpError as e:
+        return f"DataCite search failed: {e}"
 
     if not dois:
         return f"No DataCite DOI records found for: {query!r}"
@@ -84,7 +70,7 @@ def datacite_search(
     return f"DataCite DOI results for {query!r}:\n" + _format_dois(dois, include_description=False)
 
 
-@tool
+@tool(capability="network")
 def datacite_doi(doi: str) -> str:
     """Fetch DataCite metadata for a specific DOI.
 
@@ -96,19 +82,11 @@ def datacite_doi(doi: str) -> str:
         return f"DataCite DOI lookup failed: invalid DOI: {doi!r}"
 
     try:
-        data = _fetch_json(f"{_API_URL}/{urllib.parse.quote(normalized, safe='')}", {})
-        item = data.get("data")
-        record = _parse_doi(item) if isinstance(item, dict) else None
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
+        record = _API.get_json(normalized, parse=_record)
+    except HttpError as e:
+        if e.status == 404:
             return f"DataCite DOI not found: {normalized}"
-        return _http_error("DataCite DOI lookup failed", e)
-    except urllib.error.URLError as e:
-        return f"DataCite DOI lookup failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "DataCite DOI lookup failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"DataCite DOI lookup failed: could not parse API response: {e}"
+        return f"DataCite DOI lookup failed: {e}"
 
     if record is None:
         return f"DataCite DOI not found: {normalized}"
@@ -120,12 +98,15 @@ def datacite_doi(doi: str) -> str:
     )
 
 
-def _fetch_json(url: str, params: dict[str, str]) -> dict[str, Any]:
-    if params:
-        url = f"{url}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="replace"))
+def _records(data: dict[str, Any]) -> list[_DataCiteDoi]:
+    items = data.get("data", [])
+    dois = [_parse_doi(item) for item in items if isinstance(item, dict)]
+    return [doi for doi in dois if doi is not None]
+
+
+def _record(data: dict[str, Any]) -> _DataCiteDoi | None:
+    item = data.get("data")
+    return _parse_doi(item) if isinstance(item, dict) else None
 
 
 def _parse_doi(data: dict[str, Any]) -> _DataCiteDoi | None:
@@ -279,12 +260,6 @@ def _related_identifiers(value: Any) -> tuple[str, ...]:
             elif identifier:
                 related.append(identifier)
     return tuple(related)
-
-
-def _http_error(prefix: str, error: urllib.error.HTTPError) -> str:
-    if error.code == 429:
-        return f"{prefix}: rate limited by DataCite (HTTP 429). Try again later."
-    return f"{prefix}: HTTP error {error.code}: {error.reason}"
 
 
 def _int_or_none(value: Any) -> int | None:

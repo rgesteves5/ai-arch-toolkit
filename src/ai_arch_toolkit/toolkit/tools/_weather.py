@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
-import json
-import urllib.error
-import urllib.parse
-import urllib.request
+from collections.abc import Callable
+from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
-_TIMEOUT = 10
+_GEOCODING = Api(base="https://geocoding-api.open-meteo.com/v1", name="Open-Meteo")
+_FORECAST = Api(base="https://api.open-meteo.com/v1", name="Open-Meteo", query_safe=",")
+_CURRENT_FIELDS = (
+    "temperature_2m,relative_humidity_2m,apparent_temperature,"
+    "weather_code,wind_speed_10m,wind_direction_10m"
+)
+_DAILY_FIELDS = (
+    "temperature_2m_max,temperature_2m_min,weather_code,precipitation_sum,wind_speed_10m_max"
+)
 
 _WMO_CODES: dict[int, str] = {
     0: "Clear sky",
@@ -41,23 +48,26 @@ _WMO_CODES: dict[int, str] = {
 }
 
 
-def _geocode(city: str) -> tuple[float, float, str] | str:
-    """Geocode a city name → (lat, lon, display_name) or error string."""
-    url = (
-        f"https://geocoding-api.open-meteo.com/v1/search"
-        f"?name={urllib.parse.quote(city)}&count=1&language=en&format=json"
-    )
+def _at_city(city: str, report: Callable[[float, float, str], str]) -> str:
+    """``report`` at the city's first geocoding match, or why there is none."""
+    params = {"name": city, "count": "1", "language": "en", "format": "json"}
     try:
-        req = urllib.request.Request(url)
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-            data = json.loads(resp.read())
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
+        place = _GEOCODING.get_json(
+            "search", params=params, parse=lambda data: _first_match(data, city)
+        )
+    except HttpError as e:
         return f"Geocoding failed: {e}"
+    if place is None:
+        return f"City not found: {city!r}"
+    lat, lon, display = place
+    return report(lat, lon, display)
 
+
+def _first_match(data: dict[str, Any], city: str) -> tuple[float, float, str] | None:
+    """The first geocoding result as (lat, lon, display_name), or ``None`` without one."""
     results = data.get("results")
     if not results:
-        return f"City not found: {city!r}"
-
+        return None
     r = results[0]
     name = r.get("name", city)
     country = r.get("country", "")
@@ -65,37 +75,33 @@ def _geocode(city: str) -> tuple[float, float, str] | str:
     return r["latitude"], r["longitude"], display
 
 
-def _fetch_weather(lat: float, lon: float) -> dict | str:
-    """Fetch current weather JSON for a coordinate pair."""
-    url = (
-        f"https://api.open-meteo.com/v1/forecast"
-        f"?latitude={lat}&longitude={lon}"
-        f"&current=temperature_2m,relative_humidity_2m,apparent_temperature,"
-        f"weather_code,wind_speed_10m,wind_direction_10m"
-        f"&timezone=auto"
-    )
+def _current_weather(lat: float, lon: float, display: str, unit: str = "c") -> str:
+    """The current weather at a coordinate pair, formatted."""
+    params = {"latitude": lat, "longitude": lon, "current": _CURRENT_FIELDS, "timezone": "auto"}
     try:
-        req = urllib.request.Request(url)
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-            return json.loads(resp.read())
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
+        return _FORECAST.get_json(
+            "forecast",
+            params=params,
+            parse=lambda data: _format_current_weather(data, display, unit),
+        )
+    except HttpError as e:
         return f"Weather API failed: {e}"
 
 
-def _fetch_forecast(lat: float, lon: float, days: int) -> dict | str:
-    """Fetch daily forecast JSON for a coordinate pair."""
-    url = (
-        f"https://api.open-meteo.com/v1/forecast"
-        f"?latitude={lat}&longitude={lon}"
-        f"&daily=temperature_2m_max,temperature_2m_min,weather_code,"
-        f"precipitation_sum,wind_speed_10m_max"
-        f"&timezone=auto&forecast_days={days}"
-    )
+def _daily_forecast(lat: float, lon: float, display: str, days: int) -> str:
+    """The daily forecast at a coordinate pair, formatted."""
+    params = {
+        "latitude": lat,
+        "longitude": lon,
+        "daily": _DAILY_FIELDS,
+        "timezone": "auto",
+        "forecast_days": days,
+    }
     try:
-        req = urllib.request.Request(url)
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-            return json.loads(resp.read())
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
+        return _FORECAST.get_json(
+            "forecast", params=params, parse=lambda data: _format_forecast(data, display, days)
+        )
+    except HttpError as e:
         return f"Forecast API failed: {e}"
 
 
@@ -177,7 +183,7 @@ def _format_number(value: float | str) -> str:
     return str(value)
 
 
-@tool
+@tool(capability="network")
 def get_weather(city: str) -> str:
     """Get the current weather for a city using Open-Meteo (free, no API key).
 
@@ -186,17 +192,10 @@ def get_weather(city: str) -> str:
     Args:
         city: City name, e.g. "Tokyo", "London", "New York".
     """
-    geo = _geocode(city)
-    if isinstance(geo, str):
-        return geo
-    lat, lon, display = geo
-    data = _fetch_weather(lat, lon)
-    if isinstance(data, str):
-        return data
-    return _format_current_weather(data, display)
+    return _at_city(city, _current_weather)
 
 
-@tool
+@tool(capability="network")
 def get_forecast(city: str, days: int = 3) -> str:
     """Get a multi-day weather forecast for a city using Open-Meteo (free, no API key).
 
@@ -205,17 +204,10 @@ def get_forecast(city: str, days: int = 3) -> str:
         days: Number of forecast days (1-7). Defaults to 3.
     """
     days = max(1, min(days, 7))
-    geo = _geocode(city)
-    if isinstance(geo, str):
-        return geo
-    lat, lon, display = geo
-    data = _fetch_forecast(lat, lon, days)
-    if isinstance(data, str):
-        return data
-    return _format_forecast(data, display, days)
+    return _at_city(city, lambda lat, lon, display: _daily_forecast(lat, lon, display, days))
 
 
-@tool
+@tool(capability="network")
 def get_weather_by_coords(lat: float, lon: float) -> str:
     """Get the current weather for a latitude/longitude pair using Open-Meteo.
 
@@ -223,13 +215,10 @@ def get_weather_by_coords(lat: float, lon: float) -> str:
         lat: Latitude in decimal degrees.
         lon: Longitude in decimal degrees.
     """
-    data = _fetch_weather(lat, lon)
-    if isinstance(data, str):
-        return data
-    return _format_current_weather(data, f"{lat}, {lon}")
+    return _current_weather(lat, lon, f"{lat}, {lon}")
 
 
-@tool
+@tool(capability="network")
 def get_forecast_by_coords(lat: float, lon: float, days: int = 3) -> str:
     """Get a multi-day weather forecast for a latitude/longitude pair.
 
@@ -239,13 +228,10 @@ def get_forecast_by_coords(lat: float, lon: float, days: int = 3) -> str:
         days: Number of forecast days (1-7). Defaults to 3.
     """
     days = max(1, min(days, 7))
-    data = _fetch_forecast(lat, lon, days)
-    if isinstance(data, str):
-        return data
-    return _format_forecast(data, f"{lat}, {lon}", days)
+    return _daily_forecast(lat, lon, f"{lat}, {lon}", days)
 
 
-@tool
+@tool(capability="network")
 def weather_units(city: str, unit: str = "c") -> str:
     """Get current weather for a city with converted output units.
 
@@ -253,11 +239,4 @@ def weather_units(city: str, unit: str = "c") -> str:
         city: City name, e.g. "Tokyo", "London", "New York".
         unit: Output unit: "c" or "f". Defaults to Celsius.
     """
-    geo = _geocode(city)
-    if isinstance(geo, str):
-        return geo
-    lat, lon, display = geo
-    data = _fetch_weather(lat, lon)
-    if isinstance(data, str):
-        return data
-    return _format_current_weather(data, display, unit=unit)
+    return _at_city(city, lambda lat, lon, display: _current_weather(lat, lon, display, unit))

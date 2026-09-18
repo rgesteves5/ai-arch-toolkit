@@ -555,3 +555,21 @@ class TestSecurityBoundary:
         # Try to reach through a safe attribute to an unsafe one
         result = python_repl("''.__class__.__mro__")
         assert "Error:" in result
+
+
+class TestPythonReplSemantics:
+    def test_and_or_stop_at_the_value_that_decides(self):
+        assert python_repl("0 and 1 / 0") == "0"
+        assert python_repl("1 or 1 / 0") == "1"
+
+    def test_dict_unpacking_is_refused_not_misread(self):
+        assert "not supported" in python_repl("a = {'x': 1}\n{**a}")
+
+    def test_keyword_unpacking_is_refused_not_dropped(self):
+        assert "not supported" in python_repl("d = {'sep': '-'}\nprint(1, 2, **d)")
+
+    def test_an_augmented_power_has_the_same_exponent_guard(self):
+        assert "Exponent too large" in python_repl("x = 2\nx **= 5000\nx")
+
+    def test_deleting_what_cannot_be_deleted_is_refused_not_ignored(self):
+        assert "Unsupported delete target" in python_repl("s = 'a'\ndel s.upper")

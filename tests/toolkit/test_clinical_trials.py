@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-import json
 import urllib.error
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 from ai_arch_toolkit.toolkit.tools._clinical_trials import (
     clinical_trial_study,
     clinical_trials_search,
 )
+from tests.toolkit.http_fakes import HTTP_OPEN, respond
 
 _STUDY = {
     "protocolSection": {
@@ -75,17 +75,6 @@ _STUDY = {
 }
 
 
-def _mock_urlopen(data: dict | str):
-    resp = MagicMock()
-    if isinstance(data, dict):
-        resp.read.return_value = json.dumps(data).encode()
-    else:
-        resp.read.return_value = data.encode()
-    resp.__enter__ = lambda s: s
-    resp.__exit__ = MagicMock(return_value=False)
-    return resp
-
-
 def _called_request(mock_urlopen):
     return mock_urlopen.call_args.args[0]
 
@@ -95,9 +84,9 @@ def _called_params(mock_urlopen) -> dict[str, list[str]]:
 
 
 class TestClinicalTrialsSearch:
-    @patch("ai_arch_toolkit.toolkit.tools._clinical_trials.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_returns_results_and_next_page_token(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen({"studies": [_STUDY], "nextPageToken": "NEXT"})
+        mock_urlopen.return_value = respond({"studies": [_STUDY], "nextPageToken": "NEXT"})
 
         result = clinical_trials_search("covid", max_results=2)
 
@@ -115,9 +104,9 @@ class TestClinicalTrialsSearch:
         assert params["pageSize"] == ["2"]
         assert params["query.term"] == ["covid"]
 
-    @patch("ai_arch_toolkit.toolkit.tools._clinical_trials.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_filters_status_study_type_phase_and_page_token(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen({"studies": []})
+        mock_urlopen.return_value = respond({"studies": []})
 
         clinical_trials_search(
             condition="diabetes",
@@ -139,14 +128,14 @@ class TestClinicalTrialsSearch:
         assert params["pageSize"] == ["20"]
         assert params["pageToken"] == ["TOKEN"]
 
-    @patch("ai_arch_toolkit.toolkit.tools._clinical_trials.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_requires_query_or_page_token(self, mock_urlopen):
         result = clinical_trials_search()
 
         assert "provide query" in result
         mock_urlopen.assert_not_called()
 
-    @patch("ai_arch_toolkit.toolkit.tools._clinical_trials.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_api_failure(self, mock_urlopen):
         mock_urlopen.side_effect = TimeoutError()
 
@@ -154,9 +143,9 @@ class TestClinicalTrialsSearch:
 
         assert "timed out" in result.lower()
 
-    @patch("ai_arch_toolkit.toolkit.tools._clinical_trials.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_parse_failure(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen("not json")
+        mock_urlopen.return_value = respond("not json")
 
         result = clinical_trials_search("test")
 
@@ -164,9 +153,9 @@ class TestClinicalTrialsSearch:
 
 
 class TestClinicalTrialStudy:
-    @patch("ai_arch_toolkit.toolkit.tools._clinical_trials.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_returns_study(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(_STUDY)
+        mock_urlopen.return_value = respond(_STUDY)
 
         result = clinical_trial_study("nct04280705")
 
@@ -178,14 +167,14 @@ class TestClinicalTrialStudy:
         assert "PMID 32445440 - Remdesivir paper" in result
         assert "https://clinicaltrials.gov/study/NCT04280705" in result
 
-    @patch("ai_arch_toolkit.toolkit.tools._clinical_trials.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_invalid_nct_id(self, mock_urlopen):
         result = clinical_trial_study("bad")
 
         assert "invalid NCT ID" in result
         mock_urlopen.assert_not_called()
 
-    @patch("ai_arch_toolkit.toolkit.tools._clinical_trials.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_not_found(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.HTTPError(
             url="https://clinicaltrials.gov/api/v2/studies/NCT00000000",

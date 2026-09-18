@@ -2,19 +2,22 @@
 
 from __future__ import annotations
 
-import json
 import re
-import urllib.error
-import urllib.parse
-import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, overload
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
-_BASE_URL = "https://api.worldbank.org/v2"
-_TIMEOUT = 15
-_USER_AGENT = "ai-arch-toolkit/1.0 (https://github.com/ai-arch-toolkit)"
+# Country lists travel as one path segment, the codes joined by ";".
+_API = Api(
+    base="https://api.worldbank.org/v2",
+    name="World Bank",
+    timeout_s=15,
+    params={"format": "json"},
+    segment_safe=";",
+)
 _MAX_RESULTS_LIMIT = 100
 _INDICATOR_SEARCH_PAGE_SIZE = 1000
 _INDICATOR_SCAN_PAGES_LIMIT = 30
@@ -97,7 +100,7 @@ class _WorldBankSeriesPoint:
     decimal: int | None
 
 
-@tool
+@tool(capability="network")
 def world_bank_topics(max_results: int = 50, page: int = 1) -> str:
     """List World Bank indicator topics.
 
@@ -108,28 +111,14 @@ def world_bank_topics(max_results: int = 50, page: int = 1) -> str:
     if page < 1:
         return "World Bank topics failed: page must be greater than or equal to 1."
 
+    params = {"page": str(page), "per_page": str(_bounded(max_results))}
     try:
-        metadata, items = _fetch_world_bank(
-            "/topic",
-            {"page": str(page), "per_page": str(_bounded(max_results))},
-        )
-        topics = [_parse_topic(item) for item in items if isinstance(item, dict)]
-    except urllib.error.HTTPError as e:
-        return _http_error("World Bank topics failed", e)
-    except urllib.error.URLError as e:
-        return f"World Bank topics failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "World Bank topics failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"World Bank topics failed: could not parse API response: {e}"
-
-    topics = [topic for topic in topics if topic is not None]
-    if not topics:
-        return "No World Bank topics found."
-    return _pagination_header("World Bank topics", metadata) + "\n" + _format_topics(topics)
+        return _API.get_json_list("topic", params=params, parse=_topics_text)
+    except HttpError as e:
+        return f"World Bank topics failed: {e}"
 
 
-@tool
+@tool(capability="network")
 def world_bank_sources(max_results: int = 50, page: int = 1) -> str:
     """List World Bank data sources/databases.
 
@@ -140,28 +129,14 @@ def world_bank_sources(max_results: int = 50, page: int = 1) -> str:
     if page < 1:
         return "World Bank sources failed: page must be greater than or equal to 1."
 
+    params = {"page": str(page), "per_page": str(_bounded(max_results))}
     try:
-        metadata, items = _fetch_world_bank(
-            "/source",
-            {"page": str(page), "per_page": str(_bounded(max_results))},
-        )
-        sources = [_parse_source(item) for item in items if isinstance(item, dict)]
-    except urllib.error.HTTPError as e:
-        return _http_error("World Bank sources failed", e)
-    except urllib.error.URLError as e:
-        return f"World Bank sources failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "World Bank sources failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"World Bank sources failed: could not parse API response: {e}"
-
-    sources = [source for source in sources if source is not None]
-    if not sources:
-        return "No World Bank sources found."
-    return _pagination_header("World Bank sources", metadata) + "\n" + _format_sources(sources)
+        return _API.get_json_list("source", params=params, parse=_sources_text)
+    except HttpError as e:
+        return f"World Bank sources failed: {e}"
 
 
-@tool
+@tool(capability="network")
 def world_bank_countries(
     query: str = "",
     region: str = "",
@@ -184,48 +159,28 @@ def world_bank_countries(
         return "World Bank countries failed: page must be greater than or equal to 1."
 
     max_results = _bounded(max_results)
-    query = query.strip()
-    region = region.strip().upper()
-    income_level = income_level.strip().upper()
-    lending_type = lending_type.strip().upper()
-    filtered = any((query, region, income_level, lending_type))
-
-    try:
-        metadata, items = _fetch_world_bank(
-            "/country",
-            {
-                "page": "1" if filtered else str(page),
-                "per_page": str(_COUNTRIES_PAGE_SIZE if filtered else max_results),
-            },
-        )
-        countries = [_parse_country(item) for item in items if isinstance(item, dict)]
-    except urllib.error.HTTPError as e:
-        return _http_error("World Bank countries failed", e)
-    except urllib.error.URLError as e:
-        return f"World Bank countries failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "World Bank countries failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"World Bank countries failed: could not parse API response: {e}"
-
-    countries = [country for country in countries if country is not None]
-    if filtered:
-        countries = [
-            country
-            for country in countries
-            if _country_matches(country, query, region, income_level, lending_type)
-        ]
-        metadata = _local_metadata(page=page, per_page=max_results, total=len(countries))
-        countries = _slice_page(countries, page, max_results)
-
-    if not countries:
-        return "No World Bank countries found."
-    return (
-        _pagination_header("World Bank countries", metadata) + "\n" + _format_countries(countries)
+    filters = (
+        query.strip(),
+        region.strip().upper(),
+        income_level.strip().upper(),
+        lending_type.strip().upper(),
     )
+    filtered = any(filters)
+    params = {
+        "page": "1" if filtered else str(page),
+        "per_page": str(_COUNTRIES_PAGE_SIZE if filtered else max_results),
+    }
+    try:
+        return _API.get_json_list(
+            "country",
+            params=params,
+            parse=lambda payload: _countries_text(payload, filters, page, max_results),
+        )
+    except HttpError as e:
+        return f"World Bank countries failed: {e}"
 
 
-@tool
+@tool(capability="network")
 def world_bank_indicators(
     query: str = "",
     topic: str = "",
@@ -257,42 +212,13 @@ def world_bank_indicators(
 
     try:
         if query:
-            metadata, indicators = _scan_indicators(query, topic, source, page, scan_pages)
-            metadata = _local_metadata(page=1, per_page=max_results, total=len(indicators))
-            indicators = _rank_indicators(indicators, query)[:max_results]
-        else:
-            metadata, items = _fetch_world_bank(
-                _indicator_path(topic, source),
-                {"page": str(page), "per_page": str(max_results)},
-            )
-            indicators = [_parse_indicator(item) for item in items if isinstance(item, dict)]
-            if topic and source:
-                indicators = [
-                    indicator
-                    for indicator in indicators
-                    if indicator is not None and indicator.source_id == source
-                ]
-    except urllib.error.HTTPError as e:
-        return _http_error("World Bank indicators failed", e)
-    except urllib.error.URLError as e:
-        return f"World Bank indicators failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "World Bank indicators failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"World Bank indicators failed: could not parse API response: {e}"
-
-    indicators = [indicator for indicator in indicators if indicator is not None]
-    if not indicators:
-        hint = " Try a topic/source filter or increase scan_pages." if query else ""
-        return f"No World Bank indicators found.{hint}"
-
-    header = _pagination_header("World Bank indicators", metadata)
-    if query:
-        header += f" | scanned_pages: {scan_pages}"
-    return header + "\n" + _format_indicators(indicators, include_note=True)
+            return _search_indicators(query, topic, source, page, scan_pages, max_results)
+        return _browse_indicators(topic, source, page, max_results)
+    except HttpError as e:
+        return f"World Bank indicators failed: {e}"
 
 
-@tool
+@tool(capability="network")
 def world_bank_indicator(indicator: str) -> str:
     """Fetch metadata for a specific World Bank indicator.
 
@@ -304,31 +230,16 @@ def world_bank_indicator(indicator: str) -> str:
         return f"World Bank indicator lookup failed: invalid indicator ID: {indicator!r}"
 
     try:
-        _metadata, items = _fetch_world_bank(f"/indicator/{_quote_path(indicator)}", {})
-        indicators = [_parse_indicator(item) for item in items if isinstance(item, dict)]
-        indicators = [item for item in indicators if item is not None]
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
+        return _API.get_json_list(
+            "indicator", indicator, parse=lambda payload: _indicator_text(payload, indicator)
+        )
+    except HttpError as e:
+        if e.status == 404:
             return f"World Bank indicator not found: {indicator}"
-        return _http_error("World Bank indicator lookup failed", e)
-    except urllib.error.URLError as e:
-        return f"World Bank indicator lookup failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "World Bank indicator lookup failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"World Bank indicator lookup failed: could not parse API response: {e}"
-
-    if not indicators:
-        return f"World Bank indicator not found: {indicator}"
-    return f"World Bank indicator {indicators[0].id}:\n" + _format_indicators(
-        [indicators[0]],
-        include_index=False,
-        include_note=True,
-        include_organization=True,
-    )
+        return f"World Bank indicator lookup failed: {e}"
 
 
-@tool
+@tool(capability="network")
 def world_bank_series(
     country: str,
     indicator: str,
@@ -351,28 +262,21 @@ def world_bank_series(
     if validation:
         return f"World Bank series failed: {validation}"
 
+    params = _series_params(start_year, end_year, page, _bounded(max_results))
     try:
-        metadata, items = _fetch_world_bank(
-            f"/country/{_quote_country(country)}/indicator/{_quote_path(indicator.strip())}",
-            _series_params(start_year, end_year, page, _bounded(max_results)),
+        return _API.get_json_list(
+            "country",
+            country.strip(),
+            "indicator",
+            indicator.strip(),
+            params=params,
+            parse=_series_text,
         )
-        points = [_parse_series_point(item) for item in items if isinstance(item, dict)]
-        points = [point for point in points if point is not None]
-    except urllib.error.HTTPError as e:
-        return _http_error("World Bank series failed", e)
-    except urllib.error.URLError as e:
-        return f"World Bank series failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "World Bank series failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"World Bank series failed: could not parse API response: {e}"
-
-    if not points:
-        return "No World Bank series observations found."
-    return _pagination_header("World Bank series", metadata) + "\n" + _format_series(points)
+    except HttpError as e:
+        return f"World Bank series failed: {e}"
 
 
-@tool
+@tool(capability="network")
 def world_bank_compare(
     indicator: str,
     countries: str,
@@ -413,45 +317,136 @@ def world_bank_compare(
         return f"World Bank compare failed: {validation}"
 
     max_points = max(1, min(max_points, _COMPARE_POINTS_LIMIT))
+    params = _series_params(start_year, end_year, 1, max_points)
     try:
-        metadata, items = _fetch_world_bank(
-            f"/country/{_quote_country(';'.join(country_codes))}/indicator/{_quote_path(indicator)}",
-            _series_params(start_year, end_year, 1, max_points),
+        return _API.get_json_list(
+            "country",
+            ";".join(country_codes),
+            "indicator",
+            indicator,
+            params=params,
+            parse=_compare_text,
         )
-        points = [_parse_series_point(item) for item in items if isinstance(item, dict)]
-        points = [point for point in points if point is not None]
-    except urllib.error.HTTPError as e:
-        return _http_error("World Bank compare failed", e)
-    except urllib.error.URLError as e:
-        return f"World Bank compare failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "World Bank compare failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"World Bank compare failed: could not parse API response: {e}"
+    except HttpError as e:
+        return f"World Bank compare failed: {e}"
 
+
+def _page(payload: list[Any]) -> tuple[dict[str, Any], list[Any]]:
+    """A World Bank answer's ``[metadata, items]``.
+
+    An error message reads as an empty page; any other shape raises ``HttpError``.
+    """
+    if len(payload) >= 2:
+        return _dict(payload[0]), payload[1] if isinstance(payload[1], list) else []
+    if payload and isinstance(payload[0], dict) and "message" in payload[0]:
+        return {}, []
+    raise HttpError("could not parse API response: unexpected World Bank response shape")
+
+
+def _parse_items[T](items: list[Any], parse_item: Callable[[dict[str, Any]], T | None]) -> list[T]:
+    """The items that are objects and parse, in order."""
+    parsed = [parse_item(item) for item in items if isinstance(item, dict)]
+    return [item for item in parsed if item is not None]
+
+
+def _topics_text(payload: list[Any]) -> str:
+    metadata, items = _page(payload)
+    topics = _parse_items(items, _parse_topic)
+    if not topics:
+        return "No World Bank topics found."
+    return _pagination_header("World Bank topics", metadata) + "\n" + _format_topics(topics)
+
+
+def _sources_text(payload: list[Any]) -> str:
+    metadata, items = _page(payload)
+    sources = _parse_items(items, _parse_source)
+    if not sources:
+        return "No World Bank sources found."
+    return _pagination_header("World Bank sources", metadata) + "\n" + _format_sources(sources)
+
+
+def _countries_text(
+    payload: list[Any], filters: tuple[str, str, str, str], page: int, per_page: int
+) -> str:
+    """The countries on the page; with ``filters``, the page of the matches among all of them."""
+    metadata, items = _page(payload)
+    countries = _parse_items(items, _parse_country)
+    if any(filters):
+        countries = [country for country in countries if _country_matches(country, *filters)]
+        metadata = _local_metadata(page=page, per_page=per_page, total=len(countries))
+        countries = _slice_page(countries, page, per_page)
+
+    if not countries:
+        return "No World Bank countries found."
+    return (
+        _pagination_header("World Bank countries", metadata) + "\n" + _format_countries(countries)
+    )
+
+
+def _search_indicators(
+    query: str, topic: str, source: str, page: int, scan_pages: int, max_results: int
+) -> str:
+    """The best ``query`` matches over ``scan_pages`` catalog pages from ``page``."""
+    indicators = _scan_indicators(query, topic, source, page, scan_pages)
+    if not indicators:
+        return "No World Bank indicators found. Try a topic/source filter or increase scan_pages."
+
+    metadata = _local_metadata(page=1, per_page=max_results, total=len(indicators))
+    header = _pagination_header("World Bank indicators", metadata)
+    ranked = _rank_indicators(indicators, query)[:max_results]
+    return f"{header} | scanned_pages: {scan_pages}\n" + _format_indicators(
+        ranked, include_note=True
+    )
+
+
+def _browse_indicators(topic: str, source: str, page: int, max_results: int) -> str:
+    """One catalog page, under ``topic`` or ``source`` when given."""
+    params = {"page": str(page), "per_page": str(max_results)}
+    return _API.get_json_list(
+        *_indicator_segments(topic, source),
+        params=params,
+        parse=lambda payload: _indicators_text(payload, topic, source),
+    )
+
+
+def _indicators_text(payload: list[Any], topic: str, source: str) -> str:
+    metadata, items = _page(payload)
+    indicators = _parse_items(items, _parse_indicator)
+    if topic and source:
+        indicators = [indicator for indicator in indicators if indicator.source_id == source]
+    if not indicators:
+        return "No World Bank indicators found."
+    header = _pagination_header("World Bank indicators", metadata)
+    return header + "\n" + _format_indicators(indicators, include_note=True)
+
+
+def _indicator_text(payload: list[Any], indicator: str) -> str:
+    _metadata, items = _page(payload)
+    indicators = _parse_items(items, _parse_indicator)
+    if not indicators:
+        return f"World Bank indicator not found: {indicator}"
+    return f"World Bank indicator {indicators[0].id}:\n" + _format_indicators(
+        [indicators[0]],
+        include_index=False,
+        include_note=True,
+        include_organization=True,
+    )
+
+
+def _series_text(payload: list[Any]) -> str:
+    metadata, items = _page(payload)
+    points = _parse_items(items, _parse_series_point)
+    if not points:
+        return "No World Bank series observations found."
+    return _pagination_header("World Bank series", metadata) + "\n" + _format_series(points)
+
+
+def _compare_text(payload: list[Any]) -> str:
+    metadata, items = _page(payload)
+    points = _parse_items(items, _parse_series_point)
     if not points:
         return "No World Bank comparison observations found."
     return _pagination_header("World Bank comparison", metadata) + "\n" + _format_compare(points)
-
-
-def _fetch_world_bank(path: str, params: dict[str, str]) -> tuple[dict[str, Any], list[Any]]:
-    params = {"format": "json", **params}
-    url = f"{_BASE_URL}{path}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-        payload = json.loads(resp.read().decode("utf-8", errors="replace"))
-    if isinstance(payload, list) and len(payload) >= 2:
-        metadata = _dict(payload[0])
-        items = payload[1] if isinstance(payload[1], list) else []
-        return metadata, items
-    if (
-        isinstance(payload, list)
-        and payload
-        and isinstance(payload[0], dict)
-        and "message" in payload[0]
-    ):
-        return {}, []
-    raise TypeError("unexpected World Bank response shape")
 
 
 def _scan_indicators(
@@ -460,40 +455,39 @@ def _scan_indicators(
     source: str,
     start_page: int,
     scan_pages: int,
-) -> tuple[dict[str, Any], list[_WorldBankIndicator]]:
+) -> list[_WorldBankIndicator]:
     matches: list[_WorldBankIndicator] = []
-    last_metadata: dict[str, Any] = {}
     tokens = _query_tokens(query)
-    path = _indicator_path(topic, source)
+    segments = _indicator_segments(topic, source)
 
     for page in range(start_page, start_page + scan_pages):
-        metadata, items = _fetch_world_bank(
-            path,
-            {"page": str(page), "per_page": str(_INDICATOR_SEARCH_PAGE_SIZE)},
-        )
-        last_metadata = metadata
-        indicators = [_parse_indicator(item) for item in items if isinstance(item, dict)]
+        params = {"page": str(page), "per_page": str(_INDICATOR_SEARCH_PAGE_SIZE)}
+        pages, indicators = _API.get_json_list(*segments, params=params, parse=_indicator_page)
         for indicator in indicators:
-            if indicator is None:
-                continue
             if topic and not _indicator_has_topic(indicator, topic):
                 continue
             if source and indicator.source_id != source:
                 continue
             if _indicator_matches(indicator, tokens):
                 matches.append(indicator)
-        if page >= _int_or_none(metadata.get("pages"), page):
+        if pages is None or page >= pages:
             break
 
-    return last_metadata, list(dict.fromkeys(matches))
+    return list(dict.fromkeys(matches))
 
 
-def _indicator_path(topic: str, source: str) -> str:
+def _indicator_page(payload: list[Any]) -> tuple[int | None, list[_WorldBankIndicator]]:
+    """A catalog page's page count (``None`` when absent or not a number) and its indicators."""
+    metadata, items = _page(payload)
+    return _int_or_none(metadata.get("pages")), _parse_items(items, _parse_indicator)
+
+
+def _indicator_segments(topic: str, source: str) -> tuple[str, ...]:
     if topic:
-        return f"/topic/{_quote_path(topic)}/indicator"
+        return ("topic", topic, "indicator")
     if source:
-        return f"/source/{_quote_path(source)}/indicator"
-    return "/indicator"
+        return ("source", source, "indicator")
+    return ("indicator",)
 
 
 def _series_params(
@@ -867,20 +861,6 @@ def _valid_indicator_id(value: str) -> bool:
 def _valid_country(value: str) -> bool:
     stripped = value.strip()
     return bool(stripped and (stripped.lower() == "all" or _COUNTRY_RE.fullmatch(stripped)))
-
-
-def _quote_path(value: str) -> str:
-    return urllib.parse.quote(value.strip(), safe="")
-
-
-def _quote_country(value: str) -> str:
-    return urllib.parse.quote(value.strip(), safe=";")
-
-
-def _http_error(prefix: str, error: urllib.error.HTTPError) -> str:
-    if error.code == 429:
-        return f"{prefix}: rate limited by World Bank (HTTP 429). Try again later."
-    return f"{prefix}: HTTP error {error.code}: {error.reason}"
 
 
 def _bounded(value: int) -> int:

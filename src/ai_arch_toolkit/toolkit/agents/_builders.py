@@ -25,6 +25,7 @@ from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
 from ai_arch_toolkit.toolkit.agents._spec import ReasoningSpec
 from ai_arch_toolkit.toolkit.agents.flows import (
+    FlowOptions,
     generate_review_flow,
     generate_review_initial_state,
     lats_flow,
@@ -44,6 +45,7 @@ from ai_arch_toolkit.toolkit.agents.flows import (
     tot_flow,
     tot_initial_state,
 )
+from ai_arch_toolkit.toolkit.agents.flows._keys import ANSWER, MESSAGES, RESPONSE
 from ai_arch_toolkit.toolkit.flow._flow import Flow
 
 __all__ = [
@@ -222,6 +224,11 @@ def _knob_kwargs(spec: ReasoningSpec, mapping: Mapping[str, str]) -> dict[str, A
     return {target: spec.knobs[name] for name, target in mapping.items() if name in spec.knobs}
 
 
+def _flow_options(spec: ReasoningSpec) -> FlowOptions:
+    """The ``Flow`` options a spec sets. A spec has no budget: ``Agent.run`` takes one per run."""
+    return {"timeout": spec.timeout, "trace_capture": spec.trace_capture, "policy": spec.policy}
+
+
 def _aliased_dep(ctx: BuildContext, canonical: str, legacy: str, default: Any) -> Any:
     """Read a dep by canonical name, accepting a documented legacy alias."""
     if canonical in ctx.deps and legacy in ctx.deps:
@@ -243,13 +250,11 @@ def _build_react(ctx: BuildContext) -> Flow:
         system=s.system,
         max_iterations=s.max_iterations,
         parallel_tool_calls=s.knobs.get("parallel_tool_calls", True),
-        timeout=s.timeout,
-        trace_capture=s.trace_capture,
-        policy=s.policy,
         llm_kwargs=llm_kwargs or None,
         final_answer_hint=s.knobs.get("final_answer_hint", True),
         strip_tools_on_final=s.knobs.get("strip_tools_on_final", False),
         show_turn_counter=s.knobs.get("show_turn_counter", False),
+        **_flow_options(s),
     )
 
 
@@ -262,7 +267,7 @@ def _build_completion(ctx: BuildContext) -> Flow:
         llm_kwargs.setdefault("output_schema", s.output_schema)
 
     async def _complete(snap: StateSnapshot) -> Result:
-        messages = snap.require("messages")
+        messages = snap.require(MESSAGES)
         try:
             response = await llm.complete(messages, system=system, **llm_kwargs)
         except AdmissionDenied:
@@ -271,20 +276,18 @@ def _build_completion(ctx: BuildContext) -> Flow:
             return Result(error=str(exc))
         return Result(
             value=response,
-            artifacts={"response": response, "answer": response.text},
+            artifacts={RESPONSE: response, ANSWER: response.text},
         )
 
     return Flow(
         Step(name="complete", fn=_complete),
         name="completion",
-        policy=s.policy,
-        timeout=s.timeout,
-        trace_capture=s.trace_capture,
+        **_flow_options(s),
     )
 
 
 def _completion_initial_state(task: Content) -> dict[str, Any]:
-    return {"messages": [user(task)]}
+    return {MESSAGES: [user(task)]}
 
 
 def _build_plan_execute(ctx: BuildContext) -> Flow:
@@ -295,15 +298,13 @@ def _build_plan_execute(ctx: BuildContext) -> Flow:
         system=s.system,
         max_replans=s.knobs.get("max_replans", 1),
         max_iterations_per_step=s.knobs.get("max_iterations_per_step", s.max_iterations),
-        timeout=s.timeout,
-        trace_capture=s.trace_capture,
-        policy=s.policy,
         llm_kwargs=dict(s.llm_kwargs) or None,
         planner_llm=ctx.deps.get("planner_llm"),
         exec_llm=ctx.deps.get("executor_llm"),
         exec_tools=ctx.deps.get("executor_tools"),
         solver_llm=ctx.deps.get("solver_llm"),
         **_knob_kwargs(s, {"planner_system": "planner_system", "solver_system": "solver_system"}),
+        **_flow_options(s),
     )
 
 
@@ -313,13 +314,11 @@ def _build_rewoo(ctx: BuildContext) -> Flow:
         ctx.llm,
         ctx.tools,
         system=s.system,
-        timeout=s.timeout,
-        trace_capture=s.trace_capture,
-        policy=s.policy,
         llm_kwargs=dict(s.llm_kwargs) or None,
         planner_llm=ctx.deps.get("planner_llm"),
         solver_llm=ctx.deps.get("solver_llm"),
         **_knob_kwargs(s, {"planner_system": "planner_system", "solver_system": "solver_system"}),
+        **_flow_options(s),
     )
 
 
@@ -337,14 +336,12 @@ def _build_reflexion(ctx: BuildContext) -> Flow:
         max_retries=s.knobs.get("max_retries", 3),
         system=s.system,
         max_iterations=s.max_iterations,
-        timeout=s.timeout,
-        trace_capture=s.trace_capture,
-        policy=s.policy,
         llm_kwargs=dict(s.llm_kwargs) or None,
         exec_llm=ctx.deps.get("executor_llm"),
         exec_tools=ctx.deps.get("executor_tools"),
         reflect_llm=ctx.deps.get("reflector_llm"),
         **_knob_kwargs(s, {"reflector_system": "reflect_system"}),
+        **_flow_options(s),
     )
 
 
@@ -367,11 +364,9 @@ def _build_generate_review(ctx: BuildContext) -> Flow:
         max_cycles=s.knobs.get("max_cycles", 3),
         max_gen_iterations=s.max_iterations,
         max_review_iterations=s.knobs.get("max_review_iterations", 5),
-        timeout=s.timeout,
-        trace_capture=s.trace_capture,
-        policy=s.policy,
         review_kwargs=review_kwargs or None,
         **_knob_kwargs(s, {"reviewer_system": "review_system"}),
+        **_flow_options(s),
     )
 
 
@@ -393,14 +388,12 @@ def _build_self_discovery(ctx: BuildContext) -> Flow:
         ctx.tools,
         system=s.system,
         max_react_iterations=s.max_iterations,
-        timeout=s.timeout,
-        trace_capture=s.trace_capture,
-        policy=s.policy,
         llm_kwargs=dict(s.llm_kwargs) or None,
         reasoning_llm=ctx.deps.get("reasoning_llm"),
         solver_llm=ctx.deps.get("solver_llm"),
         solver_tools=ctx.deps.get("solver_tools"),
         **kwargs,
+        **_flow_options(s),
     )
 
 
@@ -412,15 +405,13 @@ def _build_llm_compiler(ctx: BuildContext) -> Flow:
         system=s.system,
         max_replans=s.knobs.get("max_replans", 2),
         max_react_iterations=s.max_iterations,
-        timeout=s.timeout,
-        trace_capture=s.trace_capture,
-        policy=s.policy,
         llm_kwargs=dict(s.llm_kwargs) or None,
         planner_llm=ctx.deps.get("planner_llm"),
         exec_llm=ctx.deps.get("executor_llm"),
         exec_tools=ctx.deps.get("executor_tools"),
         joiner_llm=ctx.deps.get("joiner_llm"),
         **_knob_kwargs(s, {"planner_system": "planner_system", "joiner_system": "joiner_system"}),
+        **_flow_options(s),
     )
 
 
@@ -434,14 +425,12 @@ def _build_tot(ctx: BuildContext) -> Flow:
         max_depth=s.knobs.get("max_depth", 3),
         max_iterations=s.max_iterations,
         strategy=s.knobs.get("search_strategy", "dfs"),
-        timeout=s.timeout,
-        trace_capture=s.trace_capture,
-        policy=s.policy,
         llm_kwargs=dict(s.llm_kwargs) or None,
         gen_llm=ctx.deps.get("generator_llm"),
         eval_llm=ctx.deps.get("evaluator_llm"),
         solver_llm=ctx.deps.get("solver_llm"),
         **_knob_kwargs(s, {"evaluator_system": "evaluator_system"}),
+        **_flow_options(s),
     )
 
 
@@ -460,9 +449,6 @@ def _build_lats(ctx: BuildContext) -> Flow:
         exploration_weight=s.knobs.get("exploration_weight", 1.41),
         max_react_iterations=s.max_iterations,
         evaluator_fn=evaluator_fn,
-        timeout=s.timeout,
-        trace_capture=s.trace_capture,
-        policy=s.policy,
         llm_kwargs=dict(s.llm_kwargs) or None,
         rollout_llm=ctx.deps.get("rollout_llm"),
         rollout_tools=ctx.deps.get("rollout_tools"),
@@ -472,6 +458,7 @@ def _build_lats(ctx: BuildContext) -> Flow:
         **_knob_kwargs(
             s, {"evaluator_system": "evaluator_system", "reflector_system": "reflect_system"}
         ),
+        **_flow_options(s),
     )
 
 

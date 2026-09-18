@@ -3,20 +3,12 @@
 from __future__ import annotations
 
 import io
-import json
 import urllib.error
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 from ai_arch_toolkit.toolkit.tools._gdelt import gdelt_news_search, gdelt_timeline
-
-
-def _mock_urlopen(data):
-    resp = MagicMock()
-    resp.read.return_value = json.dumps(data).encode()
-    resp.__enter__ = lambda s: s
-    resp.__exit__ = MagicMock(return_value=False)
-    return resp
+from tests.toolkit.http_fakes import HTTP_OPEN, respond
 
 
 def _called_params(mock_urlopen) -> dict[str, list[str]]:
@@ -24,10 +16,9 @@ def _called_params(mock_urlopen) -> dict[str, list[str]]:
 
 
 class TestGdeltNewsSearch:
-    @patch("ai_arch_toolkit.toolkit.tools._gdelt._throttle")
-    @patch("ai_arch_toolkit.toolkit.tools._gdelt.urllib.request.urlopen")
-    def test_returns_articles(self, mock_urlopen, _mock_throttle):
-        mock_urlopen.return_value = _mock_urlopen(
+    @patch(HTTP_OPEN)
+    def test_returns_articles(self, mock_urlopen):
+        mock_urlopen.return_value = respond(
             {
                 "articles": [
                     {
@@ -59,16 +50,15 @@ class TestGdeltNewsSearch:
         assert params["timespan"] == ["24h"]
         assert params["sort"] == ["DateDesc"]
 
-    @patch("ai_arch_toolkit.toolkit.tools._gdelt.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_invalid_options_do_not_call_api(self, mock_urlopen):
         assert "query cannot be empty" in gdelt_news_search("")
         assert "invalid timespan" in gdelt_news_search("test", timespan="yesterday")
         assert "sort must be" in gdelt_news_search("test", sort="random")
         mock_urlopen.assert_not_called()
 
-    @patch("ai_arch_toolkit.toolkit.tools._gdelt._throttle")
-    @patch("ai_arch_toolkit.toolkit.tools._gdelt.urllib.request.urlopen")
-    def test_rate_limited_includes_body_hint(self, mock_urlopen, _mock_throttle):
+    @patch(HTTP_OPEN)
+    def test_rate_limited_includes_body_hint(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.HTTPError(
             url="https://api.gdeltproject.org/api/v2/doc/doc",
             code=429,
@@ -84,10 +74,9 @@ class TestGdeltNewsSearch:
 
 
 class TestGdeltTimeline:
-    @patch("ai_arch_toolkit.toolkit.tools._gdelt._throttle")
-    @patch("ai_arch_toolkit.toolkit.tools._gdelt.urllib.request.urlopen")
-    def test_returns_timeline(self, mock_urlopen, _mock_throttle):
-        mock_urlopen.return_value = _mock_urlopen(
+    @patch(HTTP_OPEN)
+    def test_returns_timeline(self, mock_urlopen):
+        mock_urlopen.return_value = respond(
             {"timeline": [{"date": "20260611000000", "value": 0.2}]}
         )
 
@@ -99,14 +88,9 @@ class TestGdeltTimeline:
         assert params["mode"] == ["timelinevol"]
         assert params["timespan"] == ["7d"]
 
-    @patch("ai_arch_toolkit.toolkit.tools._gdelt._throttle")
-    @patch("ai_arch_toolkit.toolkit.tools._gdelt.urllib.request.urlopen")
-    def test_parse_failure(self, mock_urlopen, _mock_throttle):
-        resp = MagicMock()
-        resp.read.return_value = b"not json"
-        resp.__enter__ = lambda s: s
-        resp.__exit__ = MagicMock(return_value=False)
-        mock_urlopen.return_value = resp
+    @patch(HTTP_OPEN)
+    def test_parse_failure(self, mock_urlopen):
+        mock_urlopen.return_value = respond(b"not json")
 
         result = gdelt_timeline("test")
 

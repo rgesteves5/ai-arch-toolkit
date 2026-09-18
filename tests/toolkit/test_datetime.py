@@ -97,3 +97,14 @@ class TestDateFormat:
     def test_reformats_datetime(self):
         result = date_format("2026-01-15 09:30", "%H:%M on %A")
         assert result.startswith("09:30 on ")
+
+
+class TestRange:
+    def test_arithmetic_past_the_calendar_is_an_error_string(self):
+        assert date_add("2024-01-01", days=10**9).startswith("Date out of range")
+        assert date_add("9999-12-31", days=1).startswith("Date out of range")
+
+    def test_a_conversion_past_the_calendar_is_an_error_string(self):
+        result = timezone_convert("9999-12-31 23:59", "America/New_York", "Asia/Tokyo")
+
+        assert result.startswith("Date out of range")

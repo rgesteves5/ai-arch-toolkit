@@ -2,23 +2,21 @@
 
 from __future__ import annotations
 
-import json
 import re
-import time
-import urllib.error
-import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
-_DOC_API_URL = "https://api.gdeltproject.org/api/v2/doc/doc"
-_TIMEOUT = 15
-_USER_AGENT = "ai-arch-toolkit/1.0 (https://github.com/ai-arch-toolkit)"
+# At most one request every 5 seconds, with a margin: GDELT answers faster callers with a 429.
+_API = Api(
+    base="https://api.gdeltproject.org/api/v2/doc/doc",
+    name="GDELT",
+    timeout_s=15,
+    min_interval_s=5.1,
+)
 _MAX_RESULTS_LIMIT = 20
-_GDELT_INTERVAL_SECONDS = 5.1
-_LAST_REQUEST_AT = 0.0
 _TIMESPAN_RE = re.compile(r"^\d+[mhdw]$", re.IGNORECASE)
 _SORT_VALUES = {
     "hybrid": "HybridRel",
@@ -49,7 +47,7 @@ class _GdeltTimelinePoint:
     value: float | None
 
 
-@tool
+@tool(capability="network")
 def gdelt_news_search(
     query: str,
     max_results: int = 10,
@@ -75,37 +73,21 @@ def gdelt_news_search(
         return "GDELT news search failed: sort must be one of hybrid, date, tone."
 
     max_results = max(1, min(max_results, _MAX_RESULTS_LIMIT))
+    params = {
+        "query": query,
+        "mode": "artlist",
+        "format": "json",
+        "maxrecords": str(max_results),
+        "timespan": timespan,
+        "sort": _SORT_VALUES[sort],
+    }
     try:
-        data = _fetch_json(
-            {
-                "query": query,
-                "mode": "artlist",
-                "format": "json",
-                "maxrecords": str(max_results),
-                "timespan": timespan,
-                "sort": _SORT_VALUES[sort],
-            }
-        )
-        articles = [
-            _parse_article(item) for item in data.get("articles", []) if isinstance(item, dict)
-        ]
-        articles = [article for article in articles if article is not None]
-    except urllib.error.HTTPError as e:
-        return _http_error("GDELT news search failed", e)
-    except urllib.error.URLError as e:
-        return f"GDELT news search failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "GDELT news search failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"GDELT news search failed: could not parse API response: {e}"
-
-    if not articles:
-        return f"No GDELT articles found for: {query!r}"
-
-    return f"GDELT articles for {query!r}:\n" + _format_articles(articles)
+        return _API.get_json(params=params, parse=lambda data: _articles_text(data, query))
+    except HttpError as e:
+        return f"GDELT news search failed: {_reason(e)}"
 
 
-@tool
+@tool(capability="network")
 def gdelt_timeline(query: str, timespan: str = "30d") -> str:
     """Fetch a GDELT volume timeline for a query.
 
@@ -120,65 +102,35 @@ def gdelt_timeline(query: str, timespan: str = "30d") -> str:
     if not _TIMESPAN_RE.fullmatch(timespan):
         return f"GDELT timeline failed: invalid timespan: {timespan!r}"
 
+    params = {"query": query, "mode": "timelinevol", "format": "json", "timespan": timespan}
     try:
-        data = _fetch_json(
-            {
-                "query": query,
-                "mode": "timelinevol",
-                "format": "json",
-                "timespan": timespan,
-            }
-        )
-        points = [_parse_timeline_point(item) for item in data.get("timeline", [])]
-        points = [point for point in points if point is not None]
-    except urllib.error.HTTPError as e:
-        return _http_error("GDELT timeline failed", e)
-    except urllib.error.URLError as e:
-        return f"GDELT timeline failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "GDELT timeline failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"GDELT timeline failed: could not parse API response: {e}"
+        return _API.get_json(params=params, parse=lambda data: _timeline_text(data, query))
+    except HttpError as e:
+        return f"GDELT timeline failed: {_reason(e)}"
 
+
+def _reason(error: HttpError) -> str:
+    """The error's text, or for a 429 with a body, GDELT's own explanation of its limit."""
+    detail = " ".join(error.body.split()) if error.status == 429 else ""
+    return f"rate limited by GDELT (HTTP 429): {detail}" if detail else str(error)
+
+
+def _articles_text(data: dict[str, Any], query: str) -> str:
+    articles = [
+        _parse_article(item) for item in data.get("articles", []) if isinstance(item, dict)
+    ]
+    articles = [article for article in articles if article is not None]
+    if not articles:
+        return f"No GDELT articles found for: {query!r}"
+    return f"GDELT articles for {query!r}:\n" + _format_articles(articles)
+
+
+def _timeline_text(data: dict[str, Any], query: str) -> str:
+    points = [_parse_timeline_point(item) for item in data.get("timeline", [])]
+    points = [point for point in points if point is not None]
     if not points:
         return f"No GDELT timeline points found for: {query!r}"
-
     return f"GDELT timeline for {query!r}:\n" + _format_timeline(points)
-
-
-def _fetch_json(params: dict[str, str]) -> dict[str, Any]:
-    url = f"{_DOC_API_URL}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    _throttle()
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="replace"))
-
-
-def _throttle() -> None:
-    global _LAST_REQUEST_AT
-
-    now = time.monotonic()
-    elapsed = now - _LAST_REQUEST_AT
-    if elapsed < _GDELT_INTERVAL_SECONDS:
-        time.sleep(_GDELT_INTERVAL_SECONDS - elapsed)
-    _LAST_REQUEST_AT = time.monotonic()
-
-
-def _http_error(prefix: str, error: urllib.error.HTTPError) -> str:
-    if error.code == 429:
-        detail = _read_error_body(error)
-        if detail:
-            return f"{prefix}: rate limited by GDELT (HTTP 429): {detail}"
-        return f"{prefix}: rate limited by GDELT (HTTP 429). Try again later."
-    return f"{prefix}: HTTP error {error.code}: {error.reason}"
-
-
-def _read_error_body(error: urllib.error.HTTPError) -> str:
-    try:
-        body = error.read().decode("utf-8", errors="replace").strip()
-    except Exception:
-        return ""
-    return " ".join(body.split())
 
 
 def _parse_article(data: dict[str, Any]) -> _GdeltArticle | None:

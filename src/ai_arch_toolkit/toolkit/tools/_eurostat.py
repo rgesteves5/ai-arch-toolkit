@@ -2,28 +2,33 @@
 
 from __future__ import annotations
 
-import json
 import re
-import urllib.error
-import urllib.parse
-import urllib.request
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
-_DATAFLOW_URL = (
-    "https://ec.europa.eu/eurostat/api/dissemination/sdmx/2.1/dataflow/ESTAT/all/latest"
+_DATAFLOWS = Api(
+    base="https://ec.europa.eu/eurostat/api/dissemination/sdmx/2.1/dataflow/ESTAT/all/latest",
+    name="Eurostat",
+    timeout_s=30,
+    params={"format": "JSON", "lang": "en"},
+    status_messages={404: "no matching records found."},
 )
-_DATA_URL = "https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data"
-_TIMEOUT = 30
-_USER_AGENT = "ai-arch-toolkit/1.0 (https://github.com/ai-arch-toolkit)"
+_DATA = Api(
+    base="https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data",
+    name="Eurostat",
+    timeout_s=30,
+    params={"format": "JSON", "lang": "en"},
+    status_messages={404: "no matching records found."},
+)
 _MAX_LIMIT = 50
 _DATASET_RE = re.compile(r"^[A-Za-z0-9_]{2,60}$")
 _CODE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
 _TEXT_RE = re.compile(r"^[\w\s,.'()/%:+-]{1,180}$", re.UNICODE)
 
 
-@tool
+@tool(capability="network")
 def eurostat_dataset_search(query: str, max_results: int = 10, offset: int = 0) -> str:
     """Search Eurostat datasets/dataflows.
 
@@ -37,34 +42,14 @@ def eurostat_dataset_search(query: str, max_results: int = 10, offset: int = 0) 
     if offset < 0:
         return "Eurostat dataset search failed: offset must be greater than or equal to 0."
     try:
-        data = _fetch_json(_DATAFLOW_URL, {"format": "JSON", "lang": "en"})
-        items = _dataflow_items(data)
-    except urllib.error.HTTPError as e:
-        return _http_error("Eurostat dataset search failed", e)
-    except urllib.error.URLError as e:
-        return f"Eurostat dataset search failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "Eurostat dataset search failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"Eurostat dataset search failed: could not parse API response: {e}"
-
-    terms = query.lower().split()
-    matches = [item for item in items if _matches_dataflow(item, terms)]
-    page = matches[offset : offset + _bounded(max_results)]
-    if not page:
-        return "No Eurostat datasets found."
-    lines = [
-        (
-            f"Eurostat datasets for {query!r} "
-            f"(returned {len(page)}, total matches {len(matches)}, offset {offset}):"
+        return _DATAFLOWS.get_json(
+            parse=lambda data: _dataset_search_text(data, query, offset, max_results)
         )
-    ]
-    for index, item in enumerate(page, start=1):
-        lines.extend(_format_dataflow(item, index=index))
-    return "\n".join(lines)
+    except HttpError as e:
+        return f"Eurostat dataset search failed: {e}"
 
 
-@tool
+@tool(capability="network")
 def eurostat_dataset(dataset_id: str) -> str:
     """Get Eurostat dataset metadata using a small last-period query.
 
@@ -75,33 +60,16 @@ def eurostat_dataset(dataset_id: str) -> str:
     if not _DATASET_RE.fullmatch(dataset):
         return f"Eurostat dataset lookup failed: invalid dataset_id: {dataset_id!r}"
     try:
-        data = _fetch_dataset(dataset, {"lastTimePeriod": "1"})
-    except urllib.error.HTTPError as e:
-        return _http_error("Eurostat dataset lookup failed", e)
-    except urllib.error.URLError as e:
-        return f"Eurostat dataset lookup failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "Eurostat dataset lookup failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"Eurostat dataset lookup failed: could not parse API response: {e}"
-
-    lines = [f"Eurostat dataset {dataset}:", _string(data.get("label")) or "(no label)"]
-    updated = _string(data.get("updated")) or "?"
-    source = _string(data.get("source")) or "?"
-    lines.append(f"   updated: {updated} | source: {source}")
-    description = _strip_html(_nested(data, "extension", "description"))
-    if description:
-        lines.append(f"   description: {_trim(description, 500)}")
-    annotations = _annotations(data)
-    if annotations:
-        lines.append("   " + " | ".join(annotations))
-    dims = _dimension_summaries(data, max_values=5)
-    if dims:
-        lines.append("   dimensions: " + "; ".join(dims))
-    return "\n".join(lines)
+        return _DATA.get_json(
+            dataset,
+            params={"lastTimePeriod": "1"},
+            parse=lambda data: _dataset_text(data, dataset),
+        )
+    except HttpError as e:
+        return f"Eurostat dataset lookup failed: {e}"
 
 
-@tool
+@tool(capability="network")
 def eurostat_dimensions(dataset_id: str, max_values: int = 20) -> str:
     """List Eurostat dataset dimensions and sample category codes.
 
@@ -113,37 +81,16 @@ def eurostat_dimensions(dataset_id: str, max_values: int = 20) -> str:
     if not _DATASET_RE.fullmatch(dataset):
         return f"Eurostat dimensions failed: invalid dataset_id: {dataset_id!r}"
     try:
-        data = _fetch_dataset(dataset, {"lastTimePeriod": "1"})
-    except urllib.error.HTTPError as e:
-        return _http_error("Eurostat dimensions failed", e)
-    except urllib.error.URLError as e:
-        return f"Eurostat dimensions failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "Eurostat dimensions failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"Eurostat dimensions failed: could not parse API response: {e}"
-
-    dims = data.get("dimension", {})
-    ids = data.get("id", [])
-    if not isinstance(dims, dict) or not isinstance(ids, list):
-        return f"No Eurostat dimensions found for {dataset}."
-    lines = [f"Eurostat dimensions for {dataset}:"]
-    for dim_id in ids:
-        dim = dims.get(dim_id, {})
-        if not isinstance(dim, dict):
-            continue
-        labels = dim.get("category", {}).get("label", {})
-        values = []
-        if isinstance(labels, dict):
-            for code, label in list(labels.items())[: _bounded(max_values)]:
-                values.append(f"{code}={_string(label)}")
-        lines.append(f"{dim_id} — {_string(dim.get('label')) or '?'}")
-        if values:
-            lines.append(f"   values: {'; '.join(values)}")
-    return "\n".join(lines)
+        return _DATA.get_json(
+            dataset,
+            params={"lastTimePeriod": "1"},
+            parse=lambda data: _dimensions_text(data, dataset, max_values),
+        )
+    except HttpError as e:
+        return f"Eurostat dimensions failed: {e}"
 
 
-@tool
+@tool(capability="network")
 def eurostat_series(
     dataset_id: str,
     filters: str = "",
@@ -164,32 +111,16 @@ def eurostat_series(
     parsed = _parse_filters(filters)
     if isinstance(parsed, str):
         return f"Eurostat series failed: {parsed}"
-    params = parsed
-    if not any(key.lower() == "time" for key in params):
-        params["lastTimePeriod"] = str(max(1, min(last_time_periods, 20)))
+    params = _with_last_periods(parsed, last_time_periods)
     try:
-        data = _fetch_dataset(dataset, params)
-        points = _observations(data)
-    except urllib.error.HTTPError as e:
-        return _http_error("Eurostat series failed", e)
-    except urllib.error.URLError as e:
-        return f"Eurostat series failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "Eurostat series failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"Eurostat series failed: could not parse API response: {e}"
-
-    if not points:
-        return f"No Eurostat observations found for {dataset}."
-    returned = min(len(points), _bounded(max_points))
-    lines = [f"Eurostat series {dataset} (returned {returned} of {len(points)}):"]
-    for index, point in enumerate(points[: _bounded(max_points)], start=1):
-        dims = ", ".join(f"{key}={value}" for key, value in point["dimensions"].items())
-        lines.append(f"{index}. {point['value']} | {dims}")
-    return "\n".join(lines)
+        return _DATA.get_json(
+            dataset, params=params, parse=lambda data: _series_text(data, dataset, max_points)
+        )
+    except HttpError as e:
+        return f"Eurostat series failed: {e}"
 
 
-@tool
+@tool(capability="network")
 def eurostat_compare(
     dataset_id: str,
     geo_codes: str,
@@ -218,26 +149,10 @@ def eurostat_compare(
     if not _DATASET_RE.fullmatch(dataset):
         return f"Eurostat compare failed: invalid dataset_id: {dataset_id!r}"
 
-    rows: list[str] = []
     try:
-        for geo in geos:
-            params = {**parsed, "geo": geo}
-            if not any(key.lower() == "time" for key in params):
-                params["lastTimePeriod"] = str(max(1, min(last_time_periods, 20)))
-            data = _fetch_dataset(dataset, params)
-            points = _observations(data)
-            for point in points[:last_time_periods]:
-                dims = ", ".join(f"{key}={value}" for key, value in point["dimensions"].items())
-                rows.append(f"{point['value']} | {dims}")
-    except urllib.error.HTTPError as e:
-        return _http_error("Eurostat compare failed", e)
-    except urllib.error.URLError as e:
-        return f"Eurostat compare failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "Eurostat compare failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"Eurostat compare failed: could not parse API response: {e}"
-
+        rows = _compare_rows(dataset, geos, parsed, last_time_periods)
+    except HttpError as e:
+        return f"Eurostat compare failed: {e}"
     if not rows:
         return f"No Eurostat comparison observations found for {dataset}."
     lines = [f"Eurostat comparison {dataset}:"]
@@ -245,16 +160,99 @@ def eurostat_compare(
     return "\n".join(lines)
 
 
-def _fetch_dataset(dataset: str, params: dict[str, str]) -> dict[str, Any]:
-    query = {"format": "JSON", "lang": "en", **params}
-    return _fetch_json(f"{_DATA_URL}/{urllib.parse.quote(dataset)}", query)
+def _with_last_periods(params: dict[str, str], last_time_periods: int) -> dict[str, str]:
+    if not any(key.lower() == "time" for key in params):
+        params["lastTimePeriod"] = str(max(1, min(last_time_periods, 20)))
+    return params
 
 
-def _fetch_json(url: str, params: dict[str, str]) -> dict[str, Any]:
-    req_url = f"{url}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(req_url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="replace"))
+def _compare_rows(
+    dataset: str, geos: list[str], filters: dict[str, str], last_time_periods: int
+) -> list[str]:
+    rows: list[str] = []
+    for geo in geos:
+        params = _with_last_periods({**filters, "geo": geo}, last_time_periods)
+        rows.extend(
+            _DATA.get_json(
+                dataset,
+                params=params,
+                parse=lambda data: [
+                    _point_text(point) for point in _observations(data)[:last_time_periods]
+                ],
+            )
+        )
+    return rows
+
+
+def _dataset_search_text(data: dict[str, Any], query: str, offset: int, max_results: int) -> str:
+    terms = query.lower().split()
+    matches = [item for item in _dataflow_items(data) if _matches_dataflow(item, terms)]
+    page = matches[offset : offset + _bounded(max_results)]
+    if not page:
+        return "No Eurostat datasets found."
+    lines = [
+        (
+            f"Eurostat datasets for {query!r} "
+            f"(returned {len(page)}, total matches {len(matches)}, offset {offset}):"
+        )
+    ]
+    for index, item in enumerate(page, start=1):
+        lines.extend(_format_dataflow(item, index=index))
+    return "\n".join(lines)
+
+
+def _dataset_text(data: dict[str, Any], dataset: str) -> str:
+    lines = [f"Eurostat dataset {dataset}:", _string(data.get("label")) or "(no label)"]
+    updated = _string(data.get("updated")) or "?"
+    source = _string(data.get("source")) or "?"
+    lines.append(f"   updated: {updated} | source: {source}")
+    description = _strip_html(_nested(data, "extension", "description"))
+    if description:
+        lines.append(f"   description: {_trim(description, 500)}")
+    annotations = _annotations(data)
+    if annotations:
+        lines.append("   " + " | ".join(annotations))
+    dims = _dimension_summaries(data, max_values=5)
+    if dims:
+        lines.append("   dimensions: " + "; ".join(dims))
+    return "\n".join(lines)
+
+
+def _dimensions_text(data: dict[str, Any], dataset: str, max_values: int) -> str:
+    dims = data.get("dimension", {})
+    ids = data.get("id", [])
+    if not isinstance(dims, dict) or not isinstance(ids, list):
+        return f"No Eurostat dimensions found for {dataset}."
+    lines = [f"Eurostat dimensions for {dataset}:"]
+    for dim_id in ids:
+        dim = dims.get(dim_id, {})
+        if not isinstance(dim, dict):
+            continue
+        labels = dim.get("category", {}).get("label", {})
+        values = []
+        if isinstance(labels, dict):
+            for code, label in list(labels.items())[: _bounded(max_values)]:
+                values.append(f"{code}={_string(label)}")
+        lines.append(f"{dim_id} — {_string(dim.get('label')) or '?'}")
+        if values:
+            lines.append(f"   values: {'; '.join(values)}")
+    return "\n".join(lines)
+
+
+def _series_text(data: dict[str, Any], dataset: str, max_points: int) -> str:
+    points = _observations(data)
+    if not points:
+        return f"No Eurostat observations found for {dataset}."
+    returned = min(len(points), _bounded(max_points))
+    lines = [f"Eurostat series {dataset} (returned {returned} of {len(points)}):"]
+    for index, point in enumerate(points[: _bounded(max_points)], start=1):
+        lines.append(f"{index}. {_point_text(point)}")
+    return "\n".join(lines)
+
+
+def _point_text(point: dict[str, Any]) -> str:
+    dims = ", ".join(f"{key}={value}" for key, value in point["dimensions"].items())
+    return f"{point['value']} | {dims}"
 
 
 def _dataflow_items(data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -393,14 +391,6 @@ def _parse_filters(filters: str) -> dict[str, str] | str:
             return f"invalid filter value for {key!r}."
         out[key] = value
     return out
-
-
-def _http_error(prefix: str, error: urllib.error.HTTPError) -> str:
-    if error.code == 404:
-        return f"{prefix}: no matching records found."
-    if error.code == 429:
-        return f"{prefix}: rate limited by Eurostat (HTTP 429). Try again later."
-    return f"{prefix}: HTTP error {error.code}: {error.reason}"
 
 
 def _valid_text(value: str) -> bool:

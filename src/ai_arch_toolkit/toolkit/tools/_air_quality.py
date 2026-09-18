@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import json
-import urllib.error
-import urllib.parse
-import urllib.request
+from collections.abc import Callable
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
-_API_URL = "https://air-quality-api.open-meteo.com/v1/air-quality"
-_TIMEOUT = 15
+_API = Api(
+    base="https://air-quality-api.open-meteo.com/v1/air-quality", name="Open-Meteo", timeout_s=15
+)
 _MAX_HOURS_LIMIT = 72
 _DEFAULT_VARIABLES = "european_aqi,us_aqi,pm10,pm2_5,ozone,nitrogen_dioxide"
 _VALID_VARIABLES = {
@@ -61,7 +61,7 @@ _VALID_VARIABLES = {
 }
 
 
-@tool
+@tool(capability="network")
 def air_quality_current(
     latitude: float,
     longitude: float,
@@ -83,31 +83,16 @@ def air_quality_current(
     if isinstance(parsed, str):
         return f"Air quality current failed: {parsed}"
 
-    try:
-        data = _fetch_json(
-            {
-                "latitude": str(latitude),
-                "longitude": str(longitude),
-                "current": ",".join(parsed),
-                "timezone": timezone.strip() or "auto",
-            }
-        )
-    except urllib.error.HTTPError as e:
-        return _http_error("Air quality current failed", e)
-    except urllib.error.URLError as e:
-        return f"Air quality current failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "Air quality current failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"Air quality current failed: could not parse API response: {e}"
-
-    current = data.get("current")
-    if not isinstance(current, dict):
-        return "Air quality current failed: unexpected API response."
-    return _format_current(data, parsed)
+    params = {
+        "latitude": str(latitude),
+        "longitude": str(longitude),
+        "current": ",".join(parsed),
+        "timezone": timezone.strip() or "auto",
+    }
+    return _fetch("Air quality current failed", params, lambda data: _current_text(data, parsed))
 
 
-@tool
+@tool(capability="network")
 def air_quality_forecast(
     latitude: float,
     longitude: float,
@@ -139,37 +124,50 @@ def air_quality_forecast(
     past_days = max(0, min(past_days, 7))
     max_hours = max(1, min(max_hours, _MAX_HOURS_LIMIT))
 
+    params = {
+        "latitude": str(latitude),
+        "longitude": str(longitude),
+        "hourly": ",".join(parsed),
+        "forecast_days": str(forecast_days),
+        "past_days": str(past_days),
+        "timezone": timezone.strip() or "auto",
+    }
+    return _fetch(
+        "Air quality forecast failed",
+        params,
+        lambda data: _forecast_text(data, parsed, max_hours),
+    )
+
+
+def _fetch(failure: str, params: dict[str, str], render: Callable[[dict[str, Any]], str]) -> str:
     try:
-        data = _fetch_json(
-            {
-                "latitude": str(latitude),
-                "longitude": str(longitude),
-                "hourly": ",".join(parsed),
-                "forecast_days": str(forecast_days),
-                "past_days": str(past_days),
-                "timezone": timezone.strip() or "auto",
-            }
-        )
-    except urllib.error.HTTPError as e:
-        return _http_error("Air quality forecast failed", e)
-    except urllib.error.URLError as e:
-        return f"Air quality forecast failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "Air quality forecast failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"Air quality forecast failed: could not parse API response: {e}"
+        return _API.get_json(params=params, parse=render)
+    except HttpError as e:
+        reason = _error_reason(e.body)
+        if e.status is not None and reason:
+            return f"{failure}: HTTP error {e.status}: {reason}"
+        return f"{failure}: {e}"
 
-    hourly = data.get("hourly")
-    if not isinstance(hourly, dict):
+
+def _error_reason(body: str) -> str:
+    """The ``reason`` Open-Meteo puts in a JSON error body; ``""`` when there is none."""
+    try:
+        payload = json.loads(body)
+    except (ValueError, RecursionError):
+        return ""
+    return _string(payload.get("reason")) if isinstance(payload, dict) else ""
+
+
+def _current_text(data: dict[str, Any], variables: tuple[str, ...]) -> str:
+    if not isinstance(data.get("current"), dict):
+        return "Air quality current failed: unexpected API response."
+    return _format_current(data, variables)
+
+
+def _forecast_text(data: dict[str, Any], variables: tuple[str, ...], max_hours: int) -> str:
+    if not isinstance(data.get("hourly"), dict):
         return "Air quality forecast failed: unexpected API response."
-    return _format_forecast(data, parsed, max_hours)
-
-
-def _fetch_json(params: dict[str, str]) -> dict[str, Any]:
-    url = f"{_API_URL}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(url)
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="replace"))
+    return _format_forecast(data, variables, max_hours)
 
 
 def _parse_variables(value: str) -> tuple[str, ...] | str:
@@ -237,23 +235,6 @@ def _location_header(label: str, data: dict[str, Any]) -> str:
     timezone = _string(data.get("timezone"))
     suffix = f" ({timezone})" if timezone else ""
     return f"{label} for {lat}, {lon}{suffix}:"
-
-
-def _http_error(prefix: str, error: urllib.error.HTTPError) -> str:
-    detail = _read_error_body(error)
-    if detail:
-        return f"{prefix}: HTTP error {error.code}: {detail}"
-    return f"{prefix}: HTTP error {error.code}: {error.reason}"
-
-
-def _read_error_body(error: urllib.error.HTTPError) -> str:
-    try:
-        payload = json.loads(error.read().decode("utf-8", errors="replace"))
-    except Exception:
-        return ""
-    if isinstance(payload, dict):
-        return _string(payload.get("reason"))
-    return ""
 
 
 def _string(value: Any) -> str:

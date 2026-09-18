@@ -3,61 +3,43 @@
 from __future__ import annotations
 
 import ipaddress
-import json
 import math
-import urllib.error
-import urllib.parse
-import urllib.request
+from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
-_TIMEOUT = 10
-_USER_AGENT = "ai-arch-toolkit/1.0"
+_GEOCODING = Api(base="https://geocoding-api.open-meteo.com/v1", name="Open-Meteo", query_safe=",")
+_FORECAST = Api(base="https://api.open-meteo.com/v1", name="Open-Meteo", query_safe=",")
+# One request per second, a clock the osm_* tools share:
+# https://operations.osmfoundation.org/policies/nominatim/
+_NOMINATIM = Api(base="https://nominatim.openstreetmap.org", name="Nominatim", min_interval_s=1.1)
+# The free endpoint is HTTPS and allows commercial use: https://ipwhois.io/documentation
+_IPWHOIS = Api(base="https://ipwho.is", name="ipwho.is", segment_safe=":")
+_COUNTRIES = Api(base="https://restcountries.com/v3.1", name="REST Countries", query_safe=",")
+_COUNTRY_FIELDS = (
+    "name,capital,population,area,region,subregion,languages,currencies,timezones,flags,borders"
+)
 
 
-@tool
+@tool(capability="network")
 def geocode(city: str) -> str:
     """Get the coordinates and country for a city using Open-Meteo geocoding.
 
     Args:
         city: City name, e.g. "Tokyo", "London", "São Paulo".
     """
-    url = (
-        f"https://geocoding-api.open-meteo.com/v1/search"
-        f"?name={urllib.parse.quote(city)}&count=3&language=en&format=json"
-    )
+    params = {"name": city, "count": "3", "language": "en", "format": "json"}
     try:
-        req = urllib.request.Request(url)
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-            data = json.loads(resp.read())
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
+        lines = _GEOCODING.get_json("search", params=params, parse=_geocode_lines)
+    except HttpError as e:
         return f"Geocoding failed: {e}"
-
-    results = data.get("results")
-    if not results:
+    if not lines:
         return f"No results for: {city!r}"
-
-    lines: list[str] = []
-    for r in results:
-        name = r.get("name", "")
-        country = r.get("country", "")
-        admin = r.get("admin1", "")
-        lat = r.get("latitude", "?")
-        lon = r.get("longitude", "?")
-        pop = r.get("population")
-        tz = r.get("timezone", "")
-        loc = f"{name}, {admin}, {country}" if admin else f"{name}, {country}"
-        line = f"  {loc}: {lat}°N, {lon}°E"
-        if pop:
-            line += f", pop: {pop:,}"
-        if tz:
-            line += f", tz: {tz}"
-        lines.append(line)
-
     return f"Geocoding results for {city!r}:\n" + "\n".join(lines)
 
 
-@tool
+@tool(capability="network")
 def reverse_geocode(lat: float, lon: float) -> str:
     """Look up a place name from latitude and longitude.
 
@@ -70,50 +52,16 @@ def reverse_geocode(lat: float, lon: float) -> str:
     error = _validate_coords(lat, lon)
     if error:
         return error
-
-    url = (
-        "https://nominatim.openstreetmap.org/reverse"
-        f"?format=jsonv2&lat={lat}&lon={lon}&zoom=10&addressdetails=1"
-    )
+    params = {"format": "jsonv2", "lat": lat, "lon": lon, "zoom": "10", "addressdetails": "1"}
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-            data = json.loads(resp.read())
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
+        return _NOMINATIM.get_json(
+            "reverse", params=params, parse=lambda data: _place_text(data, lat, lon)
+        )
+    except HttpError as e:
         return f"Reverse geocoding failed: {e}"
 
-    display = data.get("display_name")
-    if not display:
-        return f"No reverse geocoding result for coordinates: {lat}, {lon}"
 
-    address = data.get("address", {})
-    country = address.get("country", "?")
-    state = (
-        address.get("state")
-        or address.get("region")
-        or address.get("county")
-        or address.get("state_district")
-        or "?"
-    )
-    city = (
-        address.get("city")
-        or address.get("town")
-        or address.get("village")
-        or address.get("municipality")
-        or address.get("hamlet")
-        or "?"
-    )
-
-    return (
-        f"Coordinates: {lat}, {lon}\n"
-        f"Location: {display}\n"
-        f"City: {city}\n"
-        f"Region: {state}\n"
-        f"Country: {country}"
-    )
-
-
-@tool
+@tool(capability="network")
 def timezone_lookup(lat: float, lon: float) -> str:
     """Look up the timezone for a coordinate pair.
 
@@ -126,27 +74,22 @@ def timezone_lookup(lat: float, lon: float) -> str:
     error = _validate_coords(lat, lon)
     if error:
         return error
-
-    url = (
-        f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
-        f"&current=temperature_2m&forecast_days=1&timezone=auto"
-    )
+    params = {
+        "latitude": lat,
+        "longitude": lon,
+        "current": "temperature_2m",
+        "forecast_days": "1",
+        "timezone": "auto",
+    }
     try:
-        req = urllib.request.Request(url)
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-            data = json.loads(resp.read())
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
+        return _FORECAST.get_json(
+            "forecast", params=params, parse=lambda data: _timezone_text(data, lat, lon)
+        )
+    except HttpError as e:
         return f"Timezone lookup failed: {e}"
 
-    timezone = data.get("timezone")
-    if not timezone:
-        return f"No timezone found for coordinates: {lat}, {lon}"
 
-    offset = _format_utc_offset(data.get("utc_offset_seconds"))
-    return f"Coordinates: {lat}, {lon}\nTimezone: {timezone}\nUTC offset: {offset}"
-
-
-@tool
+@tool(capability="compute")
 def distance_between(
     lat1: float,
     lon1: float,
@@ -190,11 +133,11 @@ def distance_between(
     return f"{lat1}, {lon1} → {lat2}, {lon2} = {distance:.2f} {unit}"
 
 
-@tool
+@tool(capability="network")
 def ip_lookup(ip: str = "") -> str:
     """Look up geographic location and ISP info for an IP address.
 
-    Uses ip-api.com (free, no API key, max 45 requests/minute).
+    Uses ipwho.is (free, no API key, 1000 requests/day per client IP).
 
     Args:
         ip: Explicit IPv4 or IPv6 address to look up.
@@ -203,29 +146,13 @@ def ip_lookup(ip: str = "") -> str:
         target = str(ipaddress.ip_address(ip))
     except ValueError:
         return "IP lookup failed: provide a valid IPv4 or IPv6 address"
-    url = f"http://ip-api.com/json/{target}?fields=status,message,query,country,regionName,city,zip,lat,lon,timezone,isp,org,as"
     try:
-        req = urllib.request.Request(url)
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-            data = json.loads(resp.read())
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
+        return _IPWHOIS.get_json(target, parse=_ip_text)
+    except HttpError as e:
         return f"IP lookup failed: {e}"
 
-    if data.get("status") != "success":
-        return f"IP lookup failed: {data.get('message', 'unknown error')}"
 
-    return (
-        f"IP: {data.get('query', '?')}\n"
-        f"Location: {data.get('city', '?')}, {data.get('regionName', '?')}, "
-        f"{data.get('country', '?')}\n"
-        f"Coordinates: {data.get('lat', '?')}°N, {data.get('lon', '?')}°E\n"
-        f"Timezone: {data.get('timezone', '?')}\n"
-        f"ISP: {data.get('isp', '?')}\n"
-        f"Organization: {data.get('org', '?')}"
-    )
-
-
-@tool
+@tool(capability="network")
 def country_info(name: str) -> str:
     """Get information about a country (capital, population, languages, etc.).
 
@@ -234,55 +161,113 @@ def country_info(name: str) -> str:
     Args:
         name: Country name, e.g. "Japan", "France", "Brazil".
     """
-    url = (
-        f"https://restcountries.com/v3.1/name/{urllib.parse.quote(name)}"
-        f"?fields=name,capital,population,area,region,subregion,languages,"
-        f"currencies,timezones,flags,borders"
-    )
     try:
-        req = urllib.request.Request(url)
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-            data = json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
+        return _COUNTRIES.get_json_list(
+            "name",
+            name,
+            params={"fields": _COUNTRY_FIELDS},
+            parse=lambda data: _country_text(data, name),
+        )
+    except HttpError as e:
+        if e.status == 404:
             return f"Country not found: {name!r}"
-        return f"API error: {e.code}"
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
         return f"Country info failed: {e}"
 
-    if not isinstance(data, list) or not data:
-        return f"No data for: {name!r}"
 
+def _geocode_lines(data: dict[str, Any]) -> list[str]:
+    lines: list[str] = []
+    for r in data.get("results") or []:
+        name = r.get("name", "")
+        country = r.get("country", "")
+        admin = r.get("admin1", "")
+        loc = f"{name}, {admin}, {country}" if admin else f"{name}, {country}"
+        line = f"  {loc}: {r.get('latitude', '?')}°N, {r.get('longitude', '?')}°E"
+        if r.get("population"):
+            line += f", pop: {r['population']:,}"
+        if r.get("timezone"):
+            line += f", tz: {r['timezone']}"
+        lines.append(line)
+    return lines
+
+
+def _place_text(data: dict[str, Any], lat: float, lon: float) -> str:
+    display = data.get("display_name")
+    if not display:
+        return f"No reverse geocoding result for coordinates: {lat}, {lon}"
+    address = data.get("address", {})
+    country = address.get("country", "?")
+    state = (
+        address.get("state")
+        or address.get("region")
+        or address.get("county")
+        or address.get("state_district")
+        or "?"
+    )
+    city = (
+        address.get("city")
+        or address.get("town")
+        or address.get("village")
+        or address.get("municipality")
+        or address.get("hamlet")
+        or "?"
+    )
+    return (
+        f"Coordinates: {lat}, {lon}\n"
+        f"Location: {display}\n"
+        f"City: {city}\n"
+        f"Region: {state}\n"
+        f"Country: {country}"
+    )
+
+
+def _timezone_text(data: dict[str, Any], lat: float, lon: float) -> str:
+    timezone = data.get("timezone")
+    if not timezone:
+        return f"No timezone found for coordinates: {lat}, {lon}"
+    offset = _format_utc_offset(data.get("utc_offset_seconds"))
+    return f"Coordinates: {lat}, {lon}\nTimezone: {timezone}\nUTC offset: {offset}"
+
+
+def _ip_text(data: dict[str, Any]) -> str:
+    if data.get("success") is not True:
+        return f"IP lookup failed: {data.get('message', 'unknown error')}"
+    connection = data.get("connection") or {}
+    timezone = data.get("timezone") or {}
+    return (
+        f"IP: {data.get('ip', '?')}\n"
+        f"Location: {data.get('city', '?')}, {data.get('region', '?')}, "
+        f"{data.get('country', '?')}\n"
+        f"Coordinates: {data.get('latitude', '?')}°N, {data.get('longitude', '?')}°E\n"
+        f"Timezone: {timezone.get('id', '?')}\n"
+        f"ISP: {connection.get('isp', '?')}\n"
+        f"Organization: {connection.get('org', '?')}"
+    )
+
+
+def _country_text(data: list[Any], name: str) -> str:
+    if not data:
+        return f"No data for: {name!r}"
     c = data[0]
     official = c.get("name", {}).get("official", name)
     common = c.get("name", {}).get("common", name)
     capitals = c.get("capital", [])
-    pop = c.get("population", 0)
-    area = c.get("area", 0)
-    region = c.get("region", "?")
-    subregion = c.get("subregion", "")
     languages = c.get("languages", {})
-    currencies = c.get("currencies", {})
     timezones = c.get("timezones", [])
-
     lang_str = ", ".join(languages.values()) if languages else "?"
-    curr_list = []
-    for code, info in currencies.items():
-        symbol = info.get("symbol", "")
-        curr_name = info.get("name", code)
-        curr_list.append(f"{curr_name} ({code}{', ' + symbol if symbol else ''})")
-    curr_str = ", ".join(curr_list) if curr_list else "?"
-    tz_str = ", ".join(timezones[:5]) if timezones else "?"
-
+    currencies = [
+        f"{info.get('name', code)} ({code}{', ' + info['symbol'] if info.get('symbol') else ''})"
+        for code, info in c.get("currencies", {}).items()
+    ]
+    subregion = c.get("subregion", "")
     return (
         f"{common} ({official}):\n"
         f"  Capital: {', '.join(capitals) if capitals else '?'}\n"
-        f"  Population: {pop:,}\n"
-        f"  Area: {area:,.0f} km²\n"
-        f"  Region: {region}" + (f" / {subregion}" if subregion else "") + "\n"
+        f"  Population: {c.get('population', 0):,}\n"
+        f"  Area: {c.get('area', 0):,.0f} km²\n"
+        f"  Region: {c.get('region', '?')}" + (f" / {subregion}" if subregion else "") + "\n"
         f"  Languages: {lang_str}\n"
-        f"  Currencies: {curr_str}\n"
-        f"  Timezones: {tz_str}"
+        f"  Currencies: {', '.join(currencies) if currencies else '?'}\n"
+        f"  Timezones: {', '.join(timezones[:5]) if timezones else '?'}"
     )
 
 

@@ -2,25 +2,25 @@
 
 from __future__ import annotations
 
-import json
 import re
-import urllib.error
-import urllib.parse
-import urllib.request
 from datetime import date
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
-_BASE_URL = "https://earthquake.usgs.gov/fdsnws/event/1"
-_TIMEOUT = 15
-_USER_AGENT = "ai-arch-toolkit/1.0 (https://github.com/ai-arch-toolkit)"
+_API = Api(
+    base="https://earthquake.usgs.gov/fdsnws/event/1",
+    name="USGS",
+    timeout_s=15,
+    status_messages={404: "no matching records found."},
+)
 _MAX_LIMIT = 50
 _EVENT_RE = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
 _ORDER_BY = {"time", "time-asc", "magnitude", "magnitude-asc"}
 
 
-@tool
+@tool(capability="network")
 def earthquake_search(
     start_time: str = "",
     end_time: str = "",
@@ -51,20 +51,6 @@ def earthquake_search(
         max_results: Number of events to return (1-50). Defaults to 10.
         offset: One-based result offset. Defaults to 1.
     """
-    validation = _validate_search(
-        start_time,
-        end_time,
-        min_magnitude,
-        max_magnitude,
-        latitude,
-        longitude,
-        max_radius_km,
-        order_by,
-        offset,
-    )
-    if validation:
-        return f"USGS earthquake search failed: {validation}"
-
     params = _search_params(
         start_time,
         end_time,
@@ -79,29 +65,15 @@ def earthquake_search(
         max_results,
         offset,
     )
+    if isinstance(params, str):
+        return f"USGS earthquake search failed: {params}"
     try:
-        data = _fetch_json("/query", params)
-        features = data.get("features", [])
-    except urllib.error.HTTPError as e:
-        return _http_error("USGS earthquake search failed", e)
-    except urllib.error.URLError as e:
-        return f"USGS earthquake search failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "USGS earthquake search failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"USGS earthquake search failed: could not parse API response: {e}"
-
-    if not isinstance(features, list) or not features:
-        return "No USGS earthquakes found."
-    total = _string(data.get("metadata", {}).get("count")) or "?"
-    lines = [f"USGS earthquakes (returned {len(features)}, count {total}, offset {offset}):"]
-    for index, feature in enumerate(features, start=1):
-        if isinstance(feature, dict):
-            lines.extend(_format_event(feature, index=index, details=False))
-    return "\n".join(lines)
+        return _API.get_json("query", params=params, parse=lambda data: _events_text(data, offset))
+    except HttpError as e:
+        return f"USGS earthquake search failed: {e}"
 
 
-@tool
+@tool(capability="network")
 def earthquake_event(event_id: str) -> str:
     """Get a USGS earthquake event by ID.
 
@@ -110,25 +82,16 @@ def earthquake_event(event_id: str) -> str:
     """
     if not _EVENT_RE.fullmatch(event_id.strip()):
         return f"USGS earthquake lookup failed: invalid event_id: {event_id!r}"
+    params = {"format": "geojson", "eventid": event_id.strip()}
     try:
-        data = _fetch_json("/query", {"format": "geojson", "eventid": event_id.strip()})
-    except urllib.error.HTTPError as e:
-        return _http_error("USGS earthquake lookup failed", e)
-    except urllib.error.URLError as e:
-        return f"USGS earthquake lookup failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "USGS earthquake lookup failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"USGS earthquake lookup failed: could not parse API response: {e}"
-
-    if not data:
-        return f"USGS earthquake not found: {event_id}"
-    lines = [f"USGS earthquake {event_id.strip()}:"]
-    lines.extend(_format_event(data, index=None, details=True))
-    return "\n".join(lines)
+        return _API.get_json(
+            "query", params=params, parse=lambda data: _event_text(data, event_id)
+        )
+    except HttpError as e:
+        return f"USGS earthquake lookup failed: {e}"
 
 
-@tool
+@tool(capability="network")
 def earthquake_count(
     start_time: str = "",
     end_time: str = "",
@@ -156,26 +119,33 @@ def earthquake_count(
     if end_time.strip():
         params["endtime"] = end_time.strip()
     try:
-        text = _fetch_text("/count", params)
-    except urllib.error.HTTPError as e:
-        return _http_error("USGS earthquake count failed", e)
-    except urllib.error.URLError as e:
-        return f"USGS earthquake count failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "USGS earthquake count failed: request timed out."
+        return _API.get_text("count", params=params, parse=_count_text)
+    except HttpError as e:
+        return f"USGS earthquake count failed: {e}"
 
+
+def _events_text(data: dict[str, Any], offset: int) -> str:
+    features = data.get("features", [])
+    if not isinstance(features, list) or not features:
+        return "No USGS earthquakes found."
+    total = _string(data.get("metadata", {}).get("count")) or "?"
+    lines = [f"USGS earthquakes (returned {len(features)}, count {total}, offset {offset}):"]
+    for index, feature in enumerate(features, start=1):
+        if isinstance(feature, dict):
+            lines.extend(_format_event(feature, index=index, details=False))
+    return "\n".join(lines)
+
+
+def _event_text(data: dict[str, Any], event_id: str) -> str:
+    if not data:
+        return f"USGS earthquake not found: {event_id}"
+    lines = [f"USGS earthquake {event_id.strip()}:"]
+    lines.extend(_format_event(data, index=None, details=True))
+    return "\n".join(lines)
+
+
+def _count_text(text: str) -> str:
     return f"USGS earthquake count: {_string(text) or '0'}"
-
-
-def _fetch_json(path: str, params: dict[str, str]) -> dict[str, Any]:
-    return json.loads(_fetch_text(path, params))
-
-
-def _fetch_text(path: str, params: dict[str, str]) -> str:
-    url = f"{_BASE_URL}{path}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-        return resp.read().decode("utf-8", errors="replace")
 
 
 def _search_params(
@@ -191,7 +161,21 @@ def _search_params(
     order_by: str,
     max_results: int,
     offset: int,
-) -> dict[str, str]:
+) -> dict[str, str] | str:
+    """The query of a search, or why its arguments are invalid."""
+    validation = _validate_search(
+        start_time,
+        end_time,
+        min_magnitude,
+        max_magnitude,
+        latitude,
+        longitude,
+        max_radius_km,
+        order_by,
+        offset,
+    )
+    if validation:
+        return validation
     params = {
         "format": "geojson",
         "minmagnitude": str(min_magnitude),
@@ -303,14 +287,6 @@ def _format_event(feature: dict[str, Any], *, index: int | None, details: bool) 
         if url:
             lines.append(f"   USGS: {url}")
     return lines
-
-
-def _http_error(prefix: str, error: urllib.error.HTTPError) -> str:
-    if error.code == 404:
-        return f"{prefix}: no matching records found."
-    if error.code == 429:
-        return f"{prefix}: rate limited by USGS (HTTP 429). Try again later."
-    return f"{prefix}: HTTP error {error.code}: {error.reason}"
 
 
 def _string(value: Any) -> str:

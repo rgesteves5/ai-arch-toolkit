@@ -2,20 +2,20 @@
 
 from __future__ import annotations
 
-import json
 import re
-import urllib.error
-import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
-_API_URL = "https://api.fda.gov/food/enforcement.json"
-_TIMEOUT = 15
-_USER_AGENT = "ai-arch-toolkit/1.0 (https://github.com/ai-arch-toolkit; research tool)"
+_API = Api(
+    base="https://api.fda.gov/food/enforcement.json",
+    name="openFDA",
+    timeout_s=15,
+    status_messages={404: "no matching records found."},
+)
 _MAX_RESULTS_LIMIT = 20
 _TEXT_RE = re.compile(r"^[\w\s,.'&()/%:+-]{1,160}$", re.UNICODE)
 _RECALL_RE = re.compile(r"^[A-Z]-\d{3,5}-\d{4}$", re.IGNORECASE)
@@ -42,7 +42,7 @@ class _OpenFdaRecall:
     termination_date: str
 
 
-@tool
+@tool(capability="network")
 def openfda_food_recall_search(
     query: str = "",
     product: str = "",
@@ -74,7 +74,7 @@ def openfda_food_recall_search(
     if skip < 0:
         return "openFDA food recall search failed: skip must be greater than or equal to 0."
     search = _build_search(query, product, reason, classification, status, state, country)
-    if isinstance(search, str) and search.startswith("invalid"):
+    if search.startswith("invalid"):
         return f"openFDA food recall search failed: {search}"
     date_filter = _date_filter(from_date, to_date)
     if date_filter.startswith("openFDA food recall search failed:"):
@@ -84,33 +84,18 @@ def openfda_food_recall_search(
     if date_filter:
         search = f"({search}) AND {date_filter}" if search else date_filter
 
+    params = {
+        "search": search,
+        "limit": str(max(1, min(max_results, _MAX_RESULTS_LIMIT))),
+        "skip": str(skip),
+    }
     try:
-        data = _fetch_json(
-            {
-                "search": search,
-                "limit": str(max(1, min(max_results, _MAX_RESULTS_LIMIT))),
-                "skip": str(skip),
-            }
-        )
-        recalls = _recalls_from_data(data)
-    except urllib.error.HTTPError as e:
-        return _http_error("openFDA food recall search failed", e)
-    except urllib.error.URLError as e:
-        return f"openFDA food recall search failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "openFDA food recall search failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"openFDA food recall search failed: could not parse API response: {e}"
-
-    if not recalls:
-        return "No openFDA food recalls found."
-    total = _string(data.get("meta", {}).get("results", {}).get("total")) or "?"
-    return f"openFDA food recalls (returned {len(recalls)}, total {total}):\n" + _format_recalls(
-        recalls
-    )
+        return _API.get_json(params=params, parse=_search_text)
+    except HttpError as e:
+        return f"openFDA food recall search failed: {e}"
 
 
-@tool
+@tool(capability="network")
 def openfda_food_recall(recall_number: str) -> str:
     """Fetch an FDA food enforcement recall by recall number.
 
@@ -122,16 +107,12 @@ def openfda_food_recall(recall_number: str) -> str:
         return f"openFDA food recall lookup failed: invalid recall_number: {recall_number!r}"
 
     try:
-        data = _fetch_json({"search": f'recall_number:"{normalized}"', "limit": "1"})
-        recalls = _recalls_from_data(data)
-    except urllib.error.HTTPError as e:
-        return _http_error("openFDA food recall lookup failed", e)
-    except urllib.error.URLError as e:
-        return f"openFDA food recall lookup failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "openFDA food recall lookup failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"openFDA food recall lookup failed: could not parse API response: {e}"
+        recalls = _API.get_json(
+            params={"search": f'recall_number:"{normalized}"', "limit": "1"},
+            parse=_recalls_from_data,
+        )
+    except HttpError as e:
+        return f"openFDA food recall lookup failed: {e}"
 
     if not recalls:
         return f"openFDA food recall not found: {normalized}"
@@ -142,11 +123,14 @@ def openfda_food_recall(recall_number: str) -> str:
     )
 
 
-def _fetch_json(params: dict[str, str]) -> dict[str, Any]:
-    url = f"{_API_URL}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="replace"))
+def _search_text(data: dict[str, Any]) -> str:
+    recalls = _recalls_from_data(data)
+    if not recalls:
+        return "No openFDA food recalls found."
+    total = _string(data.get("meta", {}).get("results", {}).get("total")) or "?"
+    return f"openFDA food recalls (returned {len(recalls)}, total {total}):\n" + _format_recalls(
+        recalls
+    )
 
 
 def _build_search(
@@ -284,14 +268,6 @@ def _format_recalls(
             lines.append(f"   Terminated: {recall.termination_date}")
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks)
-
-
-def _http_error(prefix: str, error: urllib.error.HTTPError) -> str:
-    if error.code == 404:
-        return f"{prefix}: no matching records found."
-    if error.code == 429:
-        return f"{prefix}: rate limited by openFDA (HTTP 429). Try again later."
-    return f"{prefix}: HTTP error {error.code}: {error.reason}"
 
 
 def _valid_text(value: str) -> bool:

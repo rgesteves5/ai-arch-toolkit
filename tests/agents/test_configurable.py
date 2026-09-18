@@ -59,6 +59,28 @@ def _metered_llm(*responses: Response) -> LLM:
 
 
 class TestReasoningSpec:
+    def test_knobs_and_llm_kwargs_are_frozen_at_entry(self) -> None:
+        knobs = {"threshold": 0.5}
+        llm_kwargs = {"temperature": 0.2}
+        spec = ReasoningSpec(knobs=knobs, llm_kwargs=llm_kwargs)
+
+        knobs["threshold"] = 0.9
+        llm_kwargs["temperature"] = 1.0
+
+        assert spec.knobs == {"threshold": 0.5}
+        assert spec.llm_kwargs == {"temperature": 0.2}
+        with pytest.raises(TypeError):
+            spec.knobs["threshold"] = 0.9
+        with pytest.raises(TypeError):
+            spec.llm_kwargs["temperature"] = 1.0
+
+    def test_a_spec_from_a_mapping_is_frozen_too_and_compares_by_value(self) -> None:
+        spec = ReasoningSpec.from_mapping({"knobs": {"a": 1}, "llm_kwargs": {"b": 2}})
+
+        with pytest.raises(TypeError):
+            spec.knobs["a"] = 2
+        assert spec == ReasoningSpec(knobs={"a": 1}, llm_kwargs={"b": 2})
+
     def test_from_mapping_parses_fields(self) -> None:
         spec = ReasoningSpec.from_mapping(
             {

@@ -177,3 +177,17 @@ class TestYouTubeTranscriptSearch:
         result = youtube_transcript_search("dQw4w9WgXcQ", "missing")
 
         assert 'No matches found for "missing"' in result
+
+
+class _OfflineApi:
+    def list(self, video_id: str):
+        raise ConnectionError("network is unreachable")
+
+
+@patch("ai_arch_toolkit.toolkit.tools._youtube._load_youtube_transcript_api")
+def test_a_network_failure_is_an_error_string(mock_loader):
+    mock_loader.return_value = (_OfflineApi, FakeYouTubeError)
+
+    assert youtube_transcript("dQw4w9WgXcQ").startswith("YouTube transcript failed:")
+    assert youtube_transcript_languages("dQw4w9WgXcQ").startswith("YouTube")
+    assert youtube_transcript_search("dQw4w9WgXcQ", "love").startswith("YouTube")

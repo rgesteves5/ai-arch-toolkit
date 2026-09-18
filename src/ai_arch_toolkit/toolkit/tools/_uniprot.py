@@ -2,24 +2,24 @@
 
 from __future__ import annotations
 
-import json
 import re
-import urllib.error
-import urllib.parse
-import urllib.request
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
-_BASE_URL = "https://rest.uniprot.org/uniprotkb"
-_TIMEOUT = 20
-_USER_AGENT = "ai-arch-toolkit/1.0 (https://github.com/ai-arch-toolkit)"
+_API = Api(
+    base="https://rest.uniprot.org/uniprotkb",
+    name="UniProt",
+    timeout_s=20,
+    status_messages={404: "no matching records found."},
+)
 _MAX_LIMIT = 25
 _TEXT_RE = re.compile(r"^[\w\s,.'()/%:+-]{1,180}$", re.UNICODE)
 _ACCESSION_RE = re.compile(r"^[A-Z0-9]{6,10}(?:-\d+)?$", re.IGNORECASE)
 
 
-@tool
+@tool(capability="network")
 def uniprot_search(
     query: str,
     organism: str = "",
@@ -45,6 +45,105 @@ def uniprot_search(
     if offset < 0:
         return "UniProt search failed: offset must be greater than or equal to 0."
 
+    params = {
+        "query": _search_query(query, organism, reviewed),
+        "format": "json",
+        "size": str(_bounded(max_results)),
+        "offset": str(offset),
+        "fields": "accession,protein_name,gene_names,organism_name,reviewed,length",
+    }
+    try:
+        return _API.get_json(params=params, parse=lambda data: _search_text(data, query, offset))
+    except HttpError as e:
+        return f"UniProt search failed: {e}"
+
+
+@tool(capability="network")
+def uniprot_entry(accession: str) -> str:
+    """Get UniProtKB entry metadata by accession.
+
+    Args:
+        accession: UniProt accession, e.g. "P01308".
+    """
+    normalized = accession.strip().upper()
+    if not _ACCESSION_RE.fullmatch(normalized):
+        return f"UniProt entry lookup failed: invalid accession: {accession!r}"
+    try:
+        return _API.get_json(
+            normalized, params={"format": "json"}, parse=lambda data: _entry_text(data, normalized)
+        )
+    except HttpError as e:
+        return f"UniProt entry lookup failed: {e}"
+
+
+@tool(capability="network")
+def uniprot_features(accession: str, feature_type: str = "", max_results: int = 20) -> str:
+    """List UniProtKB sequence features.
+
+    Args:
+        accession: UniProt accession, e.g. "P01308".
+        feature_type: Optional feature type filter, e.g. "Domain" or "Active site".
+        max_results: Number of features to return (1-25). Defaults to 20.
+    """
+    normalized = accession.strip().upper()
+    if not _ACCESSION_RE.fullmatch(normalized):
+        return f"UniProt features failed: invalid accession: {accession!r}"
+    if feature_type and not _valid_text(feature_type):
+        return "UniProt features failed: invalid feature_type."
+    try:
+        return _API.get_json(
+            normalized,
+            params={"format": "json"},
+            parse=lambda data: _features_text(data, normalized, feature_type, max_results),
+        )
+    except HttpError as e:
+        return f"UniProt features failed: {e}"
+
+
+@tool(capability="network")
+def uniprot_sequence(accession: str) -> str:
+    """Get a UniProtKB protein sequence in FASTA form.
+
+    Args:
+        accession: UniProt accession, e.g. "P01308".
+    """
+    normalized = accession.strip().upper()
+    if not _ACCESSION_RE.fullmatch(normalized):
+        return f"UniProt sequence failed: invalid accession: {accession!r}"
+    try:
+        return _API.get_text(
+            f"{normalized}.fasta",
+            parse=lambda text: text.strip() or f"No UniProt sequence found for {normalized}.",
+        )
+    except HttpError as e:
+        return f"UniProt sequence failed: {e}"
+
+
+@tool(capability="network")
+def uniprot_crossrefs(accession: str, database: str = "", max_results: int = 25) -> str:
+    """List UniProtKB database cross-references.
+
+    Args:
+        accession: UniProt accession, e.g. "P01308".
+        database: Optional database filter, e.g. "PDB", "Reactome", or "ChEMBL".
+        max_results: Number of cross-references to return (1-25). Defaults to 25.
+    """
+    normalized = accession.strip().upper()
+    if not _ACCESSION_RE.fullmatch(normalized):
+        return f"UniProt cross-references failed: invalid accession: {accession!r}"
+    if database and not _valid_text(database):
+        return "UniProt cross-references failed: invalid database."
+    try:
+        return _API.get_json(
+            normalized,
+            params={"format": "json"},
+            parse=lambda data: _crossrefs_text(data, normalized, database, max_results),
+        )
+    except HttpError as e:
+        return f"UniProt cross-references failed: {e}"
+
+
+def _search_query(query: str, organism: str, reviewed: str) -> str:
     search = query.strip()
     if organism.strip():
         org = organism.strip()
@@ -55,25 +154,11 @@ def uniprot_search(
         )
     if reviewed.strip():
         search += f" AND reviewed:{reviewed.strip().lower()}"
-    params = {
-        "query": search,
-        "format": "json",
-        "size": str(_bounded(max_results)),
-        "offset": str(offset),
-        "fields": "accession,protein_name,gene_names,organism_name,reviewed,length",
-    }
-    try:
-        data = _fetch_json("", params)
-        results = data.get("results", [])
-    except urllib.error.HTTPError as e:
-        return _http_error("UniProt search failed", e)
-    except urllib.error.URLError as e:
-        return f"UniProt search failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "UniProt search failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"UniProt search failed: could not parse API response: {e}"
+    return search
 
+
+def _search_text(data: dict[str, Any], query: str, offset: int) -> str:
+    results = data.get("results", [])
     if not isinstance(results, list) or not results:
         return "No UniProt proteins found."
     total = _string(data.get("totalResults"))
@@ -89,28 +174,8 @@ def uniprot_search(
     return "\n".join(lines)
 
 
-@tool
-def uniprot_entry(accession: str) -> str:
-    """Get UniProtKB entry metadata by accession.
-
-    Args:
-        accession: UniProt accession, e.g. "P01308".
-    """
-    normalized = accession.strip().upper()
-    if not _ACCESSION_RE.fullmatch(normalized):
-        return f"UniProt entry lookup failed: invalid accession: {accession!r}"
-    try:
-        data = _fetch_json(f"/{normalized}", {"format": "json"})
-    except urllib.error.HTTPError as e:
-        return _http_error("UniProt entry lookup failed", e)
-    except urllib.error.URLError as e:
-        return f"UniProt entry lookup failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "UniProt entry lookup failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"UniProt entry lookup failed: could not parse API response: {e}"
-
-    lines = [f"UniProt entry {normalized}:"]
+def _entry_text(data: dict[str, Any], accession: str) -> str:
+    lines = [f"UniProt entry {accession}:"]
     lines.extend(_format_entry(data, index=None, compact=False))
     function = _comment_text(data, "FUNCTION")
     if function:
@@ -118,32 +183,10 @@ def uniprot_entry(accession: str) -> str:
     return "\n".join(lines)
 
 
-@tool
-def uniprot_features(accession: str, feature_type: str = "", max_results: int = 20) -> str:
-    """List UniProtKB sequence features.
-
-    Args:
-        accession: UniProt accession, e.g. "P01308".
-        feature_type: Optional feature type filter, e.g. "Domain" or "Active site".
-        max_results: Number of features to return (1-25). Defaults to 20.
-    """
-    normalized = accession.strip().upper()
-    if not _ACCESSION_RE.fullmatch(normalized):
-        return f"UniProt features failed: invalid accession: {accession!r}"
-    if feature_type and not _valid_text(feature_type):
-        return "UniProt features failed: invalid feature_type."
-    try:
-        data = _fetch_json(f"/{normalized}", {"format": "json"})
-        features = data.get("features", [])
-    except urllib.error.HTTPError as e:
-        return _http_error("UniProt features failed", e)
-    except urllib.error.URLError as e:
-        return f"UniProt features failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "UniProt features failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"UniProt features failed: could not parse API response: {e}"
-
+def _features_text(
+    data: dict[str, Any], accession: str, feature_type: str, max_results: int
+) -> str:
+    features = data.get("features", [])
     if not isinstance(features, list):
         features = []
     wanted = feature_type.strip().lower()
@@ -155,8 +198,8 @@ def uniprot_features(accession: str, feature_type: str = "", max_results: int = 
         ]
     features = features[: _bounded(max_results)]
     if not features:
-        return f"No UniProt features found for {normalized}."
-    lines = [f"UniProt features for {normalized}:"]
+        return f"No UniProt features found for {accession}."
+    lines = [f"UniProt features for {accession}:"]
     for index, feature in enumerate(features, start=1):
         if not isinstance(feature, dict):
             continue
@@ -168,54 +211,8 @@ def uniprot_features(accession: str, feature_type: str = "", max_results: int = 
     return "\n".join(lines)
 
 
-@tool
-def uniprot_sequence(accession: str) -> str:
-    """Get a UniProtKB protein sequence in FASTA form.
-
-    Args:
-        accession: UniProt accession, e.g. "P01308".
-    """
-    normalized = accession.strip().upper()
-    if not _ACCESSION_RE.fullmatch(normalized):
-        return f"UniProt sequence failed: invalid accession: {accession!r}"
-    try:
-        text = _fetch_text(f"/{normalized}.fasta", {})
-    except urllib.error.HTTPError as e:
-        return _http_error("UniProt sequence failed", e)
-    except urllib.error.URLError as e:
-        return f"UniProt sequence failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "UniProt sequence failed: request timed out."
-
-    return text.strip() or f"No UniProt sequence found for {normalized}."
-
-
-@tool
-def uniprot_crossrefs(accession: str, database: str = "", max_results: int = 25) -> str:
-    """List UniProtKB database cross-references.
-
-    Args:
-        accession: UniProt accession, e.g. "P01308".
-        database: Optional database filter, e.g. "PDB", "Reactome", or "ChEMBL".
-        max_results: Number of cross-references to return (1-25). Defaults to 25.
-    """
-    normalized = accession.strip().upper()
-    if not _ACCESSION_RE.fullmatch(normalized):
-        return f"UniProt cross-references failed: invalid accession: {accession!r}"
-    if database and not _valid_text(database):
-        return "UniProt cross-references failed: invalid database."
-    try:
-        data = _fetch_json(f"/{normalized}", {"format": "json"})
-        refs = data.get("uniProtKBCrossReferences", [])
-    except urllib.error.HTTPError as e:
-        return _http_error("UniProt cross-references failed", e)
-    except urllib.error.URLError as e:
-        return f"UniProt cross-references failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "UniProt cross-references failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"UniProt cross-references failed: could not parse API response: {e}"
-
+def _crossrefs_text(data: dict[str, Any], accession: str, database: str, max_results: int) -> str:
+    refs = data.get("uniProtKBCrossReferences", [])
     if not isinstance(refs, list):
         refs = []
     wanted = database.strip().lower()
@@ -227,8 +224,8 @@ def uniprot_crossrefs(accession: str, database: str = "", max_results: int = 25)
         ]
     refs = refs[: _bounded(max_results)]
     if not refs:
-        return f"No UniProt cross-references found for {normalized}."
-    lines = [f"UniProt cross-references for {normalized}:"]
+        return f"No UniProt cross-references found for {accession}."
+    lines = [f"UniProt cross-references for {accession}:"]
     for index, ref in enumerate(refs, start=1):
         if not isinstance(ref, dict):
             continue
@@ -245,19 +242,6 @@ def uniprot_crossrefs(accession: str, database: str = "", max_results: int = 25)
             if prop_text:
                 lines.append(f"   {prop_text}")
     return "\n".join(lines)
-
-
-def _fetch_json(path: str, params: dict[str, str]) -> dict[str, Any]:
-    return json.loads(_fetch_text(path, params))
-
-
-def _fetch_text(path: str, params: dict[str, str]) -> str:
-    url = f"{_BASE_URL}{path}"
-    if params:
-        url = f"{url}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-        return resp.read().decode("utf-8", errors="replace")
 
 
 def _format_entry(item: dict[str, Any], *, index: int | None, compact: bool) -> list[str]:
@@ -329,14 +313,6 @@ def _position(value: Any) -> str:
     if isinstance(value, dict):
         return _string(value.get("value"))
     return _string(value)
-
-
-def _http_error(prefix: str, error: urllib.error.HTTPError) -> str:
-    if error.code == 404:
-        return f"{prefix}: no matching records found."
-    if error.code == 429:
-        return f"{prefix}: rate limited by UniProt (HTTP 429). Try again later."
-    return f"{prefix}: HTTP error {error.code}: {error.reason}"
 
 
 def _valid_text(value: str) -> bool:

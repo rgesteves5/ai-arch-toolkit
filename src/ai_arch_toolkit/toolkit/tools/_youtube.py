@@ -44,7 +44,7 @@ class _TranscriptInfo:
     translation_languages: tuple[tuple[str, str], ...]
 
 
-@tool
+@tool(capability="network")
 def youtube_transcript(
     video_url_or_id: str,
     languages: str = "en",
@@ -97,7 +97,7 @@ def youtube_transcript(
         if translate_to.strip():
             transcript = transcript.translate(translate_to.strip())
         segments = _segments(transcript.fetch(preserve_formatting=preserve_formatting))
-    except error_cls as e:
+    except (error_cls, OSError) as e:  # OSError: requests' network errors
         return f"YouTube transcript failed: {e}"
     except (AttributeError, TypeError, ValueError) as e:
         return f"YouTube transcript failed: could not parse transcript response: {e}"
@@ -110,7 +110,7 @@ def youtube_transcript(
     return _limit_text(f"{header}\n{body}", max_chars)
 
 
-@tool
+@tool(capability="network")
 def youtube_transcript_languages(video_url_or_id: str) -> str:
     """List public transcript languages available for a YouTube video.
 
@@ -127,7 +127,7 @@ def youtube_transcript_languages(video_url_or_id: str) -> str:
 
     try:
         infos = [_transcript_info(transcript) for transcript in api_cls().list(video_id)]
-    except error_cls as e:
+    except (error_cls, OSError) as e:  # OSError: requests' network errors
         return f"YouTube transcript languages failed: {e}"
     except (AttributeError, TypeError, ValueError) as e:
         return f"YouTube transcript languages failed: could not parse transcript list: {e}"
@@ -151,7 +151,7 @@ def youtube_transcript_languages(video_url_or_id: str) -> str:
     return "\n".join(lines)
 
 
-@tool
+@tool(capability="network")
 def youtube_transcript_search(
     video_url_or_id: str,
     query: str,
@@ -198,7 +198,7 @@ def youtube_transcript_search(
             allow_generated=allow_generated,
         )
         segments = _segments(transcript.fetch(preserve_formatting=preserve_formatting))
-    except error_cls as e:
+    except (error_cls, OSError) as e:  # OSError: requests' network errors
         return f"YouTube transcript search failed: {e}"
     except (AttributeError, TypeError, ValueError) as e:
         return f"YouTube transcript search failed: could not parse transcript response: {e}"

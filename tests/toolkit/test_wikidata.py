@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import urllib.error
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 from ai_arch_toolkit.toolkit.tools._wikidata import (
@@ -12,14 +11,7 @@ from ai_arch_toolkit.toolkit.tools._wikidata import (
     wikidata_search,
     wikidata_sparql,
 )
-
-
-def _mock_urlopen(data):
-    resp = MagicMock()
-    resp.read.return_value = json.dumps(data).encode()
-    resp.__enter__ = lambda s: s
-    resp.__exit__ = MagicMock(return_value=False)
-    return resp
+from tests.toolkit.http_fakes import HTTP_OPEN, respond
 
 
 def _called_request(mock_urlopen):
@@ -31,9 +23,9 @@ def _called_params(mock_urlopen) -> dict[str, list[str]]:
 
 
 class TestWikidataSearch:
-    @patch("ai_arch_toolkit.toolkit.tools._wikidata.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_returns_results(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(
+        mock_urlopen.return_value = respond(
             {
                 "search": [
                     {
@@ -61,19 +53,15 @@ class TestWikidataSearch:
         assert params["search"] == ["Douglas Adams"]
         assert params["limit"] == ["2"]
 
-    @patch("ai_arch_toolkit.toolkit.tools._wikidata.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_invalid_options_do_not_call_api(self, mock_urlopen):
         assert "query cannot be empty" in wikidata_search("")
         assert "invalid language" in wikidata_search("test", language="../en")
         mock_urlopen.assert_not_called()
 
-    @patch("ai_arch_toolkit.toolkit.tools._wikidata.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_parse_failure(self, mock_urlopen):
-        resp = MagicMock()
-        resp.read.return_value = b"not json"
-        resp.__enter__ = lambda s: s
-        resp.__exit__ = MagicMock(return_value=False)
-        mock_urlopen.return_value = resp
+        mock_urlopen.return_value = respond(b"not json")
 
         result = wikidata_search("test")
 
@@ -81,9 +69,9 @@ class TestWikidataSearch:
 
 
 class TestWikidataEntity:
-    @patch("ai_arch_toolkit.toolkit.tools._wikidata.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_returns_entity(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(
+        mock_urlopen.return_value = respond(
             {
                 "entities": {
                     "Q42": {
@@ -114,7 +102,7 @@ class TestWikidataEntity:
         assert "P31: Q5" in result
         assert "https://en.wikipedia.org/wiki/Douglas_Adams" in result
 
-    @patch("ai_arch_toolkit.toolkit.tools._wikidata.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_invalid_qid(self, mock_urlopen):
         result = wikidata_entity("P31")
 
@@ -123,9 +111,9 @@ class TestWikidataEntity:
 
 
 class TestWikidataSparql:
-    @patch("ai_arch_toolkit.toolkit.tools._wikidata.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_returns_select_rows_and_appends_limit(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(
+        mock_urlopen.return_value = respond(
             {
                 "head": {"vars": ["item", "itemLabel"]},
                 "results": {
@@ -148,22 +136,22 @@ class TestWikidataSparql:
         assert "itemLabel: Douglas Adams" in result
         assert "LIMIT 2" in _called_params(mock_urlopen)["query"][0]
 
-    @patch("ai_arch_toolkit.toolkit.tools._wikidata.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_returns_ask_boolean(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen({"boolean": True})
+        mock_urlopen.return_value = respond({"boolean": True})
 
         result = wikidata_sparql("ASK { wd:Q42 wdt:P31 wd:Q5 . }")
 
         assert result == "Wikidata SPARQL result: True"
 
-    @patch("ai_arch_toolkit.toolkit.tools._wikidata.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_rejects_unsafe_query(self, mock_urlopen):
         result = wikidata_sparql("DELETE WHERE { ?s ?p ?o }")
 
         assert "read-only" in result
         mock_urlopen.assert_not_called()
 
-    @patch("ai_arch_toolkit.toolkit.tools._wikidata.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_not_found(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.HTTPError(
             url="https://query.wikidata.org/sparql",
@@ -175,4 +163,4 @@ class TestWikidataSparql:
 
         result = wikidata_sparql("ASK { wd:Q42 wdt:P31 wd:Q5 . }")
 
-        assert "HTTP error 429" in result
+        assert "rate limited by Wikidata Query Service (HTTP 429)" in result

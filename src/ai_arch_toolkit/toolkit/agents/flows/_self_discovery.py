@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Unpack
 
 from ai_arch_toolkit.core._content import Content, user
 from ai_arch_toolkit.core._llm import LLM
-from ai_arch_toolkit.core._policy import Policy
-from ai_arch_toolkit.core._state import State, StateSnapshot
+from ai_arch_toolkit.core._state import StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
-from ai_arch_toolkit.core._trace import TraceCapture
-from ai_arch_toolkit.toolkit.agents.flows._react import react_flow, react_initial_state
-from ai_arch_toolkit.toolkit.budget import BudgetPolicy
+from ai_arch_toolkit.toolkit.agents.flows._common import FlowOptions
+from ai_arch_toolkit.toolkit.agents.flows._keys import ANSWER, RESPONSE, TASK
+from ai_arch_toolkit.toolkit.agents.flows._react import run_react
 from ai_arch_toolkit.toolkit.flow._flow import Flow
 
 _DEFAULT_MODULES = (
@@ -50,14 +49,11 @@ def self_discovery_flow(
     solve_system: str = (
         "Follow the reasoning plan to solve the task. Apply each step of the plan systematically."
     ),
-    timeout: float | None = None,
-    trace_capture: TraceCapture = "keys",
-    policy: Policy | None = None,
-    budget_policy: BudgetPolicy | None = None,
     llm_kwargs: dict[str, Any] | None = None,
     reasoning_llm: LLM | None = None,
     solver_llm: LLM | None = None,
     solver_tools: ToolGroup | None = None,
+    **options: Unpack[FlowOptions],
 ) -> Flow:
     """Create a SelfDiscovery Flow — select, adapt, plan, then solve via ReAct.
 
@@ -71,14 +67,11 @@ def self_discovery_flow(
         adapt_system: System prompt for module adaptation.
         plan_system: System prompt for operationalization.
         solve_system: System prompt for the solve phase.
-        timeout: Wall-clock limit for the whole run, in seconds.
-        trace_capture: What each step's trace records — see ``Flow``.
-        policy: Default policy for each step of the flow.
-        budget_policy: Optional cumulative runtime budget for the flow.
         llm_kwargs: Additional kwargs passed to every phase's LLM call.
         reasoning_llm: Override LLM for select/adapt/plan phases.
         solver_llm: Override LLM for the solve phase.
         solver_tools: Override tools for the solve phase.
+        **options: The options of the ``Flow`` it builds (``FlowOptions``).
     """
     reason_llm = reasoning_llm or llm
     solve_llm = solver_llm or llm
@@ -89,7 +82,7 @@ def self_discovery_flow(
 
     async def select(snap: StateSnapshot) -> Result:
         """Select relevant reasoning modules."""
-        task: str = snap.require("task")
+        task: str = snap.require(TASK)
 
         response = await reason_llm.complete(
             [user(f"Task: {task}\n\nAvailable modules:\n{modules_text}")],
@@ -103,7 +96,7 @@ def self_discovery_flow(
 
     async def adapt(snap: StateSnapshot) -> Result:
         """Adapt selected modules to the specific task."""
-        task: str = snap.require("task")
+        task: str = snap.require(TASK)
         selected: str = snap.require("selected_modules")
 
         response = await reason_llm.complete(
@@ -118,7 +111,7 @@ def self_discovery_flow(
 
     async def operationalize(snap: StateSnapshot) -> Result:
         """Create a step-by-step reasoning plan from adapted modules."""
-        task: str = snap.require("task")
+        task: str = snap.require(TASK)
         adapted: str = snap.require("adapted_modules")
 
         response = await reason_llm.complete(
@@ -133,7 +126,7 @@ def self_discovery_flow(
 
     async def solve(snap: StateSnapshot) -> Result:
         """Solve the task using the reasoning plan via inner ReAct."""
-        task: str = snap.require("task")
+        task: str = snap.require(TASK)
         reasoning_plan: str = snap.require("reasoning_plan")
 
         inner_system = solve_system
@@ -143,25 +136,16 @@ def self_discovery_flow(
         if system:
             inner_system = f"{system}\n\n{inner_system}"
 
-        inner = react_flow(
+        run = await run_react(
             solve_llm,
             solve_tools,
+            task,
             system=inner_system,
             max_iterations=max_react_iterations,
             llm_kwargs=llm_kwargs,
-            trace_capture=trace_capture,
+            **options,
         )
-
-        state = State(operational=react_initial_state(task))
-        await inner.run(state)  # metered under the shared scope; no manual cost threading
-
-        response = state.get("response")
-        answer = response.text if response else ""
-
-        return Result(
-            value=answer,
-            artifacts={"answer": answer, "response": response},
-        )
+        return Result(value=run.answer, artifacts={ANSWER: run.answer, RESPONSE: run.response})
 
     return Flow(
         Step(name="select", fn=select),
@@ -169,14 +153,11 @@ def self_discovery_flow(
         Step(name="operationalize", fn=operationalize),
         Step(name="solve", fn=solve),
         name="self_discovery",
-        policy=policy,
-        timeout=timeout,
-        trace_capture=trace_capture,
-        budget_policy=budget_policy,
+        **options,
     )
 
 
 def self_discovery_initial_state(task: Content) -> dict[str, Any]:
     """Create the initial operational state for a self_discovery_flow."""
     task_str = task if isinstance(task, str) else str(task)
-    return {"task": task_str}
+    return {TASK: task_str}

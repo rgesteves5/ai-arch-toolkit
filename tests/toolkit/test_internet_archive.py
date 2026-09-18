@@ -2,23 +2,15 @@
 
 from __future__ import annotations
 
-import json
 import urllib.error
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 from ai_arch_toolkit.toolkit.tools._internet_archive import (
     internet_archive_item,
     internet_archive_search,
 )
-
-
-def _mock_urlopen(data):
-    resp = MagicMock()
-    resp.read.return_value = json.dumps(data).encode()
-    resp.__enter__ = lambda s: s
-    resp.__exit__ = MagicMock(return_value=False)
-    return resp
+from tests.toolkit.http_fakes import HTTP_OPEN, respond
 
 
 def _called_params(mock_urlopen) -> dict[str, list[str]]:
@@ -26,9 +18,9 @@ def _called_params(mock_urlopen) -> dict[str, list[str]]:
 
 
 class TestInternetArchiveSearch:
-    @patch("ai_arch_toolkit.toolkit.tools._internet_archive.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_returns_items(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(
+        mock_urlopen.return_value = respond(
             {
                 "response": {
                     "docs": [
@@ -69,7 +61,7 @@ class TestInternetArchiveSearch:
         assert params["page"] == ["3"]
         assert set(params["fl[]"]) >= {"identifier", "title", "item_size"}
 
-    @patch("ai_arch_toolkit.toolkit.tools._internet_archive.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_invalid_options_do_not_call_api(self, mock_urlopen):
         assert "query cannot be empty" in internet_archive_search("")
         assert "page must" in internet_archive_search("test", page=0)
@@ -77,9 +69,9 @@ class TestInternetArchiveSearch:
 
 
 class TestInternetArchiveItem:
-    @patch("ai_arch_toolkit.toolkit.tools._internet_archive.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_returns_item(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(
+        mock_urlopen.return_value = respond(
             {
                 "metadata": {
                     "identifier": "goodytwoshoes00newyiala",
@@ -105,14 +97,14 @@ class TestInternetArchiveItem:
         assert "goody.pdf (PDF), 12345 bytes" in result
         assert "goody.txt (Text)" in result
 
-    @patch("ai_arch_toolkit.toolkit.tools._internet_archive.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_invalid_identifier(self, mock_urlopen):
         result = internet_archive_item("../bad")
 
         assert "invalid identifier" in result
         mock_urlopen.assert_not_called()
 
-    @patch("ai_arch_toolkit.toolkit.tools._internet_archive.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_not_found(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.HTTPError(
             url="https://archive.org/metadata/missing",

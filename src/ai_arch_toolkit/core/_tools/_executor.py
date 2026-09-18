@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
+import contextvars
+import functools
 import inspect
 import logging
-from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import replace
+import threading
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, replace
 from typing import Any
 
 from ai_arch_toolkit.core._metering._admission import AdmissionDenied
@@ -24,6 +28,7 @@ from ai_arch_toolkit.core._tools._governance import (
     ExecutionContext,
     GateBlock,
     GateDryRun,
+    GateResult,
     RunState,
     ToolGate,
     default_redactor,
@@ -79,38 +84,123 @@ def _resolve_definition(tool_call: ToolCall, tools: list[Callable[..., Any]]) ->
 # --- Invocation ---------------------------------------------------------------
 
 
-async def _as_coroutine(awaitable: Awaitable[Any]) -> Any:
-    return await awaitable  # asyncio.run() on Python 3.13 accepts only coroutines
+class _TimedOut(Exception):
+    """The executor stopped waiting for a tool."""
 
 
-def _call_tool_sync(
-    fn: Callable[..., Any], positional: list[Any], keywords: dict[str, Any]
-) -> Any:
-    """Call a tool from sync code, running an awaitable result to completion.
+def _in_thread(call: Callable[[], Any]) -> concurrent.futures.Future[Any]:
+    """Run ``call`` in a daemon thread of its own, inside a copy of the caller's context.
 
-    Covers ``async def`` tools and sync functions that return an awaitable. ``_run_sync`` uses a
-    fresh event loop, or a worker thread that carries the caller's context when a loop is
-    already running.
+    A thread cannot be killed, so a tool the executor stopped waiting for may still be running.
+    Unlike the default executor's threads, a daemon thread never holds up ``asyncio.run`` or the
+    end of the process.
     """
-    value = fn(*positional, **keywords)
-    if inspect.isawaitable(value):
-        return _run_sync(_as_coroutine(value))
-    return value
+    future: concurrent.futures.Future[Any] = concurrent.futures.Future()
+    context = contextvars.copy_context()
+
+    def run() -> None:
+        if not future.set_running_or_notify_cancel():
+            return
+        try:
+            future.set_result(context.run(call))
+        except BaseException as exc:  # handed to whoever waits on the future
+            future.set_exception(exc)
+
+    threading.Thread(target=run, name="tool", daemon=True).start()
+    return future
 
 
-async def _call_tool_async(
-    fn: Callable[..., Any], positional: list[Any], keywords: dict[str, Any]
-) -> Any:
+async def _call(fn: Callable[..., Any], positional: list[Any], keywords: dict[str, Any]) -> Any:
     """Call a tool from async code: coroutine functions on the loop, the rest in a thread.
 
     A sync function that returns an awaitable has it awaited here.
     """
     if inspect.iscoroutinefunction(fn):
         return await fn(*positional, **keywords)
-    value = await asyncio.to_thread(fn, *positional, **keywords)
+    thread = _in_thread(functools.partial(fn, *positional, **keywords))
+    value = await asyncio.wrap_future(thread)
     if inspect.isawaitable(value):
         return await value
     return value
+
+
+async def _invoke(
+    fn: Callable[..., Any],
+    positional: list[Any],
+    keywords: dict[str, Any],
+    timeout_s: float | None,
+) -> Any:
+    """Await the tool for at most ``timeout_s``; a coroutine tool is cancelled at the deadline.
+
+    Raises:
+        _TimedOut: The deadline passed. A ``TimeoutError`` the tool raised itself propagates.
+    """
+    deadline = asyncio.timeout(timeout_s)
+    try:
+        async with deadline:
+            return await _call(fn, positional, keywords)
+    except TimeoutError:
+        if deadline.expired():
+            raise _TimedOut from None
+        raise
+
+
+# --- Limits -------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class _Limits:
+    """Bounds on one call. As a group's ceiling, each bound only ever tightens the tool's."""
+
+    max_output_chars: int | None = None
+    timeout_s: float | None = None
+
+    def over(self, policy: ToolRuntimePolicy) -> _Limits:
+        """The stricter of this ceiling and the tool's policy, bound by bound."""
+        return _Limits(
+            _stricter(self.max_output_chars, policy.max_output_chars),
+            _stricter(self.timeout_s, policy.timeout_s),
+        )
+
+
+_NO_CEILING = _Limits()
+
+
+def _stricter[N: (int, float)](ceiling: N | None, own: N | None) -> N | None:
+    if ceiling is None:
+        return own
+    if own is None:
+        return ceiling
+    return min(ceiling, own)
+
+
+_TRUNCATION_NOTE = "\n\n[Output truncated: kept {kept} of {chars} characters.]"
+
+
+def _bounded(result: ToolResult, max_output_chars: int | None) -> ToolResult:
+    """``result`` with the text the model reads cut to ``max_output_chars``, and the cut noted.
+
+    A value (structured or not) becomes its cut model text; an error keeps its type and has its
+    message cut.
+    """
+    text = result.to_model_text()
+    if max_output_chars is None or len(text) <= max_output_chars:
+        return result
+    note = _TRUNCATION_NOTE.format(kept=max_output_chars, chars=len(text))
+    metadata = {**result.metadata, "truncated": {"chars": len(text), "kept": max_output_chars}}
+    if result.error is None:
+        return replace(result, value=text[:max_output_chars] + note, metadata=metadata)
+    message = result.error.message[:max_output_chars] + note
+    return replace(result, error=replace(result.error, message=message), metadata=metadata)
+
+
+def _timed_out(tool_call: ToolCall, timeout_s: float | None) -> ToolResult:
+    return ToolResult.failure(
+        "timeout",
+        f"Tool {tool_call.name!r} did not finish within {timeout_s:g}s",
+        retryable=True,
+        details={"tool_name": tool_call.name, "timeout_s": timeout_s},
+    )
 
 
 def _validated(definition: ToolDefinition, tool_call: ToolCall, arguments: Any) -> ToolCall:
@@ -252,6 +342,128 @@ def _meter_tool_open(tool_call: ToolCall) -> tuple[MeterOperation | None, Cost]:
     return op, cost
 
 
+@dataclass(frozen=True, slots=True)
+class _Admitted:
+    """A call that passed validation and every gate, with its arguments bound."""
+
+    tool_call: ToolCall
+    audit: dict[str, Any]
+    positional: list[Any]
+    keywords: dict[str, Any]
+
+
+def _apply(
+    decision: GateResult | None,
+    definition: ToolDefinition,
+    current: ToolCall,
+    audit: dict[str, Any],
+    redactor: Redactor,
+) -> tuple[ToolCall, dict[str, Any]] | ToolResult:
+    """One gate's decision: the call as the gate left it, or the result that stops it."""
+    if decision is None:
+        return current, audit
+    if isinstance(decision, GateBlock):
+        return _block_result(decision, current, audit, redactor)
+    if isinstance(decision, GateDryRun):
+        return _dry_run_result(current, {**audit, **decision.audit}, redactor)
+    audit = {**audit, **decision.audit}
+    try:
+        return _validated(definition, current, decision.args), audit
+    except ArgumentError as error:
+        return _validation_failure(current, error, audit, redactor)
+
+
+def _bind(
+    definition: ToolDefinition, current: ToolCall, audit: dict[str, Any], redactor: Redactor
+) -> _Admitted | ToolResult:
+    try:
+        positional, keywords = bind_arguments(definition.fn, current.input)
+    except ArgumentError as error:
+        return _validation_failure(current, error, audit, redactor)
+    return _Admitted(current, audit, positional, keywords)
+
+
+def _admit_sync(
+    definition: ToolDefinition,
+    tool_call: ToolCall,
+    gates: Sequence[ToolGate],
+    redactor: Redactor,
+) -> _Admitted | ToolResult:
+    """Validate, then pass every gate (each sees the arguments as the previous one left them)."""
+    try:
+        current = _validated(definition, tool_call, tool_call.input)
+    except ArgumentError as error:
+        return _validation_failure(tool_call, error, {}, redactor)
+    audit: dict[str, Any] = {}
+    for gate in gates:
+        decision = gate.check_sync(ExecutionContext(definition=definition, tool_call=current))
+        step = _apply(decision, definition, current, audit, redactor)
+        if isinstance(step, ToolResult):
+            return step
+        current, audit = step
+    return _bind(definition, current, audit, redactor)
+
+
+async def _admit(
+    definition: ToolDefinition,
+    tool_call: ToolCall,
+    gates: Sequence[ToolGate],
+    redactor: Redactor,
+) -> _Admitted | ToolResult:
+    """Validate, then pass every gate (each sees the arguments as the previous one left them)."""
+    try:
+        current = _validated(definition, tool_call, tool_call.input)
+    except ArgumentError as error:
+        return _validation_failure(tool_call, error, {}, redactor)
+    audit: dict[str, Any] = {}
+    for gate in gates:
+        decision = await gate.check(ExecutionContext(definition=definition, tool_call=current))
+        step = _apply(decision, definition, current, audit, redactor)
+        if isinstance(step, ToolResult):
+            return step
+        current, audit = step
+    return _bind(definition, current, audit, redactor)
+
+
+def _spent(run_state: RunState, max_calls: int | None) -> int | None:
+    """Count one call against ``max_calls``; the limit itself when it was already reached."""
+    if max_calls is None:
+        return None
+    if run_state.executed >= max_calls:
+        return max_calls
+    run_state.executed += 1
+    return None
+
+
+def _finished(
+    op: MeterOperation | None, cost: Cost, admitted: _Admitted, value: Any, redactor: Redactor
+) -> ToolResult:
+    result = _with_audit(_coerce_result(value), admitted.audit, redactor)
+    if op is not None:
+        op.settle(usage=_NO_USAGE, cost=cost)
+    return result
+
+
+def _failed(
+    op: MeterOperation | None,
+    exc: BaseException,
+    admitted: _Admitted,
+    limits: _Limits,
+    redactor: Redactor,
+) -> ToolResult:
+    """The result of a tool that raised or ran out of time; the op keeps its count, costs nothing.
+
+    A budget denial is terminal and a cancellation is not the tool's: both propagate.
+    """
+    if op is not None:
+        op.fail("unbilled")
+    if isinstance(exc, _TimedOut):
+        return _timed_out(admitted.tool_call, limits.timeout_s)
+    if isinstance(exc, AdmissionDenied) or not isinstance(exc, Exception):
+        raise exc
+    return _result_from_exception(admitted.tool_call.name, exc, redactor)
+
+
 def _run_tool_sync(
     definition: ToolDefinition,
     tool_call: ToolCall,
@@ -260,52 +472,23 @@ def _run_tool_sync(
     run_state: RunState,
     max_calls: int | None,
     redactor: Redactor,
+    ceiling: _Limits = _NO_CEILING,
 ) -> ToolResult:
-    audit: dict[str, Any] = {}
+    limits = ceiling.over(definition.policy)
+    admitted = _admit_sync(definition, tool_call, gates, redactor)
+    if isinstance(admitted, ToolResult):
+        return _bounded(admitted, limits.max_output_chars)
+    if (limit := _spent(run_state, max_calls)) is not None:
+        return _max_calls_block(admitted.tool_call, limit, admitted.audit, redactor)
+    op, cost = _meter_tool_open(admitted.tool_call)  # AdmissionDenied here is terminal
+    fn, args = definition.fn, (admitted.positional, admitted.keywords)
     try:
-        current = _validated(definition, tool_call, tool_call.input)
-    except ArgumentError as error:
-        return _validation_failure(tool_call, error, audit, redactor)
-    for gate in gates:
-        # Each gate sees the arguments as the gates before it left them.
-        result = gate.check_sync(ExecutionContext(definition=definition, tool_call=current))
-        if result is None:
-            continue
-        if isinstance(result, GateBlock):
-            return _block_result(result, current, audit, redactor)
-        if isinstance(result, GateDryRun):
-            return _dry_run_result(current, {**audit, **result.audit}, redactor)
-        audit = {**audit, **result.audit}
-        try:
-            current = _validated(definition, current, result.args)
-        except ArgumentError as error:
-            return _validation_failure(current, error, audit, redactor)
-    try:
-        positional, keywords = bind_arguments(definition.fn, current.input)
-    except ArgumentError as error:
-        return _validation_failure(current, error, audit, redactor)
-
-    if max_calls is not None:
-        if run_state.executed >= max_calls:
-            return _max_calls_block(current, max_calls, audit, redactor)
-        run_state.executed += 1
-
-    op, tool_cost = _meter_tool_open(current)  # AdmissionDenied here is terminal (propagates)
-    settled = False
-    try:
-        result_value = _coerce_result(_call_tool_sync(definition.fn, positional, keywords))
-        result = _with_audit(result_value, audit, redactor)
-        if op is not None:
-            op.settle(usage=_NO_USAGE, cost=tool_cost)
-            settled = True
-        return result
-    except AdmissionDenied:
-        raise  # budget denial is terminal — a tool executor never converts it to a ToolResult
-    except Exception as exc:
-        return _result_from_exception(current.name, exc, redactor)
-    finally:
-        if op is not None and not settled:
-            op.fail("unbilled")  # error / cancellation -> keep the count, release the op
+        # A loop of the sync path's own: the daemon thread of a timed-out tool does not hold it.
+        value = _run_sync(_invoke(fn, *args, limits.timeout_s))
+        result = _finished(op, cost, admitted, value, redactor)
+    except BaseException as exc:
+        result = _failed(op, exc, admitted, limits, redactor)
+    return _bounded(result, limits.max_output_chars)
 
 
 async def _arun_tool(
@@ -316,53 +499,26 @@ async def _arun_tool(
     run_state: RunState,
     max_calls: int | None,
     redactor: Redactor,
+    ceiling: _Limits = _NO_CEILING,
 ) -> ToolResult:
-    audit: dict[str, Any] = {}
-    try:
-        current = _validated(definition, tool_call, tool_call.input)
-    except ArgumentError as error:
-        return _validation_failure(tool_call, error, audit, redactor)
-    for gate in gates:
-        # Each gate sees the arguments as the gates before it left them.
-        result = await gate.check(ExecutionContext(definition=definition, tool_call=current))
-        if result is None:
-            continue
-        if isinstance(result, GateBlock):
-            return _block_result(result, current, audit, redactor)
-        if isinstance(result, GateDryRun):
-            return _dry_run_result(current, {**audit, **result.audit}, redactor)
-        audit = {**audit, **result.audit}
-        try:
-            current = _validated(definition, current, result.args)
-        except ArgumentError as error:
-            return _validation_failure(current, error, audit, redactor)
-    try:
-        positional, keywords = bind_arguments(definition.fn, current.input)
-    except ArgumentError as error:
-        return _validation_failure(current, error, audit, redactor)
-
+    limits = ceiling.over(definition.policy)
+    admitted = await _admit(definition, tool_call, gates, redactor)
+    if isinstance(admitted, ToolResult):
+        return _bounded(admitted, limits.max_output_chars)
+    limit = None
     if max_calls is not None:
         async with run_state.lock:
-            if run_state.executed >= max_calls:
-                return _max_calls_block(current, max_calls, audit, redactor)
-            run_state.executed += 1
-
-    op, tool_cost = _meter_tool_open(current)  # AdmissionDenied here is terminal (propagates)
-    settled = False
+            limit = _spent(run_state, max_calls)
+    if limit is not None:
+        return _max_calls_block(admitted.tool_call, limit, admitted.audit, redactor)
+    op, cost = _meter_tool_open(admitted.tool_call)  # AdmissionDenied here is terminal
+    fn, args = definition.fn, (admitted.positional, admitted.keywords)
     try:
-        result_value = _coerce_result(await _call_tool_async(definition.fn, positional, keywords))
-        result = _with_audit(result_value, audit, redactor)
-        if op is not None:
-            op.settle(usage=_NO_USAGE, cost=tool_cost)
-            settled = True
-        return result
-    except AdmissionDenied:
-        raise  # budget denial is terminal — a tool executor never converts it to a ToolResult
-    except Exception as exc:
-        return _result_from_exception(current.name, exc, redactor)
-    finally:
-        if op is not None and not settled:
-            op.fail("unbilled")  # error / cancellation -> keep the count, release the op
+        value = await _invoke(fn, *args, limits.timeout_s)
+        result = _finished(op, cost, admitted, value, redactor)
+    except BaseException as exc:
+        result = _failed(op, exc, admitted, limits, redactor)
+    return _bounded(result, limits.max_output_chars)
 
 
 # --- Public free functions ----------------------------------------------------

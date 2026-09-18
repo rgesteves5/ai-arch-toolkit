@@ -3,17 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Unpack
 
 from ai_arch_toolkit.core._content import Content, user
 from ai_arch_toolkit.core._llm import LLM
-from ai_arch_toolkit.core._policy import Policy
-from ai_arch_toolkit.core._state import State, StateSnapshot
+from ai_arch_toolkit.core._state import StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
-from ai_arch_toolkit.core._trace import TraceCapture
-from ai_arch_toolkit.toolkit.agents.flows._react import react_flow, react_initial_state
-from ai_arch_toolkit.toolkit.budget import BudgetPolicy
+from ai_arch_toolkit.toolkit.agents.flows._common import FlowOptions
+from ai_arch_toolkit.toolkit.agents.flows._keys import ANSWER, RESPONSE, TASK
+from ai_arch_toolkit.toolkit.agents.flows._react import run_react
 from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowStep
 
 
@@ -30,14 +29,11 @@ def reflexion_flow(
         "You are a reflection assistant. Analyze the previous attempt "
         "and provide specific, actionable feedback for improvement."
     ),
-    timeout: float | None = None,
-    trace_capture: TraceCapture = "keys",
-    policy: Policy | None = None,
-    budget_policy: BudgetPolicy | None = None,
     llm_kwargs: dict[str, Any] | None = None,
     exec_llm: LLM | None = None,
     exec_tools: ToolGroup | None = None,
     reflect_llm: LLM | None = None,
+    **options: Unpack[FlowOptions],
 ) -> Flow:
     """Create a Reflexion Flow — inner ReAct with evaluate + reflect retry loop.
 
@@ -50,14 +46,11 @@ def reflexion_flow(
         system: Base system prompt for the inner ReAct.
         max_iterations: Max iterations for the inner ReAct per attempt.
         reflect_system: System prompt for the reflector LLM.
-        timeout: Wall-clock limit for the whole run, in seconds.
-        trace_capture: What each step's trace records — see ``Flow``.
-        policy: Default policy for each step of the flow.
-        budget_policy: Optional cumulative runtime budget for the flow.
         llm_kwargs: Additional kwargs passed to every phase's LLM call.
         exec_llm: Override LLM for the executor (inner ReAct).
         exec_tools: Override tools for the executor.
         reflect_llm: Override LLM for the reflector.
+        **options: The options of the ``Flow`` it builds (``FlowOptions``).
     """
     inner_llm = exec_llm or llm
     inner_tools = exec_tools if exec_tools is not None else tools
@@ -66,45 +59,42 @@ def reflexion_flow(
 
     async def attempt(snap: StateSnapshot) -> Result:
         """Run inner ReAct and return the answer."""
-        task: str = snap.require("task")
+        task: str = snap.require(TASK)
         reflections: list[str] = snap.get("reflections", [])
 
         inner_system = system
         if reflections:
             inner_system += "\n\nPrevious reflections:\n" + "\n---\n".join(reflections)
 
-        inner = react_flow(
+        run = await run_react(
             inner_llm,
             inner_tools,
+            task,
             system=inner_system,
             max_iterations=max_iterations,
             llm_kwargs=llm_kwargs,
-            trace_capture=trace_capture,
+            **options,
         )
-
-        state = State(operational=react_initial_state(task))
-        await inner.run(state)  # metered under the shared scope; no manual cost threading
-
-        response = state.get("response")
-        answer = response.text if response else ""
-
         return Result(
-            value=answer,
-            artifacts={"last_answer": answer, "last_response": response},
+            value=run.answer,
+            artifacts={"last_answer": run.answer, "last_response": run.response},
         )
 
     async def evaluate(snap: StateSnapshot) -> Result:
         """Evaluate the answer against the task."""
-        task: str = snap.require("task")
+        task: str = snap.require(TASK)
         answer: str = snap.get("last_answer", "")
 
         score = evaluator(task, answer)
         passed = score >= threshold
 
-        artifacts: dict[str, Any] = {"score": score, "passed": passed}
-        if passed:
-            artifacts["answer"] = answer
-            artifacts["response"] = snap.get("last_response")
+        # The attempt just scored is the answer so far, passed or not: out of retries, it stands.
+        artifacts = {
+            "score": score,
+            "passed": passed,
+            ANSWER: answer,
+            RESPONSE: snap.get("last_response"),
+        }
 
         return Result(
             value=score,
@@ -114,7 +104,7 @@ def reflexion_flow(
 
     async def reflect(snap: StateSnapshot) -> Result:
         """Generate reflection on low-scoring answer."""
-        task: str = snap.require("task")
+        task: str = snap.require(TASK)
         answer: str = snap.get("last_answer", "")
         score: float = snap.get("score", 0.0)
         reflections: list[str] = list(snap.get("reflections", []))
@@ -146,11 +136,8 @@ def reflexion_flow(
         FlowStep(step=Step(name="evaluate", fn=evaluate), when=not_passed),
         FlowStep(step=Step(name="reflect", fn=reflect), when=not_passed),
         name="reflexion",
-        policy=policy,
-        timeout=timeout,
-        trace_capture=trace_capture,
-        budget_policy=budget_policy,
         max_iterations=max_retries,
+        **options,
     )
 
 
@@ -158,7 +145,7 @@ def reflexion_initial_state(task: Content) -> dict[str, Any]:
     """Create the initial operational state for a reflexion_flow."""
     task_str = task if isinstance(task, str) else str(task)
     return {
-        "task": task_str,
+        TASK: task_str,
         "reflections": [],
         "passed": False,
     }

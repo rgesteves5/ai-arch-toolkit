@@ -51,6 +51,8 @@ import ast
 import math
 import operator
 import re
+import types
+from collections.abc import Callable
 from typing import Any
 
 from ai_arch_toolkit.core import tool
@@ -283,7 +285,37 @@ _MAX_FOR_ITERATIONS = 10_000
 
 
 # ---------------------------------------------------------------------------
-# Scoped AST walker
+# What attribute access may reach: a safe method of a builtin value, or a re function
+# ---------------------------------------------------------------------------
+
+_METHODS: tuple[tuple[type, dict[str, Any]], ...] = tuple(
+    (kind, {name: vars(kind)[name] for name in sorted(names)})
+    for kind, names in (
+        (str, _SAFE_STR_METHODS),
+        (list, _SAFE_LIST_METHODS),
+        (dict, _SAFE_DICT_METHODS),
+        (set, _SAFE_SET_METHODS),
+        (tuple, {"count", "index"}),
+        (bytes, {"decode"}),
+    )
+)
+_RE_FUNCTIONS: dict[str, Any] = {
+    name: vars(re)[name] for name in ("findall", "match", "search", "split", "sub")
+}
+
+
+def _method(owner: object, name: str) -> Any:
+    """``owner.name`` when it is allowed (a bound safe method or a re function), else ``None``."""
+    if owner is re:
+        return _RE_FUNCTIONS.get(name)
+    for kind, methods in _METHODS:
+        if isinstance(owner, kind) and name in methods:
+            return methods[name].__get__(owner, kind)
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Scoped AST walker: a handler per allowed node (``_EXPRESSIONS``, ``_STATEMENTS``)
 # ---------------------------------------------------------------------------
 
 _SENTINEL = object()
@@ -293,11 +325,12 @@ class _SafeEvaluator:
     """Evaluate AST nodes with a local scope for variable bindings."""
 
     def __init__(self) -> None:
+        self._print_function = self._print
         self.scope: dict[str, Any] = {
             "True": True,
             "False": False,
             "None": None,
-            "print": self._print,
+            "print": self._print_function,
         }
         self._output: list[str] = []
         self._last_expr_value: Any = None
@@ -323,87 +356,74 @@ class _SafeEvaluator:
         return "None"
 
     def eval_node(self, node: ast.AST) -> Any:
-        """Recursively evaluate an AST node."""
-        # --- Module (multi-line) ---
+        """Evaluate a parsed program: a module of statements, or one expression."""
         if isinstance(node, ast.Module):
             if len(node.body) > _MAX_STATEMENTS:
                 raise ValueError(f"Too many statements: {len(node.body)}")
-            for stmt in node.body:
-                self._exec_stmt(stmt)
+            self._run(node.body)
             return self._last_expr_value
-
-        # --- Expression wrapper ---
         if isinstance(node, ast.Expression):
             self._last_expr_value = self._eval_expr(node.body)
             return self._last_expr_value
-
         return self._eval_expr(node)
 
-    def _exec_stmt(self, node: ast.stmt) -> None:
-        """Execute a statement node."""
-        # --- Expression statement (last value becomes result) ---
-        if isinstance(node, ast.Expr):
-            self._last_expr_value = self._eval_expr(node.value)
-            return
+    def _eval_expr(self, node: ast.AST) -> Any:
+        """Evaluate an expression node with its handler; a node without one is refused."""
+        handler = _EXPRESSIONS.get(type(node))
+        if handler is None:
+            raise ValueError(
+                _REFUSALS.get(type(node), f"Unsupported expression: {type(node).__name__}")
+            )
+        return handler(self, node)
 
-        # --- Assignment: x = 5, a, b = 1, 2 ---
-        if isinstance(node, ast.Assign):
-            value = self._eval_expr(node.value)
-            for target in node.targets:
-                self._assign(target, value)
-            return
+    def _exec_stmt(self, node: ast.AST) -> None:
+        """Execute a statement node with its handler; a node without one is refused."""
+        handler = _STATEMENTS.get(type(node))
+        if handler is None:
+            raise ValueError(f"Unsupported statement: {type(node).__name__}")
+        handler(self, node)
 
-        # --- Augmented assignment: x += 1 ---
-        if isinstance(node, ast.AugAssign):
-            current = self._eval_expr(node.target)
-            value = self._eval_expr(node.value)
-            op_fn = _BINARY_OPS.get(type(node.op))
-            if op_fn is None:
-                raise ValueError(f"Unsupported augmented op: {type(node.op).__name__}")
-            result = op_fn(current, value)
-            self._assign(node.target, result)
-            return
+    def _run(self, statements: list[ast.stmt]) -> None:
+        for statement in statements:
+            self._exec_stmt(statement)
 
-        # --- For loop ---
-        if isinstance(node, ast.For):
-            iterable = self._eval_expr(node.iter)
-            for count, item in enumerate(iterable, 1):
-                if count > _MAX_FOR_ITERATIONS:
-                    raise ValueError(f"For loop exceeded {_MAX_FOR_ITERATIONS} iterations")
-                self._assign(node.target, item)
-                for stmt in node.body:
-                    self._exec_stmt(stmt)
-            if node.orelse:
-                for stmt in node.orelse:
-                    self._exec_stmt(stmt)
-            return
+    # --- statements -------------------------------------------------------
 
-        # --- If/elif/else ---
-        if isinstance(node, ast.If):
-            if self._eval_expr(node.test):
-                for stmt in node.body:
-                    self._exec_stmt(stmt)
-            elif node.orelse:
-                for stmt in node.orelse:
-                    self._exec_stmt(stmt)
-            return
+    def _expression_statement(self, node: ast.Expr) -> None:
+        self._last_expr_value = self._eval_expr(node.value)
 
-        # --- Pass ---
-        if isinstance(node, ast.Pass):
-            return
+    def _assign_statement(self, node: ast.Assign) -> None:
+        value = self._eval_expr(node.value)
+        for target in node.targets:
+            self._assign(target, value)
 
-        # --- Delete ---
-        if isinstance(node, ast.Delete):
-            for target in node.targets:
-                if isinstance(target, ast.Name):
-                    self.scope.pop(target.id, None)
-                elif isinstance(target, ast.Subscript):
-                    obj = self._eval_expr(target.value)
-                    idx = self._eval_expr(target.slice)
-                    del obj[idx]
-            return
+    def _augmented_assignment(self, node: ast.AugAssign) -> None:
+        current = self._eval_expr(node.target)
+        value = self._eval_expr(node.value)
+        self._assign(node.target, _binary(node.op, current, value))
 
-        raise ValueError(f"Unsupported statement: {type(node).__name__}")
+    def _for(self, node: ast.For) -> None:
+        for count, item in enumerate(self._eval_expr(node.iter), 1):
+            if count > _MAX_FOR_ITERATIONS:
+                raise ValueError(f"For loop exceeded {_MAX_FOR_ITERATIONS} iterations")
+            self._assign(node.target, item)
+            self._run(node.body)
+        self._run(node.orelse)
+
+    def _if(self, node: ast.If) -> None:
+        self._run(node.body if self._eval_expr(node.test) else node.orelse)
+
+    def _pass(self, node: ast.Pass) -> None:
+        """``pass`` does nothing."""
+
+    def _delete(self, node: ast.Delete) -> None:
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                self.scope.pop(target.id, None)
+            elif isinstance(target, ast.Subscript):
+                del self._eval_expr(target.value)[self._eval_expr(target.slice)]
+            else:
+                raise ValueError(f"Unsupported delete target: {type(target).__name__}")
 
     def _assign(self, target: ast.AST, value: Any) -> None:
         """Assign a value to a target (name, tuple, list, subscript)."""
@@ -427,257 +447,162 @@ class _SafeEvaluator:
         else:
             raise ValueError(f"Unsupported assignment target: {type(target).__name__}")
 
-    def _eval_expr(self, node: ast.AST) -> Any:
-        """Evaluate an expression node."""
-        # --- Literals ---
-        if isinstance(node, ast.Constant):
-            return node.value
+    # --- expressions ------------------------------------------------------
 
-        # --- Names ---
-        if isinstance(node, ast.Name):
-            if node.id in self.scope:
-                return self.scope[node.id]
-            if node.id in _SAFE_FUNCTIONS:
-                return _SAFE_FUNCTIONS[node.id]
-            if node.id in _BLOCKED_FUNCTIONS:
-                raise ValueError(f"Blocked function: {node.id}")
-            raise ValueError(f"Unknown name: {node.id}")
+    def _constant(self, node: ast.Constant) -> Any:
+        return node.value
 
-        # --- List / Tuple / Set literals ---
-        if isinstance(node, ast.List):
-            result = [self._eval_expr(e) for e in node.elts]
-            if len(result) > _MAX_COLLECTION:
-                raise ValueError(f"Collection too large: {len(result)}")
-            return result
+    def _name(self, node: ast.Name) -> Any:
+        if node.id in self.scope:
+            return self.scope[node.id]
+        if node.id in _SAFE_FUNCTIONS:
+            return _SAFE_FUNCTIONS[node.id]
+        if node.id in _BLOCKED_FUNCTIONS:
+            raise ValueError(f"Blocked function: {node.id}")
+        raise ValueError(f"Unknown name: {node.id}")
 
-        if isinstance(node, ast.Tuple):
-            return tuple(self._eval_expr(e) for e in node.elts)
+    def _list(self, node: ast.List) -> list[Any]:
+        result = [self._eval_expr(e) for e in node.elts]
+        if len(result) > _MAX_COLLECTION:
+            raise ValueError(f"Collection too large: {len(result)}")
+        return result
 
-        if isinstance(node, ast.Set):
-            return {self._eval_expr(e) for e in node.elts}
+    def _tuple(self, node: ast.Tuple) -> tuple[Any, ...]:
+        return tuple(self._eval_expr(e) for e in node.elts)
 
-        # --- Dict literal ---
-        if isinstance(node, ast.Dict):
-            keys = [self._eval_expr(k) if k is not None else None for k in node.keys]
-            values = [self._eval_expr(v) for v in node.values]
-            return dict(zip(keys, values, strict=False))
+    def _set(self, node: ast.Set) -> set[Any]:
+        return {self._eval_expr(e) for e in node.elts}
 
-        # --- Binary operations ---
-        if isinstance(node, ast.BinOp):
-            op_fn = _BINARY_OPS.get(type(node.op))
-            if op_fn is None:
-                raise ValueError(f"Unsupported binary op: {type(node.op).__name__}")
-            left = self._eval_expr(node.left)
-            right = self._eval_expr(node.right)
-            if (
-                isinstance(node.op, ast.Pow)
-                and isinstance(right, (int, float))
-                and abs(right) > _MAX_POWER
-            ):
-                raise ValueError(f"Exponent too large: {right}")
-            return op_fn(left, right)
+    def _dict(self, node: ast.Dict) -> dict[Any, Any]:
+        if any(key is None for key in node.keys):
+            raise ValueError("Dict unpacking (**) is not supported")
+        return {
+            self._eval_expr(key): self._eval_expr(value)
+            for key, value in zip(node.keys, node.values, strict=True)
+            if key is not None
+        }
 
-        # --- Unary operations ---
-        if isinstance(node, ast.UnaryOp):
-            op_fn = _UNARY_OPS.get(type(node.op))
-            if op_fn is None:
-                raise ValueError(f"Unsupported unary op: {type(node.op).__name__}")
-            return op_fn(self._eval_expr(node.operand))
+    def _binary_operation(self, node: ast.BinOp) -> Any:
+        return _binary(node.op, self._eval_expr(node.left), self._eval_expr(node.right))
 
-        # --- Boolean: and, or ---
-        if isinstance(node, ast.BoolOp):
-            values = [self._eval_expr(v) for v in node.values]
-            if isinstance(node.op, ast.And):
-                result = values[0]
-                for v in values[1:]:
-                    result = result and v
+    def _unary_operation(self, node: ast.UnaryOp) -> Any:
+        op_fn = _UNARY_OPS.get(type(node.op))
+        if op_fn is None:
+            raise ValueError(f"Unsupported unary op: {type(node.op).__name__}")
+        return op_fn(self._eval_expr(node.operand))
+
+    def _boolean_operation(self, node: ast.BoolOp) -> Any:
+        """``and`` stops at the first false value, ``or`` at the first true one."""
+        stop_when = not isinstance(node.op, ast.And)
+        result: Any = None
+        for value in node.values:
+            result = self._eval_expr(value)
+            if bool(result) is stop_when:
                 return result
-            if isinstance(node.op, ast.Or):
-                result = values[0]
-                for v in values[1:]:
-                    result = result or v
-                return result
-            raise ValueError(f"Unsupported boolean op: {type(node.op).__name__}")
+        return result
 
-        # --- Comparisons ---
-        if isinstance(node, ast.Compare):
-            left = self._eval_expr(node.left)
-            for op, comparator in zip(node.ops, node.comparators, strict=True):
-                op_fn = _COMPARE_OPS.get(type(op))
-                if op_fn is None:
-                    raise ValueError(f"Unsupported comparison: {type(op).__name__}")
-                right = self._eval_expr(comparator)
-                if not op_fn(left, right):
-                    return False
-                left = right
+    def _compare(self, node: ast.Compare) -> bool:
+        left = self._eval_expr(node.left)
+        for op, comparator in zip(node.ops, node.comparators, strict=True):
+            op_fn = _COMPARE_OPS.get(type(op))
+            if op_fn is None:
+                raise ValueError(f"Unsupported comparison: {type(op).__name__}")
+            right = self._eval_expr(comparator)
+            if not op_fn(left, right):
+                return False
+            left = right
+        return True
+
+    def _if_expression(self, node: ast.IfExp) -> Any:
+        return self._eval_expr(node.body if self._eval_expr(node.test) else node.orelse)
+
+    def _subscript(self, node: ast.Subscript) -> Any:
+        obj = self._eval_expr(node.value)
+        part = node.slice
+        if not isinstance(part, ast.Slice):
+            return obj[self._eval_expr(part)]
+        bounds = (part.lower, part.upper, part.step)
+        lower, upper, step = (self._eval_expr(b) if b is not None else None for b in bounds)
+        return obj[lower:upper:step]
+
+    def _attribute(self, node: ast.Attribute) -> Any:
+        if node.attr in _BLOCKED_ATTRS or node.attr.startswith("__"):
+            raise ValueError(f"Blocked attribute: {node.attr}")
+        owner = self._eval_expr(node.value)
+        method = _method(owner, node.attr)
+        if method is None:
+            raise ValueError(f"Attribute not allowed: {type(owner).__name__}.{node.attr}")
+        return method
+
+    def _call(self, node: ast.Call) -> Any:
+        func = self._eval_expr(node.func)
+        if not self._vetted(func):
+            raise ValueError(f"Function not allowed: {ast.dump(node.func)}")
+        if any(keyword.arg is None for keyword in node.keywords):
+            raise ValueError("Keyword unpacking (**) is not supported")
+        args = [self._eval_expr(a) for a in node.args]
+        kwargs = {kw.arg: self._eval_expr(kw.value) for kw in node.keywords if kw.arg}
+        if func is range:
+            _check_range(args)
+        return func(*args, **kwargs)
+
+    def _vetted(self, func: object) -> bool:
+        """Whether ``func`` is one the evaluator hands out: a safe function, ``print``, a re
+        function, or a safe method bound to a builtin value."""
+        known = (self._print_function, *_SAFE_FUNCTIONS.values(), *_RE_FUNCTIONS.values())
+        if any(func is callable_ for callable_ in known):
             return True
+        return (
+            isinstance(func, types.BuiltinMethodType)
+            and _method(func.__self__, func.__name__) is not None
+        )
 
-        # --- Ternary ---
-        if isinstance(node, ast.IfExp):
-            cond = self._eval_expr(node.test)
-            return self._eval_expr(node.body) if cond else self._eval_expr(node.orelse)
+    def _list_comprehension(self, node: ast.ListComp) -> list[Any]:
+        return self._comprehend(node.generators, lambda: self._eval_expr(node.elt))
 
-        # --- Subscript ---
-        if isinstance(node, ast.Subscript):
-            obj = self._eval_expr(node.value)
-            slc = node.slice
-            if isinstance(slc, ast.Slice):
-                lower = self._eval_expr(slc.lower) if slc.lower else None
-                upper = self._eval_expr(slc.upper) if slc.upper else None
-                step = self._eval_expr(slc.step) if slc.step else None
-                return obj[lower:upper:step]
-            idx = self._eval_expr(slc)
-            return obj[idx]
+    def _set_comprehension(self, node: ast.SetComp) -> set[Any]:
+        return set(self._comprehend(node.generators, lambda: self._eval_expr(node.elt)))
 
-        # --- Attribute access (safe methods only) ---
-        if isinstance(node, ast.Attribute):
-            attr = node.attr
-            if attr in _BLOCKED_ATTRS or attr.startswith("__"):
-                raise ValueError(f"Blocked attribute: {attr}")
-            obj = self._eval_expr(node.value)
-            if isinstance(obj, str) and attr in _SAFE_STR_METHODS:
-                return getattr(obj, attr)
-            if isinstance(obj, list) and attr in _SAFE_LIST_METHODS:
-                return getattr(obj, attr)
-            if isinstance(obj, dict) and attr in _SAFE_DICT_METHODS:
-                return getattr(obj, attr)
-            if isinstance(obj, set) and attr in _SAFE_SET_METHODS:
-                return getattr(obj, attr)
-            if isinstance(obj, tuple) and attr in {"count", "index"}:
-                return getattr(obj, attr)
-            if isinstance(obj, bytes) and attr in {"decode"}:
-                return getattr(obj, attr)
-            # re module access
-            if obj is re and attr in {"match", "search", "findall", "sub", "split"}:
-                return getattr(obj, attr)
-            raise ValueError(f"Attribute not allowed: {type(obj).__name__}.{attr}")
+    def _dict_comprehension(self, node: ast.DictComp) -> dict[Any, Any]:
+        def item() -> tuple[Any, Any]:
+            return self._eval_expr(node.key), self._eval_expr(node.value)
 
-        # --- Function calls ---
-        if isinstance(node, ast.Call):
-            func = self._eval_expr(node.func)
-            # Check if it's a blocked function by name
-            if isinstance(node.func, ast.Name) and node.func.id in _BLOCKED_FUNCTIONS:
-                raise ValueError(f"Blocked function: {node.func.id}")
-            # Allow safe functions and bound methods
-            is_safe_func = func in _SAFE_FUNCTIONS.values()
-            is_bound_method = callable(func) and hasattr(func, "__self__")
-            is_re_func = callable(func) and getattr(func, "__module__", "") == "re"
-            if not (is_safe_func or is_bound_method or is_re_func):
-                raise ValueError(f"Function not allowed: {ast.dump(node.func)}")
-            args = [self._eval_expr(a) for a in node.args]
-            kwargs = {kw.arg: self._eval_expr(kw.value) for kw in node.keywords if kw.arg}
-            # Guard range()
-            if func is range:
-                test_args = list(args)
-                if len(test_args) == 1 and isinstance(test_args[0], int):
-                    if test_args[0] > _MAX_RANGE:
-                        raise ValueError(f"range too large: {test_args[0]}")
-                elif len(test_args) >= 2:
-                    start = test_args[0] if isinstance(test_args[0], int) else 0
-                    stop = test_args[1] if isinstance(test_args[1], int) else 0
-                    if abs(stop - start) > _MAX_RANGE:
-                        raise ValueError(f"range too large: {abs(stop - start)}")
-            return func(*args, **kwargs)
+        return dict(self._comprehend(node.generators, item))
 
-        # --- List comprehension ---
-        if isinstance(node, ast.ListComp):
-            return self._eval_comprehension(node.elt, node.generators)
+    def _generator(self, node: ast.GeneratorExp) -> list[Any]:
+        return self._comprehend(node.generators, lambda: self._eval_expr(node.elt))
 
-        # --- Set comprehension ---
-        if isinstance(node, ast.SetComp):
-            return set(self._eval_comprehension(node.elt, node.generators))
-
-        # --- Dict comprehension ---
-        if isinstance(node, ast.DictComp):
-            keys_vals = self._eval_dict_comprehension(node.key, node.value, node.generators)
-            return dict(keys_vals)
-
-        # --- Generator expression (evaluate as list) ---
-        if isinstance(node, ast.GeneratorExp):
-            return self._eval_comprehension(node.elt, node.generators)
-
-        # --- Formatted string (f-string) — blocked ---
-        if isinstance(node, ast.JoinedStr):
-            raise ValueError("f-strings are not supported")
-
-        raise ValueError(f"Unsupported expression: {type(node).__name__}")
-
-    def _eval_comprehension(self, elt: ast.AST, generators: list[ast.comprehension]) -> list[Any]:
+    def _comprehend(
+        self, generators: list[ast.comprehension], produce: Callable[[], Any]
+    ) -> list[Any]:
+        """What a comprehension produces, as a list; its loop names do not outlive it."""
         results: list[Any] = []
-        self._eval_comp_recursive(elt, generators, 0, results)
+        self._generate(generators, 0, produce, results)
         if len(results) > _MAX_COLLECTION:
             raise ValueError(f"Comprehension produced too many items: {len(results)}")
         return results
 
-    def _eval_comp_recursive(
+    def _generate(
         self,
-        elt: ast.AST,
         generators: list[ast.comprehension],
-        gen_idx: int,
+        index: int,
+        produce: Callable[[], Any],
         results: list[Any],
     ) -> None:
-        if gen_idx >= len(generators):
-            results.append(self._eval_expr(elt))
+        if index == len(generators):
+            results.append(produce())
             return
-
-        gen = generators[gen_idx]
-        iterable = self._eval_expr(gen.iter)
+        generator = generators[index]
         saved: dict[str, Any] = {}
-
-        for item in iterable:
-            self._assign_comp(gen.target, item, saved)
-            if all(self._eval_expr(cond) for cond in gen.ifs):
-                self._eval_comp_recursive(elt, generators, gen_idx + 1, results)
-
-        # Restore scope
-        for name in saved:
-            if saved[name] is _SENTINEL:
+        for item in self._eval_expr(generator.iter):
+            self._assign_comp(generator.target, item, saved)
+            if all(self._eval_expr(condition) for condition in generator.ifs):
+                self._generate(generators, index + 1, produce, results)
+        for name, value in saved.items():
+            if value is _SENTINEL:
                 self.scope.pop(name, None)
             else:
-                self.scope[name] = saved[name]
-
-    def _eval_dict_comprehension(
-        self,
-        key_node: ast.AST,
-        value_node: ast.AST,
-        generators: list[ast.comprehension],
-    ) -> list[tuple[Any, Any]]:
-        results: list[tuple[Any, Any]] = []
-        self._eval_dict_comp_recursive(key_node, value_node, generators, 0, results)
-        if len(results) > _MAX_COLLECTION:
-            raise ValueError(f"Dict comprehension too large: {len(results)}")
-        return results
-
-    def _eval_dict_comp_recursive(
-        self,
-        key_node: ast.AST,
-        value_node: ast.AST,
-        generators: list[ast.comprehension],
-        gen_idx: int,
-        results: list[tuple[Any, Any]],
-    ) -> None:
-        if gen_idx >= len(generators):
-            k = self._eval_expr(key_node)
-            v = self._eval_expr(value_node)
-            results.append((k, v))
-            return
-
-        gen = generators[gen_idx]
-        iterable = self._eval_expr(gen.iter)
-        saved: dict[str, Any] = {}
-
-        for item in iterable:
-            self._assign_comp(gen.target, item, saved)
-            if all(self._eval_expr(cond) for cond in gen.ifs):
-                self._eval_dict_comp_recursive(
-                    key_node, value_node, generators, gen_idx + 1, results
-                )
-
-        for name in saved:
-            if saved[name] is _SENTINEL:
-                self.scope.pop(name, None)
-            else:
-                self.scope[name] = saved[name]
+                self.scope[name] = value
 
     def _assign_comp(self, target: ast.AST, value: Any, saved: dict[str, Any]) -> None:
         """Assign in comprehension scope, tracking previous values for restore."""
@@ -693,24 +618,63 @@ class _SafeEvaluator:
             raise ValueError(f"Unsupported comp target: {type(target).__name__}")
 
 
+def _binary(op: ast.operator, left: Any, right: Any) -> Any:
+    """``left op right`` for a whitelisted operator; ``**`` keeps its exponent guard."""
+    op_fn = _BINARY_OPS.get(type(op))
+    if op_fn is None:
+        raise ValueError(f"Unsupported binary op: {type(op).__name__}")
+    if isinstance(op, ast.Pow) and isinstance(right, (int, float)) and abs(right) > _MAX_POWER:
+        raise ValueError(f"Exponent too large: {right}")
+    return op_fn(left, right)
+
+
+def _check_range(args: list[Any]) -> None:
+    """Refuse a ``range`` longer than ``_MAX_RANGE``."""
+    if len(args) == 1 and isinstance(args[0], int) and args[0] > _MAX_RANGE:
+        raise ValueError(f"range too large: {args[0]}")
+    if len(args) >= 2:
+        start = args[0] if isinstance(args[0], int) else 0
+        stop = args[1] if isinstance(args[1], int) else 0
+        if abs(stop - start) > _MAX_RANGE:
+            raise ValueError(f"range too large: {abs(stop - start)}")
+
+
+# The nodes the evaluator runs: anything else is refused (see the module docstring).
+_EXPRESSIONS: dict[type[ast.AST], Callable[[_SafeEvaluator, Any], Any]] = {
+    ast.Constant: _SafeEvaluator._constant,
+    ast.Name: _SafeEvaluator._name,
+    ast.List: _SafeEvaluator._list,
+    ast.Tuple: _SafeEvaluator._tuple,
+    ast.Set: _SafeEvaluator._set,
+    ast.Dict: _SafeEvaluator._dict,
+    ast.BinOp: _SafeEvaluator._binary_operation,
+    ast.UnaryOp: _SafeEvaluator._unary_operation,
+    ast.BoolOp: _SafeEvaluator._boolean_operation,
+    ast.Compare: _SafeEvaluator._compare,
+    ast.IfExp: _SafeEvaluator._if_expression,
+    ast.Subscript: _SafeEvaluator._subscript,
+    ast.Attribute: _SafeEvaluator._attribute,
+    ast.Call: _SafeEvaluator._call,
+    ast.ListComp: _SafeEvaluator._list_comprehension,
+    ast.SetComp: _SafeEvaluator._set_comprehension,
+    ast.DictComp: _SafeEvaluator._dict_comprehension,
+    ast.GeneratorExp: _SafeEvaluator._generator,
+}
+_STATEMENTS: dict[type[ast.AST], Callable[[_SafeEvaluator, Any], None]] = {
+    ast.Expr: _SafeEvaluator._expression_statement,
+    ast.Assign: _SafeEvaluator._assign_statement,
+    ast.AugAssign: _SafeEvaluator._augmented_assignment,
+    ast.For: _SafeEvaluator._for,
+    ast.If: _SafeEvaluator._if,
+    ast.Pass: _SafeEvaluator._pass,
+    ast.Delete: _SafeEvaluator._delete,
+}
+_REFUSALS: dict[type[ast.AST], str] = {ast.JoinedStr: "f-strings are not supported"}
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
-
-
-def _run_eval(code: str) -> _SafeEvaluator:
-    """Set up evaluator and run code, returning the evaluator for result access."""
-    evaluator = _SafeEvaluator()
-    evaluator.scope["re"] = re
-
-    try:
-        tree = ast.parse(code, mode="eval")
-        evaluator.eval_node(tree)
-    except SyntaxError:
-        tree = ast.parse(code, mode="exec")
-        evaluator.eval_node(tree)
-
-    return evaluator
 
 
 @tool(

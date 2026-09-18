@@ -12,6 +12,7 @@ from ai_arch_toolkit.toolkit.agents import (
     AgentManifestCycleError,
     AgentManifestError,
     AgentOverrideError,
+    ReasoningSpec,
     load_agent_manifest,
 )
 
@@ -297,7 +298,9 @@ def test_unknown_fields_and_profiles_fail_strictly(tmp_path: Path) -> None:
           name: react
         """,
     )
-    with pytest.raises(AgentManifestError, match="unknown fields: stratgey"):
+    with pytest.raises(
+        AgentManifestError, match=r"unknown fields: 'stratgey' \(did you mean 'strategy'\?\)"
+    ):
         load_agent_manifest(invalid)
 
     valid = _base_tree(tmp_path)
@@ -312,7 +315,7 @@ def test_version_must_be_the_exact_integer_one(tmp_path: Path, version: object) 
         json.dumps({"version": version}),
     )
 
-    with pytest.raises(AgentManifestError, match="integer version"):
+    with pytest.raises(AgentManifestError, match="version must be 1"):
         load_agent_manifest(path)
 
 
@@ -581,3 +584,61 @@ def test_invalid_override_keys_raise_domain_error_before_sorting(tmp_path: Path)
 
     with pytest.raises(AgentOverrideError, match="non-empty strings"):
         load_agent_manifest(path, overrides=invalid)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        {"strategy": None, "limits": None, "prompts": None, "override_policy": None},
+        {
+            "strategy": {
+                "name": None,
+                "system": None,
+                "max_iterations": None,
+                "timeout": None,
+                "trace_capture": None,
+                "phases": None,
+                "parallel_tool_calls": None,
+            },
+            "limits": {"reserve": None, "unpriced": None, "max_cost": None},
+        },
+    ],
+)
+def test_a_null_field_is_not_set(tmp_path: Path, document: dict[str, object]) -> None:
+    path = tmp_path / "nulls.agent.json"
+    path.write_text(json.dumps({"version": 1, **document}))
+
+    manifest = load_agent_manifest(path)
+
+    assert manifest.reasoning_spec() == ReasoningSpec()
+    assert manifest.budget_policy() is None
+    assert manifest.phase_models() == {}
+
+
+def test_a_null_strategy_timeout_leaves_the_limits_timeout(tmp_path: Path) -> None:
+    path = tmp_path / "timeout.agent.json"
+    path.write_text(
+        json.dumps({"version": 1, "strategy": {"timeout": None}, "limits": {"timeout_seconds": 5}})
+    )
+
+    assert load_agent_manifest(path).reasoning_spec().timeout == 5
+
+
+@pytest.mark.parametrize("system", [5, ["be brief"], {"text": "be brief"}, True])
+def test_a_system_prompt_must_be_text(tmp_path: Path, system: object) -> None:
+    path = tmp_path / "system.agent.json"
+    path.write_text(json.dumps({"version": 1, "strategy": {"system": system}}))
+
+    with pytest.raises(AgentManifestError, match=r"strategy\.system must be a string"):
+        load_agent_manifest(path)
+
+
+@pytest.mark.parametrize("trace_capture", [[], {}, ["keys"]])
+def test_an_unhashable_trace_capture_is_a_manifest_error(
+    tmp_path: Path, trace_capture: object
+) -> None:
+    path = tmp_path / "capture.agent.json"
+    path.write_text(json.dumps({"version": 1, "strategy": {"trace_capture": trace_capture}}))
+
+    with pytest.raises(AgentManifestError, match=r"strategy\.trace_capture must be one of"):
+        load_agent_manifest(path)

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import urllib.error
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 from ai_arch_toolkit.toolkit.tools._osm import osm_reverse_geocode, osm_search_place
+from tests.toolkit.http_fakes import HTTP_OPEN, respond
 
 _PLACE = {
     "place_id": 123,
@@ -25,17 +25,6 @@ _PLACE = {
 }
 
 
-def _mock_urlopen(data: dict | list | str):
-    resp = MagicMock()
-    if isinstance(data, str):
-        resp.read.return_value = data.encode()
-    else:
-        resp.read.return_value = json.dumps(data).encode()
-    resp.__enter__ = lambda s: s
-    resp.__exit__ = MagicMock(return_value=False)
-    return resp
-
-
 def _called_request(mock_urlopen):
     return mock_urlopen.call_args.args[0]
 
@@ -45,10 +34,9 @@ def _called_params(mock_urlopen) -> dict[str, list[str]]:
 
 
 class TestOsmSearchPlace:
-    @patch("ai_arch_toolkit.toolkit.tools._osm._throttle")
-    @patch("ai_arch_toolkit.toolkit.tools._osm.urllib.request.urlopen")
-    def test_returns_places(self, mock_urlopen, _mock_throttle):
-        mock_urlopen.return_value = _mock_urlopen([_PLACE])
+    @patch(HTTP_OPEN)
+    def test_returns_places(self, mock_urlopen):
+        mock_urlopen.return_value = respond([_PLACE])
 
         result = osm_search_place(
             "Lisbon",
@@ -76,7 +64,7 @@ class TestOsmSearchPlace:
         assert params["layer"] == ["address"]
         assert params["extratags"] == ["1"]
 
-    @patch("ai_arch_toolkit.toolkit.tools._osm.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_invalid_search_options_do_not_call_api(self, mock_urlopen):
         assert "query cannot be empty" in osm_search_place("")
         assert "country_codes" in osm_search_place("Lisbon", country_codes="portugal")
@@ -85,10 +73,9 @@ class TestOsmSearchPlace:
 
 
 class TestOsmReverseGeocode:
-    @patch("ai_arch_toolkit.toolkit.tools._osm._throttle")
-    @patch("ai_arch_toolkit.toolkit.tools._osm.urllib.request.urlopen")
-    def test_returns_reverse_result(self, mock_urlopen, _mock_throttle):
-        mock_urlopen.return_value = _mock_urlopen(_PLACE)
+    @patch(HTTP_OPEN)
+    def test_returns_reverse_result(self, mock_urlopen):
+        mock_urlopen.return_value = respond(_PLACE)
 
         result = osm_reverse_geocode(38.7077507, -9.1365919, zoom=18, layer="address,poi")
 
@@ -101,16 +88,15 @@ class TestOsmReverseGeocode:
         assert params["zoom"] == ["18"]
         assert params["layer"] == ["address,poi"]
 
-    @patch("ai_arch_toolkit.toolkit.tools._osm.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_invalid_reverse_options_do_not_call_api(self, mock_urlopen):
         assert "latitude must" in osm_reverse_geocode(-91, 0)
         assert "longitude must" in osm_reverse_geocode(0, 181)
         assert "invalid layer" in osm_reverse_geocode(0, 0, layer="bad")
         mock_urlopen.assert_not_called()
 
-    @patch("ai_arch_toolkit.toolkit.tools._osm._throttle")
-    @patch("ai_arch_toolkit.toolkit.tools._osm.urllib.request.urlopen")
-    def test_api_and_parse_failures(self, mock_urlopen, _mock_throttle):
+    @patch(HTTP_OPEN)
+    def test_api_and_parse_failures(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.HTTPError(
             url="https://nominatim.openstreetmap.org/search",
             code=429,
@@ -121,5 +107,5 @@ class TestOsmReverseGeocode:
         assert "rate limited" in osm_search_place("Lisbon")
 
         mock_urlopen.side_effect = None
-        mock_urlopen.return_value = _mock_urlopen("not json")
+        mock_urlopen.return_value = respond("not json")
         assert "could not parse" in osm_search_place("Lisbon")

@@ -220,3 +220,208 @@ def test_sdk_exception_detector_flags_catches_and_checks_outside_the_mapper() ->
     )
     mapper = "def map_error(self, exc, *, sent):\n    return isinstance(exc, openai.APIError)\n"
     assert not sdk_errors_outside_the_mapper(mapper)
+
+
+_NETWORK_MODULES = ("urllib.request", "urllib.error", "http.client", "socket", "ssl")
+_HTTP_DOOR = ROOT / "src/ai_arch_toolkit/toolkit/tools/_http.py"
+
+
+def network_access(source: str) -> list[int]:
+    """Lines that import or name a stdlib module that reaches the network.
+
+    ``urllib.parse`` only parses, so it is not one of them.
+    """
+
+    def reaches(name: str) -> bool:
+        return any(name == module or name.startswith(f"{module}.") for module in _NETWORK_MODULES)
+
+    lines: list[int] = []
+    for node in ast.walk(ast.parse(source)):
+        names: list[str] = []
+        if isinstance(node, ast.Import):
+            names = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            names = [node.module, *(f"{node.module}.{alias.name}" for alias in node.names)]
+        elif isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+            names = [f"{node.value.id}.{node.attr}"]
+        if any(reaches(name) for name in names):
+            lines.append(node.lineno)
+    return lines
+
+
+def _network_offenders() -> set[str]:
+    return {
+        str(path.relative_to(ROOT))
+        for path in (ROOT / "src/ai_arch_toolkit").rglob("*.py")
+        if "nanope" not in path.parts and path != _HTTP_DOOR and network_access(path.read_text())
+    }
+
+
+def test_only_the_tools_http_module_reaches_the_network() -> None:
+    assert _network_offenders() == set()
+
+
+def test_network_detector_flags_imports_and_attribute_use() -> None:
+    assert network_access("import urllib.request\n")
+    assert network_access("from urllib import request\n")
+    assert network_access("import urllib.parse\nurllib.request.urlopen('x')\n")
+    assert network_access("from http.client import HTTPSConnection\n")
+    assert network_access("import socket\n")
+    assert not network_access("from urllib.parse import urlsplit\n")
+    assert not network_access("from http import HTTPStatus\n")
+
+
+def duplicated_windows(first: str, second: str, size: int = 8) -> int:
+    """How many runs of ``size`` lines (whitespace-normalised, at least 6 non-blank) repeat."""
+
+    def windows(source: str) -> set[str]:
+        lines = [line.strip() for line in source.splitlines()]
+        return {
+            "\n".join(lines[i : i + size])
+            for i in range(len(lines) - size + 1)
+            if sum(1 for line in lines[i : i + size] if line) >= 6
+        }
+
+    return len(windows(first) & windows(second))
+
+
+def test_the_memory_graph_store_does_not_reimplement_the_graph_facade() -> None:
+    core = (CORE / "graph/_store.py").read_text()
+    memory = (ROOT / "src/ai_arch_toolkit/toolkit/memory/graph/_store.py").read_text()
+
+    assert duplicated_windows(core, memory) == 0
+
+
+def test_the_duplicate_detector_sees_a_copied_block() -> None:
+    block = "\n".join(f"x{i} = {i}" for i in range(10))
+    assert duplicated_windows(block, "\n".join(["pass", block, "pass"])) == 3
+    assert duplicated_windows(block, block.replace("x5", "y5")) == 0
+
+
+_FLOW_OPTIONS = frozenset({"timeout", "trace_capture", "policy", "budget_policy"})
+_FACTORIES = ROOT / "src/ai_arch_toolkit/toolkit/agents/flows"
+_BUILDERS = ROOT / "src/ai_arch_toolkit/toolkit/agents/_builders.py"
+
+
+def flow_options_by_name(source: str) -> list[str]:
+    """Where a module takes one of the four ``Flow`` options as a parameter or passes it by name.
+
+    The options travel together, as ``**options`` (``FlowOptions``); spelling one out repeats the
+    declaration this rule keeps in one place.
+    """
+    found: list[str] = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            arguments = [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]
+            found += [f"{node.name}({a.arg})" for a in arguments if a.arg in _FLOW_OPTIONS]
+        elif isinstance(node, ast.keyword) and node.arg in _FLOW_OPTIONS:
+            found.append(f"{node.arg}= (line {node.value.lineno})")
+    return found
+
+
+def spec_options_read_outside(source: str, reader: str) -> list[str]:
+    """Functions other than ``reader`` that read one of a spec's ``Flow`` options."""
+    return [
+        f"{func.name}: .{node.attr}"
+        for func in ast.parse(source).body
+        if isinstance(func, ast.FunctionDef) and func.name != reader
+        for node in ast.walk(func)
+        if isinstance(node, ast.Attribute) and node.attr in _FLOW_OPTIONS
+    ]
+
+
+def test_the_flow_factories_take_the_flow_options_as_one_set() -> None:
+    offenders = {
+        path.name: found
+        for path in sorted(_FACTORIES.glob("_*.py"))
+        if (found := flow_options_by_name(path.read_text()))
+    }
+    assert offenders == {}
+    factories = [
+        node
+        for path in sorted(_FACTORIES.glob("_*.py"))
+        for node in ast.parse(path.read_text()).body
+        if isinstance(node, ast.FunctionDef) and node.name.endswith("_flow")
+    ]
+    assert len(factories) == 9
+    unpacked = {
+        node.name: ast.unparse(node.args.kwarg.annotation)
+        for node in factories
+        if node.args.kwarg is not None and node.args.kwarg.annotation is not None
+    }
+    assert unpacked == {node.name: "Unpack[FlowOptions]" for node in factories}
+
+
+def test_the_builders_read_the_specs_flow_options_in_one_place() -> None:
+    source = _BUILDERS.read_text()
+
+    assert flow_options_by_name(source) == []
+    assert spec_options_read_outside(source, "_flow_options") == []
+
+
+def test_the_flow_option_detectors_see_a_spelled_out_option() -> None:
+    source = "def f(llm, *, timeout=None):\n    return Flow(policy=p, name='x', **options)\n"
+    assert flow_options_by_name(source) == ["f(timeout)", "policy= (line 2)"]
+    assert flow_options_by_name("def f(llm, **options):\n    return Flow(**options)\n") == []
+    reads = "def _flow_options(s):\n    return s.policy\n\ndef b(s):\n    return s.timeout\n"
+    assert spec_options_read_outside(reads, "_flow_options") == ["b: .timeout"]
+
+
+_STATE_KEYS = frozenset({"task", "messages", "answer", "response"})
+_AGENTS = ROOT / "src/ai_arch_toolkit/toolkit/agents"
+_KEYS_MODULE = _AGENTS / "flows/_keys.py"
+
+
+def state_key_literals(source: str) -> list[int]:
+    """Lines that spell one of the state keys the strategies and the runner share."""
+    return [
+        node.lineno
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Constant) and node.value in _STATE_KEYS
+    ]
+
+
+def test_the_shared_state_keys_are_spelled_in_one_module() -> None:
+    offenders = {
+        str(path.relative_to(ROOT)): lines
+        for path in sorted(_AGENTS.rglob("*.py"))
+        if path != _KEYS_MODULE and (lines := state_key_literals(path.read_text()))
+    }
+    assert offenders == {}
+
+
+def test_the_state_key_detector_sees_a_key_spelled_out() -> None:
+    assert state_key_literals('answer = snap.require("task")\n') == [1]
+    assert state_key_literals('x = {ANSWER: text}\nprint(f"Task: {task}", "Answer:")\n') == []
+
+
+def test_the_python_evaluator_vets_callables_without_capability_discovery() -> None:
+    evaluator = ROOT / "src/ai_arch_toolkit/toolkit/tools/_python.py"
+
+    assert capability_discovery(evaluator.read_text()) == []
+
+
+def react_loops_built(source: str) -> list[int]:
+    """Lines that build or seed a ReAct flow by hand, which only ``_react`` may do."""
+    return [
+        node.lineno
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in {"react_flow", "react_initial_state"}
+    ]
+
+
+def test_the_strategies_run_an_inner_react_through_one_primitive() -> None:
+    builders = {
+        path.name: lines
+        for path in sorted(_FACTORIES.glob("_*.py"))
+        if path.name != "_react.py" and (lines := react_loops_built(path.read_text()))
+    }
+    assert builders == {}
+
+
+def test_the_react_loop_detector_sees_a_hand_built_loop() -> None:
+    assert react_loops_built("inner = react_flow(llm, tools)\n") == [1]
+    assert react_loops_built("state = State(operational=react_initial_state(task))\n") == [1]
+    assert react_loops_built("answer = await run_react(llm, tools, task)\n") == []

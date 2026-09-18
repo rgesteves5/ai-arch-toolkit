@@ -2,19 +2,14 @@
 
 from __future__ import annotations
 
-import json
 import re
-import urllib.error
-import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
-_BASE_URL = "https://openlibrary.org"
-_TIMEOUT = 10
-_USER_AGENT = "ai-arch-toolkit/1.0 (https://github.com/ai-arch-toolkit)"
+_API = Api(base="https://openlibrary.org", name="Open Library")
 _MAX_RESULTS_LIMIT = 20
 _DESCRIPTION_MAX_CHARS = 1000
 _WORK_ID_RE = re.compile(r"^OL\d+W$", re.IGNORECASE)
@@ -43,7 +38,7 @@ class _OpenLibraryBook:
     links: tuple[str, ...]
 
 
-@tool
+@tool(capability="network")
 def open_library_search(
     query: str,
     max_results: int = 5,
@@ -66,38 +61,22 @@ def open_library_search(
     """
     if start < 0:
         return "Open Library search failed: start must be greater than or equal to 0."
-    if not any(value.strip() for value in (query, title, author, subject, isbn)):
+    fields = {"q": query, "title": title, "author": author, "subject": subject, "isbn": isbn}
+    filters = {key: value.strip() for key, value in fields.items() if value.strip()}
+    if not filters:
         return "Open Library search failed: provide query, title, author, subject, or isbn."
 
     max_results = max(1, min(max_results, _MAX_RESULTS_LIMIT))
     params = {
         "limit": str(max_results),
         "offset": str(start),
+        **filters,
     }
-    if query.strip():
-        params["q"] = query.strip()
-    if title.strip():
-        params["title"] = title.strip()
-    if author.strip():
-        params["author"] = author.strip()
-    if subject.strip():
-        params["subject"] = subject.strip()
-    if isbn.strip():
-        params["isbn"] = isbn.strip()
 
     try:
-        data = _fetch_json("/search.json", params)
-        docs = data.get("docs", [])
-        books = [_parse_search_doc(item) for item in docs if isinstance(item, dict)]
-        books = [book for book in books if book is not None]
-    except urllib.error.HTTPError as e:
-        return f"Open Library search failed: HTTP error {e.code}: {e.reason}"
-    except urllib.error.URLError as e:
-        return f"Open Library search failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "Open Library search failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"Open Library search failed: could not parse API response: {e}"
+        books = _API.get_json("search.json", params=params, parse=_search_books)
+    except HttpError as e:
+        return f"Open Library search failed: {e}"
 
     if not books:
         return "No Open Library results found."
@@ -105,7 +84,7 @@ def open_library_search(
     return "Open Library results:\n" + _format_books(books, include_description=False)
 
 
-@tool
+@tool(capability="network")
 def open_library_work(work_id: str) -> str:
     """Fetch Open Library metadata for a work.
 
@@ -117,18 +96,11 @@ def open_library_work(work_id: str) -> str:
         return f"Open Library work lookup failed: invalid work_id: {work_id!r}"
 
     try:
-        data = _fetch_json(f"/works/{normalized}.json", {})
-        book = _parse_work(data)
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
+        book = _API.get_json("works", f"{normalized}.json", parse=_parse_work)
+    except HttpError as e:
+        if e.status == 404:
             return f"Open Library work not found: {normalized}"
-        return f"Open Library work lookup failed: HTTP error {e.code}: {e.reason}"
-    except urllib.error.URLError as e:
-        return f"Open Library work lookup failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "Open Library work lookup failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"Open Library work lookup failed: could not parse API response: {e}"
+        return f"Open Library work lookup failed: {e}"
 
     if book is None:
         return f"Open Library work not found: {normalized}"
@@ -140,7 +112,7 @@ def open_library_work(work_id: str) -> str:
     )
 
 
-@tool
+@tool(capability="network")
 def open_library_isbn(isbn: str) -> str:
     """Fetch Open Library edition metadata for an ISBN.
 
@@ -152,18 +124,11 @@ def open_library_isbn(isbn: str) -> str:
         return f"Open Library ISBN lookup failed: invalid ISBN: {isbn!r}"
 
     try:
-        data = _fetch_json(f"/isbn/{normalized}.json", {})
-        book = _parse_isbn(data)
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
+        book = _API.get_json("isbn", f"{normalized}.json", parse=_parse_isbn)
+    except HttpError as e:
+        if e.status == 404:
             return f"Open Library ISBN not found: {normalized}"
-        return f"Open Library ISBN lookup failed: HTTP error {e.code}: {e.reason}"
-    except urllib.error.URLError as e:
-        return f"Open Library ISBN lookup failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "Open Library ISBN lookup failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"Open Library ISBN lookup failed: could not parse API response: {e}"
+        return f"Open Library ISBN lookup failed: {e}"
 
     if book is None:
         return f"Open Library ISBN not found: {normalized}"
@@ -175,13 +140,10 @@ def open_library_isbn(isbn: str) -> str:
     )
 
 
-def _fetch_json(path: str, params: dict[str, str]) -> dict[str, Any]:
-    url = f"{_BASE_URL}{path}"
-    if params:
-        url = f"{url}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="replace"))
+def _search_books(data: dict[str, Any]) -> list[_OpenLibraryBook]:
+    docs = data.get("docs", [])
+    books = [_parse_search_doc(item) for item in docs if isinstance(item, dict)]
+    return [book for book in books if book is not None]
 
 
 def _parse_search_doc(data: dict[str, Any]) -> _OpenLibraryBook | None:

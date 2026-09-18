@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from ai_arch_toolkit.toolkit.tools._math import math_eval, unit_convert
 
 
@@ -101,3 +103,20 @@ class TestUnitConvert:
         # Both should give same conversion
         assert "0.621371" in r1
         assert "0.621371" in r2
+
+
+class TestMathGuards:
+    def test_a_long_expression_is_refused(self):
+        assert math_eval("1+" * 600 + "1") == "Error: expression longer than 1000 characters"
+
+    @pytest.mark.parametrize("expression", ["factorial(3000)", "10**4000 * 10**4000", "7**9000"])
+    def test_a_result_too_large_to_print_is_refused_before_it_is_computed(self, expression):
+        assert math_eval(expression).startswith("Error: result too large")
+
+    def test_deep_nesting_is_an_error(self):
+        assert math_eval("-" * 999 + "1").startswith("Error")
+
+    def test_large_but_printable_results_still_work(self):
+        assert math_eval("2**1000") == str(2**1000)
+        assert math_eval("factorial(100)").startswith("93326215443944")
+        assert math_eval("pow(3, 10**50, 7)") == str(pow(3, 10**50, 7))

@@ -2,20 +2,14 @@
 
 from __future__ import annotations
 
-import json
 import re
-import urllib.error
-import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
-_BASE_URL = "https://archive.org"
-_SEARCH_URL = f"{_BASE_URL}/advancedsearch.php"
-_TIMEOUT = 15
-_USER_AGENT = "ai-arch-toolkit/1.0 (https://github.com/ai-arch-toolkit)"
+_API = Api(base="https://archive.org", name="Internet Archive", timeout_s=15)
 _MAX_RESULTS_LIMIT = 20
 _DESCRIPTION_MAX_CHARS = 1000
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
@@ -38,7 +32,7 @@ class _InternetArchiveItem:
     files: tuple[str, ...]
 
 
-@tool
+@tool(capability="network")
 def internet_archive_search(
     query: str,
     max_results: int = 5,
@@ -89,26 +83,14 @@ def internet_archive_search(
     }
 
     try:
-        data = _fetch_json(_SEARCH_URL, params)
-        docs = data.get("response", {}).get("docs", [])
-        items = [_parse_search_doc(item) for item in docs if isinstance(item, dict)]
-        items = [item for item in items if item is not None]
-    except urllib.error.HTTPError as e:
-        return f"Internet Archive search failed: HTTP error {e.code}: {e.reason}"
-    except urllib.error.URLError as e:
-        return f"Internet Archive search failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "Internet Archive search failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"Internet Archive search failed: could not parse API response: {e}"
-
-    if not items:
-        return f"No Internet Archive items found for: {query!r}"
-
-    return f"Internet Archive items for {query!r}:\n" + _format_items(items)
+        return _API.get_json(
+            "advancedsearch.php", params=params, parse=lambda data: _search_text(data, query)
+        )
+    except HttpError as e:
+        return f"Internet Archive search failed: {e}"
 
 
-@tool
+@tool(capability="network")
 def internet_archive_item(identifier: str) -> str:
     """Fetch Internet Archive metadata for a specific item identifier.
 
@@ -120,19 +102,11 @@ def internet_archive_item(identifier: str) -> str:
         return f"Internet Archive item lookup failed: invalid identifier: {identifier!r}"
 
     try:
-        data = _fetch_json(f"{_BASE_URL}/metadata/{urllib.parse.quote(normalized)}", {})
-        item = _parse_metadata_item(data)
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
+        item = _API.get_json("metadata", normalized, parse=_parse_metadata_item)
+    except HttpError as e:
+        if e.status == 404:
             return f"Internet Archive item not found: {normalized}"
-        return f"Internet Archive item lookup failed: HTTP error {e.code}: {e.reason}"
-    except urllib.error.URLError as e:
-        return f"Internet Archive item lookup failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "Internet Archive item lookup failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"Internet Archive item lookup failed: could not parse API response: {e}"
-
+        return f"Internet Archive item lookup failed: {e}"
     if item is None:
         return f"Internet Archive item not found: {normalized}"
 
@@ -143,13 +117,13 @@ def internet_archive_item(identifier: str) -> str:
     )
 
 
-def _fetch_json(url: str, params: dict[str, Any]) -> dict[str, Any]:
-    if params:
-        query = urllib.parse.urlencode(params, doseq=True)
-        url = f"{url}?{query}"
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="replace"))
+def _search_text(data: dict[str, Any], query: str) -> str:
+    docs = data.get("response", {}).get("docs", [])
+    items = [_parse_search_doc(item) for item in docs if isinstance(item, dict)]
+    items = [item for item in items if item is not None]
+    if not items:
+        return f"No Internet Archive items found for: {query!r}"
+    return f"Internet Archive items for {query!r}:\n" + _format_items(items)
 
 
 def _parse_search_doc(data: dict[str, Any]) -> _InternetArchiveItem | None:

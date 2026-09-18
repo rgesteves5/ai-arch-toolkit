@@ -2,26 +2,31 @@
 
 from __future__ import annotations
 
-import json
 import re
-import urllib.error
-import urllib.parse
-import urllib.request
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
-_DATA_URL = "https://data.rcsb.org/rest/v1/core"
-_SEARCH_URL = "https://search.rcsb.org/rcsbsearch/v2/query"
-_TIMEOUT = 20
-_USER_AGENT = "ai-arch-toolkit/1.0 (https://github.com/ai-arch-toolkit)"
+_DATA = Api(
+    base="https://data.rcsb.org/rest/v1/core",
+    name="RCSB PDB",
+    timeout_s=20,
+    status_messages={404: "no matching records found."},
+)
+_SEARCH = Api(
+    base="https://search.rcsb.org/rcsbsearch/v2/query",
+    name="RCSB PDB",
+    timeout_s=20,
+    status_messages={404: "no matching records found."},
+)
 _MAX_LIMIT = 25
 _PDB_ID_RE = re.compile(r"^[A-Za-z0-9]{4}$")
 _CHEM_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,12}$")
 _TEXT_RE = re.compile(r"^[\w\s,.'()/%:+-]{1,180}$", re.UNICODE)
 
 
-@tool
+@tool(capability="network")
 def pdb_search(query: str, max_results: int = 10, start: int = 0) -> str:
     """Search RCSB PDB structures by free text.
 
@@ -40,17 +45,77 @@ def pdb_search(query: str, max_results: int = 10, start: int = 0) -> str:
         "request_options": {"paginate": {"start": start, "rows": _bounded(max_results)}},
     }
     try:
-        data = _post_json(_SEARCH_URL, payload)
-        results = data.get("result_set", [])
-    except urllib.error.HTTPError as e:
-        return _http_error("RCSB PDB search failed", e)
-    except urllib.error.URLError as e:
-        return f"RCSB PDB search failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "RCSB PDB search failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"RCSB PDB search failed: could not parse API response: {e}"
+        return _SEARCH.post_json(
+            payload=payload, parse=lambda data: _search_text(data, query, start)
+        )
+    except HttpError as e:
+        return f"RCSB PDB search failed: {e}"
 
+
+@tool(capability="network")
+def pdb_entry(pdb_id: str) -> str:
+    """Get RCSB PDB entry metadata.
+
+    Args:
+        pdb_id: Four-character PDB ID, e.g. "1A3N".
+    """
+    normalized = pdb_id.strip().upper()
+    if not _PDB_ID_RE.fullmatch(normalized):
+        return f"RCSB PDB entry lookup failed: invalid pdb_id: {pdb_id!r}"
+    try:
+        return _DATA.get_json(
+            "entry", normalized, parse=lambda data: _entry_text(data, normalized)
+        )
+    except HttpError as e:
+        return f"RCSB PDB entry lookup failed: {e}"
+
+
+@tool(capability="network")
+def pdb_ligands(pdb_id: str) -> str:
+    """List non-polymer ligands for a PDB entry.
+
+    Args:
+        pdb_id: Four-character PDB ID, e.g. "1A3N".
+    """
+    normalized = pdb_id.strip().upper()
+    if not _PDB_ID_RE.fullmatch(normalized):
+        return f"RCSB PDB ligands failed: invalid pdb_id: {pdb_id!r}"
+    try:
+        ids = _DATA.get_json("entry", normalized, parse=_nonpolymer_ids)
+        ligands = [
+            _DATA.get_json("nonpolymer_entity", normalized, entity_id, parse=_ligand)
+            for entity_id in ids
+        ]
+    except HttpError as e:
+        return f"RCSB PDB ligands failed: {e}"
+
+    if not ligands:
+        return f"No RCSB PDB ligands found for {normalized}."
+    lines = [f"RCSB PDB ligands for {normalized}:"]
+    lines.extend(f"{index}. {ligand}" for index, ligand in enumerate(ligands, start=1))
+    return "\n".join(lines)
+
+
+@tool(capability="network")
+def pdb_chemical_component(component_id: str) -> str:
+    """Get RCSB chemical component metadata for a ligand/residue.
+
+    Args:
+        component_id: Chemical component ID, e.g. "ATP", "HEM", or "NAG".
+    """
+    normalized = component_id.strip().upper()
+    if not _CHEM_ID_RE.fullmatch(normalized):
+        return f"RCSB PDB chemical component failed: invalid component_id: {component_id!r}"
+    try:
+        return _DATA.get_json(
+            "chemcomp", normalized, parse=lambda data: _component_text(data, normalized)
+        )
+    except HttpError as e:
+        return f"RCSB PDB chemical component failed: {e}"
+
+
+def _search_text(data: dict[str, Any], query: str, start: int) -> str:
+    results = data.get("result_set", [])
     if not isinstance(results, list) or not results:
         return "No RCSB PDB entries found."
     total = _string(data.get("total_count")) or "?"
@@ -66,31 +131,11 @@ def pdb_search(query: str, max_results: int = 10, start: int = 0) -> str:
     return "\n".join(lines)
 
 
-@tool
-def pdb_entry(pdb_id: str) -> str:
-    """Get RCSB PDB entry metadata.
-
-    Args:
-        pdb_id: Four-character PDB ID, e.g. "1A3N".
-    """
-    normalized = pdb_id.strip().upper()
-    if not _PDB_ID_RE.fullmatch(normalized):
-        return f"RCSB PDB entry lookup failed: invalid pdb_id: {pdb_id!r}"
-    try:
-        data = _fetch_json(f"{_DATA_URL}/entry/{normalized}")
-    except urllib.error.HTTPError as e:
-        return _http_error("RCSB PDB entry lookup failed", e)
-    except urllib.error.URLError as e:
-        return f"RCSB PDB entry lookup failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "RCSB PDB entry lookup failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"RCSB PDB entry lookup failed: could not parse API response: {e}"
-
+def _entry_text(data: dict[str, Any], pdb_id: str) -> str:
     title = _nested(data, "struct", "title")
     info = data.get("rcsb_entry_info", {})
     ids = data.get("rcsb_entry_container_identifiers", {})
-    lines = [f"RCSB PDB entry {normalized}:", title or "(no title)"]
+    lines = [f"RCSB PDB entry {pdb_id}:", title or "(no title)"]
     lines.append(
         "   "
         + " | ".join(
@@ -119,69 +164,22 @@ def pdb_entry(pdb_id: str) -> str:
     return "\n".join(lines)
 
 
-@tool
-def pdb_ligands(pdb_id: str) -> str:
-    """List non-polymer ligands for a PDB entry.
-
-    Args:
-        pdb_id: Four-character PDB ID, e.g. "1A3N".
-    """
-    normalized = pdb_id.strip().upper()
-    if not _PDB_ID_RE.fullmatch(normalized):
-        return f"RCSB PDB ligands failed: invalid pdb_id: {pdb_id!r}"
-    try:
-        entry = _fetch_json(f"{_DATA_URL}/entry/{normalized}")
-        ids = _as_list(
-            entry.get("rcsb_entry_container_identifiers", {}).get("non_polymer_entity_ids")
-        )
-        ligands = [
-            _fetch_json(f"{_DATA_URL}/nonpolymer_entity/{normalized}/{entity_id}")
-            for entity_id in ids
-        ]
-    except urllib.error.HTTPError as e:
-        return _http_error("RCSB PDB ligands failed", e)
-    except urllib.error.URLError as e:
-        return f"RCSB PDB ligands failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "RCSB PDB ligands failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"RCSB PDB ligands failed: could not parse API response: {e}"
-
-    if not ligands:
-        return f"No RCSB PDB ligands found for {normalized}."
-    lines = [f"RCSB PDB ligands for {normalized}:"]
-    for index, ligand in enumerate(ligands, start=1):
-        comp = _nested(ligand, "pdbx_entity_nonpoly", "comp_id")
-        name = _nested(ligand, "pdbx_entity_nonpoly", "name")
-        entity_id = _nested(ligand, "rcsb_nonpolymer_entity_container_identifiers", "entity_id")
-        lines.append(f"{index}. {comp} — {name} | entity_id: {entity_id}")
-    return "\n".join(lines)
+def _nonpolymer_ids(entry: dict[str, Any]) -> list[str]:
+    ids = entry.get("rcsb_entry_container_identifiers", {}).get("non_polymer_entity_ids")
+    return [str(entity_id) for entity_id in _as_list(ids)]
 
 
-@tool
-def pdb_chemical_component(component_id: str) -> str:
-    """Get RCSB chemical component metadata for a ligand/residue.
+def _ligand(ligand: dict[str, Any]) -> str:
+    comp = _nested(ligand, "pdbx_entity_nonpoly", "comp_id")
+    name = _nested(ligand, "pdbx_entity_nonpoly", "name")
+    entity_id = _nested(ligand, "rcsb_nonpolymer_entity_container_identifiers", "entity_id")
+    return f"{comp} — {name} | entity_id: {entity_id}"
 
-    Args:
-        component_id: Chemical component ID, e.g. "ATP", "HEM", or "NAG".
-    """
-    normalized = component_id.strip().upper()
-    if not _CHEM_ID_RE.fullmatch(normalized):
-        return f"RCSB PDB chemical component failed: invalid component_id: {component_id!r}"
-    try:
-        data = _fetch_json(f"{_DATA_URL}/chemcomp/{urllib.parse.quote(normalized)}")
-    except urllib.error.HTTPError as e:
-        return _http_error("RCSB PDB chemical component failed", e)
-    except urllib.error.URLError as e:
-        return f"RCSB PDB chemical component failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "RCSB PDB chemical component failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"RCSB PDB chemical component failed: could not parse API response: {e}"
 
+def _component_text(data: dict[str, Any], component_id: str) -> str:
     chem = data.get("chem_comp", {})
     desc = data.get("rcsb_chem_comp_descriptor", {})
-    lines = [f"RCSB chemical component {normalized}:"]
+    lines = [f"RCSB chemical component {component_id}:"]
     lines.append(f"{_string(chem.get('name')) or '(no name)'}")
     lines.append(
         "   "
@@ -197,32 +195,6 @@ def pdb_chemical_component(component_id: str) -> str:
     if smiles:
         lines.append(f"   SMILES: {smiles}")
     return "\n".join(lines)
-
-
-def _fetch_json(url: str) -> dict[str, Any]:
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="replace"))
-
-
-def _post_json(url: str, payload: dict[str, Any]) -> dict[str, Any]:
-    body = json.dumps(payload).encode()
-    req = urllib.request.Request(
-        url,
-        data=body,
-        headers={"Content-Type": "application/json", "User-Agent": _USER_AGENT},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="replace"))
-
-
-def _http_error(prefix: str, error: urllib.error.HTTPError) -> str:
-    if error.code == 404:
-        return f"{prefix}: no matching records found."
-    if error.code == 429:
-        return f"{prefix}: rate limited by RCSB PDB (HTTP 429). Try again later."
-    return f"{prefix}: HTTP error {error.code}: {error.reason}"
 
 
 def _valid_text(value: str) -> bool:

@@ -3,18 +3,14 @@
 from __future__ import annotations
 
 import re
-import urllib.error
-import urllib.parse
-import urllib.request
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import date
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
-_API_URL = "https://export.arxiv.org/api/query"
-_TIMEOUT = 10
-_USER_AGENT = "ai-arch-toolkit/1.0 (https://github.com/ai-arch-toolkit)"
+_API = Api(base="https://export.arxiv.org/api/query", name="arXiv")
 _MAX_RESULTS_LIMIT = 20
 _SUMMARY_MAX_CHARS = 700
 _VALID_CATEGORIES = re.compile(r"^[A-Za-z0-9.-]+$")
@@ -56,7 +52,7 @@ class _ArxivPaper:
     comment: str | None
 
 
-@tool
+@tool(capability="network")
 def arxiv_search(
     query: str,
     max_results: int = 5,
@@ -97,25 +93,17 @@ def arxiv_search(
     if search_query.startswith("arXiv search failed:"):
         return search_query
 
+    params = {
+        "search_query": search_query,
+        "start": str(start),
+        "max_results": str(max_results),
+        "sortBy": sort_by,
+        "sortOrder": sort_order,
+    }
     try:
-        xml_text = _fetch_arxiv(
-            {
-                "search_query": search_query,
-                "start": str(start),
-                "max_results": str(max_results),
-                "sortBy": sort_by,
-                "sortOrder": sort_order,
-            }
-        )
-        papers = _parse_atom(xml_text)
-    except urllib.error.HTTPError as e:
-        return f"arXiv search failed: HTTP error {e.code}: {e.reason}"
-    except urllib.error.URLError as e:
-        return f"arXiv search failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "arXiv search failed: request timed out."
-    except ET.ParseError as e:
-        return f"arXiv search failed: could not parse API response: {e}"
+        papers = _API.get_text(params=params, parse=_parse_atom)
+    except HttpError as e:
+        return f"arXiv search failed: {e}"
 
     if not papers:
         return f"No arXiv results for: {query!r}"
@@ -123,7 +111,7 @@ def arxiv_search(
     return f"arXiv results for {query!r}:\n" + _format_papers(papers)
 
 
-@tool
+@tool(capability="network")
 def arxiv_paper(arxiv_id: str) -> str:
     """Fetch metadata for a specific arXiv paper by ID.
 
@@ -134,17 +122,11 @@ def arxiv_paper(arxiv_id: str) -> str:
     if not paper_id:
         return f"arXiv paper lookup failed: invalid arXiv ID: {arxiv_id!r}"
 
+    params = {"id_list": paper_id, "start": "0", "max_results": "1"}
     try:
-        xml_text = _fetch_arxiv({"id_list": paper_id, "start": "0", "max_results": "1"})
-        papers = _parse_atom(xml_text)
-    except urllib.error.HTTPError as e:
-        return f"arXiv paper lookup failed: HTTP error {e.code}: {e.reason}"
-    except urllib.error.URLError as e:
-        return f"arXiv paper lookup failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "arXiv paper lookup failed: request timed out."
-    except ET.ParseError as e:
-        return f"arXiv paper lookup failed: could not parse API response: {e}"
+        papers = _API.get_text(params=params, parse=_parse_atom)
+    except HttpError as e:
+        return f"arXiv paper lookup failed: {e}"
 
     if not papers:
         return f"arXiv paper not found: {paper_id}"
@@ -227,13 +209,6 @@ def _looks_advanced_query(query: str) -> bool:
 
 def _escape_arxiv_phrase(query: str) -> str:
     return query.replace('"', '\\"')
-
-
-def _fetch_arxiv(params: dict[str, str]) -> str:
-    url = f"{_API_URL}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-        return resp.read().decode("utf-8", errors="replace")
 
 
 def _parse_atom(xml_text: str) -> list[_ArxivPaper]:

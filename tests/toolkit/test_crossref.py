@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import urllib.error
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 from ai_arch_toolkit.toolkit.tools._crossref import crossref_search, crossref_work
+from tests.toolkit.http_fakes import HTTP_OPEN, respond
 
 _WORK = {
     "DOI": "10.5555/example",
@@ -38,14 +38,6 @@ _WORK = {
 }
 
 
-def _mock_urlopen(data):
-    resp = MagicMock()
-    resp.read.return_value = json.dumps(data).encode()
-    resp.__enter__ = lambda s: s
-    resp.__exit__ = MagicMock(return_value=False)
-    return resp
-
-
 def _called_request(mock_urlopen):
     return mock_urlopen.call_args.args[0]
 
@@ -55,9 +47,9 @@ def _called_params(mock_urlopen) -> dict[str, list[str]]:
 
 
 class TestCrossrefSearch:
-    @patch("ai_arch_toolkit.toolkit.tools._crossref.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_returns_results(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen({"message": {"items": [_WORK]}})
+        mock_urlopen.return_value = respond({"message": {"items": [_WORK]}})
 
         result = crossref_search("transformers", max_results=2)
 
@@ -79,9 +71,9 @@ class TestCrossrefSearch:
         assert params["rows"] == ["2"]
         assert params["offset"] == ["0"]
 
-    @patch("ai_arch_toolkit.toolkit.tools._crossref.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_filters_dates_type_start_and_caps_max_results(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen({"message": {"items": []}})
+        mock_urlopen.return_value = respond({"message": {"items": []}})
 
         crossref_search(
             "language agents",
@@ -100,15 +92,15 @@ class TestCrossrefSearch:
             "from-pub-date:2024-01-01,until-pub-date:2024-12-31,type:journal-article"
         ]
 
-    @patch("ai_arch_toolkit.toolkit.tools._crossref.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_no_results(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen({"message": {"items": []}})
+        mock_urlopen.return_value = respond({"message": {"items": []}})
 
         result = crossref_search("no such paper")
 
         assert "No Crossref results" in result
 
-    @patch("ai_arch_toolkit.toolkit.tools._crossref.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_invalid_options_do_not_call_api(self, mock_urlopen):
         assert "query cannot be empty" in crossref_search("")
         assert "start must be greater than or equal to 0" in crossref_search("test", start=-1)
@@ -119,7 +111,7 @@ class TestCrossrefSearch:
         assert "invalid type_filter" in crossref_search("test", type_filter="journal article")
         mock_urlopen.assert_not_called()
 
-    @patch("ai_arch_toolkit.toolkit.tools._crossref.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_api_failure(self, mock_urlopen):
         mock_urlopen.side_effect = TimeoutError()
 
@@ -127,13 +119,9 @@ class TestCrossrefSearch:
 
         assert "timed out" in result.lower()
 
-    @patch("ai_arch_toolkit.toolkit.tools._crossref.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_parse_failure(self, mock_urlopen):
-        resp = MagicMock()
-        resp.read.return_value = b"not json"
-        resp.__enter__ = lambda s: s
-        resp.__exit__ = MagicMock(return_value=False)
-        mock_urlopen.return_value = resp
+        mock_urlopen.return_value = respond(b"not json")
 
         result = crossref_search("test")
 
@@ -141,9 +129,9 @@ class TestCrossrefSearch:
 
 
 class TestCrossrefWork:
-    @patch("ai_arch_toolkit.toolkit.tools._crossref.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_returns_work_by_doi_url(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen({"message": _WORK})
+        mock_urlopen.return_value = respond({"message": _WORK})
 
         result = crossref_work("https://doi.org/10.5555/example")
 
@@ -157,22 +145,22 @@ class TestCrossrefWork:
         request = _called_request(mock_urlopen)
         assert urlparse(request.full_url).path.endswith("/10.5555%2Fexample")
 
-    @patch("ai_arch_toolkit.toolkit.tools._crossref.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_accepts_doi_prefix(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen({"message": _WORK})
+        mock_urlopen.return_value = respond({"message": _WORK})
 
         result = crossref_work("doi:10.5555/example")
 
         assert result.startswith("Crossref work 10.5555/example:")
 
-    @patch("ai_arch_toolkit.toolkit.tools._crossref.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_invalid_doi(self, mock_urlopen):
         result = crossref_work("bad doi")
 
         assert "invalid DOI" in result
         mock_urlopen.assert_not_called()
 
-    @patch("ai_arch_toolkit.toolkit.tools._crossref.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_not_found(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.HTTPError(
             url="https://api.crossref.org/works/10.5555%2Fmissing",

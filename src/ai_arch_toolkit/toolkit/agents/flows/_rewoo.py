@@ -3,19 +3,17 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Unpack
 
 from ai_arch_toolkit.core._content import Content, user
 from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._metering._admission import AdmissionDenied
-from ai_arch_toolkit.core._policy import Policy
 from ai_arch_toolkit.core._response import ToolCall
 from ai_arch_toolkit.core._state import StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
-from ai_arch_toolkit.core._trace import TraceCapture
-from ai_arch_toolkit.toolkit.agents.flows._common import substitute_tools
-from ai_arch_toolkit.toolkit.budget import BudgetPolicy
+from ai_arch_toolkit.toolkit.agents.flows._common import FlowOptions, substitute_tools
+from ai_arch_toolkit.toolkit.agents.flows._keys import ANSWER, RESPONSE, TASK
 from ai_arch_toolkit.toolkit.flow._flow import Flow
 
 _PLAN_RE = re.compile(r"#E(\d+)\s*=\s*(\w+)\[([^\]]*)\]")
@@ -37,13 +35,10 @@ def rewoo_flow(
         "You are a solving agent. Given the task and evidence from "
         "executed steps, provide the final answer."
     ),
-    timeout: float | None = None,
-    trace_capture: TraceCapture = "keys",
-    policy: Policy | None = None,
-    budget_policy: BudgetPolicy | None = None,
     llm_kwargs: dict[str, Any] | None = None,
     planner_llm: LLM | None = None,
     solver_llm: LLM | None = None,
+    **options: Unpack[FlowOptions],
 ) -> Flow:
     """Create a ReWOO Flow — Plan with evidence placeholders, Execute, Solve.
 
@@ -55,13 +50,10 @@ def rewoo_flow(
             is replaced with the rendered tool catalog (a prompt without the
             token is never modified).
         solver_system: System prompt for the solver phase.
-        timeout: Wall-clock limit for the whole run, in seconds.
-        trace_capture: What each step's trace records — see ``Flow``.
-        policy: Default policy for each step of the flow.
-        budget_policy: Optional cumulative runtime budget for the flow.
         llm_kwargs: Additional kwargs passed to every phase's LLM call.
         planner_llm: Override LLM for planning.
         solver_llm: Override LLM for solving.
+        **options: The options of the ``Flow`` it builds (``FlowOptions``).
     """
     plan_llm = planner_llm or llm
     solve_llm = solver_llm or llm
@@ -76,7 +68,7 @@ def rewoo_flow(
 
     async def plan(snap: StateSnapshot) -> Result:
         """Generate a plan with #E{n} evidence placeholders."""
-        task: str = snap.require("task")
+        task: str = snap.require(TASK)
 
         response = await plan_llm.complete([user(task)], system=plan_system, **extra)
         plan_text = response.text
@@ -140,7 +132,7 @@ def rewoo_flow(
 
     async def solve(snap: StateSnapshot) -> Result:
         """Synthesize final answer from task and evidence."""
-        task: str = snap.require("task")
+        task: str = snap.require(TASK)
         evidence: dict[str, str] = snap.get("evidence", {})
         plan_text: str = snap.get("plan_text", "")
 
@@ -154,7 +146,7 @@ def rewoo_flow(
 
         return Result(
             value=response.text,
-            artifacts={"answer": response.text, "response": response},
+            artifacts={ANSWER: response.text, RESPONSE: response},
         )
 
     return Flow(
@@ -162,14 +154,11 @@ def rewoo_flow(
         Step(name="execute", fn=execute),
         Step(name="solve", fn=solve),
         name="rewoo",
-        policy=policy,
-        timeout=timeout,
-        trace_capture=trace_capture,
-        budget_policy=budget_policy,
+        **options,
     )
 
 
 def rewoo_initial_state(task: Content) -> dict[str, Any]:
     """Create the initial operational state for a rewoo_flow."""
     task_str = task if isinstance(task, str) else str(task)
-    return {"task": task_str}
+    return {TASK: task_str}

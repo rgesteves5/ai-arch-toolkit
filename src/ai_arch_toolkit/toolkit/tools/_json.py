@@ -8,11 +8,14 @@ from io import StringIO
 from pathlib import Path
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.toolkit.tools._filesystem import clamp, read_prefix
 
 _DEFAULT_MAX_ROWS = 100
+_MAX_ROWS = 10_000
+_MAX_CSV_CHARS = 1_000_000
 
 
-@tool
+@tool(capability="compute")
 def json_extract(json_string: str, path: str) -> str:
     """Extract a value from a JSON string using dot-notation path.
 
@@ -24,7 +27,7 @@ def json_extract(json_string: str, path: str) -> str:
     """
     try:
         data = json.loads(json_string)
-    except json.JSONDecodeError as e:
+    except (ValueError, RecursionError) as e:
         return f"Invalid JSON: {e}"
 
     current = data
@@ -71,46 +74,41 @@ def csv_read(path: str, max_rows: int = _DEFAULT_MAX_ROWS) -> str:
 
     Args:
         path: Path to the CSV file.
-        max_rows: Maximum number of data rows to return. Defaults to 100.
+        max_rows: Maximum number of data rows to return (1-10000). Defaults to 100.
     """
     p = Path(path).expanduser()
-    if not p.exists():
-        return f"File not found: {path}"
-    if not p.is_file():
-        return f"Not a file: {path}"
-
     try:
-        text = p.read_text(encoding="utf-8", errors="replace")
+        if not p.exists():
+            return f"File not found: {path}"
+        if not p.is_file():
+            return f"Not a file: {path}"
+        text, _ = read_prefix(p, _MAX_CSV_CHARS)
     except PermissionError:
         return f"Permission denied: {path}"
+    except OSError as e:
+        return f"Cannot read {path!r}: {e.strerror or e}"
+    return _table(text, clamp(max_rows, 1, _MAX_ROWS))
 
-    reader = csv.reader(StringIO(text))
+
+def _table(text: str, max_rows: int) -> str:
     rows: list[list[str]] = []
-    for i, row in enumerate(reader):
+    for i, row in enumerate(csv.reader(StringIO(text))):
         rows.append(row)
         if i >= max_rows:  # header + max_rows data rows
             break
-
     if not rows:
         return "Empty CSV file."
-
-    # Calculate column widths
-    col_count = max(len(r) for r in rows)
-    widths = [0] * col_count
+    widths = [0] * max(len(r) for r in rows)
     for row in rows:
         for j, cell in enumerate(row):
             widths[j] = max(widths[j], len(cell))
 
-    # Format as table
     def _fmt_row(row: list[str]) -> str:
         cells = [cell.ljust(widths[j]) if j < len(widths) else cell for j, cell in enumerate(row)]
         return " | ".join(cells)
 
-    lines = [_fmt_row(rows[0])]
-    lines.append("-+-".join("-" * w for w in widths))
-    for row in rows[1:]:
-        lines.append(_fmt_row(row))
-
+    lines = [_fmt_row(rows[0]), "-+-".join("-" * w for w in widths)]
+    lines.extend(_fmt_row(row) for row in rows[1:])
     total_rows = text.count("\n")
     result = "\n".join(lines)
     if total_rows > max_rows + 1:

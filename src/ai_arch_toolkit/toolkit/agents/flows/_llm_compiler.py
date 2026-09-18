@@ -5,18 +5,16 @@ from __future__ import annotations
 import asyncio
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Unpack
 
 from ai_arch_toolkit.core._content import Content, user
 from ai_arch_toolkit.core._llm import LLM
-from ai_arch_toolkit.core._policy import Policy
-from ai_arch_toolkit.core._state import State, StateSnapshot
+from ai_arch_toolkit.core._state import StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
-from ai_arch_toolkit.core._trace import TraceCapture
-from ai_arch_toolkit.toolkit.agents.flows._common import substitute_tools
-from ai_arch_toolkit.toolkit.agents.flows._react import react_flow, react_initial_state
-from ai_arch_toolkit.toolkit.budget import BudgetPolicy
+from ai_arch_toolkit.toolkit.agents.flows._common import FlowOptions, substitute_tools
+from ai_arch_toolkit.toolkit.agents.flows._keys import ANSWER, RESPONSE, TASK
+from ai_arch_toolkit.toolkit.agents.flows._react import run_react
 from ai_arch_toolkit.toolkit.flow._flow import Flow
 
 _DAG_RE = re.compile(r"\$(\d+)\.\s+(.+?)\s+\[deps:\s*(.*?)\]")
@@ -72,15 +70,12 @@ def llm_compiler_flow(
         "If the results are insufficient, start your response with REPLAN "
         "followed by what needs to change."
     ),
-    timeout: float | None = None,
-    trace_capture: TraceCapture = "keys",
-    policy: Policy | None = None,
-    budget_policy: BudgetPolicy | None = None,
     llm_kwargs: dict[str, Any] | None = None,
     planner_llm: LLM | None = None,
     exec_llm: LLM | None = None,
     exec_tools: ToolGroup | None = None,
     joiner_llm: LLM | None = None,
+    **options: Unpack[FlowOptions],
 ) -> Flow:
     """Create an LLMCompiler Flow — plan DAG, parallel execute, join/replan.
 
@@ -91,6 +86,8 @@ def llm_compiler_flow(
     tools per phase. A ``{tools}`` token in ``planner_system`` is replaced with
     the executor's rendered tool catalog; a prompt without the token is never
     modified.
+
+    ``options`` are the options of the ``Flow`` it builds (``FlowOptions``).
     """
     plan_llm = planner_llm or llm
     inner_llm = exec_llm or llm
@@ -101,7 +98,7 @@ def llm_compiler_flow(
 
     async def compile(snap: StateSnapshot) -> Result:
         """Plan DAG, execute in parallel, join — with optional replanning."""
-        task: str = snap.require("task")
+        task: str = snap.require(TASK)
 
         async def _complete(model: LLM, *args: Any, **kwargs: Any):
             return await model.complete(*args, **kwargs)
@@ -151,26 +148,18 @@ def llm_compiler_flow(
                         inner_system += "\n\n"
                     inner_system += f"Subtask: {desc}"
 
-                    inner = react_flow(
+                    run = await run_react(
                         inner_llm,
                         inner_tools,
+                        task,
                         system=inner_system,
                         max_iterations=max_react_iterations,
                         llm_kwargs=llm_kwargs,
-                        trace_capture=trace_capture,
-                    )  # nested flow inherits the enclosing scope; its own budget_policy is ignored
-
-                    state = State(operational=react_initial_state(task))
-                    result = await inner.run(state)
-
-                    inner_resp = state.get("response")
-                    t.result = inner_resp.text if inner_resp else ""
+                        **options,
+                    )
+                    t.result = run.answer
                     t.done = True
-
-                    if result.trace.steps and any(
-                        st.error is not None for st in result.trace.steps if not st.skipped
-                    ):
-                        t.failed = True
+                    t.failed = t.failed or run.failed
 
                 await asyncio.gather(*[_run_one(t) for t in ready])
 
@@ -190,8 +179,8 @@ def llm_compiler_flow(
                 return Result(
                     value=join_response.text,
                     artifacts={
-                        "answer": join_response.text,
-                        "response": join_response,
+                        ANSWER: join_response.text,
+                        RESPONSE: join_response,
                     },
                 )
 
@@ -201,14 +190,11 @@ def llm_compiler_flow(
     return Flow(
         Step(name="compile", fn=compile),
         name="llm_compiler",
-        policy=policy,
-        timeout=timeout,
-        trace_capture=trace_capture,
-        budget_policy=budget_policy,
+        **options,
     )
 
 
 def llm_compiler_initial_state(task: Content) -> dict[str, Any]:
     """Create the initial operational state for a llm_compiler_flow."""
     task_str = task if isinstance(task, str) else str(task)
-    return {"task": task_str}
+    return {TASK: task_str}

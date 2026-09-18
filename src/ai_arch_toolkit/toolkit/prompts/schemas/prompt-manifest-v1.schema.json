@@ -3,89 +3,604 @@
   "$id": "https://ai-arch-toolkit.dev/schemas/prompt-manifest-v1.schema.json",
   "title": "ai-arch-toolkit prompt manifest v1",
   "type": "object",
-  "additionalProperties": false,
-  "required": ["version"],
   "properties": {
-    "version": {"const": 1},
-    "name": {"type": "string"},
-    "description": {"type": "string"},
-    "extends": {"type": "string"},
+    "version": {
+      "const": 1
+    },
+    "name": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "extends": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
     "include": {
-      "oneOf": [
-        {"type": "string"},
-        {"type": "array", "items": {"type": "string"}}
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
       ]
     },
-    "separator": {"type": "string"},
+    "separator": {
+      "type": "string"
+    },
     "layout": {
-      "oneOf": [
-        {"enum": ["text", "markdown", "xml", "json"]},
-        {"type": "object", "required": ["type"]}
+      "anyOf": [
+        {
+          "enum": [
+            "text",
+            "markdown",
+            "xml",
+            "json"
+          ]
+        },
+        {
+          "$ref": "#/$defs/layout"
+        },
+        {
+          "type": "null"
+        }
       ]
     },
-    "metadata": {"type": "object"},
+    "metadata": {
+      "type": "object"
+    },
     "variables": {
       "type": "object",
+      "propertyNames": {
+        "minLength": 1
+      },
       "additionalProperties": {
-        "oneOf": [
-          {"enum": ["any", "array", "boolean", "integer", "number", "object", "string"]},
+        "anyOf": [
+          {
+            "enum": [
+              "any",
+              "array",
+              "boolean",
+              "integer",
+              "number",
+              "object",
+              "string"
+            ]
+          },
           {
             "type": "object",
-            "additionalProperties": false,
             "properties": {
-              "type": {"enum": ["any", "array", "boolean", "integer", "number", "object", "string"]},
-              "required": {"type": "boolean"},
+              "type": {
+                "enum": [
+                  "any",
+                  "array",
+                  "boolean",
+                  "integer",
+                  "number",
+                  "object",
+                  "string"
+                ]
+              },
+              "required": {
+                "type": "boolean"
+              },
               "default": true,
-              "description": {"type": "string"},
-              "json_schema": {"type": "object"}
-            }
+              "description": {
+                "type": "string"
+              },
+              "json_schema": {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            },
+            "additionalProperties": false
           }
         ]
       }
     },
     "sections": {
       "type": "array",
-      "items": {"$ref": "#/$defs/section"}
+      "items": {
+        "$ref": "#/$defs/section"
+      }
     }
   },
+  "additionalProperties": false,
+  "required": [
+    "version"
+  ],
   "$defs": {
+    "layout": {
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "text",
+            "markdown",
+            "xml",
+            "json"
+          ]
+        }
+      },
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "text"
+            },
+            "separator": {
+              "type": "string"
+            },
+            "between": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "string"
+                  },
+                  "to": {
+                    "type": "string"
+                  },
+                  "separator": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "from",
+                  "separator",
+                  "to"
+                ]
+              }
+            },
+            "before": {
+              "type": "object",
+              "propertyNames": {
+                "minLength": 1
+              },
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "after": {
+              "type": "object",
+              "propertyNames": {
+                "minLength": 1
+              },
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "markdown"
+            },
+            "heading_level": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 6
+            },
+            "include_headings": {
+              "type": "boolean"
+            },
+            "separator": {
+              "type": "string"
+            },
+            "between": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "string"
+                  },
+                  "to": {
+                    "type": "string"
+                  },
+                  "separator": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "from",
+                  "separator",
+                  "to"
+                ]
+              }
+            },
+            "before": {
+              "type": "object",
+              "propertyNames": {
+                "minLength": 1
+              },
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "after": {
+              "type": "object",
+              "propertyNames": {
+                "minLength": 1
+              },
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "xml"
+            },
+            "root_tag": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[A-Za-z_][A-Za-z0-9_.-]*$"
+            },
+            "section_tag": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[A-Za-z_][A-Za-z0-9_.-]*$"
+            },
+            "separator": {
+              "type": "string"
+            },
+            "include_stability": {
+              "type": "boolean"
+            },
+            "metadata_attributes": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "json"
+            },
+            "indent": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "include_stability": {
+              "type": "boolean"
+            },
+            "ensure_ascii": {
+              "type": "boolean"
+            },
+            "mode": {
+              "enum": [
+                "array",
+                "object"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ]
+        }
+      ]
+    },
     "section": {
       "type": "object",
-      "additionalProperties": false,
-      "required": ["name"],
       "properties": {
-        "name": {"type": "string", "minLength": 1},
-        "order": {"type": "integer"},
-        "stability": {"enum": ["static", "session", "request"]},
-        "metadata": {"type": "object"},
-        "replace": {"type": "boolean"},
-        "remove": {"type": "boolean"},
-        "merge": {"type": "boolean"},
-        "content": {"type": "string"},
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "order": {
+          "type": "integer"
+        },
+        "stability": {
+          "enum": [
+            "static",
+            "session",
+            "request"
+          ]
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "replace": {
+          "type": "boolean"
+        },
+        "remove": {
+          "type": "boolean"
+        },
+        "merge": {
+          "type": "boolean"
+        },
+        "content": {
+          "type": "string"
+        },
         "source": {
-          "oneOf": [
-            {"type": "string"},
-            {"type": "object", "required": ["path"]}
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "media_type": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "select": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "$ref": "#/$defs/selector"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "serialize_as": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "path"
+              ]
+            }
           ]
         },
         "template": {
-          "oneOf": [
-            {"type": "string"},
-            {"type": "object"}
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "content": {
+                  "type": "string"
+                },
+                "engine": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "select": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "$ref": "#/$defs/selector"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "serialize_as": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "additionalProperties": false
+            }
           ]
         },
         "knowledge": {
-          "oneOf": [
-            {"type": "string"},
-            {"type": "array", "items": {"type": "string"}},
-            {"type": "object", "required": ["keys"]}
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            {
+              "type": "object",
+              "properties": {
+                "keys": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "separator": {
+                  "type": "string"
+                },
+                "include_names": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "keys"
+              ]
+            }
           ]
         },
         "sections": {
           "type": "array",
-          "items": {"$ref": "#/$defs/section"}
+          "items": {
+            "$ref": "#/$defs/section"
+          }
         }
-      }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ]
+    },
+    "selector": {
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "json_pointer",
+            "heading",
+            "lines",
+            "block"
+          ]
+        }
+      },
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "json_pointer"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "heading"
+            },
+            "heading": {
+              "type": "string",
+              "minLength": 1
+            },
+            "occurrence": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "include_heading": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "heading",
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "lines"
+            },
+            "start": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "end": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "start",
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "block"
+            },
+            "start_marker": {
+              "type": "string",
+              "minLength": 1
+            },
+            "end_marker": {
+              "type": "string",
+              "minLength": 1
+            },
+            "include_markers": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "end_marker",
+            "start_marker",
+            "type"
+          ]
+        }
+      ]
     }
   }
 }

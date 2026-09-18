@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from ai_arch_toolkit.toolkit.tools._rxnorm_dailymed import (
     dailymed_label,
@@ -13,22 +12,15 @@ from ai_arch_toolkit.toolkit.tools._rxnorm_dailymed import (
     rxnorm_ndcs,
     rxnorm_related,
 )
+from tests.toolkit.http_fakes import HTTP_OPEN, respond
 
 _SETID = "53c11fb4-ba31-b5e5-e063-6394a90a9c1a"
 
 
-def _mock_urlopen(data: dict | str):
-    resp = MagicMock()
-    resp.read.return_value = (data if isinstance(data, str) else json.dumps(data)).encode()
-    resp.__enter__ = lambda s: s
-    resp.__exit__ = MagicMock(return_value=False)
-    return resp
-
-
 class TestRxNormDailyMed:
-    @patch("ai_arch_toolkit.toolkit.tools._rxnorm_dailymed.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_rxnorm_tools(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(
+        mock_urlopen.return_value = respond(
             {
                 "drugGroup": {
                     "conceptGroup": [
@@ -42,12 +34,12 @@ class TestRxNormDailyMed:
         )
         assert "aspirin | RxCUI: 1191" in rxnorm_drug_search("aspirin")
 
-        mock_urlopen.return_value = _mock_urlopen(
+        mock_urlopen.return_value = respond(
             {"properties": {"name": "aspirin", "tty": "IN", "language": "ENG"}}
         )
         assert "RxNorm concept 1191:" in rxnorm_concept("1191")
 
-        mock_urlopen.return_value = _mock_urlopen(
+        mock_urlopen.return_value = respond(
             {
                 "relatedGroup": {
                     "conceptGroup": [
@@ -61,14 +53,12 @@ class TestRxNormDailyMed:
         )
         assert "aspirin 81 MG" in rxnorm_related("1191", tty="SCD")
 
-        mock_urlopen.return_value = _mock_urlopen(
-            {"ndcGroup": {"ndcList": {"ndc": ["0001-0002"]}}}
-        )
+        mock_urlopen.return_value = respond({"ndcGroup": {"ndcList": {"ndc": ["0001-0002"]}}})
         assert "0001-0002" in rxnorm_ndcs("1191")
 
-    @patch("ai_arch_toolkit.toolkit.tools._rxnorm_dailymed.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_dailymed_tools(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(
+        mock_urlopen.return_value = respond(
             {
                 "data": [
                     {"title": "ASPIRIN TABLET", "setid": _SETID, "published_date": "Jun 10, 2026"}
@@ -86,12 +76,12 @@ class TestRxNormDailyMed:
           </representedOrganization></assignedEntity></author>
           <component><structuredBody><component><section><title>INDICATIONS</title></section></component></structuredBody></component>
         </document>"""
-        mock_urlopen.return_value = _mock_urlopen(xml)
+        mock_urlopen.return_value = respond(xml)
         result = dailymed_label(_SETID)
         assert "ASPIRIN" in result
         assert "sections: INDICATIONS" in result
 
-    @patch("ai_arch_toolkit.toolkit.tools._rxnorm_dailymed.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_invalid_options_do_not_call_api(self, mock_urlopen):
         assert "invalid rxcui" in rxnorm_concept("bad")
         assert "provide drug_name" in dailymed_label_search()

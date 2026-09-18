@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 from ai_arch_toolkit.toolkit.tools._pubmed import pubmed_article, pubmed_search
+from tests.toolkit.http_fakes import HTTP_OPEN, respond
 
 _ESEARCH_RESULT = {"esearchresult": {"idlist": ["26017442"]}}
 _EMPTY_SEARCH_RESULT = {"esearchresult": {"idlist": []}}
@@ -80,17 +80,6 @@ _EMPTY_ARTICLE_XML = """\
 """
 
 
-def _mock_urlopen(content: str | dict):
-    resp = MagicMock()
-    if isinstance(content, dict):
-        resp.read.return_value = json.dumps(content).encode()
-    else:
-        resp.read.return_value = content.encode()
-    resp.__enter__ = lambda s: s
-    resp.__exit__ = MagicMock(return_value=False)
-    return resp
-
-
 def _called_request(mock_urlopen, index: int = 0):
     return mock_urlopen.call_args_list[index].args[0]
 
@@ -100,9 +89,9 @@ def _called_params(mock_urlopen, index: int = 0) -> dict[str, list[str]]:
 
 
 class TestPubmedSearch:
-    @patch("ai_arch_toolkit.toolkit.tools._pubmed.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_returns_results(self, mock_urlopen):
-        mock_urlopen.side_effect = [_mock_urlopen(_ESEARCH_RESULT), _mock_urlopen(_ARTICLE_XML)]
+        mock_urlopen.side_effect = [respond(_ESEARCH_RESULT), respond(_ARTICLE_XML)]
 
         result = pubmed_search("deep learning", max_results=2)
 
@@ -127,9 +116,9 @@ class TestPubmedSearch:
         assert fetch_params["id"] == ["26017442"]
         assert fetch_params["retmode"] == ["xml"]
 
-    @patch("ai_arch_toolkit.toolkit.tools._pubmed.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_filters_dates_sort_start_and_caps_max_results(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(_EMPTY_SEARCH_RESULT)
+        mock_urlopen.return_value = respond(_EMPTY_SEARCH_RESULT)
 
         pubmed_search(
             '"large language models"[Title/Abstract]',
@@ -150,15 +139,15 @@ class TestPubmedSearch:
         assert params["maxdate"] == ["2024/12/31"]
         assert mock_urlopen.call_count == 1
 
-    @patch("ai_arch_toolkit.toolkit.tools._pubmed.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_no_results(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(_EMPTY_SEARCH_RESULT)
+        mock_urlopen.return_value = respond(_EMPTY_SEARCH_RESULT)
 
         result = pubmed_search("no such paper")
 
         assert "No PubMed results" in result
 
-    @patch("ai_arch_toolkit.toolkit.tools._pubmed.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_invalid_options_do_not_call_api(self, mock_urlopen):
         assert "query cannot be empty" in pubmed_search("")
         assert "start must be greater than or equal to 0" in pubmed_search("test", start=-1)
@@ -169,7 +158,7 @@ class TestPubmedSearch:
         assert "sort must be one of" in pubmed_search("test", sort="best")
         mock_urlopen.assert_not_called()
 
-    @patch("ai_arch_toolkit.toolkit.tools._pubmed.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_api_failure(self, mock_urlopen):
         mock_urlopen.side_effect = TimeoutError()
 
@@ -177,17 +166,17 @@ class TestPubmedSearch:
 
         assert "timed out" in result.lower()
 
-    @patch("ai_arch_toolkit.toolkit.tools._pubmed.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_search_parse_failure(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen("not json")
+        mock_urlopen.return_value = respond("not json")
 
         result = pubmed_search("test")
 
         assert "could not parse API response" in result
 
-    @patch("ai_arch_toolkit.toolkit.tools._pubmed.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_article_xml_parse_failure(self, mock_urlopen):
-        mock_urlopen.side_effect = [_mock_urlopen(_ESEARCH_RESULT), _mock_urlopen("<not xml")]
+        mock_urlopen.side_effect = [respond(_ESEARCH_RESULT), respond("<not xml")]
 
         result = pubmed_search("test")
 
@@ -195,9 +184,9 @@ class TestPubmedSearch:
 
 
 class TestPubmedArticle:
-    @patch("ai_arch_toolkit.toolkit.tools._pubmed.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_returns_article_by_pmid(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(_ARTICLE_XML)
+        mock_urlopen.return_value = respond(_ARTICLE_XML)
 
         result = pubmed_article("26017442")
 
@@ -213,16 +202,16 @@ class TestPubmedArticle:
         params = _called_params(mock_urlopen)
         assert params["id"] == ["26017442"]
 
-    @patch("ai_arch_toolkit.toolkit.tools._pubmed.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_invalid_pmid(self, mock_urlopen):
         result = pubmed_article("PMID 26017442")
 
         assert "invalid PMID" in result
         mock_urlopen.assert_not_called()
 
-    @patch("ai_arch_toolkit.toolkit.tools._pubmed.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_not_found(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen(_EMPTY_ARTICLE_XML)
+        mock_urlopen.return_value = respond(_EMPTY_ARTICLE_XML)
 
         result = pubmed_article("999999999")
 

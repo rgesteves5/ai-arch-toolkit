@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import urllib.error
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 from ai_arch_toolkit.toolkit.tools._datacite import datacite_doi, datacite_search
+from tests.toolkit.http_fakes import HTTP_OPEN, respond
 
 _DOI_RECORD = {
     "id": "10.5061/dryad.test",
@@ -29,14 +29,6 @@ _DOI_RECORD = {
 }
 
 
-def _mock_urlopen(data):
-    resp = MagicMock()
-    resp.read.return_value = json.dumps(data).encode()
-    resp.__enter__ = lambda s: s
-    resp.__exit__ = MagicMock(return_value=False)
-    return resp
-
-
 def _called_request(mock_urlopen):
     return mock_urlopen.call_args.args[0]
 
@@ -46,9 +38,9 @@ def _called_params(mock_urlopen) -> dict[str, list[str]]:
 
 
 class TestDataCiteSearch:
-    @patch("ai_arch_toolkit.toolkit.tools._datacite.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_returns_results(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen({"data": [_DOI_RECORD]})
+        mock_urlopen.return_value = respond({"data": [_DOI_RECORD]})
 
         result = datacite_search("example", resource_type="Dataset", max_results=2, page=3)
 
@@ -66,7 +58,7 @@ class TestDataCiteSearch:
         assert params["page[number]"] == ["3"]
         assert params["resource-type-id"] == ["dataset"]
 
-    @patch("ai_arch_toolkit.toolkit.tools._datacite.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_invalid_options_do_not_call_api(self, mock_urlopen):
         assert "query cannot be empty" in datacite_search("")
         assert "page must" in datacite_search("test", page=0)
@@ -74,9 +66,9 @@ class TestDataCiteSearch:
 
 
 class TestDataCiteDoi:
-    @patch("ai_arch_toolkit.toolkit.tools._datacite.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_returns_doi(self, mock_urlopen):
-        mock_urlopen.return_value = _mock_urlopen({"data": _DOI_RECORD})
+        mock_urlopen.return_value = respond({"data": _DOI_RECORD})
 
         result = datacite_doi("https://doi.org/10.5061/dryad.test")
 
@@ -88,14 +80,14 @@ class TestDataCiteDoi:
             "/10.5061%2Fdryad.test"
         )
 
-    @patch("ai_arch_toolkit.toolkit.tools._datacite.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_invalid_doi(self, mock_urlopen):
         result = datacite_doi("not a doi")
 
         assert "invalid DOI" in result
         mock_urlopen.assert_not_called()
 
-    @patch("ai_arch_toolkit.toolkit.tools._datacite.urllib.request.urlopen")
+    @patch(HTTP_OPEN)
     def test_rate_limited(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.HTTPError(
             url="https://api.datacite.org/dois",

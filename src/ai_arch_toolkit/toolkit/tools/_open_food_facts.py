@@ -2,25 +2,32 @@
 
 from __future__ import annotations
 
-import json
 import re
-import time
-import urllib.error
-import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
-_BASE_URL = "https://world.openfoodfacts.org"
-_TIMEOUT = 15
-_USER_AGENT = "ai-arch-toolkit/1.0 (https://github.com/ai-arch-toolkit; research tool)"
+_STATUS_MESSAGES = {
+    503: "Open Food Facts global rate limit reached (HTTP 503). Try again later.",
+}
+# Product reads and searches are spaced apart on separate clocks, each at its own interval.
+_PRODUCTS = Api(
+    base="https://world.openfoodfacts.org/api/v2",
+    name="Open Food Facts",
+    timeout_s=15,
+    min_interval_s=4.1,
+    status_messages=_STATUS_MESSAGES,
+)
+_SEARCH = Api(
+    base="https://world.openfoodfacts.org/api/v2",
+    name="Open Food Facts",
+    timeout_s=15,
+    min_interval_s=6.1,
+    status_messages=_STATUS_MESSAGES,
+)
 _MAX_RESULTS_LIMIT = 20
-_PRODUCT_INTERVAL_SECONDS = 4.1
-_SEARCH_INTERVAL_SECONDS = 6.1
-_LAST_PRODUCT_REQUEST_AT = 0.0
-_LAST_SEARCH_REQUEST_AT = 0.0
 _BARCODE_RE = re.compile(r"^\d{4,32}$")
 _TEXT_FILTER_RE = re.compile(r"^[\w\s,.'&()/%+-]{1,120}$", re.UNICODE)
 _FIELDS = (
@@ -78,7 +85,7 @@ class _OpenFoodFactsProduct:
     image_url: str
 
 
-@tool
+@tool(capability="network")
 def open_food_facts_product(barcode: str) -> str:
     """Fetch packaged food metadata by barcode from Open Food Facts.
 
@@ -90,23 +97,9 @@ def open_food_facts_product(barcode: str) -> str:
         return f"Open Food Facts product lookup failed: invalid barcode: {barcode!r}"
 
     try:
-        data = _fetch_json(
-            f"/api/v2/product/{normalized}.json",
-            {"fields": ",".join(_FIELDS)},
-            request_kind="product",
-        )
-        if data.get("status") == 0:
-            return f"Open Food Facts product not found: {normalized}"
-        product_data = data.get("product")
-        product = _parse_product(product_data) if isinstance(product_data, dict) else None
-    except urllib.error.HTTPError as e:
-        return _http_error("Open Food Facts product lookup failed", e)
-    except urllib.error.URLError as e:
-        return f"Open Food Facts product lookup failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "Open Food Facts product lookup failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"Open Food Facts product lookup failed: could not parse API response: {e}"
+        product = _fetch_product(normalized)
+    except HttpError as e:
+        return f"Open Food Facts product lookup failed: {e}"
 
     if product is None:
         return f"Open Food Facts product not found: {normalized}"
@@ -117,7 +110,7 @@ def open_food_facts_product(barcode: str) -> str:
     )
 
 
-@tool
+@tool(capability="network")
 def open_food_facts_search(
     product_name: str = "",
     brand: str = "",
@@ -164,35 +157,14 @@ def open_food_facts_search(
     params.update({key: value for key, value in filters.items() if value})
 
     try:
-        data = _fetch_json("/api/v2/search", params, request_kind="search")
-        products_data = data.get("products", [])
-        products = [
-            product
-            for item in products_data
-            if isinstance(item, dict)
-            if (product := _parse_product(item))
-        ]
-    except urllib.error.HTTPError as e:
-        return _http_error("Open Food Facts search failed", e)
-    except urllib.error.URLError as e:
-        return f"Open Food Facts search failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "Open Food Facts search failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"Open Food Facts search failed: could not parse API response: {e}"
-
-    if not products:
-        return "No Open Food Facts products found."
-    total = _string(data.get("count")) or "?"
-    page_count = _string(data.get("page_count")) or str(len(products))
-    return (
-        f"Open Food Facts products (page {page}, returned {len(products)}, "
-        f"page_count {page_count}, total {total}):\n"
-        + _format_products(products, include_details=False)
-    )
+        return _SEARCH.get_json(
+            "search", params=params, parse=lambda data: _search_text(data, page)
+        )
+    except HttpError as e:
+        return f"Open Food Facts search failed: {e}"
 
 
-@tool
+@tool(capability="network")
 def open_food_facts_nutrition(barcode: str) -> str:
     """Fetch a nutrition-focused Open Food Facts summary by barcode.
 
@@ -205,21 +177,15 @@ def open_food_facts_nutrition(barcode: str) -> str:
 
     try:
         product = _fetch_product(normalized)
-    except urllib.error.HTTPError as e:
-        return _http_error("Open Food Facts nutrition lookup failed", e)
-    except urllib.error.URLError as e:
-        return f"Open Food Facts nutrition lookup failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "Open Food Facts nutrition lookup failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"Open Food Facts nutrition lookup failed: could not parse API response: {e}"
+    except HttpError as e:
+        return f"Open Food Facts nutrition lookup failed: {e}"
 
     if product is None:
         return f"Open Food Facts product not found: {normalized}"
     return f"Open Food Facts nutrition {normalized}:\n" + _format_nutrition(product)
 
 
-@tool
+@tool(capability="network")
 def open_food_facts_compare(barcodes: str) -> str:
     """Compare nutrition signals for multiple Open Food Facts products.
 
@@ -239,14 +205,8 @@ def open_food_facts_compare(barcodes: str) -> str:
                 missing.append(barcode)
             else:
                 products.append(product)
-    except urllib.error.HTTPError as e:
-        return _http_error("Open Food Facts comparison failed", e)
-    except urllib.error.URLError as e:
-        return f"Open Food Facts comparison failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "Open Food Facts comparison failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"Open Food Facts comparison failed: could not parse API response: {e}"
+    except HttpError as e:
+        return f"Open Food Facts comparison failed: {e}"
 
     if not products:
         return "Open Food Facts comparison failed: no products found."
@@ -258,45 +218,36 @@ def open_food_facts_compare(barcodes: str) -> str:
     return "\n".join(lines)
 
 
-def _fetch_json(path: str, params: dict[str, str], *, request_kind: str) -> dict[str, Any]:
-    url = f"{_BASE_URL}{path}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    _throttle(request_kind)
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="replace"))
-
-
 def _fetch_product(barcode: str) -> _OpenFoodFactsProduct | None:
-    data = _fetch_json(
-        f"/api/v2/product/{barcode}.json",
-        {"fields": ",".join(_FIELDS)},
-        request_kind="product",
+    """The product with ``barcode``, or ``None`` when Open Food Facts has none."""
+    return _PRODUCTS.get_json(
+        "product", f"{barcode}.json", params={"fields": ",".join(_FIELDS)}, parse=_product
     )
+
+
+def _product(data: dict[str, Any]) -> _OpenFoodFactsProduct | None:
     if data.get("status") == 0:
         return None
     product_data = data.get("product")
     return _parse_product(product_data) if isinstance(product_data, dict) else None
 
 
-def _throttle(request_kind: str) -> None:
-    global _LAST_PRODUCT_REQUEST_AT, _LAST_SEARCH_REQUEST_AT
-
-    if request_kind == "search":
-        interval = _SEARCH_INTERVAL_SECONDS
-        last_request_at = _LAST_SEARCH_REQUEST_AT
-    else:
-        interval = _PRODUCT_INTERVAL_SECONDS
-        last_request_at = _LAST_PRODUCT_REQUEST_AT
-
-    now = time.monotonic()
-    elapsed = now - last_request_at
-    if elapsed < interval:
-        time.sleep(interval - elapsed)
-
-    if request_kind == "search":
-        _LAST_SEARCH_REQUEST_AT = time.monotonic()
-    else:
-        _LAST_PRODUCT_REQUEST_AT = time.monotonic()
+def _search_text(data: dict[str, Any], page: int) -> str:
+    products = [
+        product
+        for item in data.get("products", [])
+        if isinstance(item, dict)
+        if (product := _parse_product(item))
+    ]
+    if not products:
+        return "No Open Food Facts products found."
+    total = _string(data.get("count")) or "?"
+    page_count = _string(data.get("page_count")) or str(len(products))
+    return (
+        f"Open Food Facts products (page {page}, returned {len(products)}, "
+        f"page_count {page_count}, total {total}):\n"
+        + _format_products(products, include_details=False)
+    )
 
 
 def _parse_product(data: dict[str, Any]) -> _OpenFoodFactsProduct | None:
@@ -509,14 +460,6 @@ def _normalize_barcode(value: str) -> str:
 
 def _valid_filter(value: str) -> bool:
     return bool(_TEXT_FILTER_RE.fullmatch(value))
-
-
-def _http_error(prefix: str, error: urllib.error.HTTPError) -> str:
-    if error.code == 429:
-        return f"{prefix}: rate limited by Open Food Facts (HTTP 429). Try again later."
-    if error.code == 503:
-        return f"{prefix}: Open Food Facts global rate limit reached (HTTP 503). Try again later."
-    return f"{prefix}: HTTP error {error.code}: {error.reason}"
 
 
 def _string(value: Any) -> str:

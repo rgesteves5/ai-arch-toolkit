@@ -2,54 +2,34 @@
 
 from __future__ import annotations
 
-import json
 import re
-import urllib.error
-import urllib.parse
-import urllib.request
 from datetime import date
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
-_BASE_URL = "https://eonet.gsfc.nasa.gov/api/v3"
-_TIMEOUT = 20
-_USER_AGENT = "ai-arch-toolkit/1.0 (https://github.com/ai-arch-toolkit)"
+_API = Api(
+    base="https://eonet.gsfc.nasa.gov/api/v3",
+    name="NASA EONET",
+    timeout_s=20,
+    status_messages={404: "no matching records found."},
+)
 _MAX_LIMIT = 50
 _ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
 _TEXT_RE = re.compile(r"^[\w\s,.'()/%:+-]{1,180}$", re.UNICODE)
 
 
-@tool
+@tool(capability="network")
 def eonet_categories() -> str:
     """List NASA EONET event categories."""
     try:
-        data = _fetch_json("/categories", {})
-        categories = data.get("categories", [])
-    except urllib.error.HTTPError as e:
-        return _http_error("NASA EONET categories failed", e)
-    except urllib.error.URLError as e:
-        return f"NASA EONET categories failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "NASA EONET categories failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"NASA EONET categories failed: could not parse API response: {e}"
-
-    if not isinstance(categories, list) or not categories:
-        return "No NASA EONET categories found."
-    lines = ["NASA EONET categories:"]
-    for index, category in enumerate(categories, start=1):
-        if isinstance(category, dict):
-            lines.append(
-                f"{index}. {_string(category.get('id'))} — {_string(category.get('title'))}"
-            )
-            description = _string(category.get("description"))
-            if description:
-                lines.append(f"   {description}")
-    return "\n".join(lines)
+        return _API.get_json("categories", parse=_categories_text)
+    except HttpError as e:
+        return f"NASA EONET categories failed: {e}"
 
 
-@tool
+@tool(capability="network")
 def eonet_events(
     category: str = "",
     status: str = "open",
@@ -76,42 +56,17 @@ def eonet_events(
     if validation:
         return f"NASA EONET events failed: {validation}"
     params = {"limit": str(_bounded(max_results)), "status": status.strip().lower()}
-    if category.strip():
-        params["category"] = category.strip()
-    if source.strip():
-        params["source"] = source.strip()
-    if bbox.strip():
-        params["bbox"] = bbox.strip()
-    if start_date.strip() or end_date.strip():
-        if start_date.strip():
-            params["start"] = start_date.strip()
-        if end_date.strip():
-            params["end"] = end_date.strip()
-    else:
-        params["days"] = str(max(1, min(days, 365)))
+    filters = {"category": category.strip(), "source": source.strip(), "bbox": bbox.strip()}
+    filters.update(_period(days, start_date, end_date))
+    params.update({key: value for key, value in filters.items() if value})
 
     try:
-        data = _fetch_json("/events", params)
-        events = data.get("events", [])
-    except urllib.error.HTTPError as e:
-        return _http_error("NASA EONET events failed", e)
-    except urllib.error.URLError as e:
-        return f"NASA EONET events failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "NASA EONET events failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"NASA EONET events failed: could not parse API response: {e}"
-
-    if not isinstance(events, list) or not events:
-        return "No NASA EONET events found."
-    lines = [f"NASA EONET events (returned {len(events)}):"]
-    for index, event in enumerate(events, start=1):
-        if isinstance(event, dict):
-            lines.extend(_format_event(event, index=index, details=False))
-    return "\n".join(lines)
+        return _API.get_json("events", params=params, parse=_events_text)
+    except HttpError as e:
+        return f"NASA EONET events failed: {e}"
 
 
-@tool
+@tool(capability="network")
 def eonet_event(event_id: str) -> str:
     """Get a NASA EONET event by ID.
 
@@ -121,28 +76,50 @@ def eonet_event(event_id: str) -> str:
     if not _ID_RE.fullmatch(event_id.strip()):
         return f"NASA EONET event failed: invalid event_id: {event_id!r}"
     try:
-        data = _fetch_json(f"/events/{urllib.parse.quote(event_id.strip())}", {})
-    except urllib.error.HTTPError as e:
-        return _http_error("NASA EONET event failed", e)
-    except urllib.error.URLError as e:
-        return f"NASA EONET event failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "NASA EONET event failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"NASA EONET event failed: could not parse API response: {e}"
+        return _API.get_json(
+            "events", event_id.strip(), parse=lambda data: _event_text(data, event_id.strip())
+        )
+    except HttpError as e:
+        return f"NASA EONET event failed: {e}"
 
-    lines = [f"NASA EONET event {event_id.strip()}:"]
-    lines.extend(_format_event(data, index=None, details=True))
+
+def _period(days: int, start_date: str, end_date: str) -> dict[str, str]:
+    if start_date.strip() or end_date.strip():
+        return {"start": start_date.strip(), "end": end_date.strip()}
+    return {"days": str(max(1, min(days, 365)))}
+
+
+def _categories_text(data: dict[str, Any]) -> str:
+    categories = data.get("categories", [])
+    if not isinstance(categories, list) or not categories:
+        return "No NASA EONET categories found."
+    lines = ["NASA EONET categories:"]
+    for index, category in enumerate(categories, start=1):
+        if isinstance(category, dict):
+            lines.append(
+                f"{index}. {_string(category.get('id'))} — {_string(category.get('title'))}"
+            )
+            description = _string(category.get("description"))
+            if description:
+                lines.append(f"   {description}")
     return "\n".join(lines)
 
 
-def _fetch_json(path: str, params: dict[str, str]) -> dict[str, Any]:
-    url = f"{_BASE_URL}{path}"
-    if params:
-        url = f"{url}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="replace"))
+def _events_text(data: dict[str, Any]) -> str:
+    events = data.get("events", [])
+    if not isinstance(events, list) or not events:
+        return "No NASA EONET events found."
+    lines = [f"NASA EONET events (returned {len(events)}):"]
+    for index, event in enumerate(events, start=1):
+        if isinstance(event, dict):
+            lines.extend(_format_event(event, index=index, details=False))
+    return "\n".join(lines)
+
+
+def _event_text(data: dict[str, Any], event_id: str) -> str:
+    lines = [f"NASA EONET event {event_id}:"]
+    lines.extend(_format_event(data, index=None, details=True))
+    return "\n".join(lines)
 
 
 def _format_event(event: dict[str, Any], *, index: int | None, details: bool) -> list[str]:
@@ -229,14 +206,6 @@ def _parse_date(value: str) -> date | None:
         return date.fromisoformat(value)
     except ValueError:
         return None
-
-
-def _http_error(prefix: str, error: urllib.error.HTTPError) -> str:
-    if error.code == 404:
-        return f"{prefix}: no matching records found."
-    if error.code == 429:
-        return f"{prefix}: rate limited by NASA EONET (HTTP 429). Try again later."
-    return f"{prefix}: HTTP error {error.code}: {error.reason}"
 
 
 def _bounded(value: int) -> int:

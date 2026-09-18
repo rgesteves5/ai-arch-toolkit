@@ -2,22 +2,21 @@
 
 from __future__ import annotations
 
-import json
 import re
-import time
-import urllib.error
-import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
-_BASE_URL = "https://nominatim.openstreetmap.org"
-_TIMEOUT = 15
-_USER_AGENT = "ai-arch-toolkit/1.0 (https://github.com/ai-arch-toolkit; research tool)"
-_MIN_REQUEST_INTERVAL_SECONDS = 1.1
-_LAST_REQUEST_AT = 0.0
+# Nominatim's usage policy allows one request per second:
+# https://operations.osmfoundation.org/policies/nominatim/
+_NOMINATIM = Api(
+    base="https://nominatim.openstreetmap.org",
+    name="Nominatim",
+    timeout_s=15,
+    min_interval_s=1.1,
+)
 _MAX_RESULTS_LIMIT = 10
 _COUNTRY_CODES_RE = re.compile(r"^[a-zA-Z]{2}(,[a-zA-Z]{2})*$")
 _LAYERS = {"address", "poi", "railway", "natural", "manmade"}
@@ -41,7 +40,7 @@ class _OsmPlace:
     extra_tags: tuple[str, ...]
 
 
-@tool
+@tool(capability="network")
 def osm_search_place(
     query: str,
     max_results: int = 5,
@@ -84,24 +83,15 @@ def osm_search_place(
         params["layer"] = ",".join(parsed_layers)
 
     try:
-        data = _fetch_json("/search", params)
-        places = [_parse_place(item) for item in data if isinstance(item, dict)]
-        places = [place for place in places if place is not None]
-    except urllib.error.HTTPError as e:
-        return _http_error("OSM place search failed", e)
-    except urllib.error.URLError as e:
-        return f"OSM place search failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "OSM place search failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"OSM place search failed: could not parse API response: {e}"
-
+        places = _NOMINATIM.get_json_list("search", params=params, parse=_places)
+    except HttpError as e:
+        return f"OSM place search failed: {e}"
     if not places:
         return f"No OSM places found for: {query!r}"
     return f"OSM places for {query!r}:\n" + _format_places(places)
 
 
-@tool
+@tool(capability="network")
 def osm_reverse_geocode(
     latitude: float,
     longitude: float,
@@ -129,9 +119,10 @@ def osm_reverse_geocode(
         return f"OSM reverse geocode failed: {parsed_layers}"
 
     try:
-        data = _fetch_json(
-            "/reverse",
-            {
+        place = _NOMINATIM.get_json(
+            "reverse",
+            parse=_parse_place,
+            params={
                 "format": "jsonv2",
                 "lat": str(latitude),
                 "lon": str(longitude),
@@ -142,16 +133,8 @@ def osm_reverse_geocode(
                 "layer": ",".join(parsed_layers),
             },
         )
-        place = _parse_place(data) if isinstance(data, dict) else None
-    except urllib.error.HTTPError as e:
-        return _http_error("OSM reverse geocode failed", e)
-    except urllib.error.URLError as e:
-        return f"OSM reverse geocode failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "OSM reverse geocode failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"OSM reverse geocode failed: could not parse API response: {e}"
-
+    except HttpError as e:
+        return f"OSM reverse geocode failed: {e}"
     if place is None:
         return f"No OSM reverse geocode result for: {latitude}, {longitude}"
     return f"OSM reverse geocode for {latitude}, {longitude}:\n" + _format_places(
@@ -160,22 +143,9 @@ def osm_reverse_geocode(
     )
 
 
-def _fetch_json(path: str, params: dict[str, str]) -> Any:
-    url = f"{_BASE_URL}{path}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    _throttle()
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="replace"))
-
-
-def _throttle() -> None:
-    global _LAST_REQUEST_AT
-
-    now = time.monotonic()
-    elapsed = now - _LAST_REQUEST_AT
-    if elapsed < _MIN_REQUEST_INTERVAL_SECONDS:
-        time.sleep(_MIN_REQUEST_INTERVAL_SECONDS - elapsed)
-    _LAST_REQUEST_AT = time.monotonic()
+def _places(data: list[Any]) -> list[_OsmPlace]:
+    places = [_parse_place(item) for item in data if isinstance(item, dict)]
+    return [place for place in places if place is not None]
 
 
 def _parse_place(data: dict[str, Any]) -> _OsmPlace | None:
@@ -275,12 +245,6 @@ def _extra_tags(value: Any) -> tuple[str, ...]:
         if text:
             tags.append(f"{key}: {text}")
     return tuple(tags)
-
-
-def _http_error(prefix: str, error: urllib.error.HTTPError) -> str:
-    if error.code == 429:
-        return f"{prefix}: rate limited by Nominatim (HTTP 429). Try again later."
-    return f"{prefix}: HTTP error {error.code}: {error.reason}"
 
 
 def _string_tuple(value: Any) -> tuple[str, ...]:

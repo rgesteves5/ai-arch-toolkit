@@ -2,19 +2,16 @@
 
 from __future__ import annotations
 
-import json
 import re
-import urllib.error
-import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
-_BASE_URL = "https://api.semanticscholar.org/graph/v1"
-_TIMEOUT = 10
-_USER_AGENT = "ai-arch-toolkit/1.0 (https://github.com/ai-arch-toolkit)"
+_API = Api(
+    base="https://api.semanticscholar.org/graph/v1", name="Semantic Scholar", segment_safe=":"
+)
 _MAX_RESULTS_LIMIT = 20
 _ABSTRACT_MAX_CHARS = 900
 _ARXIV_ID_RE = re.compile(r"^\d{4}\.\d{4,5}(v\d+)?$")
@@ -96,7 +93,7 @@ class _SemanticScholarCitation:
     is_influential: bool
 
 
-@tool
+@tool(capability="network")
 def semantic_scholar_search(
     query: str,
     max_results: int = 5,
@@ -132,18 +129,9 @@ def semantic_scholar_search(
         params["venue"] = venue.strip()
 
     try:
-        data = _fetch_json("/paper/search", params)
-        items = data.get("data", [])
-        papers = [_parse_paper(item) for item in items if isinstance(item, dict)]
-        papers = [paper for paper in papers if paper is not None]
-    except urllib.error.HTTPError as e:
-        return _http_error("Semantic Scholar search failed", e)
-    except urllib.error.URLError as e:
-        return f"Semantic Scholar search failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "Semantic Scholar search failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"Semantic Scholar search failed: could not parse API response: {e}"
+        papers = _API.get_json("paper", "search", params=params, parse=_papers)
+    except HttpError as e:
+        return f"Semantic Scholar search failed: {e}"
 
     if not papers:
         return f"No Semantic Scholar results for: {query!r}"
@@ -154,7 +142,7 @@ def semantic_scholar_search(
     )
 
 
-@tool
+@tool(capability="network")
 def semantic_scholar_paper(paper_id: str) -> str:
     """Fetch detailed Semantic Scholar metadata for a paper.
 
@@ -166,20 +154,13 @@ def semantic_scholar_paper(paper_id: str) -> str:
         return f"Semantic Scholar paper lookup failed: invalid paper_id: {paper_id!r}"
 
     try:
-        data = _fetch_json(
-            f"/paper/{urllib.parse.quote(normalized, safe=':')}", {"fields": _PAPER_FIELDS}
+        paper = _API.get_json(
+            "paper", normalized, params={"fields": _PAPER_FIELDS}, parse=_parse_paper
         )
-        paper = _parse_paper(data)
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
+    except HttpError as e:
+        if e.status == 404:
             return f"Semantic Scholar paper not found: {normalized}"
-        return _http_error("Semantic Scholar paper lookup failed", e)
-    except urllib.error.URLError as e:
-        return f"Semantic Scholar paper lookup failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "Semantic Scholar paper lookup failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"Semantic Scholar paper lookup failed: could not parse API response: {e}"
+        return f"Semantic Scholar paper lookup failed: {e}"
 
     if paper is None:
         return f"Semantic Scholar paper not found: {normalized}"
@@ -192,7 +173,7 @@ def semantic_scholar_paper(paper_id: str) -> str:
     )
 
 
-@tool
+@tool(capability="network")
 def semantic_scholar_citations(
     paper_id: str,
     max_results: int = 10,
@@ -221,21 +202,13 @@ def semantic_scholar_citations(
     }
 
     try:
-        path = f"/paper/{urllib.parse.quote(normalized, safe=':')}/citations"
-        data = _fetch_json(path, params)
-        items = data.get("data", [])
-        citations = [_parse_citation(item) for item in items if isinstance(item, dict)]
-        citations = [citation for citation in citations if citation is not None]
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
+        citations = _API.get_json(
+            "paper", normalized, "citations", params=params, parse=_citations
+        )
+    except HttpError as e:
+        if e.status == 404:
             return f"Semantic Scholar paper not found: {normalized}"
-        return _http_error("Semantic Scholar citations lookup failed", e)
-    except urllib.error.URLError as e:
-        return f"Semantic Scholar citations lookup failed: URL error: {e.reason}"
-    except TimeoutError:
-        return "Semantic Scholar citations lookup failed: request timed out."
-    except (json.JSONDecodeError, TypeError) as e:
-        return f"Semantic Scholar citations lookup failed: could not parse API response: {e}"
+        return f"Semantic Scholar citations lookup failed: {e}"
 
     if not citations:
         return f"No Semantic Scholar citations found for: {normalized}"
@@ -243,14 +216,16 @@ def semantic_scholar_citations(
     return f"Semantic Scholar citations for {normalized}:\n" + _format_citations(citations)
 
 
-def _fetch_json(path: str, params: dict[str, str]) -> dict[str, Any]:
-    query = urllib.parse.urlencode(params)
-    url = f"{_BASE_URL}{path}"
-    if query:
-        url = f"{url}?{query}"
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="replace"))
+def _papers(data: dict[str, Any]) -> list[_SemanticScholarPaper]:
+    items = data.get("data", [])
+    papers = [_parse_paper(item) for item in items if isinstance(item, dict)]
+    return [paper for paper in papers if paper is not None]
+
+
+def _citations(data: dict[str, Any]) -> list[_SemanticScholarCitation]:
+    items = data.get("data", [])
+    citations = [_parse_citation(item) for item in items if isinstance(item, dict)]
+    return [citation for citation in citations if citation is not None]
 
 
 def _normalize_paper_id(value: str) -> str:
@@ -509,12 +484,6 @@ def _int_or_none(value: Any) -> int | None:
     if isinstance(value, int):
         return value
     return None
-
-
-def _http_error(prefix: str, error: urllib.error.HTTPError) -> str:
-    if error.code == 429:
-        return f"{prefix}: rate limited by Semantic Scholar (HTTP 429). Try again later."
-    return f"{prefix}: HTTP error {error.code}: {error.reason}"
 
 
 def _truncate(text: str, max_chars: int) -> str:
