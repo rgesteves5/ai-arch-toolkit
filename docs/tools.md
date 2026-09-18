@@ -136,7 +136,7 @@ response = llm.complete_sync(
 )
 ```
 
-`code_execution(**config)` and `web_search(**config)` return a `ServerTool`. Availability depends on the provider/model.
+`code_execution(**config)` and `web_search(**config)` return a `ServerTool`. The Anthropic and Gemini adapters send both, and the Meta adapter sends `web_search`; the OpenAI adapter (Chat Completions takes function tools only) and the xAI adapter raise `RequestError` for any server tool. A config (`web_search(max_uses=3)`, for example) raises `RequestError` on every provider for now: the adapters used to drop it without a word. See [Model Compatibility](model-compatibility.md) for each provider.
 
 ---
 

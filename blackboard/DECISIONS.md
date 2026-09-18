@@ -193,3 +193,57 @@ Só acrescentar. Uma decisão revista ganha uma nova entrada que diz qual substi
 - **Contexto:** a pipeline exige adquirir vaga antes de marcar início, mas uma vaga mantida através de yields controlados pelo consumidor permite a um stream abandonado bloquear complete() e os steps seguintes.
 - **Decisão:** complete mantém a vaga durante a chamada inteira; streams mantêm-na apenas no despacho e espera pelo primeiro item. A vaga é libertada antes de entregar esse item. Cada gerador que delega assume o fecho explícito do gerador delegado, por uma única ferramenta `_managed`.
 - **Consequência:** cancelamento na fila não inicia operação; consumo lento não prende a vaga; abandono fecha imediatamente o transporte em vez de depender de GC. O teste existente de concorrência confirma ambos os contratos.
+
+## D24 · Despacho e entrega dos erros dos fornecedores (R02, passo 3)
+
+- **Contexto:** o tipo da excepção não diz se o pedido saiu. Um 200 ilegível (cobrado) e uma recusa
+  local do SDK (nada enviado) saem ambos como `ValueError`/`TypeError` (prova em loopback, passo 2).
+- **Decisão:** cada chamada tem um marcador de despacho num `ContextVar`. O hook `request` do cliente
+  HTTP do SDK marca-o quando o pedido é entregue ao transporte; o xAI marca-o ao entrar no
+  `send`/`open_stream`, porque todo o trabalho local está no `prepare`. `map_error(exc, *, sent)` é o
+  único sítio que conhece as excepções do SDK: uma excepção desconhecida é `RequestError` antes do
+  despacho e `ResponseError` depois. As falhas da fase de ligação (`ConnectError`, `ConnectTimeout`,
+  `PoolTimeout`) são `not_sent`; o 429 é `unbilled` em todos (D20); o resto segue a página de cada
+  fornecedor, citada no mapeador; sem documento, `indeterminate`. No gRPC, `UNAVAILABLE` cobre
+  também uma ligação que nunca se fez, mas o gRPC não diz se o pedido saiu, por isso fica
+  `indeterminate`.
+- **Consequência:** nenhuma excepção de SDK, `httpx`/`httpx2`, `aiohttp` ou gRPC sai crua (regra de
+  arquitectura com canário); o meter lê a entrega do erro e não o seu tipo.
+
+## D25 · xAI: esforço por modelo e mínimo do SDK (R02, passo 3)
+
+- **Contexto:** o adaptador ignorava com aviso todo o `thinking`/`thinking_effort`, mas o `grok-4.6`,
+  o `grok-4.5` e o `grok-4.3` documentam `reasoning_effort`; o `xai-sdk` 1.7 declarado não tinha
+  `medium`, `xhigh`, `agent_count` nem `cost_usd`.
+- **Decisão:** os modelos Grok de raciocínio raciocinam sem pedir, por isso `thinking_effort`
+  aplica-se sozinho (como a Muse Spark, D13) e é validado contra os esforços da página do modelo;
+  `thinking=True` não pede nada a mais, salvo num modelo que não raciocina, onde levanta
+  `RequestError`, como o esforço num modelo que não o aceita. Um modelo novo recebe as regras da
+  geração actual; os ids retirados seguem o modelo que os serve. O extra `xai` passa a
+  `xai-sdk>=1.18,<2`, sem ramos por versão (D15).
+- **Consequência:** `thinking_effort` num `grok-4.20-reasoning` ou num `grok-build-0.1`, que antes
+  era ignorado, passa a falhar antes do pedido; quem usa `xai-sdk` < 1.18 tem de actualizar.
+
+## D26 · Uma falha com usage reportado é liquidada com esse usage (R02, passo 3)
+
+- **Contexto:** a Meta devolve o usage de uma resposta que falhou (`response.failed`), e o meter
+  liquidava toda a falha pela entrega: custo desconhecido com tecto.
+- **Decisão:** `ProviderError.usage` leva o usage que o fornecedor reportou para o pedido falhado;
+  a pipeline regista-o na tentativa (`Response.attempts`) e chama
+  `MeterOperation.fail(delivery, usage=, cost=)` com o custo do pricer do scope, calculado fora do
+  lock como na liquidação normal. Sem usage, nada muda.
+- **Consequência:** uma falha com usage conta tokens e custo conhecido; `fail` recusa um custo
+  estimado, como `settle`.
+
+## D27 · Anthropic: thinking pelas tabelas documentadas (R02, passo 3)
+
+- **Decisão:** nos modelos adaptativos, `thinking=True` envia `{type: "adaptive", display:
+  "summarized"}` (o `display` por omissão esconde o texto nos modelos novos) e `thinking=False` não
+  envia nada, por isso um modelo que pensa por omissão continua a pensar. `thinking_effort` vai em
+  `output_config.effort`, sozinho e fundido com o `format`, validado pela tabela de esforços. Nas
+  famílias antigas, que só aceitam `budget_tokens`, um esforço ou um orçamento liga o thinking, com
+  `max_tokens = orçamento + max_tokens` (D20). O `tool_choice` forçado é recusado onde a API o
+  recusa (Fable 5.1, Mythos 5.1). Os pedidos falhados são `unbilled`, como a Anthropic documenta; um
+  erro dentro do stream fica `indeterminate`.
+- **Consequência:** o `claude-sonnet-4-6` passa de `budget_tokens` a adaptativo; um `top_p`/`top_k`
+  explícito num modelo sem amostragem falha antes do pedido.

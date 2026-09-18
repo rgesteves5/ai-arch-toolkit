@@ -126,7 +126,7 @@ llm = LLM("gpt-4o")
 llm = LLM("gemini-3.7-flash")
 
 # xAI
-llm = LLM("grok-2")
+llm = LLM("grok-4.3")
 
 # Meta (Muse Spark via the Meta Model API; key from MODEL_API_KEY)
 llm = LLM("muse-spark-1.3", temperature=1.0)

@@ -68,19 +68,24 @@ docstrings/comments, and when to use classes vs functions — see
 ## Adding a provider
 
 1. Add a class extending `BaseProvider` in `src/ai_arch_toolkit/core/_providers/_<name>.py`.
-   Implement `complete()`, `stream()`, `stream_events()`, plus
-   `to_provider_messages()`. Look at `_openai.py` as the most thorough
+   The base owns `complete()` and `stream()`; the adapter implements `prepare()` (pure, returns
+   the SDK's own request type, raises `RequestError` for what a model does not take), `send()`,
+   `open_stream()`, `assemble()`, `usage()`, and `map_error()` (the only place that knows the
+   SDK's exceptions, with each error's `delivery` from the provider's documented billing). Put
+   per-model rules in a profile table resolved with `core/_model_id.py`. `_openai.py` is the
    reference.
-2. Wire model-prefix routing in `core/_providers/__init__.py::create_provider()`.
+2. Route the model family in `core/_providers/__init__.py` (`_MODEL_PREFIXES`).
 3. If the provider has its own SDK, declare it as its own extra in
    `[project.optional-dependencies]` in `pyproject.toml` and add that extra to
    `all` (the `dev` extra installs `all`, so CI gets it) — never as a hard
    dependency. Cap the SDK at its next major and keep the floor at a version the
    `floors` CI job passes on.
-4. Pricing: add the model prefixes to `core/_default_pricing.toml`.
-5. Tests in `tests/test_<name>_provider.py`. Mock `urllib.request.urlopen` or
-   the SDK's HTTP layer; mirror the response-shape fixtures the other
-   provider tests use.
+4. Pricing: add each model id to `core/_default_pricing.toml` (ids billed at the same rates go in
+   the entry's `aliases`; dated snapshots are found without an entry).
+5. Tests in `tests/test_<name>_provider.py`, through `tests/provider_calls.py`, with the SDK's own
+   response types; add the adapter to the parity, conversation, and transport tests
+   (`tests/integration/fakeserver.py` serves HTTP and SSE on loopback) and to the wire net
+   (`ADAPTERS` and `VALIDATORS` in `tests/wire_contract.py`, which a test checks).
 6. Update `docs/model-compatibility.md` and the README provider × feature
    matrix.
 

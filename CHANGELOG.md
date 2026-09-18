@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `UnpricedModelError`, and prices for `gpt-4o-2024-05-13` and `gpt-3.5-turbo-1106` (snapshots
+  with a tariff of their own), `gpt-5.5-cyber`, and `gpt-5.1` (at `gpt-5`'s rates), from
+  OpenAI's pricing page on 2026-09-18.
 - Provider failures share `ProviderError` and a typed delivery disposition. New `RequestError`, `TransportError`, `ProviderTimeout`, and `ResponseError` preserve the existing builtin exception handlers.
 - **Meta provider (Muse Spark).** `LLM("muse-spark-1.3")` routes to a new `MetaProvider` that
   drives the Meta Model API's Responses API through the `openai` SDK (Meta ships no SDK), with the
@@ -99,6 +102,116 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `.env.example` documenting every provider API key; the sync-timeout configuration now validates its inputs.
 
 ### Changed
+- **Breaking: prices match a model id exactly.** A model id is priced by its own entry or as a
+  dated snapshot of one (`claude-haiku-4-5-20251001`, `gpt-4o-2024-08-06`, `grok-4-0709`,
+  `-latest`). A variant no longer inherits the entry its name starts with: `o3-pro`,
+  `gpt-4o-audio-preview`, `gpt-5-codex`, and `gemini-2.5-flash-image` used to be priced as `o3`,
+  `gpt-4o`, `gpt-5`, and `gemini-2.5-flash`. `PricingRegistry.register()` is exact by default and
+  its first parameter is now `model` (was `model_prefix`); `register(model, price, match="prefix")`,
+  or `match = "prefix"` in a TOML entry, keeps prefix matching as an explicit choice for a family
+  of local models. A TOML entry takes `aliases = [...]` for other ids billed at its rates, and the
+  shipped table lists the documented ids that prefix matching used to cover
+  (`grok-4-1-fast-reasoning`, `gemini-3.1-pro-preview`, `gpt-5.1`, …).
+- **Breaking: a model without a price does not run under a meter.** Inside a `MeterScope`, with or
+  without a budget, a call to a model the scope's pricer cannot price raises `UnpricedModelError`
+  (a `RequestError`, so neither retried nor passed to a fallback) before anything is sent; the
+  message names the `pricing.register(...)` call that fixes it. A local model registers an
+  explicit zero: `pricing.register("llama3.2", ModelPricing())`. Without a scope nothing changes:
+  the call runs and `Response.cost` is `None`. `BudgetPolicy(unpriced=...)` now governs only the
+  other unknown costs (server tools, a pricer that fails when a call settles).
+- **Every provider failure says whether the request was sent.** An adapter now knows when the
+  SDK handed a request to its transport. A connection that is refused or times out while
+  connecting, or a request the SDK itself refuses to build (a value that is not JSON, for
+  example), is a failure that was never sent (`delivery="not_sent"`: no cost, and the next call is
+  admitted); an HTTP 200 whose body cannot be read is a `ResponseError`, and so is an error event
+  inside a stream; a transport failure while reading a stream is a `TransportError` or
+  `ProviderTimeout`. None of these leave as the SDK's or the HTTP library's own exception any
+  more.
+- **xAI: requests follow each Grok model's documented rules, and gRPC errors keep their meaning.**
+  `thinking_effort` is sent as `reasoning_effort` where the model documents it (`low` to `xhigh`
+  on `grok-4.6`, `grok-4.5`, and any newer model; also `none` on `grok-4.3` and the retired ids it
+  serves), and applies without `thinking=True`; it used to be dropped with a warning. A
+  `thinking_effort` on a model that reasons without one (`grok-4.20-reasoning`, `grok-build-0.1`)
+  raises `RequestError`, and so does `thinking=True` on a model that does not reason
+  (`grok-4.20-non-reasoning`). The reasoning models refuse `stop`, `presence_penalty`, and
+  `frequency_penalty` before sending, as xAI's API does. `tool_choice="<tool name>"` works (it
+  failed inside the SDK); a server tool, or any tool on `grok-4.20-multi-agent`, raises
+  `RequestError`, and so does a request the SDK cannot build, before anything is sent. gRPC
+  `UNAVAILABLE` is a `TransportError` and `DEADLINE_EXCEEDED` a `ProviderTimeout` (they were
+  `APIError` 503 and 504); every other code maps to its `google.rpc` HTTP status
+  (`FAILED_PRECONDITION` is 400, `UNIMPLEMENTED` 501), and only `RESOURCE_EXHAUSTED` is unbilled.
+- **Gemini: a turn's tool results go back together, and thinking follows each model's rules.**
+  The results of a turn's tool calls are sent in one `user` content, as Gemini documents for
+  parallel calls, each with its call's `id` when Gemini gave the call one (Gemini 3 maps results
+  by id); they used to be split into one content each, without ids. `thinking_effort` is checked
+  against the model's documented levels (`minimal` only where the model has it; `xhigh` or `max`
+  now raise `RequestError` instead of reaching the API) and applies without `thinking=True`; on
+  Gemini 2.5 it becomes a thinking budget, and a `thinking_budget` outside the model's range raises
+  `RequestError`. A server tool with a config, or of a type the adapter does not send, raises
+  `RequestError` instead of being dropped, and so does a message role Gemini does not have. The
+  SDK always sends through `httpx` now: with `aiohttp` installed (the `xai` extra installs it), it
+  used to re-send a request on its own after a connection error, unmetered. A failed request with
+  HTTP 400 or 500 is unbilled, as Gemini's billing page says, and so is a 429; an error inside a
+  stream is indeterminate.
+- **Meta: failures keep their code's documented meaning and their usage.** A failure Meta reports
+  inside a response or a stream (`response.failed`, an `error` event) gets the HTTP status Meta's
+  error table gives its code; a code outside the table, or none (a 400 and a 500 share it), raises
+  `ResponseError` instead of an invented 400 or 500. A failed response's usage is kept: the error
+  carries it (`ProviderError.usage`), `Response.attempts` records it, and a meter settles the
+  failure with its cost instead of an unknown one. `thinking_effort` is checked per model (`max`
+  only on standard-tier `muse-spark-1.3`); `logprobs=True`, a message role the Responses API does
+  not have, `code_execution`, and a server tool's config raise `RequestError` (the last two were
+  dropped with a warning). `MetaProvider(timeout=...)` no longer needs `httpx`, which the `meta`
+  extra does not install. A connection refused before sending is `delivery="not_sent"`.
+- `MeterOperation.fail()` takes the `usage` and `cost` of a failure the provider reported usage
+  for.
+- **Anthropic: thinking, effort and tools follow each Claude model's documented rules.**
+  `thinking=True` asks the models that think adaptively (the Claude 5 family, Opus 4.8, 4.7 and
+  4.6, Sonnet 4.6) for `{type: "adaptive", display: "summarized"}`, so the summary shows on the
+  models that hide it by default; `claude-sonnet-4-6` and `claude-opus-4-6` used to get a deprecated
+  `budget_tokens`. `thinking_effort` goes in `output_config.effort` (merged with the structured
+  output format) and applies without `thinking=True`; an effort the model does not take (`xhigh`
+  on the 4.6 models, for example) raises `RequestError`. On the models that only take a budget
+  (Haiku 4.5, Sonnet 4.5, Opus 4.5 and older), an effort or a budget turns thinking on, and the
+  budget is added to `max_tokens` instead of being taken from it. The results of a turn's tool
+  calls go back in one `user` message, and an assistant turn is replayed as Claude sent it,
+  thinking signatures and server tool results included, while the message still matches it.
+  Forced `tool_choice` on `claude-fable-5-1` and `claude-mythos-5-1`, a `top_p` or `top_k` on a
+  model without sampling parameters, a message role the Messages API does not have, and a request
+  without `max_tokens` raise `RequestError` before sending. Server tools carry their `name` (the
+  API refused them without it), and `code_execution` moves from the legacy
+  `code_execution_20250522` to `code_execution_20250825`; a server tool with a config, which used
+  to be dropped, raises `RequestError`. A
+  failed request is unbilled, as Anthropic documents; an error event inside a stream gets the
+  status of its error type (it was an `APIError` with status 200), and a stream whose tool input is
+  not valid JSON raises `ResponseError` (the input used to reach the tool as `{"_raw": ...}`).
+  Batch bodies are built as a call's.
+- **OpenAI: the output limit follows the host, and model rules follow the model's family.** On
+  `api.openai.com` every model receives `max_completion_tokens` (`max_tokens` is deprecated and
+  refused by o-series models); an OpenAI-compatible server (`base_url=`) receives `max_tokens`
+  and no OpenAI model rule. `thinking=True` on a model that does not reason (`gpt-4o`,
+  `gpt-4o-mini`, `gpt-4.1*`, `gpt-4-turbo`, `gpt-4`, `gpt-3.5-turbo`) raises `RequestError`
+  before sending; so do a `thinking_effort` outside the SDK's values and a server tool (Chat
+  Completions takes only function tools; server tools are planned separately). A model the
+  adapter does not know gets the current generation's rules. `top_logprobs` is forwarded, a
+  `developer` message is sent as one, and another unknown role raises `RequestError`. The batch
+  JSONL body is built by the same code as a call.
+- **A stream ends with the same `Response` as `complete()`.** The provider adapters now build
+  one response from the SDK's final object on both paths (the SDKs accumulate Anthropic, OpenAI,
+  xAI, and Meta streams; Gemini chunks are joined). A finished `stream()` or `stream_events()`
+  therefore carries `parsed`, `citations`, `response_id`, and `logprobs`, and its text is the
+  provider's, as `complete()` returns it; the Gemini stream's `raw` keeps every part of every
+  chunk, so a replayed history keeps all its function calls. Tool-call events in
+  `stream_events()` come after the text, from the finished response and in its order (Meta used
+  to emit them in arrival order). A stream the caller abandons reports the text it consumed and
+  the thinking and tool calls it saw, with unknown usage.
+- **A response without usage has no cost.** When the provider reports no usage (an
+  OpenAI-compatible server that sends no usage chunk, or an xAI stream whose chunks carry none),
+  `Response.cost` is `None` and a meter records the call's cost as unknown instead of zero.
+- **A request an adapter refuses is never metered.** Building the provider request happens
+  before admission: an adapter's refusal (`RequestError`) opens no operation and counts no call. A stream raises it from `llm.stream(...)`
+  itself, or on its first iteration when middleware rewrote the request (its reservation is
+  released).
 - Complete and both stream APIs share one physical-attempt pipeline. Stream lifecycle handles are explicit; public LLM call signatures are unchanged.
 - The default `fallback_on` is `(ProviderError,)` instead of `(APIError, ConnectionError, TimeoutError, OSError)`. The built-in adapters raise `TransportError` or `ProviderTimeout` for network failures, so those still fall back; a raw `OSError` (a missing local file, for example) no longer does. Custom providers should raise the normalized errors.
 - **Breaking:** `MeterOperation.fail` requires a delivery disposition. `unknown_cost_count` counts only unbounded costs; bounded uncertainty consumes caps separately from known spend. `BudgetReport.cost_at_most` reports the combined bound.
@@ -106,7 +219,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking:** `csv_read` moves to `toolkit.tools.dangerous` and requires approval in governed execution.
 - **Breaking: provider SDK majors and dependency floors.** The extras now require the current SDK
   majors, each capped at the next one: `anthropic>=1.0,<2`, `openai>=3.0,<4` (the `openai` and
-  `meta` extras), `google-genai>=2.0,<3`, `xai-sdk>=1.7,<2`. `anthropic` 1.x and `openai` 3.x moved
+  `meta` extras), `google-genai>=2.0,<3`, `xai-sdk>=1.18,<2` (was 1.7; 1.18 is the first release
+  that takes the `xhigh` effort). `anthropic` 1.x and `openai` 3.x moved
   their HTTP transport to `httpx2`. `anthropic` 1.x also removed `temperature`, `top_p` and `top_k`
   from its signatures; the adapter now sends them in the request body, so they keep working on the
   Claude models that accept them (4.6 and earlier) and are still dropped where the API rejects

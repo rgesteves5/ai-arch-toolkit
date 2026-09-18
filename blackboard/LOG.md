@@ -208,3 +208,75 @@ da fixture, e o teste unitário que afirmava `temperature` como argumento do SDK
 passed; ruff, formato, pyright e lock limpos. Verificação ao vivo pendente (sem créditos): comando no
 BOARD. Documentação do SDK 1.x confirmada no guia de migração oficial incluído na skill `claude-api`
 (passo 6, "Removed request parameters").
+
+## 2026-09-18 · R02 (Claude)
+
+R01 publicada em `main` (`b3dae3f`); a R02 começa com a leitura obrigatória da R00. Linha de base:
+3886 passed, 22 deselected. Sem commits, fornecedores (só páginas públicas de documentação) nem
+`.env`.
+
+- Passo 1 (costura D) feito: gramática única de ids em `core/_model_id.py`; preços por id exacto ou
+  snapshot, com `aliases` e `match="prefix"` explícito; tokenizer e encaminhamento pela gramática;
+  D16 — sob um scope, um modelo sem preço levanta `UnpricedModelError` antes de abrir a operação;
+  `scripts/audit_models.py` para o dono. Oito testes que afirmavam a herança por prefixo ou o
+  contrato antigo da D16 corrigidos e listados na ficha. Gate: 3954 passed; ruff, formato, pyright
+  e lock limpos.
+- Passo 2 (costura B) feito: `BaseProvider` em seis peças com o algoritmo na base; `prepare` antes
+  de qualquer admissão; paridade por construção (uma montagem); os cinco adaptadores reorganizados
+  (−730 linhas, 44 blocos `except` de SDK → 0, dívida de complexidade 161 → 137). Um duplo de teste
+  (`tests/fake_provider.py`) substitui os duplos duck-typed e os providers `AsyncMock` em 33
+  ficheiros, migrados por três agentes com regras escritas e revistos. Gate: 3963 passed; ruff,
+  formato, pyright e lock limpos; os 14 ensaios SDK em loopback verdes.
+
+- Passo 3 · OpenAI feito: marcador de despacho comum na base (D24); pedido tipado pelo SDK;
+  perfis pela gramática; `max_completion_tokens` no host oficial; server tools recusadas; batch
+  pelo `prepare`; transporte em loopback com o SDK real (13 casos). Gate: 3998 passed.
+- Passo 3 · xAI feito: o `prepare` constrói o pedido com o `chat.create` do SDK (local), a partir
+  de um `TypedDict` verificado pelo pyright; perfis pelos esforços documentados de cada modelo
+  (D25); `required_tool` para o `tool_choice` com nome; mapeador pelo `google.rpc.Code`; o usage de
+  um stream sem usage deixa de valer zero; servidor gRPC falso em loopback (11 casos de
+  transporte); `xai-sdk>=1.18`. Comum: a guarda de import dos SDKs passa a gestor de contexto e
+  saem os 18 `# noqa: E402` (sete tinham entrado nesta fase, contra a R00). Dívida 134 → 129.
+  Gate: 4100 passed; ruff, formato, pyright e lock limpos.
+- Passo 3 · Gemini feito: `GenerateContentConfig` tipada num `TypedDict` verificado pelo pyright;
+  perfis pelos níveis e orçamentos documentados; resultados de um turno num só `Content` com o
+  `id` do Gemini; pilha fixa em `httpx` por um transporte próprio (acaba o reenvio escondido do
+  `aiohttp`, provado em loopback: 2 pedidos → 1); server tools com config ou desconhecidas
+  recusadas; entrega documentada (400 e 500 `unbilled`); transporte em loopback (15 casos).
+  Dívida 129 → 124. Gate: 4178 passed; ruff, formato, pyright e lock limpos.
+- Passo 3 · Meta feito: pedido tipado com três desvios listados (cada um com a prova do M01); um
+  mapeador; códigos pela tabela documentada da Meta (código nulo ou desconhecido → `ResponseError`);
+  o usage de um `response.failed` vai até ao meter (D26: `ProviderError.usage`,
+  `MeterOperation.fail(..., usage=, cost=)`); esforços por modelo; `timeout` sem `httpx`. Desvio
+  assumido: o adaptador foi escrito antes dos seus testes; o vermelho foi visto contra uma
+  reconstrução do passo 2. Dívida 124 → 123. Gate: 4215 passed; ruff, formato, pyright e lock limpos.
+- Passo 3 · Anthropic feito: thinking e esforço pelas tabelas documentadas (D27); resultados de um
+  turno numa só mensagem; turno reenviado do `_raw` com as assinaturas; `tool_choice` forçado
+  recusado no Fable 5.1/Mythos 5.1; server tools com `name`; pedidos falhados `unbilled`; erro
+  dentro do stream pelo tipo; batch pelo `prepare`. Sai o `network_error` e a lista
+  `_PENDING_ADAPTERS` (vazia). Os cinco adaptadores: 3752 → 3280 linhas (o pacote
+  `core/_providers/`: 4301 → 4018). Dívida 123 → 121. Gate:
+  4305 passed; ruff, formato, pyright e lock limpos.
+- Passo 4 feito: rede do fio em `tests/` (`wire_contract.py` e a fixture `autouse` `wire_log`):
+  cada pedido que um `prepare` constrói na suite é validado contra o contrato do SDK (Stainless
+  estrito com escalares estritos, Meta com os três desvios preenchidos, `extra_body` da Anthropic
+  pelos campos de amostragem, Gemini pelo pydantic e pelo conversor offline, xAI pelos enums do
+  `proto`). 490 pedidos em 402 testes; só os três testes que enviam de propósito um pedido mau
+  falharam, e declaram-no com `wire_contract(tolerate=...)`. 36 canários. Gate: 4341 passed;
+  ruff, formato, pyright e lock limpos.
+- Passo 5: os 20 testes `live_api` (quatro por fornecedor) ficam preparados; não correram.
+- Passo 6 feito: `docs/llm.md`, `pricing.md`, `model-compatibility.md`, `safety.md` e `AGENTS.md`
+  com as regras da R02; corrigidos também `tools.md`, `getting-started.md`,
+  `framework-overview.md`, o quadro do `README.md`, o "Adding a provider" do `CONTRIBUTING.md` e o
+  exemplo 25 (server tool no OpenAI, agora recusada). A nota "Known issue" do Gemini fica até à
+  prova ao vivo, reescrita. Duas entradas do `CHANGELOG` que a R02 contradizia foram acertadas.
+  Achado novo: o `thinking_effort` do OpenAI sem `thinking` perde-se. Gate: 4341 passed.
+- R02 concluída, sem commits. 3886 → 4341 passed (42 live_api deselected); dívida 161 → 121;
+  `src/` −249 linhas (Python −123, TOML −126); `# noqa` em `src/` 14 → 4. Relatório final, comandos
+  ao vivo e três commits propostos no fim da ficha. Próximo: o dono revê, commita e corre as
+  verificações ao vivo; a R03 continua `todo`.
+- R02 commitada a pedido do dono, sem push: `cf2aa43` código e testes (passos 1 a 3), `a8c3eea` rede
+  do fio (passo 4, com os três marcadores do transporte) e o registo (docs, CHANGELOG, blackboard).
+  Cada árvore passa o gate sozinha (índice exportado): 4305, 4341 e 4341 passed. A decisão sobre o
+  tecto de uma falha sem `BudgetPolicy` ficou em "Por fazer" no BOARD, com pistas para o dono
+  investigar. A seguir: a R03, nesta sessão, depois de o dono a compactar.

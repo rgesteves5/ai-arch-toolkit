@@ -4,13 +4,14 @@ Server tools are executed by the LLM provider's infrastructure, not
 locally. They enable capabilities like web search and code interpretation
 without needing external API keys.
 
-Supported by Anthropic (web search) and OpenAI (web search, code execution).
+Anthropic and Gemini run web search and code execution, and Meta runs web
+search; the OpenAI (Chat Completions) and xAI adapters raise RequestError.
 """
 
 from ai_arch_toolkit import LLM
 from ai_arch_toolkit.core import web_search
 
-llm = LLM("gpt-4.1-nano")
+llm = LLM("claude-haiku-4-5")
 
 # Pass web_search() as a tool — the provider handles execution
 result = llm.complete_sync(

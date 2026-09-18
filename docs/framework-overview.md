@@ -51,7 +51,7 @@ from ai_arch_toolkit import LLM
 llm = LLM("claude-sonnet-5")  # Anthropic
 llm = LLM("gpt-4o")                    # OpenAI
 llm = LLM("gemini-3.7-flash")          # Gemini
-llm = LLM("grok-2")                    # xAI
+llm = LLM("grok-4.3")                  # xAI
 llm = LLM("muse-spark-1.3")            # Meta
 ```
 

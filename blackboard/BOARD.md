@@ -5,9 +5,14 @@
 - **Estado:** aberta em 2026-09-17. **Base:** `main` a partir do commit que abre esta frente.
   Baseline: 3070 passed, 22 deselected; ruff, formatação e pyright limpos.
 - **Plano:** `docs/internal/hardening-plan.md`. **Regras comuns:** `tasks/R00-rules.md`.
-  **Decisões:** D15–D23.
-- **R01:** commitada em `main` a pedido do dono (`a16e3f9` tools, `f95c81f` F25, `5a0ab3b` núcleo,
-  e o registo); por publicar. Cada commit passa o gate sozinho (3097, 3107 e 3886 passed).
+  **Decisões:** D15–D27.
+- **R01:** commitada e publicada em `main` a pedido do dono (`a16e3f9` tools, `f95c81f` F25,
+  `5a0ab3b` núcleo, `6206df1` registo, `b3dae3f` `temperature` da Anthropic). Cada commit passa o gate
+  sozinho (3097, 3107, 3886 e 3886 passed).
+- **R02:** concluída (Claude) e commitada em `main` a pedido do dono (`cf2aa43` código e testes,
+  `a8c3eea` rede do fio, e o registo), sem push. Cada árvore passa o gate sozinha (4305, 4341 e 4341
+  passed); 42 live_api deselected; dívida de complexidade 161 → 121. Falta o dono correr as
+  verificações ao vivo (comandos no relatório final da ficha).
 - **Como correr:** uma fase de cada vez, por ordem, cada uma num agente com contexto limpo. A fase
   seguinte só começa depois de o dono rever e commitar a anterior. Os agentes não fazem commits nem
   chamadas a fornecedores.
@@ -16,7 +21,7 @@
 |---|---|---|---|---|
 | F24 | Quatro contratos pequenos | coordenador | done | — |
 | R01 | Núcleo de chamadas: F25 (nove correcções locais), erros tipados, meter com disposições e tecto incerto, pipeline de tentativa única | Codex; Claude (continuação) | done | nada |
-| R02 | Fornecedores: ids e preços, contrato de três fases, um adaptador de cada vez (OpenAI, xAI, Gemini, Meta, Anthropic) | — | todo | R01 |
+| R02 | Fornecedores: ids e preços, contrato de três fases, um adaptador de cada vez (OpenAI, xAI, Gemini, Meta, Anthropic) | Claude | done | R01 |
 | R03 | Tools, motor de flows e dívida de manutenção | — | todo | R01, R02 |
 
 ## Frente em espera: capacidades em falta
@@ -158,6 +163,24 @@ capacidades (ver "Por fazer").
   pedido) e um probe com uma tool cujo parâmetro seja `Any` (schema sem tipo) e com `system=` +
   `system()` ao mesmo tempo — únicas mudanças desta frente que o xAI ainda não confirmou.
 - **Frente C, decisões:** fixar as da vaga 1 (C02, C06, C07, C08) antes de atribuir donos.
+- **Decidir (sem pressa, não bloqueia nada): o tecto de uma falha sem `BudgetPolicy`.** Um step com
+  `Policy(max_cost=...)` num run sem `BudgetPolicy` falha depois de uma chamada `indeterminate` (5xx
+  do OpenAI, xAI ou Meta; timeout ou queda depois do envio, em qualquer fornecedor), mesmo que o retry
+  tenha dado certo: sem controller ninguém calcula o pior caso da falha, que fica sem tecto. Com
+  `BudgetPolicy` o step passa (reprodução de 2026-09-18: gasto $0.000105, no máximo $0.0616).
+  Proposta (`FINDINGS.md`, 2026-09-18): o estimador do pior caso passa para o core e calcula sempre o
+  tecto de uma falha; sai o `FailureBoundController`. Contradiz o contrato da R01 ("sem controller não
+  há tecto"); a D20 diz "o resto fica incerto com tecto", sem condição. Pistas para investigar, de
+  memória e por confirmar: as frameworks de LLM ou não têm tecto de custo (limites de pedidos e
+  tokens: Pydantic AI `UsageLimits`, `max_turns` do OpenAI Agents SDK, `recursion_limit` do
+  LangGraph) ou contam só o custo das respostas com sucesso (orçamentos do LiteLLM), isto é, uma falha
+  custa zero; os sistemas de cobrança em tempo real reservam o pior caso antes e debitam o real
+  depois, com uma política declarada para a falha (Diameter Credit-Control, RFC 4006 e RFC 8506:
+  `Credit-Control-Failure-Handling` = `TERMINATE`, `CONTINUE` ou `RETRY_AND_TERMINATE`; a pré-
+  autorização dos cartões: cativa o máximo, cobra o real, liberta o resto). Nestes últimos é o
+  próprio sistema de medição que calcula o pior caso, seja quem for que fixa o orçamento.
+- **R02, verificação ao vivo:** comandos no relatório final de `tasks/R02-providers.md` (o do Gemini
+  decide se sai a nota "Known issue").
 - **Plano de robustez (2026-09-17):** `docs/internal/hardening-plan.md` agrupa os achados sem tarefa
   em seis causas e propõe corrigi-las antes da frente C. Um é impeditivo: qualquer chamada LLM falhada
   fica com custo desconhecido e, sob `max_cost`, nega retry, fallback e o resto do run. Falta fixar as

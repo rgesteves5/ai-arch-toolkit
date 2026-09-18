@@ -34,7 +34,7 @@ Pip works the same way. Extras:
 | `anthropic` | `anthropic>=1.0,<2`                                   |
 | `openai`    | `openai>=3.0,<4`                                      |
 | `gemini`    | `google-genai>=2.0,<3`                                |
-| `xai`       | `xai-sdk>=1.7,<2`                                     |
+| `xai`       | `xai-sdk>=1.18,<2`                                    |
 | `meta`      | `openai>=3.0,<4` (Meta ships no SDK of its own)       |
 | `graph`     | `networkx>=3.0` (required by graph + memory backends) |
 | `tokens`    | `tiktoken>=0.11` (local token counting)               |
@@ -184,11 +184,11 @@ plain text, Markdown, XML, or JSON. Validate them locally with
 | Rich stream events    | ✅        | ✅     | ✅     | ✅  | ✅   |
 | Tool / function call  | ✅        | ✅     | ✅     | ✅  | ✅ auto only |
 | Structured output     | ✅ native | ✅     | ✅     | ✅  | ✅   |
-| Multimodal (image)    | ✅        | ✅     | ✅     | ✅  | ✅   |
+| Multimodal (image)    | ✅        | ✅     | ✅     | —   | ✅   |
 | Documents (PDF, etc.) | ✅        | ✅     | ✅     | —   | ✅   |
 | Prompt caching        | ✅        | ✅     | —      | —   | ✅ automatic |
-| Extended thinking     | ✅        | ✅ effort | ✅     | ✅  | ✅ effort + summaries |
-| Server-hosted tools   | ✅ code+web | ✅ code+web | ✅ code+web | —   | ✅ web |
+| Extended thinking     | ✅ adaptive or budget | ✅ effort | ✅ level or budget | ✅ effort | ✅ effort + summaries |
+| Server-hosted tools   | ✅ code+web | —      | ✅ code+web | —   | ✅ web |
 | Batch API             | ✅        | ✅     | —      | —   | —    |
 
 ## Agent architectures

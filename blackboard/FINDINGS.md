@@ -672,3 +672,77 @@ em loopback: os sete ensaios Anthropic de `tests/integration/test_attempts_local
 o `temperature=0.0` por omissão, sem o contorno da fixture, e afirmam que ele chega ao corpo do
 pedido; antes da correcção falhavam com `TypeError`. Os testes unitários passam a ligar os kwargs à
 assinatura instalada do SDK. Falta a verificação ao vivo: não há créditos Anthropic.
+
+## 2026-09-18 · R02 (Claude)
+
+### Os resultados de batch são preçados à tarifa normal → sem tarefa
+
+`OpenAIProvider._parse_batch_response` e `AnthropicProvider.batch_results` calculam
+`Response.cost` com `_estimate_response_cost(model, usage)`, que nunca passa `is_batch=True`: o custo
+de um resultado de batch sai com a tarifa normal, o dobro da de batch nos dois fornecedores
+(`batch_input`/`batch_output` estão na tabela). Reprodução: um resultado de batch do `gpt-4o` com
+1000 tokens de entrada dá `cost == 0.0025` em vez de `0.00125`. O meter não é afectado (o batch não
+passa pelo meter). Não corrigido na R02 para não alargar o âmbito.
+
+### Um `LLM` para um modelo Grok não se constrói depois de um `asyncio.run` → sem tarefa
+
+`XAIProvider` constrói o `xai_sdk.AsyncClient` no construtor (`LoopAwareClientCache._install_client`
+chama a fábrica logo), e o canal `grpc.aio` pede `asyncio.get_event_loop()`. Num programa síncrono
+que já correu um `asyncio.run(...)`, a política ficou sem loop e `LLM("grok-4.6", api_key=...)`
+levanta `RuntimeError: There is no current event loop in thread 'MainThread'` (reproduzido: num
+processo novo constrói; depois de `asyncio.run(asyncio.sleep(0))`, rebenta). Os outros adaptadores
+não sofrem (os clientes `httpx`/`httpx2` não pedem loop). A correcção natural é construir o cliente
+só no primeiro acesso ao `_client`, mas muda o sítio onde aparecem os erros de construção dos cinco
+adaptadores: fica para decisão, fora da R02.
+
+### O adaptador xAI larga imagens que os modelos Grok aceitam → sem tarefa
+
+`_xai._user_text` avisa "xAI does not support image input" e larga a imagem, mas as páginas dos
+modelos dão `text, image → text` ao `grok-4.6`, `grok-4.5`, `grok-4.3`, `grok-4.20-*` e
+`grok-build-0.1` (https://docs.x.ai/developers/models/grok-4.6, 2026-09-18), e o SDK tem
+`chat.image(...)`. É uma funcionalidade em falta, não um erro de fio; o aviso diz mais do que é
+verdade. Fora do âmbito da R02 (catálogo e capacidades: C06).
+
+### OpenAI: `thinking_effort` sem `thinking=True` perde-se em silêncio → sem tarefa
+
+Nos outros quatro adaptadores o esforço aplica-se sozinho (D13, D25; a Anthropic manda-o em
+`output_config.effort`, o Gemini como nível ou orçamento), mas o `OpenAIProvider._reasoning` sai
+logo quando `thinking` é falso: `LLM("gpt-5.4").complete(..., thinking_effort="low")` envia o pedido
+sem `reasoning_effort` e sem aviso, e o modelo raciocina com o esforço por omissão
+(https://developers.openai.com/api/docs/models/gpt-5.2: os GPT-5 raciocinam sem pedir).
+Reprodução: `prepare(OpenAIProvider("gpt-5.4", "k"), [user("hi")], thinking_effort="low").params`
+não tem `reasoning_effort`. Encontrado ao documentar o thinking por fornecedor (passo 6); o passo
+do OpenAI já estava fechado, e alinhar muda o fio de quem hoje passa um esforço sem `thinking`:
+fica para decisão do dono. Documentado em `docs/llm.md` tal como está.
+
+## 2026-09-18 · R02 concluída (Claude): achados fechados
+
+Cada um com a prova na secção da ficha `tasks/R02-providers.md` indicada; nada foi verificado ao
+vivo (comandos no relatório final da ficha).
+
+- "Erro do adaptador a montar o pedido envenena o budget" → resolvido no passo 2 (o `prepare`
+  corre antes de qualquer admissão).
+- "`stream_events()` perde `parsed` e `response_id`", "Gemini em stream reenvia só o último chunk"
+  e "Stream sem usage fica com custo 0 conhecido" → resolvidos nos passos 2 e 3 (uma montagem;
+  `raw` com todas as partes; sem usage, custo desconhecido). O resto do C01a não mudou.
+- "Server tools no fio: config descartada e formas inválidas" → as formas ficam certas (Anthropic
+  com `name` e versões actuais; OpenAI e xAI recusam) e a config levanta `RequestError` em vez de
+  se perder; suportá-la continua no C05a.
+- "Gemini separa resultados de tools consecutivos" e "Gemini nunca junta os resultados de tools e
+  não devolve o `id`" → resolvidos no passo 3 (Gemini); a nota "Known issue" espera a prova ao vivo.
+- "`thinking=True` no Anthropic falha nos modelos actuais", "`tool_choice="required"` recusado no
+  Fable 5.1" e "Anthropic: um `user` por `tool_result`" → resolvidos no passo 3 (Anthropic).
+- "Preço do `claude-fable-5-1` herdado por prefixo", "O preço por prefixo dá preços errados a
+  modelos sem entrada" e "Regras por modelo: o ramo por omissão é o antigo" → resolvidos nos
+  passos 1 e 3 (preço por id exacto; perfis com a geração actual por omissão).
+- "Comentário do xAI desactualizado" e "xAI: `tool_choice` com nome de tool rebenta no SDK real" →
+  resolvidos no passo 3 (xAI).
+- "O Gemini muda de pilha HTTP conforme os extras instalados" e "Gemini 3:
+  `thinking_effort="xhigh"`/`"max"` só dá aviso" → resolvidos no passo 3 (Gemini).
+- "Erros de transporte a meio de um stream escapam sem mapeamento" e "Validação local do SDK dentro
+  da chamada aguardada" → resolvidos nos passos 2 e 3 (mapeador por passo do stream; marcador de
+  despacho, D24).
+- "Testes: só a Meta cobre tool calls paralelas com reenvio" → os cinco adaptadores têm o contrato
+  de conversa (`tests/test_provider_conversations.py`) e testes ao vivo preparados.
+- Continua aberto: "Um tecto por step sem `BudgetPolicy` continua a falhar depois de um 5xx" espera
+  a decisão do dono; a ficha da R02 não o incluía e não foi tocado.

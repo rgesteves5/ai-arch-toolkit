@@ -25,7 +25,7 @@ from ai_arch_toolkit import LLM
 llm = LLM("claude-sonnet-5")  # → Anthropic
 llm = LLM("gpt-4o")                    # → OpenAI
 llm = LLM("gemini-3.7-flash")          # → Gemini
-llm = LLM("grok-2")                    # → xAI
+llm = LLM("grok-4.3")                  # → xAI
 llm = LLM("muse-spark-1.3")            # → Meta
 ```
 
@@ -47,8 +47,8 @@ response = await llm.complete(messages, tools=my_tool_group)
 response = await llm.complete(messages, output_schema=MyModel)
 response.parsed  # → MyModel instance
 
-# Extended thinking (Anthropic)
-response = await llm.complete(messages, thinking=True, thinking_budget=5000)
+# Thinking (each model's rules: see "Extended thinking" below)
+response = await llm.complete(messages, thinking=True, thinking_effort="high")
 response.thinking  # → tuple of ThinkingBlock
 
 # JSON mode
@@ -116,18 +116,35 @@ billing uses delivery. The base constructor requires `delivery=`.
 
 | Error | Existing handler remains valid | Detail |
 |---|---|---|
-| `RequestError` | `ValueError` | Common request validation failed before admission (`not_sent`) |
-| `APIError` | `APIError` | Retains `status_code` and `body`; defaults to `indeterminate` |
-| `RateLimitError` | `APIError` | Retains `retry_after`; `unbilled` in this phase |
-| `TransportError` | `ConnectionError` | No usable HTTP response; defaults to `indeterminate` |
-| `ProviderTimeout` | `TimeoutError` | Provider I/O timeout; defaults to `indeterminate` |
-| `ResponseError` | `ProviderError` | An unusable successful response or stream (`indeterminate`) |
+| `RequestError` | `ValueError` | Refused before anything was sent (`not_sent`): common validation, a model rule of the adapter, or the SDK's own checks |
+| `UnpricedModelError` | `RequestError` | A metered call to a model without a price ([Pricing](pricing.md#unpriced-models-under-a-meter)) |
+| `APIError` | `APIError` | Retains `status_code` and `body`; `unbilled` or `indeterminate` by provider (below) |
+| `RateLimitError` | `APIError` | Retains `retry_after`; `unbilled` on every provider |
+| `TransportError` | `ConnectionError` | No usable HTTP response; `not_sent` when connecting failed, else `indeterminate` |
+| `ProviderTimeout` | `TimeoutError` | Provider I/O timeout; `not_sent` when connecting timed out, else `indeterminate` |
+| `ResponseError` | `ProviderError` | An unusable successful response or stream, or a failure reported without a status (`indeterminate`) |
 
 The default fallback family is `(ProviderError,)`. `RequestError` remains terminal: retrying the
 same invalid request is not a recovery. Caller cancellation propagates. After the first stream
 item is visible, both retry and fallback are disabled. `complete` delivers only its final result.
 See [failed-call cost accounting](safety.md#failed-llm-calls) for the cost table and bounded uncertainty.
-Provider-specific request construction and response parsing migrate to this error contract in R02.
+
+Each adapter builds its request before the call is admitted, so a request it refuses (an option
+the model does not take, for example) raises `RequestError` without opening a metered operation.
+No SDK, HTTP-library, or gRPC exception leaves an adapter: each maps to the types above, and the
+adapter knows whether the request reached its transport. `delivery` follows each provider's
+documented billing:
+
+| Provider | Error response | Transport failure after sending |
+|---|---|---|
+| Anthropic | `unbilled` ("failed requests aren't charged") | `indeterminate` (a client timeout is billed) |
+| Gemini | `unbilled` for 400 and 500, else `indeterminate` | `indeterminate` |
+| OpenAI, xAI, Meta | `indeterminate` (billing of errors is not documented) | `indeterminate` |
+
+A 429 is `unbilled` everywhere, and an error that arrives inside a stream is `indeterminate`.
+When a failed response reports its usage (Meta's `response.failed`), the error carries it as
+`ProviderError.usage`; `Response.attempts` records it and a meter settles the failure at that
+usage's price.
 
 ---
 
@@ -321,13 +338,13 @@ Anthropic uses native structured output (`output_config`); other providers use t
 
 ## Extended thinking
 
-Anthropic models can reason through a problem before answering:
+Models can reason through a problem before answering:
 
 ```python
 response = await llm.complete(
     "Solve this step by step: what is 127 * 389?",
     thinking=True,
-    thinking_budget=5000,  # max thinking tokens
+    thinking_effort="high",
 )
 
 for block in response.thinking:
@@ -336,14 +353,29 @@ for block in response.thinking:
 print(f"Answer: {response.text}")
 ```
 
-Meta's Muse Spark always reasons, so `thinking` does not switch reasoning on:
-`thinking_effort` (`"minimal"` to `"xhigh"`, plus `"max"` on standard `muse-spark-1.3`)
-sets its depth even without `thinking=True`, and `thinking=True` asks for reasoning
-summaries, which arrive as `Response.thinking` when Meta produces one. The raw
-reasoning stays encrypted: append `response.to_message()` to the conversation and the
-next request replays it, so a tool loop keeps its chain of thought. Reasoning tokens
-count toward `max_tokens`, so keep that budget generous. See
-[Model Compatibility](model-compatibility.md#meta) for the rest of Meta's limits.
+Three options drive it: `thinking=True` asks for thinking (and, where the provider hides it, for
+a summary to show in `Response.thinking`), `thinking_effort` sets how hard the model thinks, and
+`thinking_budget` caps thinking tokens on the models that take a budget. Each adapter applies
+them by the model's documented rules and raises `RequestError` before sending when the model
+does not take a value; a model the adapter does not know gets the rules of the provider's
+current generation.
+
+| Provider and models | `thinking=True` | `thinking_effort` | `thinking_budget` |
+|---|---|---|---|
+| Anthropic: Claude 5 family, Mythos Preview, Opus 4.8, 4.7, 4.6, Sonnet 4.6 | adaptive thinking, summarized | `low` to `max` (no `xhigh` on Mythos Preview and the 4.6 models), applies alone | ignored, with a warning |
+| Anthropic: Opus, Sonnet, Haiku 4.5 and older | a budget of 10,000 tokens | a budget (2,048, 5,000 or 10,000), turns thinking on | at least 1,024; turns thinking on |
+| OpenAI | sends `reasoning_effort` (`high` unless an effort is given); `RequestError` on a model that does not reason | only with `thinking=True`, checked per model | ignored, with a warning |
+| Gemini 3 | thought summaries, and level `high` when no effort is given | the model's thinking levels, applies alone | ignored, with a warning |
+| Gemini 2.5 | thought summaries, and a budget of 10,000 when no effort is given | a budget (2,048, 5,000 or 10,000) | within the model's documented range |
+| xAI | nothing more; `RequestError` on a model that does not reason | `reasoning_effort` where the model documents one, applies alone | ignored, with a warning |
+| Meta (Muse Spark) | reasoning summaries | `none` to `xhigh`, and `max` on standard `muse-spark-1.3`; applies alone | ignored, with a warning |
+
+On the Anthropic models that take a budget, the budget is added to `max_tokens`, so the answer
+keeps its room; elsewhere reasoning tokens count toward `max_tokens`, so keep that budget
+generous. Meta's raw reasoning stays encrypted: append `response.to_message()` to the
+conversation and the next request replays it, so a tool loop keeps its chain of thought (the
+Anthropic and Gemini adapters replay their providers' thinking signatures the same way). See
+[Model Compatibility](model-compatibility.md) for each provider's models and limits.
 
 ---
 

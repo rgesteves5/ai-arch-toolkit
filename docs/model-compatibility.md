@@ -21,6 +21,12 @@ Latest recorded full run:
 
 Generated probe artifacts are local diagnostic files and are ignored by git.
 
+The tables record that run. The text above each table gives the adapter's current rules, which
+follow each provider's documentation per model: an option a model does not take raises
+`RequestError` before anything is sent, and a model the adapter does not know gets the rules of the
+provider's current generation. `tests/integration/test_provider_hardening_live.py` holds the
+cheap owner-run checks of those rules (`pytest -m live_api -k <provider>`).
+
 ## Status Legend
 
 | Status | Meaning |
@@ -59,10 +65,14 @@ and [model pricing](https://developers.openai.com/api/docs/models/gpt-6-astra).
 
 ### Recorded live baseline
 
-OpenAI GPT-5-style and o-series models use `max_completion_tokens` instead of
-`max_tokens`. The provider translates `max_tokens` for these models. For GPT-5-style
-reasoning calls, the provider drops non-default `temperature` unless the caller explicitly
-uses `temperature=1` or `reasoning_effort="none"`.
+On `api.openai.com` every model receives `max_completion_tokens` (the provider translates
+`max_tokens`, which OpenAI deprecates and the o-series refuses); an OpenAI-compatible server
+(`base_url=`) receives `max_tokens` and no OpenAI model rule. `thinking=True` sends
+`reasoning_effort` (`thinking_effort`, else `"high"`), checked against the model's efforts, and
+drops a `temperature` other than 1 unless the effort is `"none"`. The models that do not reason
+(`gpt-4o`, `gpt-4o-mini`, `gpt-4.1*`, `gpt-4-turbo`, `gpt-4`, `gpt-3.5-turbo`) raise
+`RequestError` on `thinking=True`. Chat Completions takes function tools only: a server tool
+raises `RequestError`.
 
 | Model | Plain | Tools | Structured | JSON Mode | Stream | Thinking | Notes |
 |---|---|---|---|---|---|---|---|
@@ -78,19 +88,28 @@ uses `temperature=1` or `reasoning_effort="none"`.
 
 ## xAI
 
-Grok reasoning variants reason automatically. The framework does not send
-`thinking`, `thinking_effort`, or `reasoning_effort` to normal Grok reasoning models.
+Grok reasoning models reason on their own, so `thinking=True` sends nothing more (it raises
+`RequestError` on a model that does not reason, `grok-4.20-non-reasoning`). `thinking_effort`
+applies without it and is sent as `reasoning_effort` where the model documents one: `low` to
+`xhigh` on `grok-4.6`, `grok-4.5` (which serves `xhigh` as `high`), and newer models; `none` to
+`xhigh` on `grok-4.3` and the ids retired on 2026-05-15 that xAI now serves with it
+(`grok-4-1-fast-reasoning`, for example). `grok-4.20-reasoning` and `grok-build-0.1` take no
+effort (`RequestError`). The reasoning models refuse `stop`, `presence_penalty`, and
+`frequency_penalty`, so those raise `RequestError` too. `tool_choice` takes a tool's name. A
+server tool raises `RequestError` (the adapter does not send them yet), and images and documents
+are dropped with a warning.
 
-`grok-4.20-multi-agent` is configured with `agent_count=4`. It is intentionally limited
-to `plain` and `stream` probes because xAI documents multi-agent mode as incompatible
-with client-side custom tools and `max_tokens`.
+`grok-4.20-multi-agent` takes no client-side tools (`RequestError`) and no `max_tokens` (the
+adapter leaves it out); `thinking_effort` picks the number of agents (4 for `low` and `medium`,
+16 for `high` and `xhigh`), and `agent_count=` sets it directly. The probes ran it with
+`agent_count=4`, on `plain` and `stream` only.
 
 | Model | Plain | Tools | Structured | JSON Mode | Stream | Thinking | Notes |
 |---|---|---|---|---|---|---|---|
-| `grok-4.20-reasoning` | Pass | Pass | Pass | Pass | Pass | Auto | Explicit thinking parameters are ignored. |
+| `grok-4.20-reasoning` | Pass | Pass | Pass | Pass | Pass | Auto | `thinking_effort` raises `RequestError`. |
 | `grok-4.20-non-reasoning` | Pass | Pass | Pass | Pass | Pass | Not probed | Standard non-reasoning configuration. |
 | `grok-4.20-multi-agent` | Pass | Not probed | Not probed | Not probed | Pass | `agent_count=4` | Custom client tools are not enabled for this model. |
-| `grok-4-1-fast-reasoning` | Pass | Pass | Pass | Pass | Pass | Auto | Explicit thinking parameters are ignored. |
+| `grok-4-1-fast-reasoning` | Pass | Pass | Pass | Pass | Pass | Auto | Retired 2026-05-15; served by `grok-4.3`, which takes `thinking_effort`. |
 | `grok-4-1-fast-non-reasoning` | Pass | Pass | Pass | Pass | Pass | Not probed | Standard non-reasoning configuration. |
 
 ## Gemini
@@ -98,11 +117,27 @@ with client-side custom tools and `max_tokens`.
 Gemini probes use the current Gemini generate-content provider path. Live API-only models
 need separate provider support.
 
-> **Known issue (2026-09): Gemini and tool calls.** The "Tools" column covers a single tool call.
-> Results of *parallel* tool calls are sent back as separate `user` turns without the call `id`,
-> and after `stream()` / `stream_events()` the replayed history can drop function calls and thought
-> signatures. Multi-tool agent loops on Gemini may fail with HTTP 400. Until this is fixed, use
-> another provider for tool-calling agents.
+> **Known issue (2026-09): Gemini and tool calls — fixed in code, not yet confirmed live.** The
+> "Tools" column covers a single tool call. The adapter used to send the results of *parallel*
+> tool calls back as separate `user` turns without the call `id`, and a history replayed after
+> `stream()` / `stream_events()` could drop function calls and thought signatures, so multi-tool
+> agent loops could fail with HTTP 400. It now sends a turn's results in one `user` content, with
+> each call's `id` when Gemini gave one, and replays the model's turn as Gemini sent it. This
+> note stays until a live run confirms it
+> (`pytest tests/integration/test_provider_hardening_live.py -m live_api -k gemini`); until then,
+> prefer another provider for multi-tool agents.
+
+Thinking follows each model's documented controls. On Gemini 3, `thinking_effort` is the
+thinking level and applies without `thinking=True`: `low`, `medium`, and `high` on the 3.8 and
+3.7 Flash, 3.1 Pro, and newer models; also `minimal` on the 3.6 and 3.5 Flash, 3.5 and 3.1
+Flash-Lite, and 3 Flash; `low` and `high` on 3 Pro. `thinking=True` asks for thought summaries
+and, without an effort, thinks at `high`; a `thinking_budget` is ignored with a warning. On Gemini
+2.5, the effort becomes a thinking budget (2,048, 5,000, or 10,000 tokens), and a
+`thinking_budget` must be in the model's documented range: 128 to 32,768 on 2.5 Pro, 0 to 24,576
+on 2.5 Flash, and 0 or 512 to 24,576 on 2.5 Flash-Lite (`-1` is dynamic everywhere). The
+`web_search` and `code_execution` server tools are sent as `google_search` and `code_execution`;
+a server tool with a config raises `RequestError`. The SDK always sends through `httpx`, so it
+never re-sends a request on its own.
 
 | Model | Plain | Tools | Structured | JSON Mode | Stream | Thinking | Notes |
 |---|---|---|---|---|---|---|---|
@@ -117,7 +152,23 @@ need separate provider support.
 ## Anthropic
 
 Anthropic models use top-level `system`, `input_schema` for tools, and native
-`output_config` for structured output when the model supports it.
+`output_config` for structured output when the model supports it. `max_tokens` is required (the
+`LLM` always sends one).
+
+Thinking follows each model's documented mode. The models that think adaptively (the Claude 5
+family, Mythos Preview, Opus 4.8, 4.7, and 4.6, Sonnet 4.6) get
+`{"type": "adaptive", "display": "summarized"}` on `thinking=True`, and `thinking=False` sends
+nothing, so a model that thinks by default keeps doing so; `thinking_effort` goes in
+`output_config.effort` (`low` to `max`; no `xhigh` on Mythos Preview and the 4.6 models) and
+applies without `thinking=True`. The older models (Opus, Sonnet, and Haiku 4.5, and the Claude 4
+models before them) take a budget: an effort or a `thinking_budget` (at least 1,024 tokens) turns
+thinking on, and the budget is added to `max_tokens`. The newer models take no sampling
+parameters: their `temperature` is dropped (the `LLM` always sends one) and `top_p` or `top_k`
+raise `RequestError`; the 4.6 and older models accept them. `claude-fable-5-1` and
+`claude-mythos-5-1` refuse a forced `tool_choice` (`"required"` or a name) with `RequestError`.
+The `web_search` and `code_execution` server tools are sent as `web_search_20250305` and
+`code_execution_20250825`. A turn's tool results go back in one `user` message, and an assistant
+turn is replayed as Claude sent it, thinking signatures included.
 
 `claude-opus-4-7` rejects `temperature`; the provider drops temperature for this model.
 Its tool probe still fails because the model repeatedly returned a malformed tool call
@@ -144,19 +195,25 @@ Requests are stateless (`store: false`); nothing is kept on Meta's side.
 
 What differs from other providers:
 
-- Muse Spark always reasons. `thinking_effort` (`"minimal"`, `"low"`, `"medium"`, `"high"`,
-  `"xhigh"`, and `"max"` on standard `muse-spark-1.3`) applies without `thinking=True`;
-  `thinking=True` asks for reasoning summaries, which Meta does not produce on every call.
+- Muse Spark always reasons. `thinking_effort` (`"none"`, `"minimal"`, `"low"`, `"medium"`,
+  `"high"`, `"xhigh"`, and `"max"` on standard `muse-spark-1.3`) applies without
+  `thinking=True`; `thinking=True` asks for reasoning summaries, which Meta does not produce on
+  every call.
 - Reasoning tokens count toward `max_tokens`. A budget that is too small ends the call with
   `stop_reason == "max_output_tokens"` and little or no text.
 - `tool_choice` accepts only `"auto"`. `"none"` sends the request without tools; forcing a
-  tool (`"required"` or a name) raises `ValueError` before any call.
+  tool (`"required"` or a name) raises `RequestError` (a `ValueError`) before any call.
 - `output_schema` is sent non-strict: Meta constrains the output to the schema either way,
   while strict mode would reject a plain Pydantic schema. Recursive schemas are rejected.
-- `stop` and `logprobs` are not supported. Meta tunes the model for `temperature=1.0`; the
-  `LLM` default is `0.0`, so pass `temperature=1.0` unless you need otherwise.
+- `stop` is not supported, and `logprobs=True` raises `RequestError` (Meta answers it with a
+  400). Meta tunes the model for `temperature=1.0`; the `LLM` default is `0.0`, so pass
+  `temperature=1.0` unless you need otherwise.
 - Built-in `web_search` is supported (billed by Meta per query, so metering treats the cost
-  as unknown); `code_execution` is not. There is no batch API.
+  as unknown); `code_execution`, or a server tool with a config, raises `RequestError`. There is
+  no batch API.
+- A failure Meta reports inside a response or a stream gets the HTTP status its error table gives
+  the code; a code outside the table, or none, raises `ResponseError`. A failed response's usage
+  is kept on the error (`ProviderError.usage`) and settled by the meter.
 - Text from several assistant messages in one response (for example a note before a web
   search and the answer after it) is joined with a blank line.
 - The contributor tiers (`muse-spark-1.3-contributor`, `muse-spark-1.2-contributor`) are much
@@ -183,7 +240,7 @@ pricing entries but were not probed.
   as generally supported.
 - Revisit `claude-opus-4-7` tool calling. The current provider sends the expected schema,
   but the model returned incomplete arguments in repeated live probes.
-- Add explicit Anthropic thinking probes if Claude thinking support should be documented
-  per model.
+- Run the prepared live checks (`tests/integration/test_provider_hardening_live.py`) to confirm
+  the per-model thinking rules above against each provider; they have not run live yet.
 - Keep model support current by rerunning the full probe matrix after SDK upgrades,
   provider API changes, or inventory changes.

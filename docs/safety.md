@@ -272,14 +272,14 @@ result = flow.run_sync(state)
 `BudgetPolicy` caps (all optional, `None` = unlimited): `max_llm_calls`, `max_tool_calls`, `max_input_tokens`, `max_output_tokens`, `max_total_tokens`, `max_cost` (USD), `max_wall_s`. Two knobs shape the cost cap:
 
 - `reserve` (`"none"` default | `"strict"`) — `"strict"` reserves a worst-case token/cost hold *before* each call, including tools with a registered custom price; unknown or raising prices deny admission. `"none"` charges after the outcome (concurrent in-flight calls can overshoot a soft cap).
-- `unpriced` (`"fail_closed"` default | `"allow"`) — under a `max_cost` cap, `"fail_closed"` denies further work after an **unbounded** unknown cost (an unpriced model or provider-hosted server tool). Bounded uncertainty consumes the cap and allows work within the remaining amount. `"allow"` permits unbounded unknowns (the cap may undercount). A soft budget admits a server-tool call; its unpriced settlement then blocks subsequent work.
+- `unpriced` (`"fail_closed"` default | `"allow"`) — under a `max_cost` cap, `"fail_closed"` denies further work after an **unbounded** unknown cost (a provider-hosted server tool, or a custom pricer that fails when a call settles). A model without a price does not run under a meter at all: the call raises `UnpricedModelError` before anything is sent ([Pricing](pricing.md#unpriced-models-under-a-meter)). Bounded uncertainty consumes the cap and allows work within the remaining amount. `"allow"` permits unbounded unknowns (the cap may undercount). A soft budget admits a server-tool call; its unpriced settlement then blocks subsequent work.
 
 Enforcement happens **at the charge site**: the meter denies the operation that would breach a cap, the call never happens, and nothing is charged. The denial (`BudgetExceeded`, a neutral `AdmissionDenied`) is terminal; the owning (outermost) flow converts it to `policy_decision="budget_exceeded"` in the trace, so `flow.run()` returns a normal `FlowResult` rather than raising.
 
 How *tight* the cap is depends on the dimension:
 
 - **Call caps are hard** — `max_llm_calls` / `max_tool_calls` are checked against committed + outstanding *counts* under the meter's lock, so they are exact even under concurrent (parallel-DAG) execution: a run can never overshoot them.
-- **Token and cost caps under `reserve="none"` (the default) are soft** — a call is admitted while its token usage / cost is still unknown and only denied *after* it settles, so the total can overshoot `max_input_tokens` / `max_output_tokens` / `max_total_tokens` / `max_cost` by the combined in-flight calls. Use `reserve="strict"` to reserve a worst-case token/cost hold up front and make them hard (it fails closed on unpriced models). An unbounded (unknown) cost fails closed regardless — see `unpriced` above.
+- **Token and cost caps under `reserve="none"` (the default) are soft** — a call is admitted while its token usage / cost is still unknown and only denied *after* it settles, so the total can overshoot `max_input_tokens` / `max_output_tokens` / `max_total_tokens` / `max_cost` by the combined in-flight calls. Use `reserve="strict"` to reserve a worst-case token/cost hold up front and make them hard (it fails closed on unknown prices). An unbounded (unknown) cost fails closed regardless — see `unpriced` above.
 - **Wall-time is checked between steps**, so a single long-running step is not interrupted mid-flight (use `Policy(timeout=...)` for that).
 
 The **meter is the single source of truth** for what a run consumed — read it off the result, never by summing anything yourself:
@@ -299,17 +299,21 @@ The same `budget_policy=` works per run — `flow.run_sync(state, budget_policy=
 
 Delivery disposition determines cost independently of retry eligibility. This table is the
 failure-matrix contract for `complete`, `stream`, and `stream_events` and their sync wrappers.
-Provider-specific billing policies and preparation are completed in the provider hardening phase.
+Each adapter sets the disposition by its provider's documented billing: Anthropic does not
+charge error responses, Gemini does not charge a 400 or a 500, and a 429 is unbilled everywhere;
+where billing is not documented (OpenAI, xAI, Meta, and any error inside a stream), the error is
+`indeterminate`. An adapter also knows whether its SDK handed the request to the transport, so a
+failure before that point is `not_sent`.
 
-| Failure | Disposition in this phase | Failed-attempt cost | Automatic recovery |
+| Failure | Disposition | Failed-attempt cost | Automatic recovery |
 |---|---|---|---|
-| Common request validation (`RequestError`) | `not_sent` | Known zero; no operation opens | Fix the request; no provider retry/fallback |
+| Request refused before sending (`RequestError`: common validation, a model rule of the adapter, the SDK's own checks, `UnpricedModelError`) | `not_sent` | Known zero; no operation opens | Fix the request; no provider retry/fallback |
 | HTTP 429 (`RateLimitError`) | `unbilled` | Known zero | Retry or fallback before delivery |
-| HTTP 5xx (`APIError`, including 529) | `indeterminate` | Unknown, bounded with a budget estimator | Retry for configured statuses; fallback before delivery |
-| Other HTTP errors (`APIError`, including 4xx) | `indeterminate` | Unknown, bounded with a budget estimator | Fallback before delivery; retry only for configured statuses |
-| Connection failure (`TransportError`) | `indeterminate` | Unknown, bounded with a budget estimator | Retry or fallback before delivery |
-| Read timeout (`ProviderTimeout`) | `indeterminate` | Unknown, bounded with a budget estimator | Retry or fallback before delivery |
-| Unreadable successful response (`ResponseError`) | `indeterminate` | Unknown, bounded with a budget estimator | Fallback before delivery |
+| HTTP 5xx (`APIError`, including 529) | `unbilled` (Anthropic; Gemini's 500), else `indeterminate` | Known zero when unbilled; else unknown, bounded with a budget estimator | Retry for configured statuses; fallback before delivery |
+| Other HTTP errors (`APIError`, including 4xx) | `unbilled` (Anthropic; Gemini's 400), else `indeterminate` | Known zero when unbilled; else unknown, bounded with a budget estimator | Fallback before delivery; retry only for configured statuses |
+| Connection failure (`TransportError`) | `not_sent` while connecting, else `indeterminate` | Known zero when not sent; else unknown, bounded with a budget estimator | Retry or fallback before delivery |
+| Timeout (`ProviderTimeout`) | `not_sent` while connecting, else `indeterminate` | Known zero when not sent; else unknown, bounded with a budget estimator | Retry or fallback before delivery |
+| Unreadable successful response, or a failure reported without a status (`ResponseError`) | `indeterminate` | Unknown, bounded with a budget estimator | Fallback before delivery |
 | Caller cancellation after dispatch | `indeterminate` | Unknown, bounded with a budget estimator | Propagates; a later call or step recovery can run |
 | Error after a stream item | Error's disposition | Unknown for an indeterminate error, bounded with an estimator | Propagates; no replay after delivery |
 | Abandoned stream | `indeterminate` after dispatch | Unknown, bounded with a budget estimator | No automatic replay; a later call can run |
@@ -318,6 +322,10 @@ A stream only reserves admission when created. Rejection by middleware, closing 
 iteration, or cancellation while waiting for an inference slot releases the reservation without
 counting a call. Every **started** attempt counts, including an unbilled 429 or a `not_sent` error
 reported after start. `UsageEvent.delivery` records failed-work classification.
+
+A failed response that reports its usage (Meta's `response.failed`) carries it on the error
+(`ProviderError.usage`), and the failure is settled at that usage's price instead of an unknown
+cost.
 
 `Cost.unknown(reason, at_most=Money(...))` carries a bound separately from actual spend.
 `MeterSnapshot.cost` sums known costs; `uncertain_cost` and `uncertain_cost_count` sum/count bounded
