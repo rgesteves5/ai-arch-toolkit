@@ -8,7 +8,12 @@ from io import StringIO
 from pathlib import Path
 
 from ai_arch_toolkit.core import tool
-from ai_arch_toolkit.toolkit.tools._filesystem import clamp, read_prefix
+from ai_arch_toolkit.toolkit.tools._filesystem import (
+    _error_text,
+    _is_regular_file,
+    clamp,
+    read_prefix,
+)
 
 _DEFAULT_MAX_ROWS = 100
 _MAX_ROWS = 10_000
@@ -78,15 +83,15 @@ def csv_read(path: str, max_rows: int = _DEFAULT_MAX_ROWS) -> str:
     """
     p = Path(path).expanduser()
     try:
-        if not p.exists():
-            return f"File not found: {path}"
-        if not p.is_file():
+        if not _is_regular_file(p):
             return f"Not a file: {path}"
         text, _ = read_prefix(p, _MAX_CSV_CHARS)
+    except FileNotFoundError:
+        return f"File not found: {path}"
     except PermissionError:
         return f"Permission denied: {path}"
-    except OSError as e:
-        return f"Cannot read {path!r}: {e.strerror or e}"
+    except (OSError, ValueError) as e:
+        return f"Cannot read {path!r}: {_error_text(e)}"
     return _table(text, clamp(max_rows, 1, _MAX_ROWS))
 
 

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import errno
+from pathlib import Path
+
 import pytest
 
 from ai_arch_toolkit.core import ApprovalDecision, ApprovalRequest, ToolCall, ToolGroup
@@ -145,12 +148,15 @@ class TestBounds:
         assert len(result) < 1_000
         assert result.endswith("[Stopped at 1 results]")
 
-    def test_an_os_error_is_an_error_string(self):
-        name = "a" * 100_000
+    def test_an_os_error_is_an_error_string(self, monkeypatch):
+        def fail_stat(*args, **kwargs):
+            raise OSError(errno.ENAMETOOLONG, "File name too long")
 
-        assert read_file(name).startswith("Cannot read")
-        assert list_directory(name).startswith("Cannot list")
-        assert search_files(name, "x").startswith("Cannot search")
+        monkeypatch.setattr(Path, "stat", fail_stat)
+
+        assert read_file("too-long").startswith("Cannot read")
+        assert list_directory("too-long").startswith("Cannot list")
+        assert search_files("too-long", "x").startswith("Cannot search")
 
     @pytest.mark.parametrize("pattern", ["", "/etc/*"])
     def test_an_unusable_pattern_is_an_error_string(self, tmp_path, pattern):

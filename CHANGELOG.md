@@ -444,6 +444,8 @@ flows, manifests) needs these changes; each one is detailed below.
   - `select` or `serialize_as` on an inline template (they were ignored).
 
 ### Fixed
+- Filesystem tools preserve missing, denied, wrong-kind, and other OS error distinctions on Python
+  3.14, whose `pathlib` status-query methods now suppress every `OSError`.
 - Failed calls no longer poison enforcing scopes when their cost can be bounded. Rate-limit failures are unbilled; indeterminate failures consume a separate cap allowance, so retries, fallbacks and later steps can proceed within the remaining budget.
 - Cancellation while waiting for an inference slot releases admission without counting or pricing a call. Streams release their slot before yielding to the consumer, and abandonment closes all delegated transport iterators immediately.
 - Attempt history retains failed intermediate fallback models. Settlement still precedes async after hooks, and sync stream cleanup remains safe across threads.

@@ -245,7 +245,7 @@ class TestGemini:
         blob = gemini.Blob(data=b"x", mime_type="image/png", display_name="a.png")
         request["contents"] = [gemini.Content(role="user", parts=[gemini.Part(inline_data=blob)])]
 
-        _only(violations("GeminiProvider", request), "display_name parameter is only supported")
+        _only(violations("GeminiProvider", request), "display_name")
 
     def test_a_value_set_after_construction_is_validated(self) -> None:
         request = _gemini_request()

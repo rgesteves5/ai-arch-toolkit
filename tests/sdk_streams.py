@@ -6,13 +6,17 @@ SDKs' real event types and processing instead of hand-made namespaces.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterable, AsyncIterator, Sequence
-from typing import Any
+import inspect
+from collections.abc import AsyncIterable, AsyncIterator, Callable, Sequence
+from typing import Any, cast
 
 from anthropic import types as anthropic_types
 from anthropic.lib.streaming._messages import accumulate_event, build_events
 from anthropic.types.raw_message_delta_event import Delta
 from openai.types.chat import ChatCompletionChunk
+
+_accumulate_event = cast(Callable[..., Any], accumulate_event)
+_ACCUMULATE_HAS_JSON_BUFS = "json_bufs" in inspect.signature(accumulate_event).parameters
 
 
 class AnthropicStream:
@@ -34,9 +38,10 @@ class AnthropicStream:
     async def __aiter__(self) -> AsyncIterator[Any]:
         json_bufs: dict[int, bytes] = {}
         for raw in self._raw_events:
-            self._snapshot = accumulate_event(
-                event=raw, current_snapshot=self._snapshot, json_bufs=json_bufs
-            )
+            kwargs = {"event": raw, "current_snapshot": self._snapshot}
+            if _ACCUMULATE_HAS_JSON_BUFS:
+                kwargs["json_bufs"] = json_bufs
+            self._snapshot = _accumulate_event(**kwargs)
             for event in build_events(event=raw, message_snapshot=self._snapshot):
                 yield event
 

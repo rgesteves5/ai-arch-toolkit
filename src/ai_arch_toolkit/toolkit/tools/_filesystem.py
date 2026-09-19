@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+import stat
 from pathlib import Path
 
 from ai_arch_toolkit.core import tool
@@ -30,6 +31,21 @@ def clamp(value: int, low: int, high: int) -> int:
     return max(low, min(value, high))
 
 
+def _is_regular_file(path: Path) -> bool:
+    """Whether ``path`` is a file, without suppressing filesystem errors."""
+    return stat.S_ISREG(path.stat().st_mode)
+
+
+def _is_directory(path: Path) -> bool:
+    """Whether ``path`` is a directory, without suppressing filesystem errors."""
+    return stat.S_ISDIR(path.stat().st_mode)
+
+
+def _error_text(error: Exception) -> str:
+    """The useful OS detail, or the exception text for non-OS path errors."""
+    return str(getattr(error, "strerror", None) or error)
+
+
 @tool(
     capability="filesystem",
     risk_level="high",
@@ -45,16 +61,16 @@ def read_file(path: str, max_lines: int = _DEFAULT_MAX_LINES) -> str:
     """
     try:
         return _read_lines(Path(path).expanduser(), path, clamp(max_lines, 1, _MAX_LINES))
+    except FileNotFoundError:
+        return f"File not found: {path}"
     except PermissionError:
         return f"Permission denied: {path}"
-    except OSError as e:
-        return f"Cannot read {path!r}: {e.strerror or e}"
+    except (OSError, ValueError) as e:
+        return f"Cannot read {path!r}: {_error_text(e)}"
 
 
 def _read_lines(p: Path, path: str, max_lines: int) -> str:
-    if not p.exists():
-        return f"File not found: {path}"
-    if not p.is_file():
+    if not _is_regular_file(p):
         return f"Not a file: {path}"
     text, whole = read_prefix(p, _MAX_READ_CHARS)
     lines = text.splitlines()
@@ -81,15 +97,20 @@ def list_directory(path: str = ".", pattern: str = "*") -> str:
     """
     p = Path(path).expanduser()
     try:
-        if not p.exists():
-            return f"Directory not found: {path}"
-        if not p.is_dir():
+        if not _is_directory(p):
             return f"Not a directory: {path}"
+    except FileNotFoundError:
+        return f"Directory not found: {path}"
+    except PermissionError:
+        return f"Permission denied: {path}"
+    except (OSError, ValueError) as e:
+        return f"Cannot list {path!r}: {_error_text(e)}"
+    try:
         entries = sorted(itertools.islice(p.glob(pattern), _MAX_ENTRIES + 1))
     except PermissionError:
         return f"Permission denied: {path}"
     except OSError as e:
-        return f"Cannot list {path!r}: {e.strerror or e}"
+        return f"Cannot list {path!r}: {_error_text(e)}"
     except (ValueError, NotImplementedError) as e:
         return f"Invalid pattern {pattern!r}: {e}"
     if not entries:
@@ -127,13 +148,13 @@ def search_files(directory: str, pattern: str, max_results: int = _DEFAULT_MAX_R
     root = Path(directory).expanduser()
     max_results = clamp(max_results, 1, _MAX_RESULTS)
     try:
-        if not root.exists():
-            return f"Directory not found: {directory}"
-        if not root.is_dir():
+        if not _is_directory(root):
             return f"Not a directory: {directory}"
         matches = _matches(root, pattern.lower(), max_results)
-    except OSError as e:
-        return f"Cannot search {directory!r}: {e.strerror or e}"
+    except FileNotFoundError:
+        return f"Directory not found: {directory}"
+    except (OSError, ValueError) as e:
+        return f"Cannot search {directory!r}: {_error_text(e)}"
     if not matches:
         return f"No matches for {pattern!r} in {directory}"
     if len(matches) >= max_results:

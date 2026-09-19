@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import errno
+from pathlib import Path
+
 from ai_arch_toolkit.toolkit.tools._json import csv_read, json_extract
 
 
@@ -73,9 +76,15 @@ class TestBounds:
     def test_deeply_nested_json_is_an_error_string(self):
         assert json_extract("[" * 100_000, "a").startswith("Invalid JSON")
 
-    def test_csv_rows_are_clamped_and_os_errors_are_strings(self, tmp_path):
+    def test_csv_rows_are_clamped_and_os_errors_are_strings(self, tmp_path, monkeypatch):
         f = tmp_path / "data.csv"
         f.write_text("a,b\n1,2\n3,4\n")
 
         assert "[Showing 1 of" in csv_read(str(f), max_rows=-1)
-        assert csv_read("a" * 100_000).startswith("Cannot read")
+
+        def fail_stat(*args, **kwargs):
+            raise OSError(errno.ENAMETOOLONG, "File name too long")
+
+        monkeypatch.setattr(Path, "stat", fail_stat)
+
+        assert csv_read("too-long").startswith("Cannot read")
