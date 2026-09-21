@@ -444,6 +444,8 @@ flows, manifests) needs these changes; each one is detailed below.
   - `select` or `serialize_as` on an inline template (they were ignored).
 
 ### Fixed
+- The bundled Reflex frontend now uses Reflex 0.9.11 and a security-audited dependency lock,
+  removing current PostCSS, React Router, browser-tooling, Nano ID, and Socket.IO advisories.
 - Filesystem tools preserve missing, denied, wrong-kind, and other OS error distinctions on Python
   3.14, whose `pathlib` status-query methods now suppress every `OSError`.
 - Failed calls no longer poison enforcing scopes when their cost can be bounded. Rate-limit failures are unbilled; indeterminate failures consume a separate cap allowance, so retries, fallbacks and later steps can proceed within the remaining budget.

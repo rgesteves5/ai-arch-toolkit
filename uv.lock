@@ -146,7 +146,7 @@ requires-dist = [
     { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.3" },
     { name = "pyyaml", marker = "extra == 'prompts'", specifier = ">=6.0.2" },
     { name = "pyyaml", marker = "extra == 'yaml'", specifier = ">=6.0.2" },
-    { name = "reflex", marker = "extra == 'app'", specifier = ">=0.9.6.post1" },
+    { name = "reflex", marker = "extra == 'app'", specifier = ">=0.9.11.post1" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.16" },
     { name = "tiktoken", marker = "extra == 'tokens'", specifier = ">=0.11" },
     { name = "xai-sdk", marker = "extra == 'xai'", specifier = ">=1.18,<2" },
