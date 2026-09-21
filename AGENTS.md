@@ -32,7 +32,7 @@ uv run python examples/01_hello_world.py     # run an example (needs API keys)
 
 ## Coordination
 
-Work that spans several agents or sessions is coordinated in `blackboard/`: read `blackboard/README.md` (protocol) and `blackboard/BOARD.md` before picking up a task. `board/` is a frozen historical board.
+Work that spans several agents or sessions is coordinated in `blackboard/`: read `blackboard/README.md` (protocol) and `blackboard/BOARD.md` before picking up a task.
 
 ## Architecture
 

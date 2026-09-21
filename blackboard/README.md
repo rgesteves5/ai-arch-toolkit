@@ -3,8 +3,6 @@
 Memória de trabalho partilhada entre os agentes (e as pessoas) que trabalham neste repositório ao
 mesmo tempo ou em sessões diferentes. Lê isto antes de começares; escreve aqui enquanto trabalhas.
 
-> `board/` é o quadro congelado da reescrita dos providers (maio de 2026). Não escrevas lá.
-
 ## Ficheiros
 
 | Ficheiro | Para quê | Quem escreve |

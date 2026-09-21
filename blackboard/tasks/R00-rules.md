@@ -47,7 +47,7 @@ as entradas de `FINDINGS.md` que a tua ficha cita → o `README.md` dos protóti
   o diff e faz os commits. No fim, propõe na ficha a divisão em commits por área.
 - Chamadas a fornecedores pagos ou a qualquer host que não seja `127.0.0.1`. Não leias o `.env`. Para
   exercitar os SDKs reais usa o servidor falso dos protótipos (`adapter-phases/fakeserver.py`).
-- Tocar em `src/ai_arch_toolkit/nanope/`, `board/`, `.claude/worktrees/`, `research/`.
+- Tocar em `src/ai_arch_toolkit/nanope/`, `.claude/worktrees/`, `research/`.
 - Dependências obrigatórias novas. Extras novos só se a ficha os pedir; depois de mexer em
   dependências corre `uv lock`.
 - Inventar formas de API. Confirma no SDK instalado (`uv run python`, `inspect`) e na documentação
