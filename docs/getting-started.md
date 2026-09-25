@@ -38,7 +38,7 @@ from ai_arch_toolkit import LLM, load_prompt
 template = load_prompt("prompts/story-writer.prompt.yaml")
 rendered = template.render(genre="mystery", task="Write chapter one")
 
-llm = LLM("gpt-4.1-nano")
+llm = LLM("gpt-4.1-mini")
 response = llm.complete_sync("Begin.", system=rendered.text)
 ```
 

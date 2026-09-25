@@ -36,7 +36,7 @@ uv add "git+https://github.com/rgesteves5/ai-arch-toolkit.git#egg=ai-arch-toolki
 ```python
 from ai_arch_toolkit import LLM
 
-llm = LLM("gpt-4.1-nano")
+llm = LLM("gpt-4.1-mini")
 response = llm.complete_sync("Hello!")
 print(response.text)
 ```

@@ -10,7 +10,7 @@ from ai_arch_toolkit import LLM, load_prompt
 template = load_prompt("prompts/reviewer.prompt.yaml")
 rendered = template.render(language="Python")
 
-llm = LLM("gpt-4.1-nano")
+llm = LLM("gpt-4.1-mini")
 response = llm.complete_sync("Review this change.", system=rendered.text)
 ```
 

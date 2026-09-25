@@ -57,7 +57,8 @@ flows, manifests) needs these changes; each one is detailed below.
 - Claude Opus 5.5 (`claude-opus-5-5`), GPT-6 Sol and Luna (`gpt-6-sol`, `gpt-6-luna`), and Grok
   4.7 (`grok-4.7`), from the providers' pages on 2026-09-25: prices (with the cache, batch,
   long-context and fast rates each provider publishes), per-model request rules, and probe
-  inventory entries, not yet run live. Opus 5.5 refuses a forced `tool_choice`. Sol and Luna
+  inventory entries. Sol and Luna passed every live probe on 2026-09-25; Opus 5.5 and Grok 4.7
+  are not yet run live. Opus 5.5 refuses a forced `tool_choice`. Sol and Luna
   reason at `medium` unless sent `"none"`, the only effort at which Chat Completions takes their
   tool calls and sampling parameters: a tool call that asks for no thinking is sent at
   `reasoning_effort="none"`, tools with `thinking=True` at another effort raise `RequestError`,
@@ -458,6 +459,9 @@ flows, manifests) needs these changes; each one is detailed below.
   - `select` or `serialize_as` on an inline template (they were ignored).
 
 ### Fixed
+- Local token counting (`count_tokens_local`) uses `o200k_base` for the `gpt-4.1` family, as
+  tiktoken maps it; it used `cl100k_base`. GPT-6 keeps the default: neither OpenAI nor tiktoken
+  names its encoding.
 - Meta: `thinking_effort="none"` raises `RequestError` instead of reaching Meta, which answers it
   with a 400 (Muse Spark always reasons, https://dev.meta.ai/docs/reasoning).
 - The bundled Reflex frontend now uses Reflex 0.9.11 and a security-audited dependency lock,
@@ -712,6 +716,12 @@ flows, manifests) needs these changes; each one is detailed below.
   docstring now warns that rollouts re-run their tools, so tool side effects repeat.
 
 ### Removed
+- The prices and per-model rules of the OpenAI models shut down by 2026-10-23
+  (https://developers.openai.com/api/docs/deprecations): `gpt-3.5-turbo`, `gpt-4`, `gpt-4-turbo`,
+  `gpt-4.1-nano`, `o1`, `o1-pro`, `o3-mini` and `o4-mini`, with their snapshots, and
+  `gpt-3.5-turbo-1106` (2026-09-28). Under a `MeterScope` they now raise `UnpricedModelError`;
+  `gpt-4o-2024-05-13` keeps its own tariff until its shutdown, so it is not priced as `gpt-4o`.
+  The examples, docs, and live tests use `gpt-4.1-mini` where they used `gpt-4.1-nano`.
 - **The legacy `core._budget` module** (`BudgetState`, its cooperative `BudgetPolicy`). Budgets now live in `toolkit.budget` and enforce hard at the charge site rather than by cooperative counter-checking as steps record usage. `BudgetPolicy.max_wall_time` is now `max_wall_s`; the `strict_cost` / `allow_unpriced` flags are now the `reserve` / `unpriced` knobs. `BudgetExceeded` keeps its `.limit` / `.maximum` / `.to_dict()` surface.
 
 ## Historical log

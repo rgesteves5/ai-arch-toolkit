@@ -77,9 +77,15 @@ tokens), and fast pricing. They take efforts `none` to `max` (no `minimal`) and 
   needs the Responses API);
 - drops the sampling parameters whenever the model reasons.
 
-Their probes are in the inventory but have **not been run live**. See the model pages for
+Both passed every probe live on 2026-09-25 (`scripts/probe_models.py --suite full`, report
+`20260925T013106Z`). See the model pages for
 [Sol](https://developers.openai.com/api/docs/models/gpt-6-sol) and
 [Luna](https://developers.openai.com/api/docs/models/gpt-6-luna).
+
+| Model | Plain | Tools | Structured | JSON Mode | Stream | Thinking | Notes |
+|---|---|---|---|---|---|---|---|
+| `gpt-6-sol` | Pass | Pass | Pass | Pass | Pass | Pass | Tool calls sent at `none`; `thinking_effort="low"` in probes. |
+| `gpt-6-luna` | Pass | Pass | Pass | Pass | Pass | Pass | Tool calls sent at `none`; `thinking_effort="low"` in probes. |
 
 ### Recorded live baseline
 
@@ -88,9 +94,12 @@ On `api.openai.com` every model receives `max_completion_tokens` (the provider t
 (`base_url=`) receives `max_tokens` and no OpenAI model rule. `thinking=True` sends
 `reasoning_effort` (`thinking_effort`, else `"high"`), checked against the model's efforts, and
 drops a `temperature` other than 1 unless the effort is `"none"`. The models that do not reason
-(`gpt-4o`, `gpt-4o-mini`, `gpt-4.1*`, `gpt-4-turbo`, `gpt-4`, `gpt-3.5-turbo`) raise
-`RequestError` on `thinking=True`. Chat Completions takes function tools only: a server tool
-raises `RequestError`. From GPT-5.4 on it takes tool calls only at the `none` effort
+(`gpt-4o`, `gpt-4o-mini`, `gpt-4.1`, `gpt-4.1-mini`) raise `RequestError` on `thinking=True`.
+The models OpenAI shuts down by 2026-10-23 (`gpt-3.5-turbo`, `gpt-4`, `gpt-4-turbo`,
+`gpt-4.1-nano`, `o1`, `o1-pro`, `o3-mini`, `o4-mini`) have no price or rules here any more
+([deprecations](https://developers.openai.com/api/docs/deprecations)). Chat Completions takes
+function tools only: a server tool raises `RequestError`. From GPT-5.4 on it takes tool calls
+only at the `none` effort
 ([migration guide](https://developers.openai.com/api/docs/guides/migrate-to-responses)): tools with
 `thinking=True` raise `RequestError` unless `thinking_effort="none"`, while the earlier reasoning
 models (`gpt-5` to `gpt-5.3` and the o-series) take them at any effort.

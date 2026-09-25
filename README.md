@@ -61,7 +61,7 @@ keys are set, `GOOGLE_API_KEY` wins.
 ```python
 from ai_arch_toolkit import LLM
 
-llm = LLM("gpt-4.1-nano")
+llm = LLM("gpt-4.1-mini")
 response = llm.complete_sync("What is the capital of France? Reply in one sentence.")
 
 print(response.text)
@@ -74,7 +74,7 @@ print(f"Cost: ${response.cost:.6f}")
 ```python
 from ai_arch_toolkit import LLM
 
-llm = LLM("gpt-4.1-nano")
+llm = LLM("gpt-4.1-mini")
 stream = llm.stream_sync("Explain photosynthesis in three sentences.")
 
 for chunk in stream:
@@ -106,7 +106,7 @@ def multiply(a: float, b: float) -> str:
 
 
 tools = ToolGroup(multiply)
-llm = LLM("gpt-4.1-nano")
+llm = LLM("gpt-4.1-mini")
 messages = [{"role": "user", "content": "What is 42 * 17?"}]
 
 response = llm.complete_sync(messages, tools=tools)
@@ -128,7 +128,7 @@ from ai_arch_toolkit import LLM, ToolGroup
 from ai_arch_toolkit.toolkit.agents import Agent, ReasoningSpec
 from ai_arch_toolkit.toolkit.tools import geocode, get_weather
 
-llm = LLM("gpt-4.1-nano")
+llm = LLM("gpt-4.1-mini")
 agent = Agent(ReasoningSpec(strategy="react"), llm, ToolGroup(get_weather, geocode))
 result = agent.run_sync("Weather and coordinates of Tokyo?")
 
@@ -151,7 +151,7 @@ from ai_arch_toolkit import LLM, State, ToolGroup
 from ai_arch_toolkit.toolkit.agents import react_flow, react_initial_state
 from ai_arch_toolkit.toolkit.tools import geocode, get_weather
 
-llm = LLM("gpt-4.1-nano")
+llm = LLM("gpt-4.1-mini")
 flow = react_flow(llm, ToolGroup(get_weather, geocode), max_iterations=5)
 state = State(operational=react_initial_state("Weather and coordinates of Tokyo?"))
 result = flow.run_sync(state)
