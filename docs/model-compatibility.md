@@ -63,6 +63,24 @@ Chat Completions adapter. Astra therefore cannot run tool-using agents here yet.
 See the [official Astra guide](https://developers.openai.com/api/docs/guides/latest-model)
 and [model pricing](https://developers.openai.com/api/docs/models/gpt-6-astra).
 
+### GPT-6 Sol and Luna (added 2026-09-25)
+
+The GPT-6 family is Astra, Sol, and Luna; Terra is a GPT-5.6 tier (`gpt-5.6-terra`). `gpt-6-sol`
+and `gpt-6-luna` are registered with standard, cached, batch, long-context (above 272K input
+tokens), and fast pricing. They take efforts `none` to `max` (no `minimal`) and reason at
+`medium` when no effort is sent. Chat Completions takes their tool calls and sampling parameters
+(`temperature`, `top_p`, logprobs) only at `none`, so the adapter:
+
+- sends a tool call that asks for no thinking at `reasoning_effort="none"`, which keeps the
+  sampling parameters;
+- raises `RequestError` for tools with `thinking=True` at another effort (reasoning with tools
+  needs the Responses API);
+- drops the sampling parameters whenever the model reasons.
+
+Their probes are in the inventory but have **not been run live**. See the model pages for
+[Sol](https://developers.openai.com/api/docs/models/gpt-6-sol) and
+[Luna](https://developers.openai.com/api/docs/models/gpt-6-luna).
+
 ### Recorded live baseline
 
 On `api.openai.com` every model receives `max_completion_tokens` (the provider translates
@@ -72,7 +90,10 @@ On `api.openai.com` every model receives `max_completion_tokens` (the provider t
 drops a `temperature` other than 1 unless the effort is `"none"`. The models that do not reason
 (`gpt-4o`, `gpt-4o-mini`, `gpt-4.1*`, `gpt-4-turbo`, `gpt-4`, `gpt-3.5-turbo`) raise
 `RequestError` on `thinking=True`. Chat Completions takes function tools only: a server tool
-raises `RequestError`.
+raises `RequestError`. From GPT-5.4 on it takes tool calls only at the `none` effort
+([migration guide](https://developers.openai.com/api/docs/guides/migrate-to-responses)): tools with
+`thinking=True` raise `RequestError` unless `thinking_effort="none"`, while the earlier reasoning
+models (`gpt-5` to `gpt-5.3` and the o-series) take them at any effort.
 
 | Model | Plain | Tools | Structured | JSON Mode | Stream | Thinking | Notes |
 |---|---|---|---|---|---|---|---|
@@ -91,8 +112,8 @@ raises `RequestError`.
 Grok reasoning models reason on their own, so `thinking=True` sends nothing more (it raises
 `RequestError` on a model that does not reason, `grok-4.20-non-reasoning`). `thinking_effort`
 applies without it and is sent as `reasoning_effort` where the model documents one: `low` to
-`xhigh` on `grok-4.6`, `grok-4.5` (which serves `xhigh` as `high`), and newer models; `none` to
-`xhigh` on `grok-4.3` and the ids retired on 2026-05-15 that xAI now serves with it
+`xhigh` on `grok-4.7`, `grok-4.6`, `grok-4.5` (which serves `xhigh` as `high`), and newer models;
+`none` to `xhigh` on `grok-4.3` and the ids retired on 2026-05-15 that xAI now serves with it
 (`grok-4-1-fast-reasoning`, for example). `grok-4.20-reasoning` and `grok-build-0.1` take no
 effort (`RequestError`). The reasoning models refuse `stop`, `presence_penalty`, and
 `frequency_penalty`, so those raise `RequestError` too. `tool_choice` takes a tool's name. A
@@ -103,6 +124,11 @@ are dropped with a warning.
 adapter leaves it out); `thinking_effort` picks the number of agents (4 for `low` and `medium`,
 16 for `high` and `xhigh`), and `agent_count=` sets it directly. The probes ran it with
 `agent_count=4`, on `plain` and `stream` only.
+
+`grok-4.7` (added 2026-09-25) costs $2 input and $6 output per million tokens, and $4 and $12 for
+the whole request once the prompt reaches 200k tokens; it has no Batch API. It follows the
+current generation's rules above. Grok 4.7 Fast is not on the API. Its probe is in the inventory
+but has **not been run live** ([model page](https://docs.x.ai/developers/models/grok-4.7)).
 
 | Model | Plain | Tools | Structured | JSON Mode | Stream | Thinking | Notes |
 |---|---|---|---|---|---|---|---|
@@ -151,6 +177,18 @@ never re-sends a request on its own.
 
 ## Anthropic
 
+### Claude Opus 5.5 (added 2026-09-25)
+
+`claude-opus-5-5` is registered with standard, cached, batch, and fast pricing ($4 input and $20
+output per million tokens; cache reads cost $0.20, 5% of input). It always thinks: `thinking=False`
+sends nothing and the model thinks anyway, and its thinking counts toward `max_tokens`, so leave
+room for it. Its effort defaults to `medium`, one level below Opus 5: pass `thinking_effort`
+(`low` to `max`) to choose another. It takes no sampling parameters and refuses a forced
+`tool_choice` with `RequestError`. Its probes are in the inventory but have **not been run live**.
+See the [migration guide](https://platform.claude.com/docs/en/models/opus-5-5/migration-guide).
+
+### Recorded live baseline
+
 Anthropic models use top-level `system`, `input_schema` for tools, and native
 `output_config` for structured output when the model supports it. `max_tokens` is required (the
 `LLM` always sends one).
@@ -164,8 +202,9 @@ applies without `thinking=True`. The older models (Opus, Sonnet, and Haiku 4.5, 
 models before them) take a budget: an effort or a `thinking_budget` (at least 1,024 tokens) turns
 thinking on, and the budget is added to `max_tokens`. The newer models take no sampling
 parameters: their `temperature` is dropped (the `LLM` always sends one) and `top_p` or `top_k`
-raise `RequestError`; the 4.6 and older models accept them. `claude-fable-5-1` and
-`claude-mythos-5-1` refuse a forced `tool_choice` (`"required"` or a name) with `RequestError`.
+raise `RequestError`; the 4.6 and older models accept them. `claude-opus-5-5`,
+`claude-fable-5-1`, and `claude-mythos-5-1` refuse a forced `tool_choice` (`"required"` or a name)
+with `RequestError`.
 The `web_search` and `code_execution` server tools are sent as `web_search_20250305` and
 `code_execution_20250825`. A turn's tool results go back in one `user` message, and an assistant
 turn is replayed as Claude sent it, thinking signatures included.
@@ -195,10 +234,10 @@ Requests are stateless (`store: false`); nothing is kept on Meta's side.
 
 What differs from other providers:
 
-- Muse Spark always reasons. `thinking_effort` (`"none"`, `"minimal"`, `"low"`, `"medium"`,
-  `"high"`, `"xhigh"`, and `"max"` on standard `muse-spark-1.3`) applies without
-  `thinking=True`; `thinking=True` asks for reasoning summaries, which Meta does not produce on
-  every call.
+- Muse Spark always reasons. `thinking_effort` (`"minimal"`, `"low"`, `"medium"`, `"high"`,
+  `"xhigh"`, and `"max"` on standard `muse-spark-1.3`) applies without `thinking=True`;
+  `"none"` raises `RequestError`, since Meta answers it with a 400. `thinking=True` asks for
+  reasoning summaries, which Meta does not produce on every call.
 - Reasoning tokens count toward `max_tokens`. A budget that is too small ends the call with
   `stop_reason == "max_output_tokens"` and little or no text.
 - `tool_choice` accepts only `"auto"`. `"none"` sends the request without tools; forcing a

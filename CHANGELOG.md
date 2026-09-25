@@ -54,6 +54,15 @@ flows, manifests) needs these changes; each one is detailed below.
   - `select` or `serialize_as` on an inline template.
 
 ### Added
+- Claude Opus 5.5 (`claude-opus-5-5`), GPT-6 Sol and Luna (`gpt-6-sol`, `gpt-6-luna`), and Grok
+  4.7 (`grok-4.7`), from the providers' pages on 2026-09-25: prices (with the cache, batch,
+  long-context and fast rates each provider publishes), per-model request rules, and probe
+  inventory entries, not yet run live. Opus 5.5 refuses a forced `tool_choice`. Sol and Luna
+  reason at `medium` unless sent `"none"`, the only effort at which Chat Completions takes their
+  tool calls and sampling parameters: a tool call that asks for no thinking is sent at
+  `reasoning_effort="none"`, tools with `thinking=True` at another effort raise `RequestError`,
+  and sampling parameters are dropped while they reason. There is no GPT-6 Terra: Terra is the
+  GPT-5.6 tier `gpt-5.6-terra`.
 - `UnpricedModelError`, and prices for `gpt-4o-2024-05-13` and `gpt-3.5-turbo-1106` (snapshots
   with a tariff of their own), `gpt-5.5-cyber`, and `gpt-5.1` (at `gpt-5`'s rates), from
   OpenAI's pricing page on 2026-09-18.
@@ -164,6 +173,11 @@ flows, manifests) needs these changes; each one is detailed below.
   [docs/agents.md](docs/agents.md#file-backed-agent-manifests).
 
 ### Changed
+- OpenAI, GPT-5.4 and later: tools with `thinking=True` at an effort other than `"none"` raise
+  `RequestError` before sending, since Chat Completions takes their tool calls only at `"none"`
+  (https://developers.openai.com/api/docs/guides/migrate-to-responses). The request used to reach
+  OpenAI and fail there. The earlier reasoning models (`gpt-5` to `gpt-5.3`, the o-series) still
+  take tools at any effort.
 - **Breaking: prices match a model id exactly.** A model id is priced by its own entry or as a
   dated snapshot of one (`claude-haiku-4-5-20251001`, `gpt-4o-2024-08-06`, `grok-4-0709`,
   `-latest`). A variant no longer inherits the entry its name starts with: `o3-pro`,
@@ -444,6 +458,8 @@ flows, manifests) needs these changes; each one is detailed below.
   - `select` or `serialize_as` on an inline template (they were ignored).
 
 ### Fixed
+- Meta: `thinking_effort="none"` raises `RequestError` instead of reaching Meta, which answers it
+  with a 400 (Muse Spark always reasons, https://dev.meta.ai/docs/reasoning).
 - The bundled Reflex frontend now uses Reflex 0.9.11 and a security-audited dependency lock,
   removing current PostCSS, React Router, browser-tooling, Nano ID, and Socket.IO advisories.
 - Filesystem tools preserve missing, denied, wrong-kind, and other OS error distinctions on Python

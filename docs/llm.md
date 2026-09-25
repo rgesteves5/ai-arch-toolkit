@@ -368,7 +368,13 @@ current generation.
 | Gemini 3 | thought summaries, and level `high` when no effort is given | the model's thinking levels, applies alone | ignored, with a warning |
 | Gemini 2.5 | thought summaries, and a budget of 10,000 when no effort is given | a budget (2,048, 5,000 or 10,000) | within the model's documented range |
 | xAI | nothing more; `RequestError` on a model that does not reason | `reasoning_effort` where the model documents one, applies alone | ignored, with a warning |
-| Meta (Muse Spark) | reasoning summaries | `none` to `xhigh`, and `max` on standard `muse-spark-1.3`; applies alone | ignored, with a warning |
+| Meta (Muse Spark) | reasoning summaries | `minimal` to `xhigh`, and `max` on standard `muse-spark-1.3`; applies alone | ignored, with a warning |
+
+From GPT-5.4 on, OpenAI's Chat Completions takes tool calls only at the `"none"` effort: with
+tools, `thinking=True` raises `RequestError` unless `thinking_effort="none"` (reasoning with tools
+needs the Responses API). GPT-6 Sol and Luna reason at `medium` when no effort is sent, so a tool
+call that asks for no thinking is sent at `"none"`; GPT-6 Astra takes no `"none"` and calls no
+tools here.
 
 On the Anthropic models that take a budget, the budget is added to `max_tokens`, so the answer
 keeps its room; elsewhere reasoning tokens count toward `max_tokens`, so keep that budget
