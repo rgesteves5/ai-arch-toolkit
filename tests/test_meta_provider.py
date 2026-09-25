@@ -406,12 +406,14 @@ class TestBuildRequest:
             ("muse-spark-1.4", "max", True),  # a newer model gets every effort
             ("muse-spark-1.3-contributor", "max", False),
             ("muse-spark-1.2", "max", False),
-            ("muse-spark-1.1", "none", True),
+            ("muse-spark-1.1", "minimal", True),
+            ("muse-spark-1.3", "none", False),
             ("muse-spark-1.3", "turbo", False),
         ],
     )
     def test_the_effort_must_be_one_the_model_takes(self, model, effort, sent):
-        # "max" is for standard-tier muse-spark-1.3 only (https://dev.meta.ai/docs/reasoning).
+        # "max" is for standard-tier muse-spark-1.3 only, and "none" returns HTTP 400 on every
+        # Muse Spark model (https://dev.meta.ai/docs/reasoning).
         provider = MetaProvider(model, "test-key")
         if sent:
             reasoning = prepare(provider, [USER], thinking_effort=effort).params["reasoning"]

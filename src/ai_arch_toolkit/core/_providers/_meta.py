@@ -102,7 +102,8 @@ _FORWARDED = frozenset(
 
 # Muse Spark's reasoning efforts (https://dev.meta.ai/docs/reasoning): "max" only on the standard
 # tier of muse-spark-1.3, not on contributor-tier or older models; a newer model gets them all.
-_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high", "xhigh", "max"})
+# "none" is not among them: Muse Spark always reasons and answers it with a 400.
+_EFFORTS = frozenset({"minimal", "low", "medium", "high", "xhigh", "max"})
 _PROFILES: dict[str, frozenset[str]] = dict.fromkeys(
     (
         "muse-spark-1.3-contributor",
