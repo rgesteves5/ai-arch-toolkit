@@ -134,7 +134,7 @@ class _Profile:
     multi_agent: bool = False
 
 
-_CURRENT = _Profile()  # grok-4.6, grok-4.5 (it serves xhigh as high), and any newer model
+_CURRENT = _Profile()  # grok-4.7, grok-4.6, grok-4.5 (it serves xhigh as high), newer models
 _GROK_4_3 = _Profile(efforts=_EFFORTS | {"none"})
 _AUTO = _Profile(efforts=frozenset())  # reasons with no documented effort
 _PLAIN = _Profile(efforts=frozenset(), reasons=False)

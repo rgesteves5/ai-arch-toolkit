@@ -1,6 +1,7 @@
 # Default pricing table — USD per 1M tokens
 # Last updated: 2026-08-29 (verified against each provider's official catalog);
-# Meta Muse Spark added 2026-09-13.
+# Meta Muse Spark added 2026-09-13; Claude Opus 5.5, GPT-6 Sol and Luna, and Grok 4.7 added
+# 2026-09-25.
 # Override with: pricing.load("your_file.toml") or pricing.register(...)
 # Keys are exact model ids. A dated snapshot (-20251001, -2024-08-06, @20251101, -0709, -001,
 # -latest) takes the price of the id it snapshots, unless it has an entry of its own. `aliases`
@@ -38,6 +39,23 @@ batch_input = 5.0
 batch_output = 25.0
 batch_cache_write = 6.25
 batch_cache_read = 0.125
+
+# Verified 2026-09-25: https://platform.claude.com/docs/en/about-claude/pricing
+# Cache reads cost 0.05x input. Fast mode (Claude API only) is 2x the standard rates, and the
+# caching multipliers apply on top of it.
+[claude-opus-5-5]
+input = 4.0
+output = 20.0
+cache_write = 5.0
+cache_read = 0.20
+batch_input = 2.0
+batch_output = 10.0
+batch_cache_write = 2.50
+batch_cache_read = 0.10
+fast_input = 8.0
+fast_output = 40.0
+fast_cache_write = 10.0
+fast_cache_read = 0.40
 
 # Opus 5, Sonnet 5, and Fable/Mythos 5 ship with full 1M context at standard
 # pricing (no long-context tier). Fast mode (Opus 5 only) is 2x standard rates.
@@ -226,6 +244,63 @@ fast_long_context_input = 40
 fast_long_context_output = 150
 fast_long_context_cache_write = 50
 fast_long_context_cache_read = 4
+
+# GPT-6 Sol and Luna — verified 2026-09-25. Above 272K input tokens the whole request costs 2x
+# input and cache rates and 1.5x output; Batch and Flex are 50% of Standard; Fast mode is 2x.
+# Source: https://developers.openai.com/api/docs/models/gpt-6-sol and .../gpt-6-luna
+["gpt-6-sol"]
+input = 2.0
+output = 10.0
+cache_write = 2.50
+cache_read = 0.20
+batch_input = 1.0
+batch_output = 5.0
+batch_cache_write = 1.25
+batch_cache_read = 0.10
+long_context_threshold = 272_000
+long_context_input = 4.0
+long_context_output = 15.0
+long_context_cache_write = 5.0
+long_context_cache_read = 0.40
+batch_long_context_input = 2.0
+batch_long_context_output = 7.50
+batch_long_context_cache_write = 2.50
+batch_long_context_cache_read = 0.20
+fast_input = 4.0
+fast_output = 20.0
+fast_cache_write = 5.0
+fast_cache_read = 0.40
+fast_long_context_input = 8.0
+fast_long_context_output = 30.0
+fast_long_context_cache_write = 10.0
+fast_long_context_cache_read = 0.80
+
+["gpt-6-luna"]
+input = 0.10
+output = 0.50
+cache_write = 0.125
+cache_read = 0.010
+batch_input = 0.05
+batch_output = 0.25
+batch_cache_write = 0.0625
+batch_cache_read = 0.005
+long_context_threshold = 272_000
+long_context_input = 0.20
+long_context_output = 0.75
+long_context_cache_write = 0.25
+long_context_cache_read = 0.020
+batch_long_context_input = 0.10
+batch_long_context_output = 0.375
+batch_long_context_cache_write = 0.125
+batch_long_context_cache_read = 0.010
+fast_input = 0.20
+fast_output = 1.00
+fast_cache_write = 0.25
+fast_cache_read = 0.020
+fast_long_context_input = 0.40
+fast_long_context_output = 1.50
+fast_long_context_cache_write = 0.50
+fast_long_context_cache_read = 0.040
 
 # ── GPT-5.6 family (sol > terra > luna capability tiers) ──
 
@@ -741,6 +816,18 @@ batch_cache_read = 0.005
 # the long_context rate at or above it. grok-2 was retired ("model not found")
 # and is intentionally absent.
 # ═══════════════════════════════════════════════════════════════════
+
+# Verified 2026-09-25: https://docs.x.ai/developers/models/grok-4.7 (no Batch API). Grok 4.7
+# Fast is not on the API (Cursor and Grok Build only).
+["grok-4.7"]
+input = 2.0
+output = 6.0
+cache_read = 0.50
+long_context_threshold = 200_000
+long_context_inclusive = true
+long_context_input = 4.0
+long_context_output = 12.0
+long_context_cache_read = 1.0
 
 ["grok-4.6"]
 input = 2.0

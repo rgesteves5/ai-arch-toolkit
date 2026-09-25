@@ -1105,6 +1105,7 @@ class TestContentToSdk:
 
 HI = [{"role": "user", "content": "Hi"}]
 ADAPTIVE = (
+    "claude-opus-5-5",
     "claude-fable-5-1",
     "claude-fable-5",
     "claude-opus-5",
@@ -1123,7 +1124,13 @@ EXTENDED = (
     "claude-opus-4-1",
     "claude-sonnet-4-20250514",
 )
-NO_SAMPLING = ("claude-fable-5-1", "claude-opus-5", "claude-sonnet-5", "claude-opus-4-7")
+NO_SAMPLING = (
+    "claude-opus-5-5",
+    "claude-fable-5-1",
+    "claude-opus-5",
+    "claude-sonnet-5",
+    "claude-opus-4-7",
+)
 
 
 def _params(model: str, messages: list[dict] | None = None, **kwargs) -> dict:
@@ -1149,7 +1156,9 @@ class TestThinkingByModel:
     def test_thinking_false_sends_nothing_where_thinking_may_be_on(self, model):
         assert "thinking" not in _params(model)
 
-    @pytest.mark.parametrize("model", ["claude-opus-5", "claude-fable-5-1", "claude-sonnet-5"])
+    @pytest.mark.parametrize(
+        "model", ["claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5"]
+    )
     def test_the_effort_applies_on_its_own_and_merges_with_the_format(self, model):
         assert _params(model, thinking_effort="xhigh")["output_config"] == {"effort": "xhigh"}
         schema = OutputSchema(name="P", schema={"type": "object"})
@@ -1239,15 +1248,16 @@ WEATHER_TOOL = {"name": "get_weather", "description": "d", "input_schema": {"typ
 class TestToolChoiceAndServerTools:
     TOOLS = (WEATHER_TOOL,)
 
-    @pytest.mark.parametrize("model", ["claude-fable-5-1", "claude-mythos-5-1"])
+    @pytest.mark.parametrize("model", ["claude-opus-5-5", "claude-fable-5-1", "claude-mythos-5-1"])
     @pytest.mark.parametrize("choice", ["required", "get_weather"])
     def test_forced_tool_use_is_refused_where_the_api_refuses_it(self, model, choice):
         # https://platform.claude.com/docs/en/api/errors#forced-tool-use-not-supported
         assert "tool_choice" in _refused(model, tools=list(self.TOOLS), tool_choice=choice)
 
+    @pytest.mark.parametrize("model", ["claude-opus-5-5", "claude-fable-5-1"])
     @pytest.mark.parametrize("choice", ["auto", "none"])
-    def test_auto_and_none_stay_open_on_fable_5_1(self, choice):
-        params = _params("claude-fable-5-1", tools=list(self.TOOLS), tool_choice=choice)
+    def test_auto_and_none_stay_open_where_forcing_is_refused(self, model, choice):
+        params = _params(model, tools=list(self.TOOLS), tool_choice=choice)
         assert params["tool_choice"] == {"type": choice}
 
     def test_other_models_take_a_forced_tool(self):

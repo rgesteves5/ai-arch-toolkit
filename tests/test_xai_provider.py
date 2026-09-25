@@ -348,8 +348,8 @@ class TestRequest:
         )
 
 
-# Documented efforts per model (https://docs.x.ai/developers/models/<id>, 2026-09-18).
-CURRENT = ("grok-4.6", "grok-4.5", "grok-4.7")  # grok-4.7: a model newer than the table
+# Documented efforts per model (https://docs.x.ai/developers/models/<id>, 2026-09-25).
+CURRENT = ("grok-4.7", "grok-4.6", "grok-4.5", "grok-4.8")  # grok-4.8: newer than the table
 GROK_4_3 = ("grok-4.3", "grok-4.3-latest", "grok-4-1-fast-reasoning", "grok-4-0709")
 AUTO = ("grok-4.20-reasoning", "grok-4.20-0309-reasoning", "grok-build-0.1", "grok-code-fast-1")
 PLAIN = ("grok-4.20-non-reasoning", "grok-4.20-0309-non-reasoning", "grok-3")

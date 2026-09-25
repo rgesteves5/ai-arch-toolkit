@@ -112,27 +112,67 @@ class _Profile:
     ``temperature`` (the GPT-5 models refuse another, live probe of 2026-04-28 in
     ``scripts/model_probe_notes.md``); ``refused`` raises for a model that does not reason;
     ``passthrough`` applies no OpenAI rule (another server).
+
+    ``tools_while_reasoning`` and ``sampling_while_reasoning``: the model takes tool calls, and
+    ``temperature``, ``top_p`` and logprobs, at an effort other than ``"none"``. From GPT-5.4 on,
+    Chat Completions takes tool calls only at ``"none"``
+    (https://developers.openai.com/api/docs/guides/migrate-to-responses), and the GPT-6 models
+    take sampling parameters only there (https://developers.openai.com/api/docs/guides/latest-model).
+    ``default_effort``: the effort the model reasons at when the request sends none, where its
+    page gives one; a model that takes no ``"none"`` always reasons.
     """
 
     thinking: Literal["reasoning", "refused", "passthrough"] = "reasoning"
-    sampling: bool = True  # temperature, top_p, logprobs
     efforts: frozenset[str] = _EFFORTS
-    tools: bool = True
+    tools_while_reasoning: bool = False
+    sampling_while_reasoning: bool = True
+    default_effort: str | None = None
 
 
-_CURRENT = _Profile()
+_CURRENT = _Profile()  # GPT-5.4 and later
+_EARLIER = _Profile(tools_while_reasoning=True)  # the reasoning models before GPT-5.4
 _LEGACY = _Profile(thinking="refused")
-_COMPATIBLE = _Profile(thinking="passthrough")
-# https://developers.openai.com/api/docs/guides/latest-model: no sampling or logprobs, no
-# "none" (nor "minimal") effort, and tool calling only through the Responses API.
+_COMPATIBLE = _Profile(thinking="passthrough", tools_while_reasoning=True)
+# No "none" (nor "minimal") effort, so Astra always reasons: no sampling, and tool calls only
+# through the Responses API (https://developers.openai.com/api/docs/models/gpt-6-astra).
 _ASTRA = _Profile(
-    sampling=False, efforts=frozenset({"low", "medium", "high", "xhigh", "max"}), tools=False
+    efforts=frozenset({"low", "medium", "high", "xhigh", "max"}), sampling_while_reasoning=False
+)
+# Sol and Luna take "none" and reason at "medium" when the request sends no effort
+# (https://developers.openai.com/api/docs/models/gpt-6-sol and .../gpt-6-luna).
+_SOL_LUNA = _Profile(
+    efforts=frozenset({"none", "low", "medium", "high", "xhigh", "max"}),
+    sampling_while_reasoning=False,
+    default_effort="medium",
 )
 
-# The families before the reasoning generation, a closed list: a model not listed (a new one)
-# gets the current generation's rules. https://developers.openai.com/api/docs/models/gpt-4o
+# The families that differ from the current generation, a closed list: a model not listed (a new
+# one) gets the current generation's rules. https://developers.openai.com/api/docs/models
 _PROFILES: dict[str, _Profile] = {
     "gpt-6-astra": _ASTRA,
+    **dict.fromkeys(("gpt-6-sol", "gpt-6-luna"), _SOL_LUNA),
+    **dict.fromkeys(
+        (
+            "gpt-5.3",
+            "gpt-5.3-codex",
+            "gpt-5.2",
+            "gpt-5.2-pro",
+            "gpt-5.1",
+            "gpt-5",
+            "gpt-5-pro",
+            "gpt-5-mini",
+            "gpt-5-nano",
+            "o4-mini",
+            "o4-mini-deep-research",
+            "o3",
+            "o3-mini",
+            "o1",
+            "o1-pro",
+        ),
+        _EARLIER,
+    ),
+    # The families before the reasoning generation:
+    # https://developers.openai.com/api/docs/models/gpt-4o
     **dict.fromkeys(
         (
             "gpt-4o",
@@ -470,8 +510,8 @@ class OpenAIProvider(LoopAwareClientCache, BaseProvider[Prepared[Params], ChatCo
         }
         self._forward(params, options)
         self._reasoning(params, options, profile)
-        self._sampling(params, options, profile)
         self._tools(params, request.tools, options, profile)
+        self._sampling(params, profile)  # after the tools, which may set the effort
         self._format(params, options)
         return Prepared(params, output_schema=options.output_schema)
 
@@ -512,8 +552,17 @@ class OpenAIProvider(LoopAwareClientCache, BaseProvider[Prepared[Params], ChatCo
         if default_only and params.get("temperature") not in (None, 1, 1.0):
             params.pop("temperature")
 
-    def _sampling(self, params: Params, options: Options, profile: _Profile) -> None:
-        if profile.sampling:
+    @staticmethod
+    def _reasons(params: Params, profile: _Profile) -> bool:
+        """The request runs at an effort other than ``"none"``: the one it sends, else the
+        model's default."""
+        effort = params.get("reasoning_effort") or profile.default_effort
+        return "none" not in profile.efforts if effort is None else effort != "none"
+
+    def _sampling(self, params: Params, profile: _Profile) -> None:
+        """A model without sampling while it reasons loses it; the ``LLM`` always sends a
+        ``temperature``, so it is dropped rather than refused."""
+        if profile.sampling_while_reasoning or not self._reasons(params, profile):
             return
         for name in _SAMPLING:
             params.pop(name, None)
@@ -532,15 +581,33 @@ class OpenAIProvider(LoopAwareClientCache, BaseProvider[Prepared[Params], ChatCo
                 f"Chat Completions takes no server tool ({', '.join(server)}): "
                 "only function tools reach OpenAI through this adapter"
             )
-        if not profile.tools and (tools or options.tool_choice not in (None, "none")):
-            raise RequestError(
-                f"{self._model} tool calling requires the Responses API; "
-                "this provider uses Chat Completions"
-            )
+        if tools or options.tool_choice not in (None, "none"):
+            self._tool_effort(params, options, profile)
         if tools:
             params["tools"] = [_tool_to_sdk(tool) for tool in tools]
-        if options.tool_choice is not None and profile.tools:
+        takes_tools = profile.tools_while_reasoning or "none" in profile.efforts
+        if options.tool_choice is not None and takes_tools:
             params["tool_choice"] = _tool_choice(options.tool_choice)
+
+    def _tool_effort(self, params: Params, options: Options, profile: _Profile) -> None:
+        """Tool calls at the effort the model takes them. A request that asks for no thinking is
+        sent at ``"none"`` when the model would reason by default (GPT-6 Sol and Luna); tool
+        calls while it reasons need the Responses API."""
+        if profile.tools_while_reasoning or not self._reasons(params, profile):
+            return
+        if "none" not in profile.efforts:
+            raise RequestError(
+                f"{self._model} always reasons, so its tool calling requires the Responses API, "
+                "which this provider does not use"
+            )
+        if not options.thinking:
+            params["reasoning_effort"] = "none"
+            return
+        raise RequestError(
+            f"{self._model} takes tool calls through Chat Completions only at thinking_effort "
+            "'none': tool calling while it reasons requires the Responses API, which this "
+            "provider does not use"
+        )
 
     def _format(self, params: Params, options: Options) -> None:
         response_format: ResponseFormat | None = None

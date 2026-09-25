@@ -141,8 +141,11 @@ _EXTENDED = _Profile(
 )
 # The families that differ from the current rules, a closed list.
 _PROFILES: dict[str, _Profile] = {
-    # Forced tool use returns a 400 (https://platform.claude.com/docs/en/api/errors).
-    **dict.fromkeys(("claude-fable-5-1", "claude-mythos-5-1"), _Profile(forced_tools=False)),
+    # Forced tool use returns a 400 (https://platform.claude.com/docs/en/api/errors and
+    # https://platform.claude.com/docs/en/models/opus-5-5/migration-guide).
+    **dict.fromkeys(
+        ("claude-opus-5-5", "claude-fable-5-1", "claude-mythos-5-1"), _Profile(forced_tools=False)
+    ),
     "claude-mythos-preview": _Profile(efforts=_EFFORTS - {"xhigh"}),
     **dict.fromkeys(
         ("claude-opus-4-6", "claude-sonnet-4-6"),

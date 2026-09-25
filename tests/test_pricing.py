@@ -83,6 +83,18 @@ class TestPricingRegistryDefaults:
         assert pricing.has("grok-code-fast-1")
         assert pricing.has("grok-build-latest")
 
+    def test_grok_47_pricing(self):
+        # https://docs.x.ai/developers/models/grok-4.7 (2026-09-25): the whole request is billed
+        # at the long-context rates once the prompt reaches 200k tokens; no Batch API.
+        entry = pricing.get("grok-4.7")
+        assert entry is not None
+        assert (entry.input, entry.output, entry.cache_read) == (2.0, 6.0, 0.50)
+        assert entry.long_context_threshold == 200_000
+        assert entry.long_context_inclusive
+        assert (entry.long_context_input, entry.long_context_output) == (4.0, 12.0)
+        assert entry.long_context_cache_read == 1.0
+        assert entry.batch_input is None
+
     def test_grok_46_has_its_own_entry_not_the_grok_4_prefix(self):
         entry = pricing.get("grok-4.6")
         assert entry is not None
@@ -171,6 +183,23 @@ class TestPricingRegistryGet:
             assert p is not None
             assert (p.input, p.output, p.cache_read) == rates
 
+    def test_gpt6_sol_and_luna_prices(self):
+        # https://developers.openai.com/api/docs/models/gpt-6-sol and .../gpt-6-luna (2026-09-25)
+        expected = {
+            # (input, cache_read, cache_write, output), then above 272K, batch, and fast
+            "gpt-6-sol": ((2.0, 0.20, 2.50, 10.0), (4.0, 15.0), (1.0, 5.0), (4.0, 20.0)),
+            "gpt-6-luna": ((0.10, 0.010, 0.125, 0.50), (0.20, 0.75), (0.05, 0.25), (0.20, 1.0)),
+        }
+        for model, (standard, long, batch, fast) in expected.items():
+            p = pricing.get(model)
+            assert p is not None
+            assert (p.input, p.cache_read, p.cache_write, p.output) == standard
+            assert p.long_context_threshold == 272_000
+            assert not p.long_context_inclusive  # "more than 272K input tokens"
+            assert (p.long_context_input, p.long_context_output) == long
+            assert (p.batch_input, p.batch_output) == batch
+            assert (p.fast_input, p.fast_output) == fast
+
     def test_current_anthropic_pricing(self):
         sonnet = pricing.get("claude-sonnet-5")
         opus_48 = pricing.get("claude-opus-4-8")
@@ -178,6 +207,15 @@ class TestPricingRegistryGet:
         assert opus_48 is not None
         assert (sonnet.input, sonnet.output, sonnet.cache_read) == (2.0, 10.0, 0.20)
         assert (opus_48.fast_input, opus_48.fast_output) == (10.0, 50.0)
+
+    def test_opus_55_pricing(self):
+        # https://platform.claude.com/docs/en/about-claude/pricing (2026-09-25): cache reads at
+        # 0.05x input, and fast mode at 2x with the caching multipliers on top.
+        p = pricing.get("claude-opus-5-5")
+        assert p is not None
+        assert (p.input, p.output, p.cache_write, p.cache_read) == (4.0, 20.0, 5.0, 0.20)
+        assert (p.batch_input, p.batch_output, p.batch_cache_read) == (2.0, 10.0, 0.10)
+        assert (p.fast_input, p.fast_output, p.fast_cache_read) == (8.0, 40.0, 0.40)
 
     def test_haiku_45_specific_prefix(self):
         p = pricing.get("claude-haiku-4-5-20251001")

@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import warnings
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -885,6 +886,61 @@ class TestAstra:
             prepare(provider, HI, tools=[{"name": "lookup"}])
 
 
+LOOKUP = {"name": "lookup", "description": "d", "input_schema": {"type": "object"}}
+SAMPLING = {"temperature": 0.2, "top_p": 0.9, "logprobs": True, "top_logprobs": 3}
+
+
+@pytest.mark.parametrize("model", ["gpt-6-sol", "gpt-6-luna"])
+class TestSolAndLuna:
+    """GPT-6 Sol and Luna reason at "medium" unless sent "none", and take tool calls and sampling
+    through Chat Completions only at "none" (https://developers.openai.com/api/docs/models/gpt-6-sol,
+    https://developers.openai.com/api/docs/guides/latest-model)."""
+
+    @staticmethod
+    def _params(model: str, **kwargs: Any) -> dict[str, Any]:
+        return prepare(OpenAIProvider(model, "test-key"), HI, max_tokens=64, **kwargs).params
+
+    def test_by_default_they_reason_so_sampling_is_dropped(self, model):
+        params = self._params(model, **SAMPLING)
+        assert "reasoning_effort" not in params
+        assert not {"temperature", "top_p", "logprobs", "top_logprobs"} & params.keys()
+        assert params["max_completion_tokens"] == 64
+
+    @pytest.mark.parametrize("effort", ["none", "low", "medium", "high", "xhigh", "max"])
+    def test_every_documented_effort_is_sent(self, model, effort):
+        assert self._params(model, thinking=True, thinking_effort=effort)["reasoning_effort"] == (
+            effort
+        )
+
+    def test_minimal_is_not_one_of_their_efforts(self, model):
+        with pytest.raises(RequestError, match="thinking_effort"):
+            self._params(model, thinking=True, thinking_effort="minimal")
+
+    def test_at_none_they_sample(self, model):
+        params = self._params(model, thinking=True, thinking_effort="none", **SAMPLING)
+        assert params["reasoning_effort"] == "none"
+        assert params["temperature"] == 0.2
+        assert params["top_p"] == 0.9
+        assert params["logprobs"] is True
+
+    def test_tool_calls_without_thinking_are_sent_at_none(self, model):
+        params = self._params(model, tools=[LOOKUP], tool_choice="auto", temperature=0.0)
+        assert params["reasoning_effort"] == "none"
+        assert params["tools"][0]["function"]["name"] == "lookup"
+        assert params["tool_choice"] == "auto"
+        assert params["temperature"] == 0.0  # at "none" the sampling stays
+
+    @pytest.mark.parametrize("effort", [None, "low", "max"])
+    def test_tool_calls_while_reasoning_need_the_responses_api(self, model, effort):
+        with pytest.raises(RequestError, match="Responses API"):
+            self._params(model, tools=[LOOKUP], thinking=True, thinking_effort=effort)
+
+    def test_tool_calls_at_none_are_accepted_with_thinking_on(self, model):
+        params = self._params(model, tools=[LOOKUP], thinking=True, thinking_effort="none")
+        assert params["reasoning_effort"] == "none"
+        assert "tools" in params
+
+
 class TestProfiles:
     """Per-model and per-host request rules (R02 step 3), resolved by the id grammar."""
 
@@ -916,6 +972,32 @@ class TestProfiles:
         ).params
         assert params["reasoning_effort"] == "high"
         assert "temperature" not in params  # reasoning models take only the default
+
+    @pytest.mark.parametrize("model", ["gpt-5.4", "gpt-5.5", "gpt-5.6-terra", "gpt-7"])
+    def test_from_gpt_5_4_tool_calls_while_reasoning_are_refused(self, model):
+        # "Starting with GPT-5.4, Chat Completions does not support tool calling with
+        # reasoning_effort values other than none" (docs/guides/migrate-to-responses).
+        provider = OpenAIProvider(model, "test-key")
+        with pytest.raises(RequestError, match="Responses API"):
+            prepare(provider, HI, tools=[LOOKUP], thinking=True)
+        at_none = prepare(provider, HI, tools=[LOOKUP], thinking=True, thinking_effort="none")
+        assert at_none.params["reasoning_effort"] == "none"
+        # Without thinking nothing changes: no effort is sent, as the live probes ran them.
+        plain = prepare(provider, HI, tools=[LOOKUP], temperature=0.0).params
+        assert "reasoning_effort" not in plain
+        assert plain["temperature"] == 0.0
+
+    @pytest.mark.parametrize("model", ["gpt-5", "gpt-5.2", "gpt-5-2025-08-07", "o3", "o4-mini"])
+    def test_earlier_reasoning_models_call_tools_while_reasoning(self, model):
+        params = prepare(OpenAIProvider(model, "test-key"), HI, tools=[LOOKUP], thinking=True)
+        assert params.params["reasoning_effort"] == "high"
+        assert "tools" in params.params
+
+    def test_a_compatible_server_calls_tools_while_reasoning(self):
+        provider = OpenAIProvider("qwen3", "not-needed", base_url="http://localhost:11434/v1")
+        params = prepare(provider, HI, tools=[LOOKUP], thinking=True).params
+        assert params["reasoning_effort"] == "high"
+        assert "tools" in params
 
     def test_astra_refusals_are_request_errors(self):
         provider = OpenAIProvider("gpt-6-astra", "test-key")

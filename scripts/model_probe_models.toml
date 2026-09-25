@@ -18,6 +18,21 @@ provider = "openai"
 scenarios = ["plain", "structured", "json_mode", "stream", "thinking"]
 kwargs = { max_tokens = 4096, thinking_effort = "low" }
 
+# GPT-6 Sol and Luna reason at "medium" unless sent "none"; Chat Completions takes their tool
+# calls only at "none", which the adapter sends when a tool call asks for no thinking.
+# Added 2026-09-25, not yet run live.
+[[models]]
+id = "gpt-6-sol"
+provider = "openai"
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
+kwargs = { max_tokens = 4096, thinking_effort = "low" }
+
+[[models]]
+id = "gpt-6-luna"
+provider = "openai"
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
+kwargs = { max_tokens = 4096, thinking_effort = "low" }
+
 [[models]]
 id = "gpt-5.5"
 provider = "openai"
@@ -75,6 +90,14 @@ kwargs = { temperature = 1.0, max_tokens = 1024, thinking_effort = "low" }
 # ---------------------------------------------------------------------------
 # xAI
 # ---------------------------------------------------------------------------
+
+# Grok 4.7 always reasons (high by default): thinking_effort applies on its own and keeps the
+# probe cheap. Added 2026-09-25, not yet run live.
+[[models]]
+id = "grok-4.7"
+provider = "xai"
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream"]
+kwargs = { max_tokens = 2048, thinking_effort = "low" }
 
 [[models]]
 id = "grok-4.20-reasoning"
@@ -162,6 +185,16 @@ kwargs = { temperature = 0.0, max_tokens = 1024, thinking_budget = 512 }
 # ---------------------------------------------------------------------------
 # Anthropic
 # ---------------------------------------------------------------------------
+
+# Opus 5.5 always thinks, and its thinking counts toward max_tokens; it refuses a forced
+# tool_choice. Added 2026-09-25, not yet run live.
+[[models]]
+id = "claude-opus-5-5"
+provider = "anthropic"
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
+allow_transient = true
+tool_choice = "auto"
+kwargs = { max_tokens = 4096, thinking_effort = "low" }
 
 [[models]]
 id = "claude-opus-4-7"
