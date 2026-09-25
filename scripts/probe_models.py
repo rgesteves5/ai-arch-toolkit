@@ -27,6 +27,7 @@ type ScenarioName = Literal["plain", "tools_loop", "structured", "json_mode", "s
 type Classification = Literal[
     "ok",
     "auth_error",
+    "billing",
     "content_policy",
     "rate_limit",
     "transient_provider_error",
@@ -174,6 +175,9 @@ def classify_exception(exc: BaseException, *, allow_transient: bool = False) -> 
     status_code = getattr(exc, "status_code", None)
     message = str(exc).lower()
 
+    # An account without credits: Anthropic answers 400, xAI 403, OpenAI 429 insufficient_quota.
+    if _has_any(message, _BILLING):
+        return "billing"
     if isinstance(exc, TimeoutError):
         return "transient_provider_error" if allow_transient else "timeout"
     if isinstance(exc, RateLimitError) or status_code == 429 or "rate limit" in message:
@@ -566,6 +570,15 @@ def _sanitize_error_message(text: str, limit: int) -> str:
     redacted = re.sub(r"(API key ID:\s*)[0-9a-fA-F-]+", r"\1<redacted>", redacted)
     redacted = re.sub(r"LLM\|\d+\|\S+", "<redacted>", redacted)  # Meta Model API key format
     return _truncate(redacted, limit)
+
+
+_BILLING = (
+    "credit balance is too low",
+    "used all available credits",
+    "monthly spending limit",
+    "insufficient_quota",
+    "exceeded your current quota",
+)
 
 
 def _has_any(message: str, needles: Iterable[str]) -> bool:

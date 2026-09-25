@@ -20,7 +20,7 @@ kwargs = { max_tokens = 4096, thinking_effort = "low" }
 
 # GPT-6 Sol and Luna reason at "medium" unless sent "none"; Chat Completions takes their tool
 # calls only at "none", which the adapter sends when a tool call asks for no thinking.
-# Added 2026-09-25, not yet run live.
+# Every scenario passed live on 2026-09-25.
 [[models]]
 id = "gpt-6-sol"
 provider = "openai"

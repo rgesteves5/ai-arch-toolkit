@@ -80,6 +80,13 @@ def test_classify_exception() -> None:
         == "content_policy"
     )
     assert classify_exception(RateLimitError(429, "rate limit")) == "rate_limit"
+    # An account without credits is billing, not a framework bug or a rate limit.
+    low_balance = "Your credit balance is too low to access the Anthropic API."
+    assert classify_exception(APIError(400, low_balance)) == "billing"
+    no_credits = "Your team has either used all available credits or reached its monthly..."
+    assert classify_exception(APIError(403, no_credits)) == "billing"
+    quota = "You exceeded your current quota (insufficient_quota)."
+    assert classify_exception(RateLimitError(429, quota)) == "billing"
     assert classify_exception(APIError(503, "high demand")) == "transient_provider_error"
     assert classify_exception(APIError(404, "model not found")) == "unsupported_model"
     assert (
