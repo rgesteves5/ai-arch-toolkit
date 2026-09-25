@@ -22,9 +22,11 @@ _CORRECTIONS: dict[str, float] = {
     "muse-spark-": 1.0,  # Meta input_tokens count was 0.98x o200k_base on English prose
 }
 
-# Families that use the o200k_base encoding (GPT-4o+, o-series, Muse Spark).
+# Families that use the o200k_base encoding: the OpenAI ones as tiktoken maps them
+# (tiktoken/model.py), and Muse Spark. Neither tiktoken nor OpenAI names GPT-6's encoding
+# (2026-09-25), so GPT-6 counts with the default.
 _ENCODINGS: dict[str, str] = dict.fromkeys(
-    ("gpt-4o", "gpt-5", "o1", "o3", "o4", "muse-spark-"), "o200k_base"
+    ("gpt-4o", "gpt-4.1", "gpt-5", "o1", "o3", "o4", "muse-spark-"), "o200k_base"
 )
 
 # Average chars per token (rough cross-model approximation).

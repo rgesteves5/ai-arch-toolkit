@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import math
 
+import pytest
+
 from ai_arch_toolkit.core._tokens import (
     _get_correction,
     chars_to_tokens,
@@ -66,6 +68,15 @@ class TestCountTokensLocal:
         # Should not raise — uses o200k_base
         n = count_tokens_local("Hello world", model="gpt-5")
         assert n > 0
+
+    @pytest.mark.parametrize("model", ["gpt-4.1", "gpt-4.1-mini", "gpt-4.1-2025-04-14"])
+    def test_gpt_4_1_counts_with_o200k(self, model):
+        # tiktoken maps gpt-4.1 to o200k_base; the default, cl100k_base, disagrees on this text.
+        text = "Olá, como estás? Este é um teste de tokenização em português, com acentuação."
+        assert count_tokens_local(text, model=model) == count_tokens_local(text, model="gpt-4o")
+        assert count_tokens_local(text, model=model) != count_tokens_local(
+            text, model="unknown-model"
+        )
 
     def test_muse_spark_counts_with_o200k(self):
         # o200k_base and cl100k_base disagree on this text (23 vs 27 tokens).
