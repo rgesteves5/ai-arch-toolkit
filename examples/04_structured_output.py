@@ -7,7 +7,7 @@ The parsed result is available via response.parsed.
 from ai_arch_toolkit import LLM
 from ai_arch_toolkit.core import OutputSchema
 
-llm = LLM("gpt-4.1-nano")
+llm = LLM("gpt-4.1-mini")
 
 schema = OutputSchema(
     name="book_recommendations",

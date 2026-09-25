@@ -6,7 +6,7 @@ inspect the response text and token usage.
 
 from ai_arch_toolkit import LLM
 
-llm = LLM("gpt-4.1-nano")
+llm = LLM("gpt-4.1-mini")
 
 response = llm.complete_sync("What is the capital of France? Reply in one sentence.")
 

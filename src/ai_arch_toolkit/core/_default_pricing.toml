@@ -213,7 +213,10 @@ batch_cache_read = 0.05
 # OpenAI
 # Source: https://developers.openai.com/api/docs/pricing
 # Retired ids (o1-mini, o3-pro, o3-deep-research) are intentionally absent —
-# they no longer appear in /v1/models.
+# they no longer appear in /v1/models — and so are the ids OpenAI shuts down by
+# 2026-10-23 (https://developers.openai.com/api/docs/deprecations): gpt-3.5-turbo,
+# gpt-4, gpt-4-turbo, gpt-4.1-nano, o1, o1-pro, o3-mini and o4-mini, with their
+# snapshots, and gpt-3.5-turbo-1106 (2026-09-28).
 # ═══════════════════════════════════════════════════════════════════
 
 # GPT-6 Astra — verified 2026-09-04.
@@ -553,14 +556,6 @@ batch_cache_read = 0.0625
 
 # ── GPT-4.1 family ──
 
-["gpt-4.1-nano"]
-input = 0.10
-output = 0.40
-cache_read = 0.025
-batch_input = 0.05
-batch_output = 0.20
-batch_cache_read = 0.0125
-
 ["gpt-4.1-mini"]
 input = 0.40
 output = 1.60
@@ -595,42 +590,13 @@ batch_input = 1.25
 batch_output = 5.0
 batch_cache_read = 0.625
 
-# A snapshot with a tariff of its own. Verified 2026-09-18:
-# https://developers.openai.com/api/docs/pricing
+# A snapshot with a tariff of its own, served until 2026-10-23: without this entry it would be
+# priced as gpt-4o. Verified 2026-09-18: https://developers.openai.com/api/docs/pricing
 ["gpt-4o-2024-05-13"]
 input = 5.0
 output = 15.0
 
-# ── GPT legacy (still served) ──
-
-[gpt-4-turbo]
-input = 10.0
-output = 30.0
-
-# gpt-4-0613 is a snapshot of gpt-4.
-[gpt-4]
-input = 30.0
-output = 60.0
-
-["gpt-3.5-turbo"]
-input = 0.50
-output = 1.50
-
-# gpt-3.5-turbo-0125 costs the base rate; the 1106 snapshot has a tariff of its own.
-# Verified 2026-09-18: https://developers.openai.com/api/docs/pricing
-["gpt-3.5-turbo-1106"]
-input = 1.0
-output = 2.0
-
 # ── o-series (reasoning) ──
-
-[o3-mini]
-input = 1.10
-output = 4.40
-cache_read = 0.55
-batch_input = 0.55
-batch_output = 2.20
-batch_cache_read = 0.275
 
 [o3]
 input = 2.0
@@ -647,28 +613,6 @@ cache_read = 0.20
 batch_input = 1.0
 batch_output = 4.0
 batch_cache_read = 0.10
-
-[o4-mini]
-input = 1.10
-output = 4.40
-cache_read = 0.275
-batch_input = 0.55
-batch_output = 2.20
-batch_cache_read = 0.1375
-
-[o1-pro]
-input = 150.0
-output = 600.0
-batch_input = 75.0
-batch_output = 300.0
-
-[o1]
-input = 15.0
-output = 60.0
-cache_read = 7.50
-batch_input = 7.50
-batch_output = 30.0
-batch_cache_read = 3.75
 
 # ═══════════════════════════════════════════════════════════════════
 # Google Gemini

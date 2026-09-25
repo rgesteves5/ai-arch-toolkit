@@ -13,7 +13,7 @@ from ai_arch_toolkit.toolkit.agents import plan_execute_flow, plan_execute_initi
 from ai_arch_toolkit.toolkit.tools import geocode, get_weather, math_eval
 
 tools = ToolGroup(get_weather, geocode, math_eval)
-llm = LLM("gpt-4.1-nano")
+llm = LLM("gpt-4.1-mini")
 
 flow = plan_execute_flow(
     llm,

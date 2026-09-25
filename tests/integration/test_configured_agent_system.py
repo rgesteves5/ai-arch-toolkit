@@ -54,7 +54,7 @@ def _configured_project(root: Path) -> tuple[Path, Path]:
                 "parallel_tool_calls": False,
             },
             "model": {
-                "model": "gpt-4.1-nano",
+                "model": "gpt-4.1-mini",
                 "temperature": 0.4,
                 "max_tokens": 64,
             },

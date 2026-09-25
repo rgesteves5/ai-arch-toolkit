@@ -17,7 +17,7 @@ from tests.integration.conftest import skip_no_anthropic, skip_no_gemini, skip_n
 pytestmark = [pytest.mark.integration, pytest.mark.live_api]
 
 ANTHROPIC = "claude-haiku-4-5"
-OPENAI = "gpt-4.1-nano"
+OPENAI = "gpt-4.1-mini"
 GEMINI = "gemini-2.5-flash"
 
 

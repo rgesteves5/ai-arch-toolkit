@@ -6,7 +6,7 @@ Works with vision-capable models (GPT-4o, Claude, Gemini).
 
 from ai_arch_toolkit.core import LLM, image, user
 
-llm = LLM("gpt-4.1-nano")
+llm = LLM("gpt-4.1-mini")
 
 # --- Image from URL ---
 print("=== Image from URL ===")

@@ -27,7 +27,7 @@ weather_schema = OutputSchema(
 )
 
 tools = ToolGroup(get_weather, geocode)
-llm = LLM("gpt-4.1-nano")
+llm = LLM("gpt-4.1-mini")
 
 flow = react_flow(
     llm,

@@ -10,7 +10,7 @@ from ai_arch_toolkit import LLM
 
 
 async def main():
-    async with LLM("gpt-4.1-nano") as llm:
+    async with LLM("gpt-4.1-mini") as llm:
         # --- Single async request ---
         print("=== Async Complete ===")
         resp = await llm.complete("What is 2 + 2? Reply in one word.")

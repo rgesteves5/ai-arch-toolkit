@@ -12,7 +12,7 @@ from ai_arch_toolkit.toolkit.agents import rewoo_flow, rewoo_initial_state
 from ai_arch_toolkit.toolkit.tools import geocode, get_weather
 
 tools = ToolGroup(get_weather, geocode)
-llm = LLM("gpt-4.1-nano")
+llm = LLM("gpt-4.1-mini")
 
 flow = rewoo_flow(
     llm,

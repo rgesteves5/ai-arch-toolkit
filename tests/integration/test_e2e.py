@@ -15,7 +15,7 @@ from ai_arch_toolkit.toolkit.agents import (
 from ai_arch_toolkit.toolkit.prompts import load_prompt
 from tests.integration.conftest import skip_no_openai
 
-MODEL = "gpt-4.1-nano"
+MODEL = "gpt-4.1-mini"
 pytestmark = pytest.mark.live_api
 
 

@@ -65,34 +65,34 @@ class TestFallbackConstruction:
     @patch("ai_arch_toolkit.core._llm.create_provider")
     def test_nested_fallbacks_flattened(self, mock_create):
         mock_create.side_effect = _fake_provider
-        inner = LLM("gpt-4o", api_key="test", fallback="gpt-4.1-nano")
+        inner = LLM("gpt-4o", api_key="test", fallback="gpt-4.1-mini")
         assert len(inner._fallbacks) == 1  # before flattening into parent
 
         llm = LLM("claude-sonnet-4-20250514", api_key="test", fallback=inner)
         # inner's fallback should be flattened into llm's chain
         assert len(llm._fallbacks) == 2
         assert llm._fallbacks[0]._model == "gpt-4o"
-        assert llm._fallbacks[1]._model == "gpt-4.1-nano"
+        assert llm._fallbacks[1]._model == "gpt-4.1-mini"
         # the caller's LLM keeps its own chain and its ownership: nothing passed in is modified
-        assert [fb._model for fb in inner._fallbacks] == ["gpt-4.1-nano"]
+        assert [fb._model for fb in inner._fallbacks] == ["gpt-4.1-mini"]
         assert len(inner._owned_fallbacks) == 1
         assert llm._owned_fallbacks == []
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     def test_a_fallback_shared_by_two_parents_keeps_its_chain(self, mock_create):
         mock_create.side_effect = _fake_provider
-        shared = LLM("gpt-4o", api_key="test", fallback="gpt-4.1-nano")
+        shared = LLM("gpt-4o", api_key="test", fallback="gpt-4.1-mini")
 
         first = LLM("claude-sonnet-4-20250514", api_key="test", fallback=shared)
         second = LLM("claude-haiku-4-5", api_key="test", fallback=shared)
 
-        assert [fb._model for fb in first._fallbacks] == ["gpt-4o", "gpt-4.1-nano"]
-        assert [fb._model for fb in second._fallbacks] == ["gpt-4o", "gpt-4.1-nano"]
+        assert [fb._model for fb in first._fallbacks] == ["gpt-4o", "gpt-4.1-mini"]
+        assert [fb._model for fb in second._fallbacks] == ["gpt-4o", "gpt-4.1-mini"]
 
     @patch("ai_arch_toolkit.core._llm.create_provider")
     def test_a_model_reachable_twice_appears_once_in_the_chain(self, mock_create):
         mock_create.side_effect = _fake_provider
-        last = LLM("gpt-4.1-nano", api_key="test")
+        last = LLM("gpt-4.1-mini", api_key="test")
         middle = LLM("gpt-4o", api_key="test", fallback=last)
 
         llm = LLM("claude-sonnet-4-20250514", api_key="test", fallback=[middle, last])

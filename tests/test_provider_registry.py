@@ -171,9 +171,9 @@ class TestCreateProvider:
 
     def test_openai_route(self):
         with patch("ai_arch_toolkit.core._providers._openai.OpenAIProvider") as cls:
-            create_provider("gpt-4.1-nano", api_key="test-key", base_url="https://x", timeout=20.0)
+            create_provider("gpt-4.1-mini", api_key="test-key", base_url="https://x", timeout=20.0)
             cls.assert_called_once_with(
-                "gpt-4.1-nano", "test-key", base_url="https://x", timeout=20.0
+                "gpt-4.1-mini", "test-key", base_url="https://x", timeout=20.0
             )
 
     def test_xai_route(self, monkeypatch):

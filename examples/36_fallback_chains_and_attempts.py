@@ -27,7 +27,7 @@ print("1. BASIC FALLBACK CHAIN")
 print("=" * 60)
 
 llm = LLM(
-    "gpt-4.1-nano",
+    "gpt-4.1-mini",
     fallback="gpt-4.1-mini",  # single string fallback (backward compatible)
 )
 print(f"LLM: {llm!r}\n")
@@ -47,11 +47,11 @@ print("2. MULTI-MODEL FALLBACK CHAIN")
 print("=" * 60)
 
 # Each fallback LLM is fully independent — own provider, retry, temperature
-fast_fallback = LLM("gpt-4.1-nano", temperature=0.0)
+fast_fallback = LLM("gpt-4.1-mini", temperature=0.0)
 creative_fallback = LLM("gpt-4.1-mini", temperature=0.7)
 
 llm = LLM(
-    "gpt-4.1-nano",
+    "gpt-4.1-mini",
     temperature=0.0,
     fallback=[fast_fallback, creative_fallback],
 )
@@ -71,7 +71,7 @@ print("3. FALLBACK + RETRY CONFIG")
 print("=" * 60)
 
 llm = LLM(
-    "gpt-4.1-nano",
+    "gpt-4.1-mini",
     retry=RetryConfig(max_retries=2, base_delay=0.5),
     fallback="gpt-4.1-mini",
 )
@@ -90,7 +90,7 @@ print(f"\n{'=' * 60}")
 print("4. ATTEMPT TRACKING IN DETAIL")
 print("=" * 60)
 
-llm = LLM("gpt-4.1-nano", fallback="gpt-4.1-mini")
+llm = LLM("gpt-4.1-mini", fallback="gpt-4.1-mini")
 response = llm.complete_sync("What is Python? One sentence.")
 
 
@@ -119,7 +119,7 @@ print(f"\n{'=' * 60}")
 print("5. STREAMING WITH FALLBACK + ATTEMPTS")
 print("=" * 60)
 
-llm = LLM("gpt-4.1-nano", fallback="gpt-4.1-mini")
+llm = LLM("gpt-4.1-mini", fallback="gpt-4.1-mini")
 
 print("Streaming: ", end="")
 stream = llm.stream_sync("Count from 1 to 5, separated by commas.")
@@ -140,7 +140,7 @@ print("6. FLOW-LEVEL TRACE")
 print("=" * 60)
 
 tools = ToolGroup(datetime_now, math_eval)
-llm = LLM("gpt-4.1-nano", fallback="gpt-4.1-mini")
+llm = LLM("gpt-4.1-mini", fallback="gpt-4.1-mini")
 
 flow = react_flow(
     llm,
@@ -166,7 +166,7 @@ print("=" * 60)
 
 # Only fall back on APIError and TimeoutError (not ConnectionError/OSError)
 llm = LLM(
-    "gpt-4.1-nano",
+    "gpt-4.1-mini",
     fallback="gpt-4.1-mini",
     fallback_on=(APIError, TimeoutError),
 )
@@ -186,8 +186,8 @@ print(f"\n{'=' * 60}")
 print("8. NESTED FALLBACK FLATTENING")
 print("=" * 60)
 
-inner = LLM("gpt-4.1-mini", fallback="gpt-4.1-nano")
-outer = LLM("gpt-4.1-nano", fallback=inner)
+inner = LLM("gpt-4.1-mini", fallback="gpt-4.1-mini")
+outer = LLM("gpt-4.1-mini", fallback=inner)
 
 print(f"outer: {outer!r}")
 print(f"Chain length: {len(outer._fallbacks)} (flattened from nested)")

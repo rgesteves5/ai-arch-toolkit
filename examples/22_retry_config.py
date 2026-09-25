@@ -9,7 +9,7 @@ from ai_arch_toolkit import LLM
 from ai_arch_toolkit.core import RetryConfig
 
 llm = LLM(
-    "gpt-4.1-nano",
+    "gpt-4.1-mini",
     retry=RetryConfig(
         max_retries=3,
         base_delay=1.0,

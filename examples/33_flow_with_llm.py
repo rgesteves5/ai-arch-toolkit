@@ -59,7 +59,7 @@ async def review(snap):
 
 
 async def main():
-    llm = LLM("gpt-4.1-nano")
+    llm = LLM("gpt-4.1-mini")
     flow = Flow(
         FlowStep(step=Step(name="research", fn=research)),
         FlowStep(step=Step(name="draft", fn=draft)),

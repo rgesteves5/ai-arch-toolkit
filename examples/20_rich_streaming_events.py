@@ -9,7 +9,7 @@ differently (e.g. collapsible thinking blocks, formatted tool calls).
 
 from ai_arch_toolkit import LLM
 
-llm = LLM("gpt-4.1-nano")
+llm = LLM("gpt-4.1-mini")
 
 print("=== Rich streaming events ===\n")
 

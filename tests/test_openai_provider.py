@@ -961,7 +961,7 @@ class TestProfiles:
         assert params["temperature"] == 0.0
         assert params["reasoning_effort"] == "high"
 
-    @pytest.mark.parametrize("model", ["gpt-4o", "gpt-4o-2024-08-06", "gpt-4.1-mini", "gpt-4"])
+    @pytest.mark.parametrize("model", ["gpt-4o", "gpt-4o-2024-08-06", "gpt-4.1-mini", "gpt-4.1"])
     def test_a_model_that_does_not_reason_refuses_thinking(self, model):
         with pytest.raises(RequestError, match="does not reason"):
             prepare(OpenAIProvider(model, "test-key"), HI, thinking=True)
@@ -987,7 +987,7 @@ class TestProfiles:
         assert "reasoning_effort" not in plain
         assert plain["temperature"] == 0.0
 
-    @pytest.mark.parametrize("model", ["gpt-5", "gpt-5.2", "gpt-5-2025-08-07", "o3", "o4-mini"])
+    @pytest.mark.parametrize("model", ["gpt-5", "gpt-5.2", "gpt-5-2025-08-07", "o3"])
     def test_earlier_reasoning_models_call_tools_while_reasoning(self, model):
         params = prepare(OpenAIProvider(model, "test-key"), HI, tools=[LOOKUP], thinking=True)
         assert params.params["reasoning_effort"] == "high"

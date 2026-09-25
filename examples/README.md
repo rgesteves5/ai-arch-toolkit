@@ -12,7 +12,7 @@ set -a && source .env && set +a                  # load API keys (see .env.examp
 uv run python examples/01_hello_world.py
 ```
 
-Many examples default to inexpensive models (`gpt-4.1-nano`,
+Many examples default to inexpensive models (`gpt-4.1-mini`,
 `claude-haiku-4-5`, etc.), but provider prices and model availability change.
 Check provider pricing before running the full set.
 

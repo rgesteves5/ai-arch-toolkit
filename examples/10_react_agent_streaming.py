@@ -12,7 +12,7 @@ from ai_arch_toolkit.toolkit.agents import react_flow, react_initial_state
 from ai_arch_toolkit.toolkit.tools import math_eval, wikipedia_article, wikipedia_search
 
 tools = ToolGroup(wikipedia_search, wikipedia_article, math_eval)
-llm = LLM("gpt-4.1-nano")
+llm = LLM("gpt-4.1-mini")
 
 flow = react_flow(
     llm,

@@ -84,7 +84,7 @@ async def main() -> None:
     )
 
     # --- 5. Use LLM with middleware ---
-    llm_with_memory = LLM("gpt-4.1-nano", middleware=[middleware])
+    llm_with_memory = LLM("gpt-4.1-mini", middleware=[middleware])
 
     questions = [
         "What programming language should I use for my next project?",

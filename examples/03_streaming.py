@@ -6,7 +6,7 @@ access the full Response (with usage, cost, etc.) via stream.response.
 
 from ai_arch_toolkit import LLM
 
-llm = LLM("gpt-4.1-nano")
+llm = LLM("gpt-4.1-mini")
 
 # --- Sync streaming ---
 print("=== stream_sync() ===")

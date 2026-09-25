@@ -10,7 +10,7 @@ from ai_arch_toolkit.toolkit.agents import reflexion_flow, reflexion_initial_sta
 from ai_arch_toolkit.toolkit.tools import math_eval, wikipedia_search
 
 tools = ToolGroup(wikipedia_search, math_eval)
-llm = LLM("gpt-4.1-nano")
+llm = LLM("gpt-4.1-mini")
 
 
 def evaluator(task: str, answer: str) -> float:

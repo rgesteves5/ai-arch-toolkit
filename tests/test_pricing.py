@@ -36,7 +36,6 @@ class TestPricingRegistryDefaults:
     def test_has_gpt41_models(self):
         assert pricing.has("gpt-4.1")
         assert pricing.has("gpt-4.1-mini")
-        assert pricing.has("gpt-4.1-nano")
 
     def test_has_gpt5_models(self):
         assert pricing.has("gpt-5")
@@ -67,9 +66,7 @@ class TestPricingRegistryDefaults:
 
     def test_has_o_series_models(self):
         assert pricing.has("o3")
-        assert pricing.has("o3-mini")
         assert pricing.has("o4-mini-deep-research")
-        assert pricing.has("o1-pro")
         assert pricing.has("grok-3")
 
     def test_has_grok4_models(self):
@@ -351,14 +348,35 @@ class TestIdGrammar:
 
     def test_a_snapshot_with_its_own_tariff_keeps_it(self):
         # https://developers.openai.com/api/docs/pricing (2026-09-18): the May 2024 gpt-4o
-        # snapshot and gpt-3.5-turbo-1106 cost more than the ids they are snapshots of.
+        # snapshot costs more than the id it is a snapshot of; the other snapshots do not.
         dated = pricing.get("gpt-4o-2024-05-13")
         assert dated is not None
         assert (dated.input, dated.output) == (5.0, 15.0)
-        turbo_1106 = pricing.get("gpt-3.5-turbo-1106")
-        assert turbo_1106 is not None
-        assert (turbo_1106.input, turbo_1106.output) == (1.0, 2.0)
-        assert pricing.get("gpt-3.5-turbo-0125") == pricing.get("gpt-3.5-turbo")
+        assert pricing.get("gpt-4o-2024-08-06") == pricing.get("gpt-4o")
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "gpt-3.5-turbo",
+            "gpt-3.5-turbo-0125",
+            "gpt-3.5-turbo-1106",
+            "gpt-4",
+            "gpt-4-0613",
+            "gpt-4-turbo",
+            "gpt-4-turbo-2024-04-09",
+            "gpt-4.1-nano",
+            "gpt-4.1-nano-2025-04-14",
+            "o1",
+            "o1-2024-12-17",
+            "o1-pro",
+            "o3-mini",
+            "o4-mini",
+            "o4-mini-2025-04-16",
+        ],
+    )
+    def test_models_openai_shuts_down_have_no_price(self, model: str):
+        # Shut down by 2026-10-23 (https://developers.openai.com/api/docs/deprecations).
+        assert pricing.get(model) is None
 
     @pytest.mark.parametrize(
         ("alias", "canonical"),
@@ -430,14 +448,14 @@ class TestEstimateCost:
         assert abs(cost - expected) < 1e-10
 
     def test_cache_tokens_ignored_for_models_without_cache(self):
-        # gpt-4-turbo has no cache pricing (None) — cache tokens should not contribute
+        # gpt-5.5-pro has no cache pricing (None) — cache tokens should not contribute
         cost = pricing.estimate_cost(
-            "gpt-4-turbo-2024-04-09",
+            "gpt-5.5-pro",
             input_tokens=1000,
             output_tokens=0,
             cache_write_tokens=500,
         )
-        expected = 10.0 * 1000 / 1_000_000
+        expected = 30.0 * 1000 / 1_000_000
         assert cost is not None
         assert abs(cost - expected) < 1e-10
 
@@ -453,14 +471,14 @@ class TestEstimateCost:
         assert abs(cost - expected) < 1e-10
 
     def test_batch_fallback_to_normal_pricing(self):
-        # gpt-4-turbo has no batch pricing (None) — should fall back to normal rates
+        # Meta has no batch pricing (None) — should fall back to normal rates
         cost = pricing.estimate_cost(
-            "gpt-4-turbo-2024-04-09",
+            "muse-spark-1.3",
             input_tokens=1000,
             output_tokens=500,
             is_batch=True,
         )
-        expected = 10.0 * 1000 / 1_000_000 + 30.0 * 500 / 1_000_000
+        expected = 1.25 * 1000 / 1_000_000 + 4.25 * 500 / 1_000_000
         assert cost is not None
         assert abs(cost - expected) < 1e-10
 
@@ -838,9 +856,13 @@ class TestLoad:
 
 
 class TestModelPricingNone:
-    def test_none_semantics(self):
+    def test_none_semantics(self, tmp_path: Path):
         # Models without cache/batch have None, not 0.0
-        p = pricing.get("gpt-4-turbo-2024-04-09")
+        table = tmp_path / "prices.toml"
+        table.write_text("[acme-1]\ninput = 1.0\noutput = 2.0\n")
+        registry = PricingRegistry()
+        registry.load(table)
+        p = registry.get("acme-1-2026-01-01")
         assert p is not None
         assert p.cache_write is None
         assert p.cache_read is None

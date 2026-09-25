@@ -31,7 +31,7 @@ class CostLogger:
 
 logger = CostLogger()
 tools = ToolGroup(get_weather, geocode)
-llm = LLM("gpt-4.1-nano", middleware=[logger])
+llm = LLM("gpt-4.1-mini", middleware=[logger])
 
 flow = react_flow(
     llm,

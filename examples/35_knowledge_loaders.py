@@ -29,7 +29,7 @@ tmp = Path(tempfile.mkdtemp())
 )
 
 (tmp / "settings.toml").write_text(
-    '[model]\nname = "gpt-4.1-nano"\ntemperature = 0.7\nmax_tokens = 1024\n'
+    '[model]\nname = "gpt-4.1-mini"\ntemperature = 0.7\nmax_tokens = 1024\n'
 )
 
 (tmp / "readme.md").write_text(

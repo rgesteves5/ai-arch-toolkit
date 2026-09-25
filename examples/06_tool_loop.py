@@ -56,7 +56,7 @@ for t in group.definitions:
 print()
 
 # Tool loop — keep calling until the model stops requesting tools
-llm = LLM("gpt-4.1-nano")
+llm = LLM("gpt-4.1-mini")
 messages = [{"role": "user", "content": "What is 42 * 17, and convert 100 km to miles?"}]
 
 response = llm.complete_sync(messages, tools=group)

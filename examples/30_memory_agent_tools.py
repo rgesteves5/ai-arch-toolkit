@@ -71,7 +71,7 @@ async def main() -> None:
     print(f"Memory tools: {mem_tools}\n")
 
     # --- 3. Create flow with memory tools ---
-    llm = LLM("gpt-4.1-nano")
+    llm = LLM("gpt-4.1-mini")
     flow = react_flow(
         llm,
         mem_tools,

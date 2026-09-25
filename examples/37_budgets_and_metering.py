@@ -35,7 +35,7 @@ from ai_arch_toolkit import (
     budget_scope,
 )
 
-MODEL = "gpt-4.1-nano"  # cheap + priced in the registry; swap for any model you have a key for
+MODEL = "gpt-4.1-mini"  # cheap + priced in the registry; swap for any model you have a key for
 
 
 def _ask(llm: LLM, prompt: str):

@@ -13,7 +13,7 @@ from ai_arch_toolkit.toolkit.agents import tot_flow, tot_initial_state
 from ai_arch_toolkit.toolkit.tools import math_eval
 
 tools = ToolGroup(math_eval)
-llm = LLM("gpt-4.1-nano")
+llm = LLM("gpt-4.1-mini")
 
 flow = tot_flow(
     llm,
