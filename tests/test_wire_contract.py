@@ -241,11 +241,17 @@ class TestGemini:
         assert violations("GeminiProvider", params) == []
 
     def test_a_field_only_vertex_takes_is_caught(self) -> None:
+        # google-genai 2.25 stopped refusing Blob.display_name on the Developer API (its discovery
+        # doc update); a function call's will_continue and the config's labels are still Vertex's.
+        call = gemini.FunctionCall(name="f", args={}, will_continue=True)
         request = _gemini_request()
-        blob = gemini.Blob(data=b"x", mime_type="image/png", display_name="a.png")
-        request["contents"] = [gemini.Content(role="user", parts=[gemini.Part(inline_data=blob)])]
+        request["contents"] = [
+            *request["contents"],
+            gemini.Content(role="model", parts=[gemini.Part(function_call=call)]),
+        ]
 
-        _only(violations("GeminiProvider", request), "display_name")
+        _only(violations("GeminiProvider", request), "will_continue")
+        _only(violations("GeminiProvider", _gemini_request(labels={"team": "a"})), "labels")
 
     def test_a_value_set_after_construction_is_validated(self) -> None:
         request = _gemini_request()
