@@ -9,11 +9,34 @@ Reference guides and deep-dive explorations spanning LLM APIs, agent architectur
 | File | Description |
 |------|-------------|
 | `llm_api_complete_guide_2026.md` | Comprehensive guide to LLM provider APIs (Anthropic, OpenAI, Google, xAI) — auth, messaging, streaming, tools, multimodal, batch |
-| `llm_agent_architectures.md` | Survey of agent architectures: ReAct, ReWOO, Reflexion, Plan-and-Execute, LLM Compiler, ToT, LATS, Self-Discovery |
+| `llm_agent_architectures.md` | Early practical survey of agent architectures — superseded by the evidence review in `agent-strategies/` |
 | `python_best_practices.md` | Modern Python patterns, idioms, and conventions |
 | `modern_python_2015_16.md` | Python 3.12–3.16 features and migration notes |
 | `networkx_guide.md` | NetworkX library reference for graph construction, algorithms, and visualization |
 | `graph_algorithms_overview.md` | Core graph algorithms — traversal, shortest path, MST, centrality, community detection |
+
+---
+
+## Agent Strategies
+
+`agent-strategies/` — An evidence review (September 2026) of the ten strategies behind `ReasoningSpec(strategy=…)`: origin papers, measured results, strengths, failure modes, what changed with 2024–2026 reasoning models, router signals, and how each of our flows compares with its paper.
+
+| # | File | Topic |
+|---|------|-------|
+| 00 | `00-index.md` | Overview, headline findings, decision guide, state of our implementations |
+| 01 | `01-completion.md` | Single call — chain of thought, reasoning models, test-time compute |
+| 02 | `02-react.md` | ReAct and native tool loops |
+| 03 | `03-plan-execute.md` | Plan-and-execute, replanning, planning benchmarks |
+| 04 | `04-rewoo.md` | ReWOO and plan-then-execute security |
+| 05 | `05-llm-compiler.md` | LLMCompiler and parallel function calling |
+| 06 | `06-reflexion.md` | Reflexion, self-correction, verifier-gated retry |
+| 07 | `07-generate-review.md` | Generator–critic loops and LLM-as-judge biases |
+| 08 | `08-self-discovery.md` | SELF-DISCOVER and meta-reasoning prompts |
+| 09 | `09-tot.md` | Tree of Thoughts and test-time search |
+| 10 | `10-lats.md` | LATS and tree search for agents |
+| 11 | `11-cross-cutting.md` | Cost-aware comparisons, task properties, reasoning models vs scaffolds, per-query strategy routing |
+
+**Quick start:** read `00` for the verdicts and the decision guide, then the page of the strategy you are about to use.
 
 ---
 

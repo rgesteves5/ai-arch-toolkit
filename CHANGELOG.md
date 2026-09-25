@@ -689,6 +689,11 @@ flows, manifests) needs these changes; each one is detailed below.
   - `del x.attr` (ignored).
 - `python_repl`'s `and`/`or` stop at the operand that decides, as Python's do.
 - `python_repl`'s `x **= n` has the same exponent limit as `x ** n`.
+- **`lats` branches.** Each rollout added one child to a node that had none, so the search tree
+  was a single chain of attempts and `n_candidates` was ignored. A node now takes up to
+  `n_candidates` sibling attempts before the search goes below it, and UCT chooses among them, as
+  in Zhou et al. 2024 (LATS). `max_rollouts` still caps the total number of ReAct attempts. The
+  docstring now warns that rollouts re-run their tools, so tool side effects repeat.
 
 ### Removed
 - **The legacy `core._budget` module** (`BudgetState`, its cooperative `BudgetPolicy`). Budgets now live in `toolkit.budget` and enforce hard at the charge site rather than by cooperative counter-checking as steps record usage. `BudgetPolicy.max_wall_time` is now `max_wall_s`; the `strict_cost` / `allow_unpriced` flags are now the `reserve` / `unpriced` knobs. `BudgetExceeded` keeps its `.limit` / `.maximum` / `.to_dict()` surface.

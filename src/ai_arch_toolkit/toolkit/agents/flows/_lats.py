@@ -34,9 +34,13 @@ class _MCTSNode:
     answer: str = ""
 
 
-def _select_uct(node: _MCTSNode, exploration_weight: float) -> _MCTSNode:
-    """Select leaf node using UCT."""
-    while node.children:
+def _select_uct(node: _MCTSNode, exploration_weight: float, width: int) -> _MCTSNode:
+    """Select the node to expand next: descend by UCT through nodes that have ``width`` children.
+
+    A node takes up to ``width`` children, sibling attempts from its state, before the search goes
+    below it; from then on UCT chooses among those siblings. A width below 1 acts as 1.
+    """
+    while node.children and len(node.children) >= width:
         best = max(
             node.children,
             key=lambda c: (
@@ -84,12 +88,25 @@ def lats_flow(
 ) -> Flow:
     """Create a LATS Flow — MCTS with ReAct rollouts.
 
+    A node is a text state: the task plus the attempts that led to it. Each rollout selects, by
+    UCT, the most promising node that has fewer than ``n_candidates`` children, runs one inner
+    ReAct attempt from its state, scores the answer (``evaluator_fn``, else the evaluator LLM),
+    adds it as a child and backpropagates the score. A node thus gets up to ``n_candidates``
+    sibling attempts before the search goes below it (Zhou et al. 2024, Language Agent Tree
+    Search). A low-scoring attempt gets a reflection, passed to the attempts expanded from it. The
+    search stops at a score of 0.9 or after ``max_rollouts`` attempts; the solver then answers
+    from the best attempt.
+
+    Each attempt re-runs its tools from scratch: the flow has no environment reset, so tool side
+    effects repeat on every rollout. Use it only with read-only, idempotent or sandboxed tools.
+
     Args:
         llm: Default language model.
         tools: Tool group for ReAct rollouts.
         system: Base system prompt.
-        n_candidates: Number of candidates (used for node creation context).
-        max_rollouts: Maximum MCTS rollouts.
+        n_candidates: Sibling attempts a node gets before the search goes below it (the
+            branching factor).
+        max_rollouts: Maximum rollouts, one ReAct attempt each.
         exploration_weight: UCT exploration constant.
         max_react_iterations: Max iterations per inner ReAct.
         evaluator_fn: Optional external evaluator(task, answer) → score.
@@ -111,7 +128,7 @@ def lats_flow(
     extra = llm_kwargs or {}
 
     async def mcts_rollout(snap: StateSnapshot) -> Result:
-        """One MCTS rollout: select, expand (ReAct), evaluate, backprop."""
+        """One MCTS rollout: select a node, expand it by one ReAct attempt, evaluate, backprop."""
         task: str = snap.require(TASK)
         root: _MCTSNode = snap.require("mcts_root")
         rollout_num: int = snap.get("rollout_num", 0)
@@ -119,18 +136,18 @@ def lats_flow(
         async def _complete(model: LLM, *args: Any, **kwargs: Any):
             return await model.complete(*args, **kwargs)
 
-        # SELECT via UCT
-        leaf = _select_uct(root, exploration_weight)
+        # SELECT via UCT: the most promising node that still takes children
+        node = _select_uct(root, exploration_weight, n_candidates)
 
-        # EXPAND via inner ReAct
+        # EXPAND via inner ReAct: one more child of the node
         inner_system = system
-        if leaf.reflection:
-            inner_system += f"\n\nPrevious feedback:\n{leaf.reflection}"
+        if node.reflection:
+            inner_system += f"\n\nPrevious feedback:\n{node.reflection}"
 
         run = await run_react(
             inner_llm,
             inner_tools,
-            leaf.state,
+            node.state,
             system=inner_system,
             max_iterations=max_react_iterations,
             llm_kwargs=llm_kwargs,
@@ -154,11 +171,11 @@ def lats_flow(
 
         # Create child node
         child = _MCTSNode(
-            state=f"{leaf.state}\nAttempt: {answer}",
-            parent=leaf,
+            state=f"{node.state}\nAttempt: {answer}",
+            parent=node,
             answer=answer,
         )
-        leaf.children.append(child)
+        node.children.append(child)
 
         # BACKPROPAGATE
         _backprop(child, score)

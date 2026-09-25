@@ -1,6 +1,8 @@
 # LLM Agent Architectures
 
 > A practical reference for building your own agent using model API endpoints.
+>
+> **Superseded (2026-09-24)** by the evidence review in [`agent-strategies/`](agent-strategies/00-index.md). Some advice below does not hold up against that evidence — for example, "Add Reflexion when you need reliability … the highest ROI upgrade": cost-controlled reruns found a plain verifier-gated retry at least as accurate and cheaper.
 
 ---
 

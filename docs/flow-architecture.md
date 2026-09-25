@@ -637,13 +637,19 @@ Each iteration: select from frontier, generate candidates, evaluate, expand or s
 Cyclic flow — Monte Carlo Tree Search with ReAct rollouts.
 
 ```python
-flow = lats_flow(llm, tools, max_rollouts=10, exploration_weight=1.41)
+flow = lats_flow(llm, tools, n_candidates=5, max_rollouts=10, exploration_weight=1.41)
 state = State(operational=lats_initial_state("Complex reasoning task"))
 ```
 
 Steps: `mcts_rollout` (when: search_not_done) → loop
 
 Each rollout: UCT selection, ReAct expansion, evaluation, backpropagation, optional reflection.
+UCT picks the most promising node that still has fewer than `n_candidates` children, one ReAct
+attempt from its state becomes a new child, and a low score adds a reflection for the attempts
+expanded from it. A node thus gets up to `n_candidates` sibling attempts before the search goes
+below it; `max_rollouts` caps the total number of attempts. Each attempt re-runs its tools from
+scratch — there is no environment reset — so use `lats` only with read-only, idempotent or
+sandboxed tools.
 
 ### Self-Discovery
 
