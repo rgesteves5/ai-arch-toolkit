@@ -10,6 +10,7 @@ Reference guides and deep-dive explorations spanning LLM APIs, agent architectur
 |------|-------------|
 | `llm_api_complete_guide_2026.md` | Comprehensive guide to LLM provider APIs (Anthropic, OpenAI, Google, xAI) — auth, messaging, streaming, tools, multimodal, batch |
 | `llm_agent_architectures.md` | Early practical survey of agent architectures — superseded by the evidence review in `agent-strategies/` |
+| `task_oriented_evidence.md` | Compact task-oriented comparison with ReAct and routing implications |
 | `python_best_practices.md` | Modern Python patterns, idioms, and conventions |
 | `modern_python_2015_16.md` | Python 3.12–3.16 features and migration notes |
 | `networkx_guide.md` | NetworkX library reference for graph construction, algorithms, and visualization |
