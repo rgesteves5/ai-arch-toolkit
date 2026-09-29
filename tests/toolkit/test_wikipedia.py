@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
 from ai_arch_toolkit.toolkit.tools._wikipedia import (
     wikipedia_article,
     wikipedia_related,
@@ -100,6 +102,97 @@ class TestWikipediaRelated:
         ]
         result = wikipedia_related("Missing")
         assert "Wikipedia results" in result
+
+
+_RATELIMITED = {
+    "error": {
+        "code": "ratelimited",
+        "info": "You've exceeded your rate limit. Please wait some time and try again.",
+    }
+}
+
+
+@pytest.mark.parametrize(
+    ("fn", "failure"),
+    [
+        (wikipedia_search, "Wikipedia search failed"),
+        (wikipedia_article, "Wikipedia API failed"),
+        (wikipedia_related, "Wikipedia related lookup failed"),
+    ],
+)
+@patch(HTTP_OPEN)
+def test_an_error_the_api_reports_is_the_tools_error(mock_urlopen, fn, failure):
+    # MediaWiki sends it with HTTP 200; wikipedia_related does not fall back to a search.
+    mock_urlopen.return_value = respond(_RATELIMITED)
+
+    result = fn("Python")
+
+    assert result == (
+        f"{failure}: ratelimited: You've exceeded your rate limit. Please wait some time and try "
+        "again."
+    )
+    assert mock_urlopen.call_count == 1
+
+
+_INVALID_TITLE = {
+    "batchcomplete": "",
+    "query": {
+        "pages": {
+            "-1": {
+                "title": "a[b",
+                "invalidreason": 'The requested page title contains invalid characters: "[".',
+                "invalid": "",
+            }
+        }
+    },
+}
+
+
+@pytest.mark.parametrize(
+    ("fn", "failure"),
+    [
+        (wikipedia_article, "Wikipedia API failed"),
+        (wikipedia_related, "Wikipedia related lookup failed"),
+    ],
+)
+@patch(HTTP_OPEN)
+def test_an_invalid_title_is_the_tools_error_with_the_apis_reason(mock_urlopen, fn, failure):
+    # As answered live (2026-09-29): wikipedia_article said "No extract available", and
+    # wikipedia_related searched for the title instead.
+    mock_urlopen.return_value = respond(_INVALID_TITLE)
+
+    result = fn("a[b")
+
+    assert result == (
+        f'{failure}: invalid title: The requested page title contains invalid characters: "[".'
+    )
+    assert mock_urlopen.call_count == 1
+
+
+@patch(HTTP_OPEN)
+def test_an_invalid_title_without_a_reason_still_says_so(mock_urlopen):
+    mock_urlopen.return_value = respond({"query": {"pages": {"-1": {"invalid": ""}}}})
+
+    assert wikipedia_article("Talk:") == "Wikipedia API failed: invalid title"
+
+
+@patch(HTTP_OPEN)
+def test_an_answer_without_pages_is_not_found(mock_urlopen):
+    # An interwiki title, like "fr:Paris", comes back with no pages.
+    mock_urlopen.return_value = respond({"query": {"interwiki": [{"title": "fr:Paris"}]}})
+
+    assert wikipedia_article("fr:Paris") == "Article not found: 'fr:Paris'"
+
+
+@patch(HTTP_OPEN)
+def test_an_empty_search_reports_the_missing_parameter(mock_urlopen):
+    mock_urlopen.return_value = respond(
+        {"error": {"code": "missingparam", "info": 'The "srsearch" parameter must be set.'}}
+    )
+
+    assert wikipedia_search("") == (
+        'Wikipedia search failed: missingparam: The "srsearch" parameter must be set.'
+    )
 
 
 @patch(HTTP_OPEN)

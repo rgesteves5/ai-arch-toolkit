@@ -315,6 +315,131 @@ class TestErrors:
         assert caught.value.status is None
 
 
+def _reported(data: object) -> str | None:
+    """The example API's own error: ``{"error": text}``, or ``[{"error": text}]``."""
+    first = data[0] if isinstance(data, list) and data else data
+    return first.get("error") if isinstance(first, dict) else None
+
+
+REPORTING = Api(base="https://api.example.org/v1", name="Example", body_error=_reported)
+
+
+def _refuse(data: object) -> None:
+    raise AssertionError(f"parse ran on {data!r}")
+
+
+def _said(answer: object) -> str | None:
+    """An API's error sent as text in place of the JSON."""
+    return answer.strip() if isinstance(answer, str) else None
+
+
+def _length(answer: object) -> str | None:
+    return f"{len(answer)} characters" if isinstance(answer, str) else None
+
+
+_HTML = {"Content-Type": "text/html; charset=utf-8"}
+
+
+class TestBodyErrors:
+    """An API that answers errors with a success status declares how to read them."""
+
+    @pytest.mark.parametrize(
+        ("method", "kwargs", "body"),
+        [
+            ("get_json", {}, {"error": "no such thing"}),
+            ("get_json_list", {}, [{"error": "no such thing"}]),
+            ("post_json", {"payload": {}}, {"error": "no such thing"}),
+            ("post_form", {"form": {}}, {"error": "no such thing"}),
+        ],
+    )
+    def test_a_reported_error_is_raised_before_parse_runs(
+        self, web: _Transport, method: str, kwargs: dict[str, Any], body: object
+    ) -> None:
+        web.add("https://api.example.org/v1/x", body)
+
+        with pytest.raises(HttpError) as caught:
+            getattr(REPORTING, method)("x", parse=_refuse, **kwargs)
+
+        assert str(caught.value) == "no such thing"
+        assert caught.value.status is None
+
+    def test_an_answer_that_reports_no_error_reaches_parse(self, web: _Transport) -> None:
+        web.add("https://api.example.org/v1/x", {"items": [1]})
+
+        assert REPORTING.get_json("x", parse=dict) == {"items": [1]}
+
+    def test_the_reader_sees_the_answer_before_its_kind_is_checked(self, web: _Transport) -> None:
+        # An error object where the API usually sends an array is still the API's error.
+        web.add("https://api.example.org/v1/x", {"error": "no such list"})
+
+        with pytest.raises(HttpError, match=r"^no such list$"):
+            REPORTING.get_json_list("x", parse=_refuse)
+
+    def test_a_text_answer_is_left_to_its_parse(self, web: _Transport) -> None:
+        web.add("https://api.example.org/v1/t", '{"error": "just text"}')
+
+        assert REPORTING.get_text("t", parse=str) == '{"error": "just text"}'
+
+    @pytest.mark.parametrize(
+        ("method", "kwargs"),
+        [
+            ("get_json", {}),
+            ("get_json_list", {}),
+            ("post_json", {"payload": {}}),
+            ("post_form", {"form": {}}),
+        ],
+    )
+    def test_a_body_that_is_not_json_reaches_the_reader_as_its_text(
+        self, web: _Transport, method: str, kwargs: dict[str, Any]
+    ) -> None:
+        # Some APIs send an error as text in place of the JSON, with a success status.
+        api = Api(base="https://api.example.org/v1", name="Example", body_error=_said)
+        web.add("https://api.example.org/v1/x", "Query too short.\n", **_HTML)
+
+        with pytest.raises(HttpError) as caught:
+            getattr(api, method)("x", parse=_refuse, **kwargs)
+
+        assert str(caught.value) == "Query too short."
+        assert caught.value.status is None
+
+    def test_a_body_that_is_not_json_and_reports_no_error_is_a_parse_error(
+        self, web: _Transport
+    ) -> None:
+        web.add("https://api.example.org/v1/x", "not json", **_HTML)
+
+        with pytest.raises(HttpError, match=r"^could not parse API response: Expecting value"):
+            REPORTING.get_json("x", parse=_refuse)
+
+    def test_the_reader_gets_only_the_start_of_a_body_that_is_not_json(
+        self, web: _Transport
+    ) -> None:
+        api = Api(base="https://api.example.org/v1", name="Example", body_error=_length)
+        web.add("https://api.example.org/v1/x", "x" * 100_000, **_HTML)
+
+        with pytest.raises(HttpError, match=rf"^{_http._ERROR_BODY_CHARS} characters$"):
+            api.get_json("x", parse=_refuse)
+
+    def test_a_reader_that_trips_on_the_shape_is_a_parse_error(self, web: _Transport) -> None:
+        def strict(data: Any) -> str | None:
+            return data["error"]
+
+        api = Api(base="https://api.example.org/v1", name="Example", body_error=strict)
+        web.add("https://api.example.org/v1/x", {"items": []})
+
+        with pytest.raises(HttpError, match="could not parse API response: KeyError"):
+            api.get_json("x", parse=dict)
+
+    def test_within_keeps_the_reader(self) -> None:
+        api = Api.within(
+            "https://en.wikipedia.org/w/api.php",
+            {"wikipedia.org"},
+            name="MediaWiki",
+            body_error=_reported,
+        )
+
+        assert api.body_error is _reported
+
+
 class TestRedirects:
     def test_a_redirect_on_the_same_host_is_followed(self, web: _Transport) -> None:
         web.add("https://api.example.org/v1/old", b"", status=301, Location="/v1/new")

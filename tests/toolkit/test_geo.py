@@ -288,6 +288,17 @@ class TestCountryInfo:
         assert country_info("Japan") == "Country info failed: request timed out."
 
     @patch(HTTP_OPEN)
+    def test_an_error_the_search_api_reports_is_not_a_missing_country(self, mock_urlopen):
+        mock_urlopen.return_value = respond(
+            {"error": {"code": "ratelimited", "info": "You've exceeded your rate limit."}}
+        )
+
+        assert country_info("Japan") == (
+            "Country info failed: ratelimited: You've exceeded your rate limit."
+        )
+        assert mock_urlopen.call_count == 1
+
+    @patch(HTTP_OPEN)
     def test_a_malformed_query_answer_fails_cleanly(self, mock_urlopen):
         bad_row = _fact("Q17", "population", "many")
         mock_urlopen.side_effect = [respond({"search": [{"id": "Q17"}]}), _sparql([bad_row])]

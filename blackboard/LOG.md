@@ -399,3 +399,25 @@ R01 publicada em `main` (`b3dae3f`); a R02 começa com a leitura obrigatória da
   tipo do `_raw`, não o modelo) e schemas das funções normalizados para strict. Continua fora de
   âmbito.
 - Próximo: abrir a frente do contrato das tools no `BOARD.md`, quando o dono disser.
+
+## 2026-09-29 · Erros que as fontes mandam com sucesso (Claude, a pedido do dono)
+
+- A sessão paralela do `missingtitle`, revista e commitada a pedido do dono. A correcção está na
+  porta: o `Api` ganha `body_error`, uma função que lê a resposta antes do `parse=` e devolve o erro
+  que a fonte lá pôs; um corpo que não é JSON chega-lhe como texto (os primeiros 2000 caracteres).
+  Ainda com strings de erro.
+- Leitores: `mediawiki_error` em todos os `api.php` da MediaWiki (um teste verifica), a `message` do
+  World Bank, o `ERROR` do ESearch, o `error` do Internet Archive, o `remark` "runtime error" do
+  Overpass e a linha de texto do GDELT. A Wikipedia diz o `invalidreason` de um título inválido.
+- Anexo C do plano: resolvidas as confirmadas das tools MediaWiki, `wikipedia_*`, `wikidata_search`,
+  `country_info`, `world_bank_*` e `overpass_*`, e as suspeitas das duas tools do GDELT, do
+  `pubmed_search` e do `internet_archive_search`. A forma do `gdelt_timeline` confirmou-se (o
+  cliente `gdeltdoc` lê `timeline[0].data` e os seus testes correm contra a API): nenhuma resposta
+  dava pontos; corrigido. Continuam: a troca do `wikipedia_related` para a pesquisa quando a página
+  não existe (documentada), o `hacker_news`, o 204 da RCSB e as outras suspeitas.
+- Para o D38: o `body_error` só vê o corpo de um 2xx. A função do D38 lê também o estado e os
+  cabeçalhos, e o D37 troca a string por um erro tipado; os leitores passam para lá.
+- Gate: 5642 passed, 42 deselected; ruff e pyright limpos. Ao vivo: as correcções da MediaWiki, da
+  Wikipedia, do World Bank, do PubMed, do Internet Archive, do Overpass e o erro de texto do GDELT
+  (`Invalid/Unsupported Country.`); o timeline do GDELT não, porque a API respondeu 429 a todas as
+  tentativas.

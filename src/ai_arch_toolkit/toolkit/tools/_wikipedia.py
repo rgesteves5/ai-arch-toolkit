@@ -6,8 +6,9 @@ from typing import Any
 
 from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
+from ai_arch_toolkit.toolkit.tools._mediawiki import mediawiki_error
 
-_API = Api(base="https://en.wikipedia.org/w/api.php", name="Wikipedia")
+_API = Api(base="https://en.wikipedia.org/w/api.php", name="Wikipedia", body_error=mediawiki_error)
 _MAX_CHARS_LIMIT = 100_000
 
 
@@ -106,42 +107,50 @@ def _search_text(data: dict[str, Any], query: str) -> str:
     return f"Wikipedia results for {query!r}:\n" + "\n".join(lines)
 
 
-def _article_text(data: dict[str, Any], title: str, max_chars: int) -> str:
-    pages = data.get("query", {}).get("pages", {})
-    for page in pages.values():
-        if "missing" in page:
-            return f"Article not found: {title!r}"
-        extract = page.get("extract", "")
-        if not extract:
-            return f"No extract available for: {title!r}"
-        if len(extract) > max_chars:
-            return extract[:max_chars] + "\n\n[Truncated]"
-        return f"{page.get('title', title)}:\n{extract}"
+def _page(data: dict[str, Any]) -> dict[str, Any] | None:
+    """The page an ``action=query`` answer for one title describes; ``None`` when there is none.
 
-    return f"Article not found: {title!r}"
+    A title that cannot name a page comes back flagged ``invalid``, with its ``invalidreason``
+    (https://www.mediawiki.org/wiki/API:Query#Example_3:_Missing_and_invalid_titles): that is
+    the tool's error, not a page without text.
+    """
+    page = next(iter(data.get("query", {}).get("pages", {}).values()), None)
+    if page is not None and "invalid" in page:
+        reason = page.get("invalidreason")
+        raise HttpError(f"invalid title: {reason}" if reason else "invalid title")
+    return page
+
+
+def _article_text(data: dict[str, Any], title: str, max_chars: int) -> str:
+    page = _page(data)
+    if page is None or "missing" in page:
+        return f"Article not found: {title!r}"
+    extract = page.get("extract", "")
+    if not extract:
+        return f"No extract available for: {title!r}"
+    if len(extract) > max_chars:
+        return extract[:max_chars] + "\n\n[Truncated]"
+    return f"{page.get('title', title)}:\n{extract}"
 
 
 def _related_text(data: dict[str, Any], title: str, limit: int) -> str | None:
     """The page's outgoing links, or ``None`` to fall back to a search."""
-    pages = data.get("query", {}).get("pages", {})
-    for page in pages.values():
-        if "missing" in page:
-            return None
+    page = _page(data)
+    if page is None or "missing" in page:
+        return None
 
-        links = page.get("links", [])
-        if not links:
-            return None
+    links = page.get("links", [])
+    if not links:
+        return None
 
-        lines = [f"Related Wikipedia pages for {page.get('title', title)!r}:"]
-        for item in links[:limit]:
-            link_title = item.get("title", "")
-            if link_title:
-                lines.append(f"  - {link_title}")
-        if len(lines) == 1:
-            return None
-        return "\n".join(lines)
-
-    return None
+    lines = [f"Related Wikipedia pages for {page.get('title', title)!r}:"]
+    for item in links[:limit]:
+        link_title = item.get("title", "")
+        if link_title:
+            lines.append(f"  - {link_title}")
+    if len(lines) == 1:
+        return None
+    return "\n".join(lines)
 
 
 def _strip_html(text: str) -> str:

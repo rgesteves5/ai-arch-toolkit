@@ -9,11 +9,30 @@ from typing import Any
 from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
+
+def mediawiki_error(data: object) -> str | None:
+    """The error a MediaWiki API answer reports, as ``code: info``; ``None`` for a result.
+
+    MediaWiki answers errors with an ``error`` object in place of the result, usually with HTTP
+    200 (https://www.mediawiki.org/wiki/API:Errors_and_warnings), so every ``Api`` on an
+    ``api.php`` declares this as its ``body_error``.
+    """
+    error = data.get("error") if isinstance(data, dict) else None
+    if not isinstance(error, dict):
+        return None
+    reported = (_string(error.get("code")), _string(error.get("info")))
+    return ": ".join(text for text in reported if text) or "unknown error"
+
+
 _DEFAULT_API = "https://en.wiktionary.org/w/api.php"
 _TIMEOUT_S = 15
 _STATUS_MESSAGES = {404: "no matching records found."}
 _WIKTIONARY = Api(
-    base=_DEFAULT_API, name="MediaWiki", timeout_s=_TIMEOUT_S, status_messages=_STATUS_MESSAGES
+    base=_DEFAULT_API,
+    name="MediaWiki",
+    timeout_s=_TIMEOUT_S,
+    status_messages=_STATUS_MESSAGES,
+    body_error=mediawiki_error,
 )
 _MAX_LIMIT = 25
 _TEXT_RE = re.compile(r"^[\w\s,.'()/%:+-]{1,180}$", re.UNICODE)
@@ -149,6 +168,7 @@ def _api(api_url: str) -> Api | None:
             name="MediaWiki",
             timeout_s=_TIMEOUT_S,
             status_messages=_STATUS_MESSAGES,
+            body_error=mediawiki_error,
         )
     except HttpError:
         return None
@@ -157,6 +177,18 @@ def _api(api_url: str) -> Api | None:
 
 def _parse_params(title: str, props: str) -> dict[str, str]:
     return {"action": "parse", "page": title, "prop": props, "format": "json", "utf8": "1"}
+
+
+def _parse_result(data: dict[str, Any]) -> dict[str, Any]:
+    """The ``parse`` object of an ``action=parse`` answer.
+
+    An error answer never gets here (``mediawiki_error`` raised it first), so an answer without a
+    ``parse`` object has an unexpected shape.
+    """
+    parse = data.get("parse")
+    if not isinstance(parse, dict):
+        raise HttpError('could not parse API response: no "parse" object')
+    return parse
 
 
 def _search_text(data: dict[str, Any], query: str, offset: int) -> str:
@@ -180,9 +212,7 @@ def _search_text(data: dict[str, Any], query: str, offset: int) -> str:
 
 
 def _page_text(data: dict[str, Any], title: str, max_chars: int) -> str:
-    parse = data.get("parse", {})
-    if not isinstance(parse, dict):
-        return f"MediaWiki page not found: {title}"
+    parse = _parse_result(data)
     page_title = _string(parse.get("title")) or title.strip()
     text = _extract_wikitext(parse)
     cleaned = _clean_wikitext(text)
@@ -197,9 +227,7 @@ def _page_text(data: dict[str, Any], title: str, max_chars: int) -> str:
 
 
 def _sections_text(data: dict[str, Any], title: str) -> str:
-    parse = data.get("parse", {})
-    if not isinstance(parse, dict):
-        return f"MediaWiki page not found: {title}"
+    parse = _parse_result(data)
     sections = parse.get("sections", [])
     if not isinstance(sections, list) or not sections:
         return f"No MediaWiki sections found for {title}."
@@ -214,9 +242,7 @@ def _sections_text(data: dict[str, Any], title: str) -> str:
 
 
 def _entry_text(data: dict[str, Any], term: str, language: str, max_chars: int) -> str:
-    parse = data.get("parse", {})
-    if not isinstance(parse, dict):
-        return f"Wiktionary entry not found: {term}"
+    parse = _parse_result(data)
     text = _extract_wikitext(parse)
     focused = _language_section(text, language) or text
     cleaned = _clean_wikitext(focused)

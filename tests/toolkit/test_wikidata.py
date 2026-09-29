@@ -67,6 +67,26 @@ class TestWikidataSearch:
 
         assert "could not parse" in result
 
+    @patch(HTTP_OPEN)
+    def test_an_error_the_api_reports_is_the_tools_error(self, mock_urlopen):
+        # Sent with HTTP 200 (www.wikidata.org, 2026-09-29); it used to read as no results.
+        mock_urlopen.return_value = respond(
+            {
+                "error": {
+                    "code": "badvalue",
+                    "info": 'Unrecognized value for parameter "language": xx.',
+                    "*": "See https://www.wikidata.org/w/api.php for API usage.",
+                },
+                "servedby": "mw-api-ext.eqiad.main-79f4dd7c47-fhdrp",
+            }
+        )
+
+        result = wikidata_search("apple", language="xx")
+
+        assert result == (
+            'Wikidata search failed: badvalue: Unrecognized value for parameter "language": xx.'
+        )
+
 
 class TestWikidataEntity:
     @patch(HTTP_OPEN)

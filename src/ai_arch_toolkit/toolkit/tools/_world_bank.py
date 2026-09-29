@@ -10,6 +10,26 @@ from typing import Any, overload
 from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
+
+def _api_message(payload: object) -> str | None:
+    """The error a World Bank answer reports, as ``key: value``; ``None`` for a result.
+
+    The API sends its errors
+    (https://datahelpdesk.worldbank.org/knowledgebase/articles/898620-api-error-codes) as
+    ``[{"message": [{"id", "key", "value"}]}]``, with HTTP 200 (seen 2026-09-29).
+    """
+    first = payload[0] if isinstance(payload, list) and payload else None
+    messages = first.get("message") if isinstance(first, dict) else None
+    if not isinstance(messages, list):
+        return None
+    reported = [
+        ": ".join(text for text in (_string(item.get("key")), _string(item.get("value"))) if text)
+        for item in messages
+        if isinstance(item, dict)
+    ]
+    return "; ".join(text for text in reported if text) or "unknown error"
+
+
 # Country lists travel as one path segment, the codes joined by ";".
 _API = Api(
     base="https://api.worldbank.org/v2",
@@ -17,6 +37,7 @@ _API = Api(
     timeout_s=15,
     params={"format": "json"},
     segment_safe=";",
+    body_error=_api_message,
 )
 _MAX_RESULTS_LIMIT = 100
 _INDICATOR_SEARCH_PAGE_SIZE = 1000
@@ -332,14 +353,12 @@ def world_bank_compare(
 
 
 def _page(payload: list[Any]) -> tuple[dict[str, Any], list[Any]]:
-    """A World Bank answer's ``[metadata, items]``.
+    """A World Bank answer's ``[metadata, items]``; any other shape raises ``HttpError``.
 
-    An error message reads as an empty page; any other shape raises ``HttpError``.
+    An error message never reaches here: ``_API`` raises it first (``_api_message``).
     """
     if len(payload) >= 2:
         return _dict(payload[0]), payload[1] if isinstance(payload[1], list) else []
-    if payload and isinstance(payload[0], dict) and "message" in payload[0]:
-        return {}, []
     raise HttpError("could not parse API response: unexpected World Bank response shape")
 
 

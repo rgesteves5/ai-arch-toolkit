@@ -11,12 +11,26 @@ from typing import Any
 from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
+
+def _esearch_error(data: object) -> str | None:
+    """The error an ESearch answer reports in place of a result; ``None`` for a result.
+
+    ESearch answers ``ERROR`` instead of the count and ids
+    (https://eutils.ncbi.nlm.nih.gov/eutils/dtd/20060628/esearch.dtd), with HTTP 200 (seen
+    2026-09-29). A query that matches nothing is a result, with notes under ``warninglist``.
+    """
+    result = data.get("esearchresult") if isinstance(data, dict) else None
+    error = result.get("ERROR") if isinstance(result, dict) else None
+    return _clean_text(str(error)) if error else None
+
+
 # NCBI asks clients without an API key for at most three requests a second.
 _EUTILS = Api(
     base="https://eutils.ncbi.nlm.nih.gov/entrez/eutils",
     name="NCBI E-utilities",
     min_interval_s=0.34,
     params={"tool": "ai_arch_toolkit"},
+    body_error=_esearch_error,
 )
 _MAX_RESULTS_LIMIT = 20
 _ABSTRACT_MAX_CHARS = 900

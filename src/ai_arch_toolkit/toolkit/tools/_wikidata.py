@@ -9,8 +9,14 @@ from typing import Any
 
 from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
+from ai_arch_toolkit.toolkit.tools._mediawiki import mediawiki_error
 
-_API = Api(base="https://www.wikidata.org/w/api.php", name="Wikidata", timeout_s=15)
+_API = Api(
+    base="https://www.wikidata.org/w/api.php",
+    name="Wikidata",
+    timeout_s=15,
+    body_error=mediawiki_error,
+)
 _ENTITY_DATA = Api(
     base="https://www.wikidata.org/wiki/Special:EntityData", name="Wikidata", timeout_s=15
 )

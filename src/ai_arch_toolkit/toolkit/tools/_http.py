@@ -36,7 +36,8 @@ class HttpError(Exception):
     """A request that produced no usable body. ``str()`` is the reason shown to the model.
 
     Attributes:
-        status: The HTTP status of an error response; ``None`` when no response arrived.
+        status: The HTTP status of an error response; ``None`` when no response arrived, or when
+            the API reported the error inside a successful one (``Api.body_error``).
         body: The start of an error response's body, for APIs that explain errors there.
     """
 
@@ -289,7 +290,9 @@ class Api:
 
     Every request takes the function that reads its answer (``parse``), and whatever that
     function raises on a shape it did not expect becomes an ``HttpError``: no raw response leaves
-    this module unguarded, so a tool cannot crash on a body it did not foresee.
+    this module unguarded, so a tool cannot crash on a body it did not foresee. An API that
+    reports errors inside a successful answer declares how to read them (``body_error``), so no
+    ``parse`` mistakes such an answer for an empty result.
 
     Attributes:
         base: ``https://host/path`` without credentials, port, query, fragment or final slash.
@@ -302,6 +305,12 @@ class Api:
         segment_safe: Characters left raw in path segments.
         query_safe: Characters left raw in the query string.
         status_messages: The text shown for particular HTTP statuses.
+        body_error: For an API that answers some errors with a success status: reads the answer
+            and returns the error it reports, as the text shown to the model, or ``None`` when
+            it reports none. The JSON requests raise that text as an ``HttpError`` before
+            ``parse`` runs. It reads the decoded JSON or, for an API that sends an error as text
+            in place of the JSON, the start of a body that is not JSON; such a body that reports
+            no error is a parse error.
     """
 
     base: str
@@ -313,6 +322,7 @@ class Api:
     segment_safe: str = ""
     query_safe: str = ""
     status_messages: Mapping[int, str] = field(default_factory=dict)
+    body_error: Callable[[object], str | None] | None = None
 
     def __post_init__(self) -> None:
         if not _plain_base(self.base):
@@ -328,6 +338,7 @@ class Api:
         name: str,
         timeout_s: float = 10.0,
         status_messages: Mapping[int, str] | None = None,
+        body_error: Callable[[object], str | None] | None = None,
     ) -> Api:
         """An ``Api`` at ``url``, a URL that came from outside the module.
 
@@ -341,7 +352,13 @@ class Api:
             raise HttpError(f"host not allowed: {url!r}")
         if not _plain_base(url):
             raise HttpError(f"URL not allowed: {url!r} (https://host/path only)")
-        return cls(base=url, name=name, timeout_s=timeout_s, status_messages=status_messages or {})
+        return cls(
+            base=url,
+            name=name,
+            timeout_s=timeout_s,
+            status_messages=status_messages or {},
+            body_error=body_error,
+        )
 
     @property
     def host(self) -> str:
@@ -352,13 +369,13 @@ class Api:
         self, *segments: str, parse: Callable[[dict[str, Any]], T], params: Params | None = None
     ) -> T:
         """GET a JSON object from ``base/segment/...`` and read it with ``parse``."""
-        return _parsed(parse, _object(_json(self._send(segments, params))))
+        return _parsed(parse, _object(self._json_answer(segments, params)))
 
     def get_json_list[T](
         self, *segments: str, parse: Callable[[list[Any]], T], params: Params | None = None
     ) -> T:
         """GET a JSON array from ``base/segment/...`` and read it with ``parse``."""
-        return _parsed(parse, _array(_json(self._send(segments, params))))
+        return _parsed(parse, _array(self._json_answer(segments, params)))
 
     def get_text[T](
         self, *segments: str, parse: Callable[[str], T], params: Params | None = None
@@ -371,14 +388,36 @@ class Api:
     ) -> T:
         """POST a JSON payload and read the JSON object back with ``parse``."""
         body = (json.dumps(payload).encode(), "application/json")
-        return _parsed(parse, _object(_json(self._send(segments, None, body))))
+        return _parsed(parse, _object(self._json_answer(segments, None, body)))
 
     def post_form[T](
         self, *segments: str, form: Mapping[str, str], parse: Callable[[dict[str, Any]], T]
     ) -> T:
         """POST a form and read the JSON object back with ``parse``."""
         body = (urllib.parse.urlencode(form).encode(), "application/x-www-form-urlencoded")
-        return _parsed(parse, _object(_json(self._send(segments, None, body))))
+        return _parsed(parse, _object(self._json_answer(segments, None, body)))
+
+    def _json_answer(
+        self,
+        segments: tuple[str, ...],
+        params: Params | None,
+        body: tuple[bytes, str] | None = None,
+    ) -> object:
+        """The decoded JSON answer, unless it reports an error (``body_error``)."""
+        text = self._send(segments, params, body)
+        try:
+            value = _json(text)
+        except HttpError as not_json:
+            if error := self._reported(text[:_ERROR_BODY_CHARS]):
+                raise HttpError(error) from not_json
+            raise
+        if error := self._reported(value):
+            raise HttpError(error)
+        return value
+
+    def _reported(self, answer: object) -> str | None:
+        """The error ``answer`` reports, read by ``body_error``; ``None`` when it reports none."""
+        return None if self.body_error is None else _parsed(self.body_error, answer)
 
     def _send(
         self,

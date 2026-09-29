@@ -36,6 +36,26 @@ class TestOverpass:
         assert "around%3A500%2C38.7%2C-9.1" in body
 
     @patch(HTTP_OPEN)
+    def test_a_runtime_error_is_the_tools_error_even_with_partial_elements(self, mock_urlopen):
+        # Sent with HTTP 200 (overpass-api.de, 2026-09-29), after the elements found so far.
+        timeout = 'runtime error: Query timed out in "query" at line 1 after 4 seconds.'
+        mock_urlopen.return_value = respond({**_DATA, "remark": timeout})
+
+        assert overpass_query("[out:json][timeout:1];node[amenity];out;") == (
+            f"Overpass query failed: {timeout}"
+        )
+        mock_urlopen.return_value = respond({"elements": [], "remark": timeout})
+        assert overpass_pois("amenity", latitude=38.7, longitude=-9.1) == (
+            f"Overpass POI search failed: {timeout}"
+        )
+
+    @patch(HTTP_OPEN)
+    def test_another_remark_is_a_note(self, mock_urlopen):
+        mock_urlopen.return_value = respond({**_DATA, "remark": "a note that is no error"})
+
+        assert "Cafe A | node/1" in overpass_query("[out:json];node(1);out;")
+
+    @patch(HTTP_OPEN)
     def test_invalid_options_do_not_call_api(self, mock_urlopen):
         assert "include [out:json]" in overpass_query("node;")
         assert "provide bbox" in overpass_pois("amenity", "cafe")

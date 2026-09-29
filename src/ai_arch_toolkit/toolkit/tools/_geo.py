@@ -10,6 +10,7 @@ from typing import Any
 
 from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
+from ai_arch_toolkit.toolkit.tools._mediawiki import mediawiki_error
 
 _GEOCODING = Api(base="https://geocoding-api.open-meteo.com/v1", name="Open-Meteo", query_safe=",")
 _FORECAST = Api(base="https://api.open-meteo.com/v1", name="Open-Meteo", query_safe=",")
@@ -21,7 +22,12 @@ _IPWHOIS = Api(base="https://ipwho.is", name="ipwho.is", segment_safe=":")
 # Country facts come from Wikidata, free and without a key: the search API finds the candidates,
 # one SPARQL query reads those that hold an ISO 3166-1 code. REST Countries took v1-v4 down and
 # its v5 needs a key: https://restcountries.com/docs/countries/legacy-api-deprecation
-_WIKIDATA = Api(base="https://www.wikidata.org/w/api.php", name="Wikidata", timeout_s=15)
+_WIKIDATA = Api(
+    base="https://www.wikidata.org/w/api.php",
+    name="Wikidata",
+    timeout_s=15,
+    body_error=mediawiki_error,
+)
 _WIKIDATA_SPARQL = Api(
     base="https://query.wikidata.org/sparql", name="Wikidata Query Service", timeout_s=15
 )

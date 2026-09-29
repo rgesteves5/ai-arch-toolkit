@@ -8,11 +8,25 @@ from typing import Any
 from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
+
+def _runtime_error(data: object) -> str | None:
+    """The error an Overpass answer reports in its ``remark``; ``None`` for a result.
+
+    A query that fails while running, on a timeout or out of memory
+    (https://wiki.openstreetmap.org/wiki/Overpass_API/Overpass_QL), still answers HTTP 200: the
+    elements found so far and a ``remark`` that starts "runtime error" (seen 2026-09-29). Other
+    remarks are notes.
+    """
+    remark = _string(data.get("remark")) if isinstance(data, dict) else ""
+    return remark if remark.startswith("runtime error") else None
+
+
 _API = Api(
     base="https://overpass-api.de/api/interpreter",
     name="Overpass",
     timeout_s=35,
     status_messages={504: "Overpass query timed out upstream (HTTP 504)."},
+    body_error=_runtime_error,
 )
 _MAX_LIMIT = 50
 _TAG_RE = re.compile(r"^[A-Za-z0-9_:-]{1,80}$")

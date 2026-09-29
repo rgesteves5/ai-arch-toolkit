@@ -6,6 +6,8 @@ import urllib.error
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
+import pytest
+
 from ai_arch_toolkit.toolkit.tools._world_bank import (
     world_bank_compare,
     world_bank_countries,
@@ -265,3 +267,59 @@ class TestWorldBankSeries:
         mock_urlopen.side_effect = None
         mock_urlopen.return_value = respond("not json")
         assert "could not parse" in world_bank_topics()
+
+
+# What the API answers, with HTTP 200, for an indicator or source ID it does not know
+# (api.worldbank.org, 2026-09-29).
+_INVALID_VALUE = [
+    {
+        "message": [
+            {
+                "id": "120",
+                "key": "Invalid value",
+                "value": "The provided parameter value is not valid",
+            }
+        ]
+    }
+]
+
+
+@pytest.mark.parametrize(
+    ("call", "failure"),
+    [
+        (lambda: world_bank_series("PRT", "NOT.AN.INDICATOR"), "World Bank series failed"),
+        (lambda: world_bank_compare("NOT.AN.INDICATOR", "PRT,ESP"), "World Bank compare failed"),
+        (lambda: world_bank_indicator("NOT.AN.INDICATOR"), "World Bank indicator lookup failed"),
+        (lambda: world_bank_indicators(source="99999"), "World Bank indicators failed"),
+        (lambda: world_bank_indicators(query="gdp", scan_pages=2), "World Bank indicators failed"),
+        (world_bank_topics, "World Bank topics failed"),
+        (world_bank_sources, "World Bank sources failed"),
+        (world_bank_countries, "World Bank countries failed"),
+    ],
+)
+@patch(HTTP_OPEN)
+def test_an_error_the_api_reports_is_the_tools_error_not_an_empty_page(
+    mock_urlopen, call, failure
+):
+    mock_urlopen.return_value = respond(_INVALID_VALUE)
+
+    assert call() == f"{failure}: Invalid value: The provided parameter value is not valid"
+    assert mock_urlopen.call_count == 1
+
+
+@patch(HTTP_OPEN)
+def test_every_message_the_api_reports_is_kept(mock_urlopen):
+    mock_urlopen.return_value = respond(
+        [
+            {
+                "message": [
+                    {"id": "120", "key": "Invalid value", "value": "Bad country"},
+                    {"id": "175", "key": "Invalid format", "value": "Bad indicator"},
+                ]
+            }
+        ]
+    )
+
+    assert world_bank_series("PRT", "SP.POP.TOTL") == (
+        "World Bank series failed: Invalid value: Bad country; Invalid format: Bad indicator"
+    )

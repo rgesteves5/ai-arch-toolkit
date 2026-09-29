@@ -459,6 +459,28 @@ flows, manifests) needs these changes; each one is detailed below.
   - `select` or `serialize_as` on an inline template (they were ignored).
 
 ### Fixed
+- **Tools report the errors an API sends with a success status.** MediaWiki answers errors with
+  HTTP 200 and an `error` object instead of the result, which the tools read as an empty result: on
+  a page that does not exist, `mediawiki_page` returned only its header line, `wiktionary_entry`
+  only `Wiktionary entry X (English):`, and `mediawiki_sections` "No MediaWiki sections found", so
+  an agent never learned the page was missing. They now fail with the API's code and info
+  (`MediaWiki page failed: missingtitle: The page you specified doesn't exist.`), and so do
+  `mediawiki_search`, the `wikipedia_*` tools, `wikidata_search` and `country_info`. An
+  `action=parse` answer without a `parse` object fails as an unexpected response, and a title the
+  API flags `invalid` fails with its reason (`wikipedia_article` said "No extract available", and
+  `wikipedia_related` searched for it). Other APIs that do the same are now read too, in their own
+  words: a World Bank `message` (an unknown indicator or source read as an empty page, and
+  `world_bank_indicator` said "not found"), the `ERROR` of a PubMed search ("No PubMed results"),
+  an Internet Archive `error` (a search read as "No items found", an item lookup as "not found"),
+  an Overpass "runtime error" remark (a query that timed out read as "No Overpass elements
+  found."), and the line of text GDELT sends in place of the JSON (`Your query was too short or
+  too long.` read as "could not parse API response"). The `Api` of each of these services
+  declares how it reports such errors (`body_error`, which also reads a body that is not JSON),
+  and `_http` checks that before any `parse` runs.
+- **`gdelt_timeline` returns the timeline.** GDELT nests the points under the series
+  (`{"timeline": [{"series": …, "data": [points]}]}`), and the tool read each series as a point, so
+  every answer came back as "No GDELT timeline points found". It now lists the series' points, and
+  when it shows only the first 20 it says of how many (the default 30-day timespan has 31).
 - **Tree of Thoughts searches best first and always answers.** DFS expanded the worst-scored child
   first (`frontier.pop()` took the last of the children sorted best to worst); it now expands the
   most promising one. BFS kept every state of each level, so with the defaults it made 40 calls,

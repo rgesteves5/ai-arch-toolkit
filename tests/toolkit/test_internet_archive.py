@@ -19,6 +19,19 @@ def _called_params(mock_urlopen) -> dict[str, list[str]]:
 
 class TestInternetArchiveSearch:
     @patch(HTTP_OPEN)
+    def test_a_query_the_search_cannot_run_is_the_tools_error(self, mock_urlopen):
+        # Sent with HTTP 200 (archive.org, 2026-09-29); it used to read as no items.
+        mock_urlopen.return_value = respond(
+            {"error": 'a group is empty (near char ")" at position 10)'}
+        )
+
+        result = internet_archive_search("title:(")
+
+        assert result == (
+            'Internet Archive search failed: a group is empty (near char ")" at position 10)'
+        )
+
+    @patch(HTTP_OPEN)
     def test_returns_items(self, mock_urlopen):
         mock_urlopen.return_value = respond(
             {
@@ -117,3 +130,18 @@ class TestInternetArchiveItem:
         result = internet_archive_item("missing")
 
         assert "not found" in result
+
+    @patch(HTTP_OPEN)
+    def test_an_error_the_metadata_api_reports_is_not_a_missing_item(self, mock_urlopen):
+        mock_urlopen.return_value = respond({"error": "Item is temporarily unavailable."})
+
+        result = internet_archive_item("goodytwoshoes00newyiala")
+
+        assert result == "Internet Archive item lookup failed: Item is temporarily unavailable."
+
+    @patch(HTTP_OPEN)
+    def test_an_unknown_identifier_is_still_not_found(self, mock_urlopen):
+        # The metadata API answers an identifier it does not know with an empty object.
+        mock_urlopen.return_value = respond({})
+
+        assert internet_archive_item("zzqqxx") == "Internet Archive item not found: zzqqxx"

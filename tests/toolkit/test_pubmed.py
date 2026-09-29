@@ -175,6 +175,45 @@ class TestPubmedSearch:
         assert "could not parse API response" in result
 
     @patch(HTTP_OPEN)
+    def test_an_error_the_search_reports_is_the_tools_error(self, mock_urlopen):
+        # Sent with HTTP 200 (eutils.ncbi.nlm.nih.gov, 2026-09-29); it used to read as no results.
+        mock_urlopen.return_value = respond(
+            {
+                "header": {"type": "esearch", "version": "0.3"},
+                "esearchresult": {
+                    "ERROR": "Search Backend failed: An error occurred while processing request. "
+                    "Details: Empty Term in the request"
+                },
+            }
+        )
+
+        result = pubmed_search("(((")
+
+        assert result == (
+            "PubMed search failed: Search Backend failed: An error occurred while processing "
+            "request. Details: Empty Term in the request"
+        )
+        assert mock_urlopen.call_count == 1
+
+    @patch(HTTP_OPEN)
+    def test_a_query_that_matches_nothing_is_no_error(self, mock_urlopen):
+        mock_urlopen.return_value = respond(
+            {
+                "header": {"type": "esearch", "version": "0.3"},
+                "esearchresult": {
+                    "count": "0",
+                    "idlist": [],
+                    "warninglist": {
+                        "quotedphrasesnotfound": ['"zzqqxxnotaword"'],
+                        "outputmessages": ["No items found."],
+                    },
+                },
+            }
+        )
+
+        assert pubmed_search("zzqqxxnotaword") == "No PubMed results for: 'zzqqxxnotaword'"
+
+    @patch(HTTP_OPEN)
     def test_article_xml_parse_failure(self, mock_urlopen):
         mock_urlopen.side_effect = [respond(_ESEARCH_RESULT), respond("<not xml")]
 

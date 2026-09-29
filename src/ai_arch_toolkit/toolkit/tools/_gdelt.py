@@ -9,12 +9,25 @@ from typing import Any
 from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
+
+def _query_error(answer: object) -> str | None:
+    """The error GDELT sends in place of the JSON; ``None`` for a result.
+
+    GDELT answers a request it cannot run with a line of text instead of JSON, still with HTTP
+    200 (seen 2026-09-29: "Your query was too short or too long.", "Invalid/Unsupported
+    Country."). Text that starts like JSON is a broken answer, not a message.
+    """
+    message = " ".join(answer.split()) if isinstance(answer, str) else ""
+    return message if message and not message.startswith(("{", "[")) else None
+
+
 # At most one request every 5 seconds, with a margin: GDELT answers faster callers with a 429.
 _API = Api(
     base="https://api.gdeltproject.org/api/v2/doc/doc",
     name="GDELT",
     timeout_s=15,
     min_interval_s=5.1,
+    body_error=_query_error,
 )
 _MAX_RESULTS_LIMIT = 20
 _TIMESPAN_RE = re.compile(r"^\d+[mhdw]$", re.IGNORECASE)
@@ -126,11 +139,17 @@ def _articles_text(data: dict[str, Any], query: str) -> str:
 
 
 def _timeline_text(data: dict[str, Any], query: str) -> str:
-    points = [_parse_timeline_point(item) for item in data.get("timeline", [])]
+    """The points of the timeline's one series: ``{"timeline": [{"series", "data": [...]}]}``."""
+    series = next((item for item in data.get("timeline", []) if isinstance(item, dict)), {})
+    points = [_parse_timeline_point(item) for item in series.get("data", [])]
     points = [point for point in points if point is not None]
     if not points:
         return f"No GDELT timeline points found for: {query!r}"
-    return f"GDELT timeline for {query!r}:\n" + _format_timeline(points)
+    name = str(series.get("series", "") or "").strip()
+    heading = f"GDELT timeline for {query!r}" + (f" ({name})" if name else "")
+    if len(points) > _MAX_RESULTS_LIMIT:
+        heading += f", first {_MAX_RESULTS_LIMIT} of {len(points)} points"
+    return f"{heading}:\n" + _format_timeline(points)
 
 
 def _parse_article(data: dict[str, Any]) -> _GdeltArticle | None:
