@@ -8,8 +8,8 @@ ficheiros, 1 de shell, 1 de Python), com as respostas das fontes simuladas na co
 `_http._open`, sem rede. Ao vivo, só as APIs gratuitas da MediaWiki e a base de dados local do
 ai-network. *Confirmado*: o caminho foi reproduzido sem rede e o comportamento da fonte está
 documentado. *Suspeito*: o caminho existe, mas o comportamento da fonte não foi visto ao vivo.
-**Estado:** decisões D37–D41 tomadas (`blackboard/DECISIONS.md`). Ainda não é uma frente no
-`BOARD.md`.
+**Estado:** decisões D37–D42 tomadas (`blackboard/DECISIONS.md`); frente T aberta a 30/09 no
+`BOARD.md`, com as fichas T00–T09. O `c259e0b` (29/09) já resolveu parte do anexo C.
 
 ## 0. Resumo
 

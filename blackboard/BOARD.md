@@ -1,7 +1,64 @@
 # Quadro
 
+## Frente activa: contrato das tools
+
+- **Estado:** aberta em 2026-09-30. Fichas T00 (regras) e T01 a T09 escritas; nenhuma tarefa
+  começou.
+- **Plano:** `docs/internal/tools-contract-plan.md`. **Regras:** `tasks/T00-rules.md`, que remete
+  para `tasks/R00-rules.md`. **Decisões:** D37 a D42, tomadas pelo coordenador por delegação do dono.
+- **Origem:** duas conversas do ai-network em que o agente não chegou ao que as páginas tinham, e o
+  levantamento das 132 tools (29/09).
+- **Base:** `main` @ `c259e0b`; gate 5642 passed, 42 deselected.
+- **Já feito antes da abertura:** `c259e0b` fez a parte da D38 sobre os erros dentro de um 200,
+  ainda com strings. Resolveu as confirmadas do anexo C nas tools MediaWiki, `wikipedia_*`,
+  `wikidata_search`, `country_info`, `world_bank_*` e `overpass_*`, e corrigiu o `gdelt_timeline`.
+- **Com a frente C:** C01, C04, C06 e C09 não tocam em tools e podem correr em paralelo. A C02 e a
+  T04a partilham `core/_tools`, por isso aplicam-se em série. A C07 e a C08 criam tools: esperam
+  pela T01 e pela T03 e nascem com o contrato. As fichas delas ainda dizem "erros → string"; vale a
+  D37.
+- **Como correr:** cada ficha num agente com contexto limpo; a T06, a T07, a T08 e a T09 em
+  worktrees, em paralelo. Os agentes não fazem commits nem chamadas a fornecedores; o dono revê e
+  commita.
+
+| ID | Tarefa | Dono | Estado | Depende de |
+|---|---|---|---|---|
+| T01 | Falhas tipadas: `ToolFailure`, executor, `is_error`, os 44 módulos sem strings de erro | — | todo | nada |
+| T02 | Porta HTTP: um leitor de erros por fonte, 404 por endpoint, erro da fonte na mensagem | — | todo | T01 |
+| T03 | Janela: primitiva de corte com rodapé e continuação | — | todo | nada; aplicar depois da T01 |
+| T04a | Limites na assinatura: marcador no schema e no validador | — | todo | nada; em série com a C02 |
+| T04b | Invariante de contrato e lista de dívida | — | todo | T01, T02, T03, T04a |
+| T05 | Família wiki: HTML, navegação e fusão (8 tools) | — | todo | T04b |
+| T06 | Literatura e identificadores (8 módulos, 18 tools) | — | todo | T05 |
+| T07 | Vida e saúde (9 módulos, 34 tools) | — | todo | T05 |
+| T08 | Dados, geo e notícias (13 módulos, 44 tools) | — | todo | T05 |
+| T09 | Ficheiros, web e o resto (11 módulos, 28 tools) | — | todo | T05 |
+
+### Ordem de aplicação
+
+| Vaga | Tarefas | Porquê |
+|---|---|---|
+| 1 | T01, T03, T04a | Ficheiros quase disjuntos: a T01 mexe no núcleo das tools, na porta e em todos os módulos; a T03 cria um módulo novo (e toca no `_bounded` depois da T01); a T04a mexe no `_schema.py` e no `_validation.py`. |
+| 2 | T02 | Precisa do `ToolFailure`; mexe na porta e nos módulos com leitores ou `status_messages`. |
+| 3 | T04b | A invariante verifica o que as costuras dão. |
+| 4 | T05 | A primeira família a sair da lista de dívida; fica como modelo. |
+| 5 | T06, T07, T08, T09 | Módulos disjuntos, em paralelo; o coordenador junta a lista de dívida, o `CHANGELOG` e os docs. |
+
+### Quebras visíveis
+
+- **T01:** uma tool que falha, chamada crua, lança `ToolFailure`; pelo executor dá `ok=False` com o
+  tipo. `ToolFailure` é pública.
+- **T03:** os textos de corte mudam para o formato do rodapé.
+- **T04a:** um argumento fora dos limites passa a ser recusado com `validation_error`, em vez de
+  ajustado em silêncio. O marcador de limites é público.
+- **T05 a T09:** tools fundidas ou renomeadas (sem aliases, com tabela de migração) e saídas
+  formatadas de outra maneira. O `nanope` importa tools pelo nome: pergunta-se ao dono antes de tirar
+  um nome que ele use.
+
 ## Frente activa: capacidades em falta
 
+- **Com a frente T (30/09):** C01, C04, C06 e C09 seguem em paralelo. A C02 aplica-se em série com a
+  T04a. A C07 e a C08 esperam pela T01 e pela T03, e as tools delas seguem a D37 (falhas tipadas),
+  não o "erros → string" das fichas.
 - **A vez:** volta a esta frente com o fim da R03 (2026-09-18). A base é o `main` publicado com a
   R03 (`6ceb516` e o registo; gate 5465 passed, 42 deselected). As fichas
   foram escritas antes da frente de robustez: quem pegar numa relê a sua secção de ficheiros contra

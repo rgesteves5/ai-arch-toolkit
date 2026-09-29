@@ -445,3 +445,20 @@ Só acrescentar. Uma decisão revista ganha uma nova entrada que diz qual substi
   mantêm dois caminhos.
 - **Consequência:** mudança incompatível. O `CHANGELOG` traz a tabela de migração, e o ai-network,
   que chama as tools pelo nome, recebe o aviso antes.
+
+## D42 · A excepção das tools chama-se `ToolFailure` e leva o `ToolError` (refina D37)
+
+- **Contexto:** a D37 escreveu "as tools lançam `ToolError`", mas `ToolError` já é o registo público
+  (dataclass congelada, exportada no topo) que o `ToolResult` leva no campo `error`. Uma dataclass
+  congelada não pode ser uma excepção (o Python escreve `__traceback__` ao lançar), e dar dois
+  significados ao mesmo nome seria pior.
+- **Decisão:**
+  - A excepção chama-se `ToolFailure(Exception)` e leva um `ToolError` em `.error`; o executor
+    devolve `ToolResult(ok=False, error=exc.error)`, com a mensagem redigida como hoje.
+  - Os tipos que as tools lançam são `not_found`, `validation_error`, `upstream` e `rate_limited`.
+    Um argumento inválido usa o `validation_error` que o executor já dá quando o schema falha: para
+    o agente é o mesmo assunto.
+  - O `tool_result()` ganha `is_error`, e o adaptador Anthropic manda-o no bloco `tool_result`. Nos
+    outros fornecedores, o `Tool error [type]: …` do `to_model_text()` já o diz no texto.
+  - O `HttpError` da porta é uma subclasse de `ToolFailure`.
+- **Consequência:** a D37 lê-se com estes nomes; o `ToolError` não muda.

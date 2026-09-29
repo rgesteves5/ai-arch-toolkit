@@ -421,3 +421,19 @@ R01 publicada em `main` (`b3dae3f`); a R02 começa com a leitura obrigatória da
   Wikipedia, do World Bank, do PubMed, do Internet Archive, do Overpass e o erro de texto do GDELT
   (`Invalid/Unsupported Country.`); o timeline do GDELT não, porque a API respondeu 429 a todas as
   tentativas.
+
+## 2026-09-30 · Frente do contrato das tools aberta (Claude, a pedido do dono)
+
+- Apagadas, a pedido do dono, as 33 branches locais cujo remoto já não existe, depois de verificar
+  que estavam todas integradas no `main` e que nenhuma estava numa worktree.
+- `main` avançou para `c259e0b` (a sessão paralela do `missingtitle`: leitores de erros num 200,
+  ainda com strings). As fichas partem daí.
+- Frente T aberta no `BOARD.md`: regras em `tasks/T00-rules.md` e fichas T01 a T09. As costuras vêm
+  primeiro (falhas tipadas, porta HTTP, janela, limites); depois a invariante de contrato com a lista
+  de dívida; depois a família wiki, que fica como modelo; e, por fim, os quatro grupos de módulos em
+  paralelo.
+- D42 refina a D37: a excepção chama-se `ToolFailure` e leva o `ToolError` público, que já existia
+  como registo; os argumentos inválidos usam o `validation_error` do executor.
+- Com a frente C: a C07 e a C08 esperam pela T01 e pela T03; a C02 e a T04a aplicam-se em série; o
+  resto segue em paralelo.
+- Próximo: o dono escolhe quem pega na vaga 1 (T01, T03, T04a).
