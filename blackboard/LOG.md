@@ -375,3 +375,27 @@ R01 publicada em `main` (`b3dae3f`); a R02 começa com a leitura obrigatória da
 - Por resolver: `define_word` depende do dictionaryapi.dev, que responde 522 da Cloudflare ao fim
   de ~19 s (o nosso prazo é 10 s). Não é código nosso; o `wiktionary_entry` cobre as definições.
 - Gate: 5549 passed, 42 skipped; ruff, formatação e pyright limpos.
+
+## 2026-09-29 · Commits pendentes e contrato das tools (Claude, a pedido do dono)
+
+- Por fazer push, nada. Por commitar: as correcções de 28/09 (checkout principal) e quatro
+  correcções de estratégias de 24/09 numa worktree (`exciting-germain-a41255`), nunca aplicadas nem
+  registadas: ToT, notas do avaliador em `tot`/`lats`, `ACCEPT` do `generate_review`, `$N` do
+  `llm_compiler`.
+- As duas passaram o gate num export do `main`; commitadas como `d892cfd` (tools) e `1433016`
+  (estratégias, com o `CHANGELOG` fundido à mão) e enviadas. Gate: 5566 passed, 42 skipped; ruff e
+  pyright limpos. A worktree antiga fica como estava.
+- Levantamento das 132 tools, depois de duas conversas do ai-network em que o agente não chegou ao
+  que as páginas tinham: `docs/internal/tools-contract-plan.md`. Decisões D37–D41: falhas tipadas,
+  porta HTTP que valida, janela sem becos sem saída, MediaWiki pelo HTML renderizado, fusão das tools
+  repetidas sem aliases.
+- Em paralelo, numa sessão própria: `mediawiki_page` e `wiktionary_entry` deixam de devolver sucesso
+  vazio para páginas que não existem (ainda com strings de erro; converte-se no passo 3 do plano).
+- Fornecedor, fora do plano: a GPT-6 Luna nunca raciocina num agente com tools, porque o adaptador
+  OpenAI só usa a Chat Completions, que desde o GPT-5.4 só aceita tools com `reasoning_effort` a
+  `none`. A porta para a Responses API tem custos relatados por terceiros: latência 2–3× (medição de
+  2025 no Azure), histórico frágil com o raciocínio cifrado (400 quando um item de raciocínio perde o
+  seu par), raciocínio preso ao modelo e à organização (o `_replayable_output` da Meta verifica o
+  tipo do `_raw`, não o modelo) e schemas das funções normalizados para strict. Continua fora de
+  âmbito.
+- Próximo: abrir a frente do contrato das tools no `BOARD.md`, quando o dono disser.

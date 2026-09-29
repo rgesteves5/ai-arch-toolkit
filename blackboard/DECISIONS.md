@@ -363,3 +363,85 @@ Só acrescentar. Uma decisão revista ganha uma nova entrada que diz qual substi
     - um objecto onde se espera uma lista;
     - o crash do `trace_capture`.
   - As mensagens de forma ganham um só formato. Mudanças visíveis no `CHANGELOG`.
+
+## D37 · As falhas das tools são `ToolError` tipados, e o executor trata-as como falhas (contrato das tools)
+
+- **Contexto:** as tools devolvem strings de erro, com seis ou mais formulações, e o executor
+  embrulha qualquer valor em `ToolResult.success`. O meter liquida a chamada como sucesso, nenhum
+  fornecedor recebe o sinal de erro e o ai-network mostrou `ok: true` para páginas que não existiam
+  (`docs/internal/tools-contract-plan.md`, 3.1).
+- **Decisão:**
+  - Uma tool que não consegue responder lança `ToolError` com um tipo de um conjunto fechado
+    (`not_found`, `invalid_argument`, `upstream`, `rate_limited`), uma mensagem com o motivo da
+    fonte e o passo seguinte, e o `retryable` certo.
+  - O executor, que já converte excepções em falhas sem parar o agente, usa esse tipo em vez de
+    `runtime_error`; o `tool_result()` leva o erro, e cada adaptador passa-o como o fornecedor o
+    aceita (o `is_error` do Anthropic).
+  - O `HttpError` passa a ser um `ToolError`.
+  - Zero resultados não é falha: é um sucesso que o diz, com a consulta.
+- **Consequência:**
+  - Desaparecem as strings de erro feitas à mão e o `try/except HttpError` de cada tool.
+  - A regra do `AGENTS.md` ("Toolkit tools return error strings instead of raising") muda quando a
+    costura entrar.
+  - Quem chama a função crua, fora do executor, passa a ver excepções. Mudança visível no
+    `CHANGELOG`, com aviso ao ai-network.
+
+## D38 · A porta HTTP valida a resposta de cada fonte (contrato das tools)
+
+- **Contexto:** o `_http` trata qualquer 2xx como sucesso e não entrega estado nem cabeçalhos às
+  tools; o corpo dos erros perde-se; 12 módulos traduzem qualquer 404 por "no matching records
+  found."; os erros dentro de um 200 (MediaWiki `error`, World Bank `message`, Overpass `remark`,
+  texto do GDELT, 204 da RCSB) viram "sem resultados" (plano, 3.2 e anexo C).
+- **Decisão:**
+  - Cada `Api` declara uma vez como a sua fonte sinaliza erro: uma função sobre estado, cabeçalhos
+    e corpo, corrida antes do `parse=`.
+  - O que um 404 quer dizer é declarado por endpoint: num recurso é `not_found`; numa pesquisa ou
+    listagem é `upstream`, porque o endpoint mudou.
+  - A mensagem leva o código e o texto da fonte.
+- **Consequência:** desaparecem os `status_messages={404: …}` e as guardas `isinstance` que nunca
+  disparam. Um endpoint mudado deixa de parecer "sem resultados", como o `uniprot_search` antes de
+  28/09.
+
+## D39 · Nenhum corte é beco sem saída: uma primitiva de janela para texto e listas (contrato das tools)
+
+- **Contexto:** 94 das 132 tools cortam e 60 não deixam ler o resto; cerca de 72 cortes `[:N]` são
+  silenciosos, e os helpers de corte estão copiados em 15 módulos sem dizer o tamanho original
+  (plano, 3.3 e anexo A).
+- **Decisão:**
+  - Todo o corte passa por uma primitiva: texto por caracteres, listas por itens. Ela escreve um
+    rodapé com o que foi mostrado, o total e a chamada exacta para o resto, e preenche `metadata`
+    (`truncated`, `total`, `next`).
+  - Documentos navegam-se por `section`, `offset` e `find` (a janela à volta de cada ocorrência); o
+    índice de secções dá o tamanho de cada uma.
+  - Listas paginam por `offset` ou `cursor`, como a fonte; com total quando a fonte o dá, e "há mais"
+    quando não dá.
+  - Os tectos actuais ficam. Nas 72 chamadas a `mediawiki_page` registadas no ai-network, o agente
+    pediu sempre 3000 ou 4000 caracteres, nunca o valor por omissão: um tecto maior seria contexto
+    reenviado a cada volta. A navegação substitui o tamanho.
+  - Um campo de um registo (um resumo, uma descrição) não se corta abaixo da janela; as listas
+    dentro de um registo dizem quantas faltam.
+- **Consequência:** desaparecem os helpers copiados e os cortes soltos. A invariante de contrato
+  prova que a continuação de cada rodapé devolve a janela seguinte.
+
+## D40 · A MediaWiki lê-se pelo HTML que o servidor renderiza (contrato das tools)
+
+- **Contexto:** o `_clean_wikitext` limpa wikitexto com uma regex de uma só passagem: ficam as
+  predefinições exteriores, a marcação das tabelas (369 linhas `|-` e 253 `rowspan` na página dos
+  Nobel da Física) e os parâmetros das imagens (`80px`). O TextExtracts do `wikipedia_article` deita
+  fora as tabelas: o texto completo dessa página não tem nenhum laureado.
+- **Decisão:** `action=parse&prop=text`, com as predefinições já expandidas e `section=N`,
+  convertido para texto pelo `html.parser` da stdlib. As tabelas saem em linhas, com `rowspan` e
+  `colspan` resolvidos; referências, caixas de navegação, `<style>` e ligações de edição ficam de
+  fora.
+- **Consequência:** desaparece o `_clean_wikitext`. O mesmo conversor serve a Wikipedia, o
+  Wiktionary e os outros wikis da Wikimedia.
+
+## D41 · Tools repetidas sobre a mesma fonte fundem-se, sem aliases (contrato das tools)
+
+- **Contexto:** dez grupos de tools fazem o mesmo trabalho sobre a mesma fonte com limites,
+  validações e saídas diferentes; as tools MediaWiki usam o Wiktionary por omissão (plano, anexo E).
+- **Decisão:** uma família por fonte, com o mesmo prefixo e um trabalho por tool; a família wiki usa
+  a Wikipedia por omissão. As tools substituídas saem sem aliases: o pacote é pré-1.0 e não se
+  mantêm dois caminhos.
+- **Consequência:** mudança incompatível. O `CHANGELOG` traz a tabela de migração, e o ai-network,
+  que chama as tools pelo nome, recebe o aviso antes.
