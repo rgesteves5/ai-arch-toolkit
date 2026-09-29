@@ -38,7 +38,7 @@ from ai_arch_toolkit.core._tools._governance import (
 )
 from ai_arch_toolkit.core._tools._group import ToolGroup
 from ai_arch_toolkit.core._tools._result import ToolError, ToolResult
-from ai_arch_toolkit.core._tools._schema import infer_schema, tool_schema
+from ai_arch_toolkit.core._tools._schema import Range, infer_schema, tool_schema
 
 __all__ = [
     "ApprovalDecision",
@@ -53,6 +53,7 @@ __all__ = [
     "GateModify",
     "GateResult",
     "GovernanceOutcome",
+    "Range",
     "RiskLevel",
     "RunState",
     "ToolDefinition",

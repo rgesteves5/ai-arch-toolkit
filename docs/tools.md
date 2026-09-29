@@ -33,6 +33,24 @@ def get_distance(origin: str, destination: str, unit: str = "km") -> str:
     ...
 ```
 
+Declare a numeric parameter's limits in its annotation with `Range`, instead of adjusting the value inside the tool. The model reads them in the schema (`minimum`/`maximum`), and the executor refuses a value outside them with a `validation_error` that names the range (`expected integer from 1 to 25, got int 40`). One bound is enough (`Range(maximum=1.0)`), and `Annotated[int | None, Range(1, 25)]` bounds an optional parameter. A `Range` on a type with no numbers is a `ValueError` when the tool is decorated.
+
+```python
+from typing import Annotated
+
+from ai_arch_toolkit import Range, tool
+
+@tool
+def search_papers(query: str, max_results: Annotated[int, Range(1, 25)] = 10) -> str:
+    """Search papers by keyword.
+
+    Args:
+        query: Keywords.
+        max_results: How many papers to return.
+    """
+    ...
+```
+
 The decorator also accepts governance metadata — `capability`, `risk_level`, `requires_approval`, `approval_reason` — and the bounds the executor holds each call to, `max_output_chars` and `timeout_s`:
 
 ```python

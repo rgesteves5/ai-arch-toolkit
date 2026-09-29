@@ -73,4 +73,50 @@ Migrar as tools (T05 a T09).
 
 ## Registo do dono
 
-- **Estado:** todo.
+- **Estado:** T04a em `review` no branch `feat/tools-contract-wave1` (Claude, 2026-09-30); T04b
+  todo.
+
+### T04a · Nota de desenho
+
+- **Interface:** `Range(minimum=None, maximum=None)`, dataclass `frozen`/`slots` em
+  `core/_tools/_schema.py`, pública em `ai_arch_toolkit.core` e no topo. Uso:
+  `max_results: Annotated[int, Range(1, 25)] = 10`. Recusa com `ValueError`, ao construir, um
+  `Range` sem limites, com limites que não sejam números finitos (`bool` incluído) ou com
+  `minimum > maximum`.
+- **Schema:** o `infer_schema` lê as anotações com `include_extras=True`; o `_hint_to_json_schema`
+  trata `Annotated`: o schema do tipo de base, mais `minimum`/`maximum` de um `Range`. Um `Range`
+  sobre um tipo sem números (nem `integer`, nem `number`, nem um ramo `anyOf` numérico) levanta
+  `ValueError` ao decorar, e não cai no `string` de recurso, que só apanha `TypeError`. Outros
+  metadados de `Annotated` ignoram-se, como antes.
+- **Validador:** depois da coerção e do `enum`, um número fora de `minimum`/`maximum` dá
+  `ArgumentError` ("argument 'max_results': expected integer from 1 to 25, got int 40"), que o
+  executor já transforma em `validation_error`. Vale também para o caminho `anyOf`.
+- **Âmbito:** só os parâmetros de topo; os campos de dataclasses e `TypedDict` aninhados não mudam,
+  porque o validador não desce a objectos. `minLength`/`maxLength` ficam de fora: nenhuma tool os
+  pediu ainda.
+- **O que desaparece:** nada nesta ficha; os `max(…, min(…))` das tools saem quando cada módulo
+  adoptar o `Range` (T05 a T09).
+- **Testes:** `tests/test_tools_schema.py` (limites, um só limite, `Optional`, tipo sem números,
+  metadados alheios), `tests/test_tools_validation.py` (dentro, fora, string coercida para fora,
+  `anyOf`), `tests/test_tools_executor.py` (o `validation_error` com o intervalo),
+  `tests/test_core_exports.py` (`Range` público).
+
+### T04a · Registo
+
+- **Feito:** `Range` e a leitura de `Annotated` no `_schema.py`; o limite no `_validation.py`;
+  exports no `core._tools`, no `core` e no topo; docs em `docs/tools.md` (como declarar),
+  `docs/safety.md` (tabela da validação) e `docs/api.md`; entrada `Added` no `CHANGELOG`.
+- **Desvio da nota:** o teste do `validation_error` ficou em `tests/test_tools_validation.py`, que
+  já corre pelo `ToolGroup` (sync e async); o `test_tools_executor.py` não mudou.
+- **Estrutura:** para não subir a dívida, o `infer_schema` passou a usar helpers pequenos
+  (`_type_hints`, `_annotated_hints`, `_in_schema`, `_parameter_schema`, `_range_of`,
+  `_numeric`) e o `validate_arguments` também (`_check_required`, `_check_declared`, `_checked`).
+  Saem da `tests/quality_baseline.json` três entradas: `infer_schema` (C901 14, PLR0912 15) e
+  `validate_arguments` (C901 13). Também desapareceu um `# type: ignore[arg-type]` dos overrides.
+- **Testes novos:** 23 casos: 13 em `test_tools_schema.py` (6 de limites inválidos,
+  parametrizados), 7 em `test_tools_validation.py` (dois correm em sync e async), 3 em
+  `test_core_exports.py`. Falharam antes por `ImportError: Range`.
+- **Verificação:** 5665 passed, 42 deselected; ruff, formatação e pyright (0 erros, com
+  `--pythonpath .venv/bin/python`, porque o pyright da worktree não acha o `.venv` sozinho) limpos;
+  a baseline de qualidade passa.
+- **Linhas:** `_schema.py` 456 → 543 (o `Range` e os helpers); `_validation.py` 315 → 351.

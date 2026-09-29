@@ -50,6 +50,7 @@ Most public types are re-exported from `ai_arch_toolkit` (top-level) or from
 | `ToolGate`, `ExecutionContext`, `GateResult`, `GateBlock`, `GateModify`, `GateDryRun` | Protocol and results for custom pre-execution gates |
 | `ApprovalGate`, `DangerousToolGate`, `ApprovalHandler`, `ApprovalRequest`, `ApprovalDecision` | Built-in gates and the human-approval contract |
 | `ToolRuntimePolicy` | Risk metadata that `@tool(...)` attaches to a tool |
+| `Range` | Inclusive bounds for a numeric parameter, `Annotated[int, Range(1, 25)]`: in the schema, and enforced before the call |
 | `infer_schema()` | Manual schema inference from a callable |
 | `prepare_tools()` | Convert tools to provider-specific format |
 

@@ -45,6 +45,12 @@ def test_gate_surface_is_exported(module: ModuleType, name: str) -> None:
     assert name in module.__all__, f"{name} is missing from {module.__name__}.__all__"
 
 
+@pytest.mark.parametrize("module", [core_tools, core, ai_arch_toolkit], ids=lambda m: m.__name__)
+def test_range_is_exported_for_tool_authors(module: ModuleType) -> None:
+    assert "Range" in module.__all__
+    assert module.Range is core_tools.Range
+
+
 def test_custom_gate_built_from_public_imports_blocks_a_call() -> None:
     from ai_arch_toolkit import (
         ExecutionContext,

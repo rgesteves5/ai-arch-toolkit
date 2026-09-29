@@ -54,6 +54,11 @@ flows, manifests) needs these changes; each one is detailed below.
   - `select` or `serialize_as` on an inline template.
 
 ### Added
+- `Range`, inclusive bounds for a numeric tool parameter: `Annotated[int, Range(1, 25)]` puts
+  `minimum`/`maximum` in the schema the model reads, and the executor refuses a value outside them
+  with a `validation_error` that names the range. One bound is enough, and a `Range` on a type with
+  no numbers is a `ValueError` when the tool is decorated. Exported from `ai_arch_toolkit` and
+  `ai_arch_toolkit.core`.
 - Claude Opus 5.5 (`claude-opus-5-5`), GPT-6 Sol and Luna (`gpt-6-sol`, `gpt-6-luna`), and Grok
   4.7 (`grok-4.7`), from the providers' pages on 2026-09-25: prices (with the cache, batch,
   long-context and fast rates each provider publishes), per-model request rules, and probe
