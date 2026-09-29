@@ -39,8 +39,14 @@ def pdb_search(query: str, max_results: int = 10, start: int = 0) -> str:
         return "RCSB PDB search failed: invalid query."
     if start < 0:
         return "RCSB PDB search failed: start must be greater than or equal to 0."
+    # "text" searches one attribute and needs its name; free text is "full_text":
+    # https://search.rcsb.org/#search-services
     payload = {
-        "query": {"type": "terminal", "service": "text", "parameters": {"value": query.strip()}},
+        "query": {
+            "type": "terminal",
+            "service": "full_text",
+            "parameters": {"value": query.strip()},
+        },
         "return_type": "entry",
         "request_options": {"paginate": {"start": start, "rows": _bounded(max_results)}},
     }

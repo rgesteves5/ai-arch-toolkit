@@ -14,21 +14,20 @@ from ai_arch_toolkit.toolkit.tools._eurostat import (
 )
 from tests.toolkit.http_fakes import HTTP_OPEN, respond
 
+# A dataflow stub, as ``detail=allstubs`` returns it: the ID and the title.
 _DATAFLOW = {
     "link": {
         "item": [
             {
+                "class": "dataset",
                 "label": "Population on 1 January",
-                "extension": {
-                    "id": "TPS00001",
-                    "description": "<p>Population dataset</p>",
-                    "annotation": [
-                        {"type": "OBS_COUNT", "title": "592"},
-                        {"type": "OBS_PERIOD_OVERALL_OLDEST", "title": "2014"},
-                        {"type": "OBS_PERIOD_OVERALL_LATEST", "title": "2025"},
-                    ],
-                },
-            }
+                "extension": {"lang": "EN", "id": "TPS00001", "agencyId": "ESTAT"},
+            },
+            {
+                "class": "dataset",
+                "label": "Mean hourly earnings",
+                "extension": {"lang": "EN", "id": "EARN_SES_AGT15", "agencyId": "ESTAT"},
+            },
         ]
     }
 }
@@ -64,12 +63,14 @@ def _params(mock_urlopen):
 class TestEurostat:
     @patch(HTTP_OPEN)
     def test_dataset_search(self, mock_urlopen):
-        mock_urlopen.return_value = respond(_DATAFLOW)
+        mock_urlopen.side_effect = [respond(_DATAFLOW), respond(_DATAFLOW)]
 
         result = eurostat_dataset_search("population")
 
-        assert "TPS00001 — Population on 1 January" in result
-        assert "period: 2014-2025" in result
+        assert result.splitlines()[1:] == ["1. TPS00001 — Population on 1 January"]
+        assert "1. EARN_SES_AGT15 — Mean hourly earnings" in eurostat_dataset_search("earn_ses")
+        # The full catalogue is 20 MB, over the response cap; its stubs are about 1.5 MB.
+        assert _params(mock_urlopen)["detail"] == ["allstubs"]
 
     @patch(HTTP_OPEN)
     def test_dataset_dimensions_and_series(self, mock_urlopen):

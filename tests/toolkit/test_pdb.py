@@ -26,7 +26,10 @@ class TestPdb:
         assert "1A3N | score: 1.0" in result
         request = mock_urlopen.call_args.args[0]
         assert request.get_method() == "POST"
-        assert json.loads(request.data.decode())["return_type"] == "entry"
+        payload = json.loads(request.data.decode())
+        assert payload["return_type"] == "entry"
+        # RCSB answers 400 to a "text" query without an attribute.
+        assert payload["query"]["service"] == "full_text"
 
     @patch(HTTP_OPEN)
     def test_entry_ligands_and_component(self, mock_urlopen):

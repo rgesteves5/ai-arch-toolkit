@@ -359,3 +359,19 @@ R01 publicada em `main` (`b3dae3f`); a R02 começa com a leitura obrigatória da
     pushes, fornecedores nem `.env`.
 - A pedido do dono: os dois commits propostos (`6ceb516` código e testes, e o registo), e o push de
   `main`, que publicou também os três commits da R02.
+
+## 2026-09-28 · Seis tools gratuitas ao vivo (Claude, a pedido do dono)
+
+- Um agente disse que arXiv, REST Countries, UniProt, PDB, Eurostat e Free Dictionary não
+  funcionavam. Verificação ao vivo, chamada a chamada: o arXiv funciona; falhavam `country_info`,
+  `uniprot_search`, `pdb_search`, `eurostat_dataset_search` e `define_word`.
+- Corrigidos, por commitar:
+  - `country_info` passa a ler o Wikidata (pesquisa + uma consulta SPARQL), sem chave: a REST
+    Countries desligou as v1–v4 e a v5 pede chave. O dono pode acrescentar a v5 se arranjar uma.
+  - `uniprot_search` pede `/uniprotkb/search` (fecha o achado da UniProt em `FINDINGS.md`).
+  - `pdb_search` usa o serviço `full_text` (o `text` sem atributo dava 400).
+  - `eurostat_dataset_search` lê só os stubs do catálogo (1,5 MB em vez de 20 MB, acima do tecto
+    de 10 MB); o período e as observações ficam no `eurostat_dataset`.
+- Por resolver: `define_word` depende do dictionaryapi.dev, que responde 522 da Cloudflare ao fim
+  de ~19 s (o nosso prazo é 10 s). Não é código nosso; o `wiktionary_entry` cobre as definições.
+- Gate: 5549 passed, 42 skipped; ruff, formatação e pyright limpos.

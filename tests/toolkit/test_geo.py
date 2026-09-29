@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from io import BytesIO
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -183,45 +183,116 @@ class TestDistanceBetween:
         assert "Invalid unit" in result
 
 
+def _fact(qid, prop, value, *, label=None, extra=None):
+    """One row of the country query: an item value is a URI, anything else a literal."""
+    row = {
+        "c": {"type": "uri", "value": f"http://www.wikidata.org/entity/{qid}"},
+        "prop": {"type": "literal", "value": prop},
+        "value": (
+            {"type": "uri", "value": f"http://www.wikidata.org/entity/{value}"}
+            if value.startswith("Q") and value[1:].isdigit()
+            else {"type": "literal", "value": value}
+        ),
+    }
+    if label is not None:
+        row["label"] = {"type": "literal", "xml:lang": "en", "value": label}
+    if extra is not None:
+        row["extra"] = {"type": "literal", "value": extra}
+    return row
+
+
+_JAPAN = [
+    _fact("Q17", "name", "Japan"),
+    _fact("Q17", "iso2", "JP"),
+    _fact("Q17", "iso3", "JPN"),
+    _fact("Q17", "capital", "Q1490", label="Tokyo"),
+    _fact("Q17", "population", "125800000", extra="2020-10-01T00:00:00Z"),
+    _fact("Q17", "population", "123975371", extra="2024-10-01T00:00:00Z"),
+    _fact("Q17", "area", "377975000000"),
+    _fact("Q17", "continent", "Q48", label="Asia"),
+    _fact("Q17", "language", "Q5287", label="Japanese"),
+    _fact("Q17", "language", "Q999999"),
+    _fact("Q17", "currency", "Q8146", label="Japanese yen", extra="JPY"),
+    _fact("Q17", "currency", "Q4916", extra="EUR"),
+    _fact("Q17", "timezone", "Q7", label="Asia/Tokyo"),
+    _fact("Q17", "timezone", "Q8", label="UTC+09:00"),
+    _fact("Q17", "timezone", "Q9", label="UTC\u221201:00"),
+]
+
+
+def _sparql(rows):
+    return respond(
+        {"head": {"vars": ["c", "prop", "value", "label", "extra"]}, "results": {"bindings": rows}}
+    )
+
+
 class TestCountryInfo:
     @patch(HTTP_OPEN)
-    def test_returns_info(self, mock_urlopen):
-        mock_urlopen.return_value = respond(
-            [
-                {
-                    "name": {"common": "Japan", "official": "Japan"},
-                    "capital": ["Tokyo"],
-                    "population": 125800000,
-                    "area": 377975,
-                    "region": "Asia",
-                    "subregion": "Eastern Asia",
-                    "languages": {"jpn": "Japanese"},
-                    "currencies": {"JPY": {"name": "Japanese yen", "symbol": "¥"}},
-                    "timezones": ["UTC+09:00"],
-                }
-            ]
-        )
-        result = country_info("Japan")
-        assert "Japan" in result
-        assert "Tokyo" in result
-        assert "125,800,000" in result
-        assert "Japanese" in result
-        assert "yen" in result
-        assert "Eastern Asia" in result
+    def test_the_search_order_picks_the_country_and_lists_the_others(self, mock_urlopen):
+        # Q1 is no country (the query returns nothing for it); a malformed ID never reaches it.
+        search = {"search": [{"id": "Q17"}, {"id": "Q1"}, {"id": "../Q2"}, {"id": "Q183"}]}
+        germany = [_fact("Q183", "name", "Germany"), _fact("Q183", "iso2", "DE")]
+        mock_urlopen.side_effect = [respond(search), _sparql(germany + _JAPAN)]
+
+        lines = country_info(" Japan ").splitlines()
+
+        assert lines[0] == "Japan:"
+        assert lines[-1] == "Other matches: Germany (DE)"
+        first, second = (call.args[0].full_url for call in mock_urlopen.call_args_list)
+        assert first.startswith("https://www.wikidata.org/w/api.php?")
+        assert parse_qs(urlparse(first).query)["search"] == ["Japan"]
+        assert second.startswith("https://query.wikidata.org/sparql?")
+        assert "VALUES ?c { wd:Q17 wd:Q1 wd:Q183 }" in parse_qs(urlparse(second).query)["query"][0]
 
     @patch(HTTP_OPEN)
-    def test_country_not_found(self, mock_urlopen):
-        import urllib.error
+    def test_formats_the_latest_population_the_area_in_km2_and_the_utc_offsets(self, mock_urlopen):
+        mock_urlopen.side_effect = [respond({"search": [{"id": "Q17"}]}), _sparql(_JAPAN)]
 
-        mock_urlopen.side_effect = urllib.error.HTTPError("url", 404, "Not Found", {}, BytesIO())
-        result = country_info("Xyzland")
-        assert "not found" in result.lower()
+        result = country_info("Japan")
+
+        assert result.splitlines() == [
+            "Japan:",
+            "  ISO 3166-1: JP, JPN",
+            "  Capital: Tokyo",
+            "  Population: 123,975,371 (2024)",
+            "  Area: 377,975 km²",
+            "  Continent: Asia",
+            "  Official languages: Japanese",
+            "  Currencies: EUR, Japanese yen (JPY)",
+            "  Timezones: UTC\u221201:00, UTC+09:00",
+            "  Wikidata: https://www.wikidata.org/wiki/Q17",
+        ]
+
+    @patch(HTTP_OPEN)
+    def test_an_empty_search_asks_no_query(self, mock_urlopen):
+        mock_urlopen.return_value = respond({"search": []})
+
+        assert country_info("Xyzland") == "Country not found: 'Xyzland'"
+        assert mock_urlopen.call_count == 1
+
+    @patch(HTTP_OPEN)
+    def test_no_country_among_the_matches(self, mock_urlopen):
+        mock_urlopen.side_effect = [respond({"search": [{"id": "Q1"}]}), _sparql([])]
+
+        assert country_info("Xyzland") == "Country not found: 'Xyzland'"
+
+    @patch(HTTP_OPEN)
+    def test_an_invalid_name_asks_nothing(self, mock_urlopen):
+        assert country_info('Japan" } DELETE') == "Country info failed: invalid name."
+        assert country_info("") == "Country info failed: invalid name."
+        mock_urlopen.assert_not_called()
 
     @patch(HTTP_OPEN)
     def test_api_error(self, mock_urlopen):
         mock_urlopen.side_effect = TimeoutError()
-        result = country_info("Japan")
-        assert "failed" in result.lower()
+        assert country_info("Japan") == "Country info failed: request timed out."
+
+    @patch(HTTP_OPEN)
+    def test_a_malformed_query_answer_fails_cleanly(self, mock_urlopen):
+        bad_row = _fact("Q17", "population", "many")
+        mock_urlopen.side_effect = [respond({"search": [{"id": "Q17"}]}), _sparql([bad_row])]
+
+        assert country_info("Japan").startswith("Country info failed: could not parse")
 
 
 @pytest.mark.parametrize("ip", ["", "a b?c", "not-an-ip"])

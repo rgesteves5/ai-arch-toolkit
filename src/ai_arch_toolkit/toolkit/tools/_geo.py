@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import ipaddress
 import math
+import re
+from decimal import Decimal
 from typing import Any
 
 from ai_arch_toolkit.core import tool
@@ -16,10 +18,38 @@ _FORECAST = Api(base="https://api.open-meteo.com/v1", name="Open-Meteo", query_s
 _NOMINATIM = Api(base="https://nominatim.openstreetmap.org", name="Nominatim", min_interval_s=1.1)
 # The free endpoint is HTTPS and allows commercial use: https://ipwhois.io/documentation
 _IPWHOIS = Api(base="https://ipwho.is", name="ipwho.is", segment_safe=":")
-_COUNTRIES = Api(base="https://restcountries.com/v3.1", name="REST Countries", query_safe=",")
-_COUNTRY_FIELDS = (
-    "name,capital,population,area,region,subregion,languages,currencies,timezones,flags,borders"
+# Country facts come from Wikidata, free and without a key: the search API finds the candidates,
+# one SPARQL query reads those that hold an ISO 3166-1 code. REST Countries took v1-v4 down and
+# its v5 needs a key: https://restcountries.com/docs/countries/legacy-api-deprecation
+_WIKIDATA = Api(base="https://www.wikidata.org/w/api.php", name="Wikidata", timeout_s=15)
+_WIKIDATA_SPARQL = Api(
+    base="https://query.wikidata.org/sparql", name="Wikidata Query Service", timeout_s=15
 )
+_COUNTRY_RE = re.compile(r"^[\w .,'\u2019()&-]{1,80}$")
+_QID_RE = re.compile(r"^Q\d+$")
+# One row per fact and value, so a fact with many values adds rows instead of multiplying them.
+# Best-rank statements only; the area is normalised to square metres.
+_COUNTRY_FACTS = """
+  ?c wdt:P297 [] .
+  FILTER NOT EXISTS { ?c wdt:P576 [] }
+  { BIND("name" AS ?prop) ?c rdfs:label ?value . FILTER(LANG(?value) = "en") }
+  UNION { BIND("official" AS ?prop) ?c wdt:P1448 ?value . FILTER(LANG(?value) = "en") }
+  UNION { BIND("iso2" AS ?prop) ?c wdt:P297 ?value }
+  UNION { BIND("iso3" AS ?prop) ?c wdt:P298 ?value }
+  UNION { BIND("capital" AS ?prop) ?c wdt:P36 ?value }
+  UNION { BIND("population" AS ?prop) ?c p:P1082 ?s . ?s a wikibase:BestRank ;
+          ps:P1082 ?value . OPTIONAL { ?s pq:P585 ?extra } }
+  UNION { BIND("area" AS ?prop) ?c p:P2046 ?a . ?a a wikibase:BestRank ;
+          psn:P2046/wikibase:quantityAmount ?value }
+  UNION { BIND("continent" AS ?prop) ?c wdt:P30 ?value }
+  UNION { BIND("language" AS ?prop) ?c wdt:P37 ?value }
+  UNION { BIND("currency" AS ?prop) ?c wdt:P38 ?value . OPTIONAL { ?value wdt:P498 ?extra } }
+  UNION { BIND("timezone" AS ?prop) ?c wdt:P421 ?value }
+  OPTIONAL { ?value rdfs:label ?label . FILTER(LANG(?label) = "en") }
+"""
+_UTC_OFFSET_RE = re.compile(r"^UTC([+\u2212-])?(\d{1,2}):(\d{2})")
+
+type _Facts = dict[str, list[tuple[str, str]]]
 
 
 @tool(capability="network")
@@ -156,22 +186,36 @@ def ip_lookup(ip: str = "") -> str:
 def country_info(name: str) -> str:
     """Get information about a country (capital, population, languages, etc.).
 
-    Uses restcountries.com (free, no API key).
+    Uses Wikidata (free, no API key).
 
     Args:
-        name: Country name, e.g. "Japan", "France", "Brazil".
+        name: Country name or ISO 3166-1 code, e.g. "Japan", "France", "BR".
     """
+    name = name.strip()
+    if not _COUNTRY_RE.fullmatch(name):
+        return "Country info failed: invalid name."
+    search = {
+        "action": "wbsearchentities",
+        "search": name,
+        "language": "en",
+        "uselang": "en",
+        "type": "item",
+        "limit": "10",
+        "format": "json",
+    }
     try:
-        return _COUNTRIES.get_json_list(
-            "name",
-            name,
-            params={"fields": _COUNTRY_FIELDS},
-            parse=lambda data: _country_text(data, name),
+        qids = _WIKIDATA.get_json(params=search, parse=_candidate_qids)
+        text = (
+            _WIKIDATA_SPARQL.get_json(
+                params={"query": _country_query(qids), "format": "json"},
+                parse=lambda data: _country_text(data, qids),
+            )
+            if qids
+            else ""
         )
     except HttpError as e:
-        if e.status == 404:
-            return f"Country not found: {name!r}"
         return f"Country info failed: {e}"
+    return text or f"Country not found: {name!r}"
 
 
 def _geocode_lines(data: dict[str, Any]) -> list[str]:
@@ -244,31 +288,100 @@ def _ip_text(data: dict[str, Any]) -> str:
     )
 
 
-def _country_text(data: list[Any], name: str) -> str:
-    if not data:
-        return f"No data for: {name!r}"
-    c = data[0]
-    official = c.get("name", {}).get("official", name)
-    common = c.get("name", {}).get("common", name)
-    capitals = c.get("capital", [])
-    languages = c.get("languages", {})
-    timezones = c.get("timezones", [])
-    lang_str = ", ".join(languages.values()) if languages else "?"
-    currencies = [
-        f"{info.get('name', code)} ({code}{', ' + info['symbol'] if info.get('symbol') else ''})"
-        for code, info in c.get("currencies", {}).items()
-    ]
-    subregion = c.get("subregion", "")
+def _candidate_qids(data: dict[str, Any]) -> list[str]:
+    ids = [item.get("id") for item in data.get("search") or [] if isinstance(item, dict)]
+    return [qid for qid in ids if isinstance(qid, str) and _QID_RE.fullmatch(qid)]
+
+
+def _country_query(qids: list[str]) -> str:
+    items = " ".join(f"wd:{qid}" for qid in qids)
     return (
-        f"{common} ({official}):\n"
-        f"  Capital: {', '.join(capitals) if capitals else '?'}\n"
-        f"  Population: {c.get('population', 0):,}\n"
-        f"  Area: {c.get('area', 0):,.0f} km²\n"
-        f"  Region: {c.get('region', '?')}" + (f" / {subregion}" if subregion else "") + "\n"
-        f"  Languages: {lang_str}\n"
-        f"  Currencies: {', '.join(currencies) if currencies else '?'}\n"
-        f"  Timezones: {', '.join(timezones[:5]) if timezones else '?'}"
+        f"SELECT ?c ?prop ?value ?label ?extra WHERE {{ VALUES ?c {{ {items} }}{_COUNTRY_FACTS}}}"
     )
+
+
+def _country_text(data: dict[str, Any], qids: list[str]) -> str:
+    """The best match in full, then the other countries the search found; ``""`` for none."""
+    countries: dict[str, _Facts] = {}
+    for row in data["results"]["bindings"]:
+        qid = row["c"]["value"].rsplit("/", 1)[-1]
+        value = row["value"]
+        # An item shows by its English label and a literal by its value; an unlabelled item
+        # keeps only its extra (a currency's ISO code), or nothing.
+        text = row["label"]["value"] if "label" in row else ""
+        if value["type"] != "uri":
+            text = value["value"]
+        extra = row["extra"]["value"] if "extra" in row else ""
+        countries.setdefault(qid, {}).setdefault(row["prop"]["value"], []).append((text, extra))
+    found = [qid for qid in qids if qid in countries]
+    if not found:
+        return ""
+    lines = _country_lines(found[0], countries[found[0]])
+    others = [
+        f"{_first(countries[qid], 'name') or qid} ({_first(countries[qid], 'iso2')})"
+        for qid in found[1:]
+    ]
+    if others:
+        lines.append(f"Other matches: {', '.join(others)}")
+    return "\n".join(lines)
+
+
+def _country_lines(qid: str, facts: _Facts) -> list[str]:
+    name = _first(facts, "name") or qid
+    official = _first(facts, "official")
+    codes = ", ".join(code for code in (_first(facts, "iso2"), _first(facts, "iso3")) if code)
+    currencies = sorted(
+        {
+            f"{label} ({code})" if label and code else label or code
+            for label, code in facts.get("currency", [])
+        }
+        - {""}
+    )
+    zones = _labels(facts, "timezone")
+    offsets = [zone for zone in zones if _UTC_OFFSET_RE.match(zone)]
+    return [
+        f"{name} ({official}):" if official and official != name else f"{name}:",
+        f"  ISO 3166-1: {codes or '?'}",
+        f"  Capital: {', '.join(_labels(facts, 'capital')) or '?'}",
+        f"  Population: {_population(facts)}",
+        f"  Area: {_area(facts)}",
+        f"  Continent: {', '.join(_labels(facts, 'continent')) or '?'}",
+        f"  Official languages: {', '.join(_labels(facts, 'language')) or '?'}",
+        f"  Currencies: {', '.join(currencies) or '?'}",
+        f"  Timezones: {', '.join(sorted(offsets, key=_utc_minutes) or zones) or '?'}",
+        f"  Wikidata: https://www.wikidata.org/wiki/{qid}",
+    ]
+
+
+def _first(facts: _Facts, prop: str) -> str:
+    return next((text for text, _ in facts.get(prop, []) if text), "")
+
+
+def _labels(facts: _Facts, prop: str) -> list[str]:
+    return sorted({text for text, _ in facts.get(prop, []) if text})
+
+
+def _population(facts: _Facts) -> str:
+    """The latest best-rank figure, with its year when Wikidata dates it."""
+    figures = facts.get("population", [])
+    if not figures:
+        return "?"
+    value, when = max(figures, key=lambda figure: figure[1])
+    year = f" ({when[:4]})" if when[:4].isdigit() else ""
+    return f"{int(Decimal(value)):,}{year}"
+
+
+def _area(facts: _Facts) -> str:
+    areas = [Decimal(value) for value, _ in facts.get("area", [])]
+    return f"{max(areas) / 1_000_000:,.0f} km²" if areas else "?"
+
+
+def _utc_minutes(label: str) -> int:
+    match = _UTC_OFFSET_RE.match(label)
+    if not match:
+        return 0
+    sign, hours, minutes = match.groups()
+    return (-1 if sign in {"-", "\u2212"} else 1) * (int(hours) * 60 + int(minutes))
 
 
 def _validate_coords(lat: float, lon: float) -> str | None:

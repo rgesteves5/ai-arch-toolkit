@@ -459,6 +459,16 @@ flows, manifests) needs these changes; each one is detailed below.
   - `select` or `serialize_as` on an inline template (they were ignored).
 
 ### Fixed
+- `country_info` reads Wikidata (its search API, then one SPARQL query), free and without a key:
+  REST Countries took v1-v4 down, so every call failed, and its v5 needs a key. It takes a name or
+  an ISO 3166-1 code, names the other countries the search matched, and gives the continent where
+  it gave the UN subregion.
+- `uniprot_search` calls `/uniprotkb/search`: the bare `/uniprotkb` path answered every search with
+  a redirect to plain HTTP, which the tools refuse.
+- `pdb_search` sends a `full_text` query: RCSB answers 400 to a `text` query without an attribute.
+- `eurostat_dataset_search` reads the dataset stubs (IDs and titles, about 1.5 MB) instead of the
+  whole catalogue (20 MB, over the 10 MB response cap) and matches the ID and title; its lines no
+  longer carry the observation count and period, which `eurostat_dataset` gives.
 - Local token counting (`count_tokens_local`) uses `o200k_base` for the `gpt-4.1` family, as
   tiktoken maps it; it used `cl100k_base`. GPT-6 keeps the default: neither OpenAI nor tiktoken
   names its encoding.

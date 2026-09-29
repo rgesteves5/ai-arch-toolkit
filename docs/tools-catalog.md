@@ -65,7 +65,7 @@ For the conceptual guide (`@tool`, `ToolGroup`, server tools), see [Tools](tools
 - `timezone_lookup` — Timezone and UTC offset from coordinates
 - `distance_between` — Great-circle distance between coordinate pairs
 - `ip_lookup` — Geographic location and ISP info for an explicit IP, from ipwho.is over HTTPS (free, 1000 requests a day per client IP)
-- `country_info` — Country details (capital, population, languages, etc.)
+- `country_info` — Country facts from Wikidata by name or ISO 3166-1 code (capital, population, area, languages, currencies, time zones)
 
 **OpenStreetMap** — `_osm.py`, `_overpass.py`
 
@@ -234,7 +234,7 @@ without credentials or ports.
 - `who_indicators` — Search WHO Global Health Observatory indicators
 - `who_indicator` — Get WHO GHO indicator metadata by code
 - `who_series` — Fetch WHO GHO observations for an indicator
-- `eurostat_dataset_search` — Search Eurostat datasets/dataflows
+- `eurostat_dataset_search` — Search Eurostat datasets by ID or title
 - `eurostat_dataset` — Get Eurostat dataset metadata and dimension summary
 - `eurostat_dimensions` — List Eurostat dimensions and sample category codes
 - `eurostat_series` — Get Eurostat observations with generic dimension filters

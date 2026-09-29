@@ -8,11 +8,13 @@ from typing import Any
 from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
+# Stubs are each dataset's ID and title, about 1.5 MB; the full catalogue is 20 MB, nine tenths of
+# it annotations. eurostat_dataset reads one dataset's details.
 _DATAFLOWS = Api(
     base="https://ec.europa.eu/eurostat/api/dissemination/sdmx/2.1/dataflow/ESTAT/all/latest",
     name="Eurostat",
     timeout_s=30,
-    params={"format": "JSON", "lang": "en"},
+    params={"format": "JSON", "lang": "en", "detail": "allstubs"},
     status_messages={404: "no matching records found."},
 )
 _DATA = Api(
@@ -30,7 +32,7 @@ _TEXT_RE = re.compile(r"^[\w\s,.'()/%:+-]{1,180}$", re.UNICODE)
 
 @tool(capability="network")
 def eurostat_dataset_search(query: str, max_results: int = 10, offset: int = 0) -> str:
-    """Search Eurostat datasets/dataflows.
+    """Search Eurostat datasets by ID or title; eurostat_dataset gives one's period and dimensions.
 
     Args:
         query: Dataset ID or title search text.
@@ -261,33 +263,17 @@ def _dataflow_items(data: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _matches_dataflow(item: dict[str, Any], terms: list[str]) -> bool:
-    extension = item.get("extension", {})
-    text = " ".join(
-        [
-            _string(item.get("label")),
-            _string(extension.get("id")) if isinstance(extension, dict) else "",
-            _strip_html(_string(extension.get("description")))
-            if isinstance(extension, dict)
-            else "",
-        ]
-    ).lower()
+    text = f"{_string(item.get('label'))} {_dataflow_id(item)}".lower()
     return all(term in text for term in terms)
 
 
 def _format_dataflow(item: dict[str, Any], *, index: int) -> list[str]:
+    return [f"{index}. {_dataflow_id(item)} — {_string(item.get('label'))}"]
+
+
+def _dataflow_id(item: dict[str, Any]) -> str:
     extension = item.get("extension", {})
-    if not isinstance(extension, dict):
-        extension = {}
-    dataset_id = _string(extension.get("id"))
-    label = _string(item.get("label"))
-    lines = [f"{index}. {dataset_id} — {label}"]
-    annotations = _annotation_map(extension.get("annotation"))
-    obs = annotations.get("OBS_COUNT")
-    latest = annotations.get("OBS_PERIOD_OVERALL_LATEST")
-    oldest = annotations.get("OBS_PERIOD_OVERALL_OLDEST")
-    if obs or latest or oldest:
-        lines.append(f"   observations: {obs or '?'} | period: {oldest or '?'}-{latest or '?'}")
-    return lines
+    return _string(extension.get("id")) if isinstance(extension, dict) else ""
 
 
 def _annotations(data: dict[str, Any]) -> list[str]:

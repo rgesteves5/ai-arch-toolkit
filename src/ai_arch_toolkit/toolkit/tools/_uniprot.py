@@ -53,7 +53,9 @@ def uniprot_search(
         "fields": "accession,protein_name,gene_names,organism_name,reviewed,length",
     }
     try:
-        return _API.get_json(params=params, parse=lambda data: _search_text(data, query, offset))
+        return _API.get_json(
+            "search", params=params, parse=lambda data: _search_text(data, query, offset)
+        )
     except HttpError as e:
         return f"UniProt search failed: {e}"
 

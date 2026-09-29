@@ -50,6 +50,9 @@ class TestUniProt:
 
         assert "Insulin | accession: P01308" in result
         assert "reviewed:true" in _params(mock_urlopen)["query"][0]
+        # The bare collection path answers with a redirect to plain HTTP on port 8080.
+        url = urlparse(mock_urlopen.call_args.args[0].full_url)
+        assert url.path == "/uniprotkb/search"
 
         mock_urlopen.return_value = respond(_ENTRY)
         assert "Function: Insulin decreases blood glucose." in uniprot_entry("P01308")
