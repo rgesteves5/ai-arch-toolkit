@@ -630,7 +630,9 @@ state = State(operational=tot_initial_state("Solve this puzzle"))
 
 Steps: `search_step` (when: search_not_done) → loop
 
-Each iteration: select from frontier, generate candidates, evaluate, expand or solve.
+Each iteration: select from frontier, generate candidates, evaluate, expand or solve. DFS expands
+the most promising child first; BFS keeps the best `n_candidates` states of each level (Yao et al.
+2023). When the iterations or the states run out, it answers from the best state found.
 
 ### LATS
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Unpack
 
 from ai_arch_toolkit.core._content import Content, user
@@ -13,6 +14,8 @@ from ai_arch_toolkit.toolkit.agents.flows._common import FlowOptions
 from ai_arch_toolkit.toolkit.agents.flows._keys import ANSWER, RESPONSE, TASK
 from ai_arch_toolkit.toolkit.agents.flows._react import run_react
 from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowStep
+
+_FIRST_WORD_RE = re.compile(r"\W*(\w+)")
 
 
 def generate_review_flow(
@@ -112,8 +115,9 @@ def generate_review_flow(
             )
             verdict_text = response.text
 
-        first_line = verdict_text.strip().split("\n")[0].lower()
-        accepted = "accept" in first_line and "unacceptable" not in first_line
+        # The verdict is the review's first word: ACCEPT accepts; RETRY or anything else does not.
+        verdict = _FIRST_WORD_RE.match(verdict_text)
+        accepted = verdict is not None and verdict.group(1).upper() == "ACCEPT"
 
         # The draft just reviewed is the answer so far, accepted or not: out of cycles, it stands.
         artifacts: dict[str, Any] = {

@@ -459,6 +459,20 @@ flows, manifests) needs these changes; each one is detailed below.
   - `select` or `serialize_as` on an inline template (they were ignored).
 
 ### Fixed
+- **Tree of Thoughts searches best first and always answers.** DFS expanded the worst-scored child
+  first (`frontier.pop()` took the last of the children sorted best to worst); it now expands the
+  most promising one. BFS kept every state of each level, so with the defaults it made 40 calls,
+  never reached `max_depth` and left no `answer`; it now keeps the best `n_candidates` states of
+  each level, as in Yao et al. 2023. When the iterations or the states to expand run out, both
+  answer from the best state found (the best-scored of the deepest).
+- `tot` and `lats` read an LLM evaluator's score as the last number in [0, 1] of its reply. They
+  took the first number, so `Score (0.0-1.0): 0.8` scored 0.0 and `Step 2 looks strong: 0.9`
+  scored 1.0.
+- `generate_review` accepts a draft only when the review's first word is `ACCEPT`. Any first line
+  containing "accept" did, so `RETRY: this is not acceptable yet` and `I cannot accept this draft`
+  accepted it.
+- `llm_compiler` replaces each `$N` in a subtask with the result of task N as a whole: `$1` was
+  also replaced inside `$10`, so `Combine $1 and $10` became `Combine <R1> and <R1>0`.
 - `country_info` reads Wikidata (its search API, then one SPARQL query), free and without a key:
   REST Countries took v1-v4 down, so every call failed, and its v5 needs a key. It takes a name or
   an ISO 3166-1 code, names the other countries the search matched, and gives the continent where

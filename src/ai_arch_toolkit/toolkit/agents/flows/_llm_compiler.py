@@ -18,6 +18,7 @@ from ai_arch_toolkit.toolkit.agents.flows._react import run_react
 from ai_arch_toolkit.toolkit.flow._flow import Flow
 
 _DAG_RE = re.compile(r"\$(\d+)\.\s+(.+?)\s+\[deps:\s*(.*?)\]")
+_REF_RE = re.compile(r"\$(\d+)")
 
 
 @dataclass(slots=True)
@@ -117,7 +118,7 @@ def llm_compiler_flow(
                 if deps_str.lower() == "none" or not deps_str:
                     deps: tuple[int, ...] = ()
                 else:
-                    dep_ids = [int(d) for d in re.findall(r"\$(\d+)", deps_str)]
+                    dep_ids = [int(d) for d in _REF_RE.findall(deps_str)]
                     deps = tuple(dep_ids)
 
                 valid_ids.add(task_id)
@@ -138,10 +139,11 @@ def llm_compiler_flow(
                     t: _DAGTask,
                     dag_ref: list[_DAGTask] = dag,
                 ) -> None:
-                    desc = t.description
-                    for other in dag_ref:
-                        if other.done:
-                            desc = desc.replace(f"${other.id}", other.result)
+                    # One pass over whole references, so $1 leaves $10 alone.
+                    results = {other.id: other.result for other in dag_ref if other.done}
+                    desc = _REF_RE.sub(
+                        lambda ref: results.get(int(ref.group(1)), ref.group(0)), t.description
+                    )
 
                     inner_system = system
                     if inner_system:

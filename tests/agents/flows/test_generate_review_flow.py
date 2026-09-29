@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock
 
+import pytest
+
 from ai_arch_toolkit.core._response import Response, Usage
 from ai_arch_toolkit.core._state import State
 from ai_arch_toolkit.core._tools._group import ToolGroup
@@ -123,6 +125,46 @@ class TestGenerateReviewFlow:
         # Should have retried — "unacceptable" must not match as "accept"
         assert gen_llm.complete.call_count == 2
         assert state.get("accepted") is True
+
+    @pytest.mark.parametrize(
+        "verdict",
+        [
+            "RETRY: this is not acceptable yet",
+            "I cannot accept this draft",
+            "The draft looks fine.",  # no verdict: not accepted
+        ],
+    )
+    async def test_a_review_not_starting_with_accept_is_not_accepted(self, verdict: str) -> None:
+        gen_llm = AsyncMock()
+        gen_llm.complete = AsyncMock(return_value=_make_response("draft"))
+
+        review_llm = AsyncMock()
+        review_llm.complete = AsyncMock(return_value=_make_response(verdict))
+
+        flow = generate_review_flow(gen_llm, review_llm, max_cycles=2)
+        state = State(operational=generate_review_initial_state("test"))
+        await flow.run(state)
+
+        assert state.get("accepted") is False
+        assert gen_llm.complete.call_count == 2
+        assert state.get("feedback") == [verdict, verdict]
+
+    @pytest.mark.parametrize(
+        "verdict", ["ACCEPT", "Accept.", "**ACCEPT**\n\nCorrect and complete."]
+    )
+    async def test_a_review_starting_with_accept_is_accepted(self, verdict: str) -> None:
+        gen_llm = AsyncMock()
+        gen_llm.complete = AsyncMock(return_value=_make_response("draft"))
+
+        review_llm = AsyncMock()
+        review_llm.complete = AsyncMock(return_value=_make_response(verdict))
+
+        flow = generate_review_flow(gen_llm, review_llm, max_cycles=2)
+        state = State(operational=generate_review_initial_state("test"))
+        await flow.run(state)
+
+        assert state.get("accepted") is True
+        gen_llm.complete.assert_called_once()
 
     async def test_with_review_tools(self) -> None:
         gen_llm = AsyncMock()

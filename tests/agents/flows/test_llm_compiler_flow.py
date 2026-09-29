@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock
 
 from ai_arch_toolkit.core._response import Response, Usage
@@ -63,6 +64,33 @@ class TestLLMCompilerFlow:
         await flow.run(state)
 
         assert state.get("answer") is not None
+
+    async def test_a_reference_is_replaced_by_its_whole_task_number(self) -> None:
+        plan = (
+            "$1. Find alpha [deps: none]\n"
+            "$10. Find beta [deps: none]\n"
+            "$11. Combine $1 and $10 [deps: $1, $10]\n"
+        )
+        subtasks: list[str] = []
+
+        async def complete(messages: list[dict[str, Any]], **kwargs: Any) -> Response:
+            system = kwargs.get("system") or ""
+            if system.startswith("Subtask: "):
+                subtasks.append(system.removeprefix("Subtask: "))
+                return _make_response(f"<{subtasks[-1]}>")  # a subtask's result
+            if "planning agent" in system:
+                return _make_response(plan)
+            return _make_response("final")  # the joiner
+
+        llm = AsyncMock()
+        llm.complete = AsyncMock(side_effect=complete)
+
+        flow = llm_compiler_flow(llm, ToolGroup(), max_replans=0)
+        state = State(operational=llm_compiler_initial_state("task"))
+        await flow.run(state)
+
+        assert subtasks[-1] == "Combine <Find alpha> and <Find beta>"
+        assert state.get("answer") == "final"
 
     async def test_replan(self) -> None:
         dag_plan = "$1. Do something [deps: none]"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import TypedDict
 
 from ai_arch_toolkit.core._policy import Policy
@@ -9,9 +10,11 @@ from ai_arch_toolkit.core._tools._group import ToolGroup
 from ai_arch_toolkit.core._trace import TraceCapture
 from ai_arch_toolkit.toolkit.budget import BudgetPolicy
 
-__all__ = ["TOOLS_PLACEHOLDER", "FlowOptions", "nested", "substitute_tools"]
+__all__ = ["TOOLS_PLACEHOLDER", "FlowOptions", "nested", "parse_score", "substitute_tools"]
 
 TOOLS_PLACEHOLDER = "{tools}"
+
+_NUMBER_RE = re.compile(r"\d*\.?\d+")
 
 
 class FlowOptions(TypedDict, total=False):
@@ -42,6 +45,16 @@ def nested(options: FlowOptions) -> FlowOptions:
     run (the two share the meter scope), and its policy governs its own steps.
     """
     return {"trace_capture": options["trace_capture"]} if "trace_capture" in options else {}
+
+
+def parse_score(text: str) -> float:
+    """Read an evaluator's score from its reply: the last number in [0, 1], or 0.5 without one.
+
+    The last one, because a reply may first repeat the prompt's ``Score (0.0-1.0):`` or name a
+    step, as in ``Step 2 looks strong: 0.9``.
+    """
+    scores = [score for score in map(float, _NUMBER_RE.findall(text)) if score <= 1.0]
+    return scores[-1] if scores else 0.5
 
 
 def substitute_tools(prompt: str, tools: ToolGroup) -> str:

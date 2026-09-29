@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Unpack
@@ -13,12 +12,10 @@ from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._state import StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
-from ai_arch_toolkit.toolkit.agents.flows._common import FlowOptions
+from ai_arch_toolkit.toolkit.agents.flows._common import FlowOptions, parse_score
 from ai_arch_toolkit.toolkit.agents.flows._keys import ANSWER, RESPONSE, TASK
 from ai_arch_toolkit.toolkit.agents.flows._react import run_react
 from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowStep
-
-_SCORE_RE = re.compile(r"(\d+\.?\d*)")
 
 
 @dataclass(slots=True)
@@ -165,9 +162,7 @@ def lats_flow(
                 system=evaluator_system,
                 **extra,
             )
-            match = _SCORE_RE.search(eval_response.text)
-            score = float(match.group(1)) if match else 0.5
-            score = min(max(score, 0.0), 1.0)
+            score = parse_score(eval_response.text)
 
         # Create child node
         child = _MCTSNode(

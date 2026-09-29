@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock
 
+import pytest
+
 from ai_arch_toolkit.core._response import Response, Usage
 from ai_arch_toolkit.core._state import State
 from ai_arch_toolkit.core._tools._group import ToolGroup
@@ -100,6 +102,34 @@ class TestLATSFlow:
         result = await flow.run(state)
 
         assert result.trace.flow_name == "lats"
+
+    @pytest.mark.parametrize(
+        ("reply", "score"),
+        [
+            # The prompt's "Score (0.0-1.0):" repeated before the score is not the score…
+            ("Score (0.0-1.0): 0.8", 0.8),
+            # …nor is a step's number.
+            ("Step 2 looks strong: 0.9", 0.9),
+        ],
+    )
+    async def test_a_score_is_the_last_number_in_range_of_the_evaluator_reply(
+        self, reply: str, score: float
+    ) -> None:
+        llm = AsyncMock()
+        llm.complete = AsyncMock(
+            side_effect=[
+                _make_response(text="draft"),  # inner ReAct
+                _make_response(text=reply),  # evaluator
+                _make_response(text="final"),  # solver (no reflection: the score is not low)
+            ]
+        )
+
+        flow = lats_flow(llm, ToolGroup(), max_rollouts=1)
+        state = State(operational=lats_initial_state("test"))
+        await flow.run(state)
+
+        assert state.get("last_score") == score
+        assert state.get("answer") == "final"
 
     async def test_llm_call_budget_stops_after_inner_rollout(self) -> None:
         llm, provider = fake_llm(_make_response(text="answer"))
