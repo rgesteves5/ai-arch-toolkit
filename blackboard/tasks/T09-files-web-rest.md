@@ -6,6 +6,8 @@
   `_datetime` (5): 28 tools
 - **Origem:** os anexos A a E do plano para estes módulos · **Decisões:** D37 a D42 · **Regras:**
   `T00-rules.md`
+- **Já feito:** `c259e0b` (o `error` do Internet Archive) e `6a34668` (a Open Library segue um
+  registo fundido e diz que um apagado foi apagado).
 
 ## O que está partido
 

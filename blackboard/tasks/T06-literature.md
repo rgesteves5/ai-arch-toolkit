@@ -5,6 +5,8 @@
   `_semantic_scholar` (3), `_ror` (2), `_nvd` (2): 18 tools
 - **Origem:** os anexos A a E do plano para estes módulos · **Decisões:** D37 a D42 · **Regras:**
   `T00-rules.md`
+- **Já feito:** `c259e0b` (o `ERROR` do ESearch do PubMed) e `6a34668` (a entrada de erro do arXiv,
+  num 400 ou num 200, é a falha e não um artigo).
 
 ## O que está partido
 

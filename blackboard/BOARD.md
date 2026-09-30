@@ -8,10 +8,15 @@
   para `tasks/R00-rules.md`. **Decisões:** D37 a D42, tomadas pelo coordenador por delegação do dono.
 - **Origem:** duas conversas do ai-network em que o agente não chegou ao que as páginas tinham, e o
   levantamento das 132 tools (29/09).
-- **Base:** `main` @ `c259e0b`; gate 5642 passed, 42 deselected.
+- **Base:** `main` @ `6a34668`; gate 5690 passed, 42 deselected.
 - **Já feito antes da abertura:** `c259e0b` fez a parte da D38 sobre os erros dentro de um 200,
   ainda com strings. Resolveu as confirmadas do anexo C nas tools MediaWiki, `wikipedia_*`,
   `wikidata_search`, `country_info`, `world_bank_*` e `overpass_*`, e corrigiu o `gdelt_timeline`.
+- **Já feito depois da abertura:** `6a34668`, a pedido do dono, fez o resto do anexo C, ainda com
+  strings: a porta lê o erro que a fonte explica num 4xx ou 5xx e aceita, por chamada, uma resposta
+  vazia (`allow_empty`); erros do Eurostat, do arXiv e da UniProt, entradas inactivas da UniProt,
+  registos fundidos ou apagados da Open Library, QID fundido, 500 do EONET, histórias do HN que
+  falham e a pesquisa do `wikipedia_related`. Cada ficha diz o que já tem.
 - **Com a frente C:** C01, C04, C06 e C09 não tocam em tools e podem correr em paralelo. A C02 e a
   T04a partilham `core/_tools`, por isso aplicam-se em série. A C07 e a C08 criam tools: esperam
   pela T01 e pela T03 e nascem com o contrato. As fichas delas ainda dizem "erros → string"; vale a

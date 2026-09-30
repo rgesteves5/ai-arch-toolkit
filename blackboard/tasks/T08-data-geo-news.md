@@ -6,6 +6,10 @@
   `_wikidata` (3), `_news` (1): 44 tools
 - **Origem:** os anexos A a E do plano para estes módulos · **Decisões:** D37 a D42 · **Regras:**
   `T00-rules.md`
+- **Já feito:** `c259e0b` (erros num 200 do World Bank, do Overpass, do GDELT e da Wikidata; o
+  `gdelt_timeline` lê as séries) e `6a34668` (o Eurostat explica os seus 404 e 413; o `eonet_event`
+  explica o 500 e recusa uma resposta sem evento; o `wikidata_entity` segue um QID fundido; o
+  `hacker_news` diz que histórias não carregou).
 
 ## O que está partido
 
