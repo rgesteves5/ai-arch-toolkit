@@ -125,6 +125,28 @@ class TestFindWindow:
         assert window.body == "" and window.total == 0
         assert window.text() == '[no matches for "nobel"]'
 
+    def test_a_frequent_term_stays_within_the_limit_and_counts_every_match_once(self) -> None:
+        windows = _follow(
+            find_window(TEXT, "row", limit=500),
+            lambda call: find_window(TEXT, call["find"], offset=call["offset"], limit=500),
+        )
+
+        assert all(len(window.body) <= 600 for window in windows)
+        assert windows[0].first == 1 and windows[-1].last == TEXT.count("row")
+        for before, after in pairwise(windows):
+            assert after.first == before.last + 1
+
+    def test_an_empty_term_matches_nothing(self) -> None:
+        window = find_window(TABLE, "", limit=500)
+
+        assert window.total == 0 and window.text() == '[no matches for ""]'
+
+    def test_a_term_with_accents_stays_readable_in_the_footer(self) -> None:
+        window = find_window("Émile Borel\n" * 30, "émile", limit=40, context=0)
+
+        assert window.total == 30
+        assert 'for "émile"' in window.footer() and 'next: find="émile"' in window.footer()
+
 
 class TestListWindows:
     def test_a_page_the_source_cut_names_its_place_and_the_next_page(self) -> None:

@@ -120,3 +120,15 @@ Migrar as tools (T05 a T09).
   `--pythonpath .venv/bin/python`, porque o pyright da worktree não acha o `.venv` sozinho) limpos;
   a baseline de qualidade passa.
 - **Linhas:** `_schema.py` 456 → 543 (o `Range` e os helpers); `_validation.py` 315 → 351.
+
+### T04a · Revisão (a pedido do dono, antes do push)
+
+- **Consequência que faltava documentar:** o validador verifica `minimum`/`maximum` no topo de um
+  parâmetro, venha de onde vier, e não só os que um `Range` pôs lá. Um `@tool(schema=...)` com
+  limites, que antes só chegavam ao modelo, passa a ser aplicado. No repositório nenhuma tool os
+  tem. Ficou escrito no `CHANGELOG`, em `docs/tools.md`, em `docs/safety.md` e na docstring do
+  `_validation.py`, e há um teste.
+- **Limite do âmbito, documentado:** limites dentro de um ramo `anyOf` escrito à mão não são
+  verificados; só os do topo.
+- **Testes novos:** 2: um `Range` num membro de uma união (`Annotated[int, Range(1, 5)] | None`), um
+  caminho do `_range_of` que não estava coberto, e um `schema=` com `minimum`.

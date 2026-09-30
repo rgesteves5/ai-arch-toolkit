@@ -672,6 +672,13 @@ class TestRange:
         }
         assert schema["required"] == []
 
+    def test_a_range_on_a_member_of_a_union_is_found(self):
+        def page(limit: Annotated[int, Range(1, 5)] | None = None) -> str:
+            return ""
+
+        prop = infer_schema(page)["input_schema"]["properties"]["limit"]
+        assert (prop["minimum"], prop["maximum"]) == (1, 5)
+
     def test_a_union_with_a_numeric_branch_takes_the_bounds(self):
         def pick(value: Annotated[int | str, Range(1, 5)]) -> str:
             return ""

@@ -451,5 +451,13 @@ R01 publicada em `main` (`b3dae3f`); a R02 começa com a leitura obrigatória da
   repartidos em funções pequenas, e três entradas saem da baseline de complexidade.
 - T03: `toolkit/tools/_window.py` (texto, `find`, listas), `line_cut` no core e o `_bounded` do
   executor no mesmo vocabulário. Nenhuma tool a usa ainda.
-- Gate no branch: 5686 passed, 42 deselected; ruff, formatação e pyright limpos.
-- Próximo: o dono revê o branch; a T01 começa quando a sessão paralela terminar e for commitada.
+- Revisão antes do push, a pedido do dono:
+  - o `find` fundia passagens sem tecto, e um termo frequente podia devolver o texto todo;
+  - os termos com acentos saíam escapados no rodapé;
+  - um termo vazio contava ocorrências vazias.
+
+  Os três foram corrigidos, com testes que falham na versão anterior. Ficou documentado que o
+  validador aplica os `minimum`/`maximum` de um `schema=` escrito à mão.
+- Gate no branch: 5691 passed, 42 deselected; ruff, formatação e pyright limpos.
+- Próximo: o dono faz o merge do branch; a T01 começa quando a sessão paralela terminar e for
+  commitada.

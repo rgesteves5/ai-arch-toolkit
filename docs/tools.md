@@ -33,7 +33,7 @@ def get_distance(origin: str, destination: str, unit: str = "km") -> str:
     ...
 ```
 
-Declare a numeric parameter's limits in its annotation with `Range`, instead of adjusting the value inside the tool. The model reads them in the schema (`minimum`/`maximum`), and the executor refuses a value outside them with a `validation_error` that names the range (`expected integer from 1 to 25, got int 40`). One bound is enough (`Range(maximum=1.0)`), and `Annotated[int | None, Range(1, 25)]` bounds an optional parameter. A `Range` on a type with no numbers is a `ValueError` when the tool is decorated.
+Declare a numeric parameter's limits in its annotation with `Range`, instead of adjusting the value inside the tool. The model reads them in the schema (`minimum`/`maximum`), and the executor refuses a value outside them with a `validation_error` that names the range (`expected integer from 1 to 25, got int 40`). One bound is enough (`Range(maximum=1.0)`), and `Annotated[int | None, Range(1, 25)]` bounds an optional parameter. A `Range` on a type with no numbers is a `ValueError` when the tool is decorated. Bounds written in a `schema=` override are enforced the same way.
 
 ```python
 from typing import Annotated

@@ -436,6 +436,12 @@ def slot(value: Annotated[int | str, Range(1, 5)]) -> str:
     return f"{type(value).__name__}:{value}"
 
 
+@tool(schema={"count": {"type": "integer", "minimum": 0}})
+def countdown(count: int) -> str:
+    """Count down from a number."""
+    return f"count={count}"
+
+
 @pytest.mark.parametrize("mode", MODES)
 async def test_values_inside_a_range_pass_bounds_included(mode: str) -> None:
     group = ToolGroup(top)
@@ -476,3 +482,10 @@ async def test_a_range_on_a_union_bounds_numbers_only() -> None:
     assert group.execute(_call("slot", value="north")).value == "str:north"
     refused = group.execute(_call("slot", value=9))
     assert refused.error is not None and "from 1 to 5" in refused.error.message
+
+
+async def test_bounds_written_in_a_schema_override_are_enforced_too() -> None:
+    refused = ToolGroup(countdown).execute(_call("countdown", count=-1))
+
+    assert refused.error is not None
+    assert "expected integer at least 0, got int -1" in refused.error.message

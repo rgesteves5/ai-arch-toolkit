@@ -3,7 +3,8 @@
 ## Frente activa: contrato das tools
 
 - **Estado:** aberta em 2026-09-30. Fichas T00 (regras) e T01 a T09 escritas. A T03 e a T04a
-  estão feitas no branch `feat/tools-contract-wave1`, à espera de revisão (gate 5686 passed). A
+  estão feitas e revistas no branch `feat/tools-contract-wave1`, à espera de merge (gate 5691
+  passed). A
   T01 espera que a sessão paralela da porta HTTP e das suspeitas do anexo C termine, porque mexe
   nos mesmos ficheiros (`_http.py` e nove módulos de tools).
 - **Plano:** `docs/internal/tools-contract-plan.md`. **Regras:** `tasks/T00-rules.md`, que remete

@@ -38,7 +38,8 @@ class Window:
         last: For ``chars``, the offset where the body ends; otherwise the number of the last
             result or match shown.
         total: How many there are in all, or ``None`` when the source does not say.
-        next_call: The arguments of the call that reads on, or ``None`` when nothing is left.
+        next_call: The arguments of the call that reads on, as JSON values, or ``None`` when
+            nothing is left.
         label: The term a search looked for.
     """
 
@@ -104,13 +105,16 @@ def find_window(
 ) -> Window:
     """The passages of ``text`` that contain ``needle``, from ``offset``, within ``limit`` chars.
 
-    Matching ignores case. A passage is the whole lines within ``context`` characters of a match,
-    headed by its position (``[at char 13860]``); passages that touch merge into one. The first
-    passage is always shown; the next call searches on from the end of the last one shown.
+    Matching ignores case. A passage is the whole lines within ``context`` characters of a match
+    (at most half of ``limit``), headed by its position (``[at char 13860]``); passages that touch
+    merge while they fit in ``limit``, so a frequent term never returns the whole text. Every
+    match is counted once: the next call searches on from the end of the last passage shown.
     """
-    positions = [match.start() for match in re.finditer(re.escape(needle), text, re.IGNORECASE)]
-    later = [position for position in positions if position >= offset] if needle else []
-    shown = _within(text, _passages(text, later, len(needle), context), limit)
+    matches = re.finditer(re.escape(needle), text, re.IGNORECASE) if needle else ()
+    positions = [match.start() for match in matches]
+    later = [position for position in positions if position >= offset]
+    context = min(context, max(limit, 1) // 2)
+    shown = _within(text, _passages(text, later, len(needle), context, limit), limit)
     if not shown:
         return Window(body="", unit="matches", first=0, last=0, total=len(positions), label=needle)
     first = positions.index(shown[0].matches[0]) + 1
@@ -136,11 +140,14 @@ def list_window(
 ) -> Window:
     """A page of results the source already cut.
 
+    Zero results are the tool's to say, with the query: an empty first page has no text.
+
     Args:
         lines: The results of this page, one line each.
         first: The 1-based number of the first of them.
         total: The source's count of all results, when it gives one.
-        next_call: The arguments that fetch the following page; ``None`` on the last.
+        next_call: The arguments, as JSON values, that fetch the following page; ``None`` on the
+            last.
     """
     return Window(
         body="\n".join(lines),
@@ -176,16 +183,29 @@ class _Passage:
         return f"[at char {self.start}]\n{text[self.start : self.end]}"
 
 
-def _passages(text: str, positions: Sequence[int], length: int, context: int) -> list[_Passage]:
+def _passages(
+    text: str, positions: Sequence[int], length: int, context: int, limit: int
+) -> list[_Passage]:
+    """The passages around ``positions``, in order.
+
+    A match that falls inside the current passage counts there (it is on show), and one whose
+    lines touch it joins it; either widens the passage only while it stays within ``limit``. So
+    every match belongs to exactly one passage, and every match before a passage's end belongs to
+    it or to an earlier one.
+    """
     passages: list[_Passage] = []
     for position in positions:
         start, end = _around(text, position, position + length, context)
-        if passages and start <= passages[-1].end + 1:
-            joined = passages[-1]
-            end = max(joined.end, end)
-            passages[-1] = _Passage(joined.start, end, (*joined.matches, position))
-        else:
-            passages.append(_Passage(start, end, (position,)))
+        current = passages[-1] if passages else None
+        if current is not None and (position < current.end or start <= current.end + 1):
+            wider = end if end - current.start <= limit else current.end
+            if position < current.end or wider > current.end:
+                passages[-1] = _Passage(
+                    current.start, max(current.end, wider), (*current.matches, position)
+                )
+                continue
+        floor = current.end if current is not None else 0
+        passages.append(_Passage(max(start, floor), end, (position,)))
     return passages
 
 
@@ -224,15 +244,20 @@ def _of(total: int | None) -> str:
 
 def _onward(window: Window) -> str:
     if window.next_call is not None:
-        arguments = (f"{name}={json.dumps(value)}" for name, value in window.next_call.items())
+        arguments = (f"{name}={_json(value)}" for name, value in window.next_call.items())
         return "next: " + ", ".join(arguments)
     if window.total is not None and window.last < window.total:
         return "the rest cannot be read here"
     return "end"
 
 
+def _json(value: object) -> str:
+    """A value as the model passes it back: JSON, with the text of a term kept as written."""
+    return json.dumps(value, ensure_ascii=False)
+
+
 def _matches_footer(window: Window) -> str:
-    term = json.dumps(window.label)
+    term = _json(window.label)
     if window.first == 0:
         if not window.total:
             return f"[no matches for {term}]"

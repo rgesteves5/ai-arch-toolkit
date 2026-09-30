@@ -123,3 +123,23 @@ Migrar tools para a janela (T05 a T09) e apagar os helpers copiados, que desapar
 - **Para as fichas seguintes:** uma tool devolve `window.result()`, que o `_coerce_result` do
   executor aceita; a chamada crua passa a devolver um `ToolResult` em vez de uma `str`, e os testes
   das tools lêem `result.value`.
+
+### Revisão (a pedido do dono, antes do push)
+
+- **Corrigido:**
+  - **`find` sem tecto.** Num termo frequente, as passagens encostadas fundiam-se sem limite, e uma
+    só passagem podia ser o documento inteiro. Agora uma passagem só cresce enquanto cabe no
+    `limit`, o contexto fica em metade do `limit` no máximo, e uma ocorrência que já está à vista
+    conta nessa passagem. Continua a valer que cada ocorrência conta uma vez e que a continuação
+    começa no fim da última passagem.
+  - **Termos com acentos.** O rodapé escapava-os (`"émile"`), e o modelo devolveria o termo
+    errado. Os valores vão agora em JSON sem escapes: o enquadramento do rodapé é ASCII, e o termo
+    vai como foi escrito.
+  - **Termo vazio.** Contava uma ocorrência vazia por carácter; agora não encontra nada.
+- **Testes novos:** 3 em `test_window.py`: um termo frequente dentro do limite e com cada
+  ocorrência uma vez, o termo vazio e os acentos. Falham na versão de `4d5b7cd`, verificado numa
+  cópia em scratch.
+- **Fica como estava:** num erro cortado pelo executor, os números da nota contam o texto do
+  modelo (prefixo `Tool error [tipo]: ` incluído), mas o corte é feito na mensagem; a diferença é o
+  tamanho do prefixo. Já era assim antes.
+- **Verificação:** 5691 passed, 42 deselected; ruff, formatação e pyright limpos.

@@ -7,8 +7,8 @@ actually run and an invalid call never reaches a human:
 * ``integer`` accepts ints, integral floats, and integer strings (``"3"``, ``"3.0"``); never bools;
 * ``number`` accepts ints, finite floats, and numeric strings; never bools;
 * ``boolean`` accepts bools and the strings ``"true"`` / ``"false"`` (any case);
-* ``enum`` is checked after coercion, and so are ``minimum``/``maximum`` (a ``Range`` in the
-  tool's signature puts them in the schema), whose refusal names the range;
+* ``enum`` is checked after coercion, and so are a parameter's top-level ``minimum``/``maximum``
+  (from a ``Range`` in the signature or a ``schema=`` override), whose refusal names the range;
 * ``anyOf`` keeps a value that already matches a branch, and otherwise takes the first branch that
   coerces it (``int | str`` keeps ``"1"`` as a string);
 * ``string``, ``array``, ``object`` and untyped schemas (``Any``) are left as they are — the schema
