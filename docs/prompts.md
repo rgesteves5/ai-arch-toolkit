@@ -50,9 +50,12 @@ prompt = Prompt(
 ```
 
 Layouts translate depth: Markdown deepens headings one level per nesting level,
-XML nests `<section>` elements, JSON nests a `sections` array, and the text
-layout flattens the tree in preorder. A parent's span covers its whole subtree,
-so `section_text("context")` returns the parent together with its subsections.
+XML nests `<section>` elements, and the text layout flattens the tree in
+preorder. JSON's default array mode gives a parent a nested `sections` array of
+section objects; with `JsonLayout(mode="object")`, section names become keys
+and a parent's value is `{"content": ..., "sections": {...}}`. A parent's span
+covers its whole subtree, so `section_text("context")` returns the parent
+together with its subsections.
 
 ## Prompts from files
 
@@ -78,7 +81,7 @@ See [Resources & File Loading](resources.md) for supported formats and selectors
 from ai_arch_toolkit import load_prompt
 
 template = load_prompt("prompts/story-writer.prompt.yaml")
-rendered = template.render(genre="mystery", task="Write chapter one")
+rendered = template.render(genre="mystery")
 ```
 
 Content remains literal unless a section explicitly selects a template engine. See
@@ -120,11 +123,11 @@ parameters, and output schema must be tracked separately for full replay.
 
 ## Deliberate scope boundary
 
-This delivery stops at the stable prompt/resource contracts and the real consumer integrations.
-It does not add generic `compose_prompts`, `PromptProvider`, `PromptMiddleware`, or
-`AgentDefinition` abstractions yet. Those APIs should be designed only after the Story Creator
-and Nanope have concrete repeated composition/lifecycle needs; adding them now would create a
-second orchestration layer without a validated consumer.
+The prompt system stops at the stable prompt/resource contracts. It has no generic
+`compose_prompts`, `PromptProvider`, or `PromptMiddleware` abstraction: prompts compose through
+sections, templates, and manifest `include`/`extends`. An
+[agent manifest](agents.md#file-backed-agent-manifests) names an agent's prompt manifest in
+`prompts.system_manifest`; the application renders it and passes the text as `system`.
 
 ## Stability and cache layout
 
@@ -152,8 +155,8 @@ response = llm.complete_sync(
 )
 ```
 
-The LLM core accepts strings and `Content`; it deliberately does not depend on toolkit
-prompt objects.
+The LLM core takes messages (a string, or message dicts whose content is `Content`) and a
+string `system`; it deliberately does not depend on toolkit prompt objects.
 
 When the workflow needs ordered system/user/assistant turns, use
 [Prompt Messages & Content](prompt-messages.md). It preserves multimodal `Content` parts and

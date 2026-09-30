@@ -1,6 +1,6 @@
 # Agents & Capabilities
 
-This page is the capabilities index — each subsystem now has its own focused page. Below the index are end-to-end recipes that combine several of them, plus a quick-reference table.
+This page is the capabilities index — each subsystem has its own focused page. Below the index are end-to-end recipes that combine several of them, plus a quick-reference table.
 
 ## Capability index
 
@@ -148,20 +148,20 @@ result = await flow.run(state)
 | Capability | How it connects | Example |
 |---|---|---|
 | **Agent facade** | Declarative wrapper over the factories | `Agent(ReasoningSpec(strategy="react"), llm, tools).run_sync(task)` |
-| **Fallback chains** | LLM-level, transparent to flows | `LLM("opus", fallback="sonnet")` |
-| **Retry** | LLM-level, exponential backoff | `LLM("opus", retry=RetryConfig(max_retries=3))` |
+| **Fallback chains** | LLM-level, transparent to flows | `LLM("claude-opus-5", fallback="claude-sonnet-5")` |
+| **Retry** | LLM-level, exponential backoff | `LLM("claude-opus-5", retry=RetryConfig(max_retries=3))` |
 | **Middleware** | Hooks into every LLM call | Cost tracking, logging, memory injection |
 | **Memory** | `MemoryMiddleware` + `memory_tools()` | Agents remember across conversations |
 | **Knowledge** | Injected into system prompts | Domain context, style guides |
 | **Structured prompts** | Rendered into `ReasoningSpec.system` or an LLM system prompt | Ordered sections and experiment fingerprints |
 | **Pre-built tools** | 132 ready-to-use tools | Weather, Wikipedia, math, papers, public data |
-| **Server tools** | Provider-hosted web search, code execution | `tools=[web_search()]` |
+| **Server tools** | Provider-hosted web search, code execution — per `LLM` call, next to a `ToolGroup`, which rejects them (so not through an agent's `tools`) | `llm.complete(..., tools=[group, web_search()])` |
 | **Tool governance** | Risk levels, approval, blocking | `@tool(requires_approval=True)` |
 | **Structured output** | `output_schema` on LLM call | Pydantic models as output |
 | **Extended thinking** | `thinking=True` on LLM call | Anthropic reasoning traces |
-| **Multimodal input** | `Content` accepts images, PDFs | Vision + tools agents |
+| **Multimodal input** | `Content` accepts images, PDFs; of the strategies, only `react` and `completion` send them to the model (the other eight turn the task into text) | Vision + tools ReAct agents |
 | **Per-phase models** | `Agent` deps (`deps={"planner_llm": haiku}`), factory kwargs, or manifest `strategy.phases` | Cheap planner, smart solver |
-| **Per-phase prompts** | Knobs (`planner_system`, …) or manifest `strategy.phases.*.system`; `{tools}` token renders the phase's tool catalog | Custom planner instructions |
+| **Per-phase prompts** | Knobs (`planner_system`, …) or manifest `strategy.phases.*.system`; a `{tools}` token in a planner prompt renders the catalog of the tools that run the plan | Custom planner instructions |
 | **Cost tracking** | Automatic on every Response + FlowResult | `result.total_cost` |
 | **Budgets** | Run-wide caps on a flow | `Flow(budget_policy=BudgetPolicy(...))` |
 | **Token counting** | `llm.count_tokens()` | Budget estimation before running |

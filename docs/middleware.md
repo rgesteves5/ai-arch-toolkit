@@ -17,7 +17,7 @@ class CostTracker:
 
     def after(self, request: Request, response: Response) -> Response:
         self.total_cost += response.cost or 0.0
-        print(f"Call cost: ${response.cost:.4f} | Total: ${self.total_cost:.4f}")
+        print(f"Call cost: ${response.cost or 0.0:.4f} | Total: ${self.total_cost:.4f}")
         return response
 
 tracker = CostTracker()
@@ -36,7 +36,7 @@ request.model       # model name
 request.kwargs      # extra provider kwargs
 ```
 
-A middleware's `before` returns a (possibly new) `Request`; `after` returns a (possibly new) `Response`.
+A middleware defines both hooks (or their async variants, below): `before` returns a (possibly new) `Request`; `after` returns a (possibly new) `Response`. A hook with nothing to do returns its argument.
 
 ---
 
@@ -90,6 +90,8 @@ class CostGuard:
     def __init__(self, budget: float):
         self.spent = 0.0
         self.budget = budget
+    def before(self, req: Request) -> Request:
+        return req
     def after(self, req: Request, res: Response) -> Response:
         self.spent += res.cost or 0.0
         if self.spent > self.budget:

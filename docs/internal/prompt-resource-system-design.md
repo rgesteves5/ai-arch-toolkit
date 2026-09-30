@@ -1,6 +1,7 @@
 # Prompt and Resource System Design
 
-Status: accepted for implementation.
+Status: implemented — kept as the design record. The user-facing reference is
+[Prompts](../prompts.md) and the pages it links.
 
 ## Goals
 

@@ -19,8 +19,9 @@ template = PromptTemplate.from_file(
 rendered = template.render(topic="graphs")
 ```
 
-The built-in engine uses strict `${name}` syntax. Missing variables are errors; optional
-variables are omitted unless a default exists.
+The built-in engine is the stdlib `string.Template`, used strictly: `${name}` or `$name`
+substitutes, and `$$` writes a literal `$`. Missing variables are errors; optional variables are
+omitted unless a default exists.
 
 Supported types are `string`, `integer`, `number`, `boolean`, `array`, `object`, and `any`.
 Optional JSON Schema validation is available with the `prompts` extra.
@@ -40,5 +41,7 @@ not permission to execute untrusted templates.
 
 ## Provenance
 
-Rendered provenance records variable names and the template engine, not variable values.
-The final rendered text and its fingerprint necessarily contain values visible to the model.
+`RenderedPrompt.provenance` records the supplied variable names, and each templated section's
+metadata records its engine and variable names; neither records variable values, except that a
+source selector written with `${name}` is recorded as resolved. The final rendered text and its
+fingerprint necessarily contain values visible to the model.

@@ -1,6 +1,6 @@
 # Content & Messages
 
-Helpers for building messages and multimodal content. Every `LLM` and agent flow accepts `Content` — a plain string or a list of typed parts — so the same call site handles text, images, PDFs, and prompt caching.
+Helpers for building messages and multimodal content. A message's content is `Content` — a plain string or a list of typed parts — so the same call site handles text, images, PDFs, and prompt caching. `LLM` calls take a string or a list of messages; agent flows take `Content` as their task (see the end of this page).
 
 `Content` is the provider-input contract. It is distinct from a
 [Resource](resources.md), which is a loaded application asset, and from a
@@ -24,14 +24,17 @@ messages = [
 ## Multimodal content
 
 ```python
+from pathlib import Path
+
 from ai_arch_toolkit import user, image, document, cache
 
 # Image (URL, base64, or raw bytes)
 messages = [user(["Describe this image:", image("https://example.com/photo.jpg")])]
 messages = [user(["Describe this:", image(raw_bytes, media_type="image/png")])]
 
-# PDF document
-messages = [user(["Summarize this:", document("report.pdf", media_type="application/pdf")])]
+# PDF document (base64 or raw bytes; a file path is not read)
+pdf = Path("report.pdf").read_bytes()
+messages = [user(["Summarize this:", document(pdf, name="report.pdf")])]
 
 # Anthropic prompt caching
 messages = [user([cache(long_context), "Now answer my question."])]
@@ -58,4 +61,7 @@ type ContentPart = str | ImagePart | DocumentPart | CachePart
 type Content = str | list[ContentPart]
 ```
 
-Because all agents accept `Content` as their task input, you can pass images and documents to **any** agent flow — enabling vision + tools use cases. See [Flow Architecture](flow-architecture.md).
+Every agent strategy takes `Content` as its task input, but only `react` and `completion` send it
+to the model as content parts, so images and documents reach the model through those two, and
+vision plus tools through `react`. The other strategies turn a non-string task into text
+(`str(task)`). See [Flow Architecture](flow-architecture.md).

@@ -6,6 +6,7 @@ in specialized namespaces so the convenience API stays small.
 ## Custom codec
 
 ```python
+from ai_arch_toolkit import Prompt
 from ai_arch_toolkit.toolkit.resources import DecodedResource, ResourceResolver
 
 class UpperCodec:

@@ -1,6 +1,6 @@
 # Pricing & Cost Tracking
 
-Every response carries an estimated cost, computed from a built-in pricing registry — so you can track and cap spend without wiring up your own price table.
+A response's cost is estimated from a built-in pricing registry — so you can track and cap spend without wiring up your own price table.
 
 ## Automatic cost estimation
 

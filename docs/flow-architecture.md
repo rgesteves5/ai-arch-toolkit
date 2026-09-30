@@ -43,6 +43,9 @@ state["task"] = "New task" # writes to operational
 state.set("user_id", 42, layer="persistent")
 ```
 
+Nothing enforces these roles: the engine writes only `operational` (a step's artifacts), and every
+layer lasts as long as the `State` object that holds it.
+
 ### StateSnapshot
 
 Steps never see the mutable State. They receive a **StateSnapshot** — a read-only view of every
@@ -83,7 +86,9 @@ engine does not fork per step: deep copies on every step would make long runs qu
 | `"collect"` | Conflicting values collected into a list |
 | `"raise"` | Raises `MergeConflictError` on conflict |
 
-**The contract**: parallel steps that write the same key will conflict. Use `after=` to serialize dependent steps, or write to different keys.
+**The contract**: a flow always merges with `"last_wins"`, so when parallel steps write the same
+key, the one declared last wins. Use `after=` to serialize dependent steps, or write to different
+keys.
 
 ---
 
@@ -134,8 +139,7 @@ The `artifacts` dict is the key mechanism: whatever a Step puts in artifacts get
 Execution constraints attached to a Step. Controls retry, timeout, confidence thresholds, cost limits, and what happens when things fail:
 
 ```python
-from ai_arch_toolkit.core import Policy
-from ai_arch_toolkit.core._retry import RetryConfig
+from ai_arch_toolkit.core import Policy, RetryConfig
 
 policy = Policy(
     retry=RetryConfig(max_retries=3, base_delay=1.0),
@@ -156,7 +160,8 @@ step = Step(name="critical_step", fn=my_fn, policy=policy)
 Step runs → success?
   Yes → confidence >= threshold?
     Yes → cost <= max_cost? → done
-    No  → retry / escalate / fallback (per on_low_confidence)
+    No  → retry while retries remain / escalate / fallback (per on_low_confidence);
+          with no retry left and no fallback, the result is kept
   No (error) → retries left?
     Yes → exponential backoff → retry
     No  → halt / continue / fallback (per on_exhausted)
@@ -164,14 +169,16 @@ Step runs → success?
 Timeout? → halt / fallback (per on_timeout)
 ```
 
-All decisions are recorded in the Trace. A step timeout is never retried, even when `retry` is
-configured: `on_timeout` chooses between `halt` and `fallback`.
+All decisions except `continue` are recorded in the Trace; a halt after a timeout shows only as
+`timeout`. A step timeout is never retried, even when `retry` is configured: `on_timeout` chooses
+between `halt` and `fallback`.
 
 ### Policy on a Flow
 
 `Flow(policy=...)` is the default for every step of that flow that has no policy of its own; a
 step's own `policy` always wins. A nested flow applies its own policy when it runs, so the step that
-wraps it (`as_step()`) carries none and nothing is applied twice.
+wraps it (`as_step()`) carries none and nothing is applied twice. That step still takes the outer
+flow's `policy`, like any step without one: a retry there runs the whole nested flow again.
 
 `Flow(timeout=...)` bounds a whole run, in seconds. When it elapses, the steps in flight are
 cancelled, nothing else starts, and the trace ends with a `flow_timeout` step (`iter()` emits a
@@ -189,7 +196,10 @@ flow = Flow(
 
 ### Fallback
 
-A fallback is just another Step. It runs when the primary Step exhausts retries or times out:
+A fallback is just another Step. It runs, once, when the primary Step exhausts its retries, times
+out, or returns low confidence, and the matching `on_exhausted`, `on_timeout` or
+`on_low_confidence` is `"fallback"`. `Step(fallback=...)` takes precedence over
+`Policy(fallback=...)`:
 
 ```python
 fallback_step = Step(name="cheap_model", fn=cheap_fn)
@@ -222,7 +232,7 @@ trace.flow("inner_react")      # find nested flow
 # Aggregates
 trace.total_duration           # wall clock
 trace.confidence               # min across non-skipped steps
-trace.total_cost               # raw sum of per-step Result.cost annotations (0 for metered flows)
+trace.total_cost               # raw sum of per-step Result.cost annotations (not the meter)
 trace.total_usage              # raw sum of per-step Result.usage annotations
 
 # Per-step detail
@@ -230,21 +240,22 @@ for st in trace.steps:
     print(st.name, st.duration)
     print(st.policy_decisions)  # ("retry", "fallback", ...)
     print(st.error)             # None or error string
-    print(st.skipped)           # True if condition not met
+    print(st.skipped)           # True if the step did not run (see st.skip_reason)
 ```
 
 For **spend**, read the run's meter — the single source of truth — not the trace: `result.meter`
 (a `BudgetReport`), or the `result.total_cost` / `result.usage` shortcuts. `trace.total_cost` and
-`st.cost` only reflect costs a custom step annotated manually via `Result(cost=...)`.
+`st.cost` only reflect each step's `Result(cost=...)`: what a custom step annotated manually, or
+the spend at which a `max_cost` step was stopped.
 
 ### StepTrace fields
 
 ```
-name, duration, cost, confidence, usage, attempts
+name, started_at, duration, cost, confidence, usage, attempts
 policy_decisions: ("retry", "timeout", "fallback", ...)
 error, skipped, skip_reason
-children: the steps of flows run inside this step (nested flows, inner agent loops)
-input_keys: the keys the step read, per state layer
+children: the steps of a nested flow (as_step()), or one entry per flow the step ran itself
+input_keys: the keys the step could read (its scoped snapshot), per state layer
 output_keys: the artifact keys the step returned
 input_state, output_result: the values, as trace_capture allows
 ```
@@ -310,7 +321,18 @@ enricher's output.
 
 ## Flow
 
-A Flow composes Steps into an execution graph. Three modes, auto-detected:
+A Flow composes Steps into an execution graph. There is no mode to set: the steps decide it when
+the flow is built, and `flow.is_dag` says whether it runs as a DAG.
+
+- **DAG** — some step declares `after` dependencies (`is_dag` is `True`). The flow runs once; a
+  `when` that returns False skips its step (and, by skip propagation, the steps that depend on it),
+  and `max_iterations` is not used.
+- **Cyclic** — no step has `after`, but some step has a `when` condition. `max_iterations` is
+  required.
+- **Sequential** — neither: one pass over the steps, in the order they were declared.
+
+A step that ends in error stops a sequential or cyclic flow unless its policy's `on_exhausted` is
+`"continue"` or `"fallback"`; in a DAG it only skips the steps that depend on it.
 
 ### Sequential
 
@@ -335,7 +357,7 @@ result = flow.run_sync(state)
 
 ### Cyclic
 
-Steps with `when` conditions loop until no step fires or `max_iterations` is reached. You **must** set `max_iterations` explicitly — omitting it raises `ValueError` at construction time. This prevents accidental infinite loops:
+Without `after`, steps with `when` conditions loop until no step fires or `max_iterations` is reached. You **must** set `max_iterations` explicitly — omitting it raises `ValueError` at construction time. This prevents accidental infinite loops:
 
 ```python
 from ai_arch_toolkit.toolkit.flow import Flow, FlowStep
@@ -352,8 +374,9 @@ flow = Flow(
 ```
 
 Each iteration goes through all steps, evaluates `when`, runs or skips. The loop stops when:
-- No step's `when` condition returns True in a full pass
+- No step runs in a full pass (a step without `when` runs on every pass)
 - `max_iterations` is reached
+- A step ends in error and its policy halts (see above)
 
 ### DAG
 
@@ -379,7 +402,7 @@ fetch_weather ──┐
 fetch_news   ──┘
 ```
 
-`fetch_weather` and `fetch_news` have no deps — they run **concurrently** via `asyncio.gather`. `summarize` waits for both.
+`fetch_weather` and `fetch_news` have no deps — they run **concurrently**, each in its own task. `summarize` waits for both. The steps run in waves: a wave starts every step whose dependencies have all ended, and the next wave starts once the whole wave has finished, so a step may also wait for a slower step it does not depend on.
 
 #### Bounding the fan-out width
 
@@ -446,7 +469,7 @@ with flow.iter_sync(state) as sync_execution:
 | `flow_start`, `flow_end` | The run starts; the run has finished (`flow_end.trace` is the complete trace). |
 | `step_start`, `step_end` | A step starts; a step finishes (`step_end.result` and `step_end.error` carry the outcome). |
 | `step_skipped` | A `when` condition was false, or a DAG dependency failed or was skipped. |
-| `retry`, `timeout`, `fallback` | The step engine takes that decision — while the step is still running. |
+| `retry`, `timeout`, `fallback` | The step engine takes that decision — while the step is still running. A `timeout` without a `step_name` means the run's own `timeout` elapsed. |
 | `policy_decision` | Any other decision: `low_confidence`, `escalate`, `halt`, `cost_exceeded`, `budget_exceeded`. |
 
 The run only moves past a step when you ask for the next event. A `break` does not stop it by
@@ -464,8 +487,8 @@ A Flow can become a Step via `as_step()`. This is how agents compose:
 
 ```python
 inner = Flow(
-    Step(name="think", fn=think),
-    Step(name="act", fn=act),
+    FlowStep(step=Step(name="think", fn=think), when=needs_work),
+    FlowStep(step=Step(name="act", fn=act), when=needs_work),
     name="inner_loop",
     max_iterations=5,
 )
@@ -483,8 +506,9 @@ When a Flow runs as a Step:
 - Only new/changed artifacts are returned to the parent
 - Its spend is metered under the parent's run — one shared meter, read from `result.meter` — and a
   per-step `Policy(max_cost=...)` on the wrapping step counts it
-- Its steps appear in the trace as the wrapping step's `children`, as do the steps of any flow a
-  step runs itself (e.g. an agent's inner ReAct loop); confidence propagates as the minimum
+- Its steps appear in the trace as the wrapping step's `children`; a step that runs a flow itself
+  (e.g. an agent's inner ReAct loop) gets one child per run, named after that flow (`react`), with
+  its steps below (`trace.flow(name)` finds it); confidence propagates as the minimum
 
 ---
 
@@ -506,7 +530,7 @@ from ai_arch_toolkit.toolkit.agents.flows import (
 )
 ```
 
-Each flow factory has a companion `*_initial_state(task)` helper that creates the initial operational dict for `State(operational=...)`. This dict contains the task string and any agent-specific keys the flow steps expect to read and write.
+Each flow factory has a companion `*_initial_state(task)` helper that creates the initial operational dict for `State(operational=...)`. This dict contains the task (under `task`; ReAct keeps it as the first of its `messages`) and any agent-specific keys the flow steps expect to read and write.
 
 ### Usage pattern
 
@@ -533,6 +557,9 @@ response = state.get("response")
 answer = response.text if response else result.trace.steps[-1].error
 print(f"Cost: ${result.total_cost:.4f}")
 ```
+
+A factory's flow that runs to its end leaves its answer, as text, under `answer`, and the model
+`Response` it came from under `response` (`None` when there was none).
 
 ### Per-phase LLM/tools override
 
@@ -630,9 +657,12 @@ state = State(operational=tot_initial_state("Solve this puzzle"))
 
 Steps: `search_step` (when: search_not_done) → loop
 
-Each iteration: select from frontier, generate candidates, evaluate, expand or solve. DFS expands
-the most promising child first; BFS keeps the best `n_candidates` states of each level (Yao et al.
-2023). When the iterations or the states run out, it answers from the best state found.
+Each iteration: select from frontier, generate candidates, evaluate, expand or solve. The
+evaluator's score is the last number in [0, 1] of its reply (0.5 when there is none); a candidate
+scoring 0.9 or more is solved at once, and a state at `max_depth` is solved instead of expanded.
+DFS expands the most promising child first; BFS keeps the best `n_candidates` states of each level
+(Yao et al. 2023). When the iterations or the states run out, it answers from the best state found
+(the best-scored of the deepest).
 
 ### LATS
 
@@ -647,11 +677,13 @@ Steps: `mcts_rollout` (when: search_not_done) → loop
 
 Each rollout: UCT selection, ReAct expansion, evaluation, backpropagation, optional reflection.
 UCT picks the most promising node that still has fewer than `n_candidates` children, one ReAct
-attempt from its state becomes a new child, and a low score adds a reflection for the attempts
-expanded from it. A node thus gets up to `n_candidates` sibling attempts before the search goes
-below it; `max_rollouts` caps the total number of attempts. Each attempt re-runs its tools from
-scratch — there is no environment reset — so use `lats` only with read-only, idempotent or
-sandboxed tools.
+attempt from its state becomes a new child, and a score below 0.5 adds a reflection for the
+attempts expanded from it. A node thus gets up to `n_candidates` sibling attempts before the search
+goes below it. Without an `evaluator_fn`, the score is the last number in [0, 1] of the evaluator
+LLM's reply (0.5 when there is none). The search stops at a score of 0.9 or more, or after
+`max_rollouts` attempts, and the solver answers from the best attempt. Each attempt re-runs its
+tools from scratch — there is no environment reset — so use `lats` only with read-only, idempotent
+or sandboxed tools.
 
 ### Self-Discovery
 
@@ -677,7 +709,7 @@ state = State(operational=llm_compiler_initial_state("Multi-step research task")
 
 Steps: `compile` (internally: plan → parallel execute → join → optional replan)
 
-The planner generates `$N. task [deps: $1, $2]` format. Independent tasks run concurrently via `asyncio.gather`.
+The planner generates `$N. task [deps: $1, $2]` format. Independent tasks run concurrently via `asyncio.gather`; a `$N` in a task's description is replaced, as a whole token, by the result of task N once it is done (`$1` leaves `$10` alone).
 
 ### Generate-Review
 
@@ -690,6 +722,10 @@ state = State(operational=generate_review_initial_state("Draft a release note"))
 
 Steps: `generate` → `review` → loop while not accepted
 
+The reviewer accepts only when the first word of its reply is `ACCEPT` (in any case); any other
+reply is added to the feedback for the next attempt. When the cycles run out, the last draft
+reviewed is the answer.
+
 Useful when you want an explicit critique pass, optional tool use in both phases, and accumulated reviewer feedback injected into later generation attempts. Both phases take their own LLM (`gen_llm` / `review_llm`), optional tools (`gen_tools` / `review_tools`), and iteration caps.
 
 ---
@@ -699,7 +735,7 @@ Useful when you want an explicit critique pass, optional tool use in both phases
 `execute_step()` lives in `core/` — it has **zero toolkit imports**. It receives an already-scoped StateSnapshot and runs a single Step with full policy enforcement:
 
 ```python
-from ai_arch_toolkit.core._step_engine import execute_step
+from ai_arch_toolkit.core import execute_step
 
 result, step_trace = await execute_step(step, scoped_snapshot)
 ```
@@ -773,7 +809,7 @@ print(state["report"])
 print(f"Total cost: ${result.total_cost:.4f}")   # from the meter (single source of truth)
 print(f"Duration: {result.total_duration:.1f}s")
 
-# Per-step timing (per-step cost lives in the meter, not the trace):
+# Per-step timing (spend lives in the meter, not the trace):
 for st in result.trace.steps:
     print(f"  {st.name}: {st.duration:.1f}s")
 ```

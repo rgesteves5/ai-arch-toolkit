@@ -1,14 +1,14 @@
 # Tool Governance & Safety
 
-When an LLM can call tools, you need control over *which* tools run, *whether* a human signs off first, *what* leaks into traces, and *how much* a run is allowed to spend. The toolkit handles these with four cooperating mechanisms:
+When an LLM can call tools, you need control over *which* tools run, *whether* a human signs off first, *what* leaks into traces, and *how much* a run is allowed to spend. The toolkit handles these with five cooperating mechanisms:
 
 - **Risk metadata** on each tool (`@tool(risk_level=..., requires_approval=...)`).
 - **Gates** that run before execution — block dangerous tools, require approval, or dry-run.
-- **Structured results** (`ToolResult` / `ToolError`) so failures are data, not exceptions, and error text is redacted.
+- **Structured results** (`ToolResult` / `ToolError`) so failures are data, not exceptions, and exception text is redacted.
 - **Output and time limits** the executor imposes on every tool — `max_output_chars` and `timeout_s`.
 - **Budgets** (`BudgetPolicy`) that cap a flow's calls, tokens, cost, and wall-time.
 
-The execution pipeline for every tool call is: **resolve → validate & coerce arguments → gates (in order) → call-count budget → execute within `timeout_s` → redact & structure the result → cut it to `max_output_chars`**.
+The execution pipeline for every tool call is: **resolve → validate & coerce arguments → gates (in order) → call-count budget → execute within `timeout_s` → structure the result, redacting error text and audit → cut it to `max_output_chars`**.
 
 ---
 
@@ -33,9 +33,9 @@ Every tool in `ai_arch_toolkit.toolkit.tools` declares its `capability`: `"netwo
 
 ## Output and time limits
 
-The governed executor bounds every tool it runs — the toolkit's, yours, and dynamic ones — so a missing limit in one tool cannot flood the model or stall a run:
+The governed executor bounds every tool it runs — the toolkit's and yours — so a missing limit in one tool cannot flood the model or stall a run:
 
-- **`max_output_chars`** (default 200 000): the text the model receives (`to_model_text()`) keeps its first `max_output_chars` characters, followed by `[Output truncated: kept N of M characters.]`, and `result.metadata["truncated"]` records `{"chars": M, "kept": N}`. A structured value that is too long becomes its cut JSON text; an error keeps its type and has its message cut.
+- **`max_output_chars`** (default 200 000): the text the model receives (`to_model_text()`) keeps at most its first `max_output_chars` characters — up to the last line break in their second half, when there is one — followed by a line `[chars 0-N of M | cut at the output limit; ask for less]`, and `result.metadata["truncated"]` records `{"chars": M, "kept": N}`. A structured value that is too long becomes its cut JSON text; an error keeps its type and has its message cut.
 - **`timeout_s`** (default 120): past it the call returns `ToolResult.failure("timeout", ...)` (`retryable=True`). An `async def` tool is cancelled. A synchronous tool runs in a daemon thread of its own — also on the sync path, `execute()` and `run_tools_sync()` — which the executor stops waiting for; a thread cannot be killed, so the tool may still finish in the background, but it never holds up `asyncio.run()` or the end of the process.
 
 Set them per tool, or switch one off with `None`:
@@ -73,15 +73,15 @@ A **`ToolError`** is structured so an agent (or your retry logic) can reason abo
 
 | Field | Meaning |
 |-------|---------|
-| `type` | error code — one of a closed set (see below), so retry/branch logic can switch on it |
-| `message` | human-readable message (already redacted) |
+| `type` | error code — from a fixed set for the executor's own failures (see below), so retry/branch logic can switch on it |
+| `message` | human-readable message; the executor redacts the ones it writes from an exception or an argument error, not a gate's or the tool's own |
 | `retryable` | whether retrying might succeed |
 | `safe_to_show` | if `False`, `to_model_text()` hides the message from the model |
 | `details` | structured extra context |
 
-The `type` is drawn from a fixed set:
+The executor draws the `type` of its own failures from a fixed set:
 
-- **Governance blocks** — `"dangerous_tool_blocked"`, `"approval_denied"`, `"max_calls_exceeded"`, `"budget_exceeded"`.
+- **Governance blocks** — `"dangerous_tool_blocked"`, `"approval_denied"`, `"max_calls_exceeded"`. A budget denial is not among them: it is raised, not returned (see [Cumulative budgets](#cumulative-budgets)).
 - **Resolution / execution** — `"unknown_tool"` (no matching function), `"validation_error"` (arguments that don't fit the tool's schema or signature — see [Argument validation](#argument-validation)), `"runtime_error"` (any exception raised by the tool itself, `TypeError` included; `retryable=True`), `"timeout"` (the tool did not finish within its `timeout_s`; `retryable=True`).
 
 Construct results directly when writing custom executors:
@@ -123,7 +123,7 @@ A gate runs *before* a tool executes and can **pass** (return `None`), **block**
 
 > Don't pass your own `ApprovalGate` in `gates=`; use `approval_handler=`. The group appends its own approval gate, so a hand-placed one would be double-gated and denied.
 
-Beyond gates, `ToolGroup(max_calls=N)` caps how many tools the group runs in one pass — the call past the cap is blocked with `max_calls_exceeded`. The counter is enforced atomically at the pipeline's commit step (not as a gate), so it holds exactly even under concurrent execution; call `group.reset()` to reuse the group for a fresh run.
+Beyond gates, `ToolGroup(max_calls=N)` caps how many tools the group runs in one pass — the call past the cap is blocked with `max_calls_exceeded`. The counter is not a gate: it is taken once the call has passed validation and the gates, under an `asyncio` lock on the async path, so concurrent `async_execute()` calls on one event loop never exceed it; the sync path (`execute()`, `run_tools_sync()`) counts without a lock, so calls made from several threads at once are not guarded. Call `group.reset()` to reuse the group for a fresh run.
 
 ### Dangerous tools
 
@@ -136,7 +136,7 @@ The tools in `ai_arch_toolkit.toolkit.tools.dangerous` execute real side effects
 | `csv_read`, `read_file`, `list_directory`, `search_files` | `"filesystem"` | `"high"` |
 | `http_get`, `scrape_text` | `"network"` | `"high"` |
 
-Run through a `ToolGroup`, `execute_tool()` / `async_execute_tool()`, `run_tools()` or an agent without an `approval_handler`, every call to them returns `approval_denied`; supply a handler to let them run (see [Human approval](#human-approval)). Calling the function directly (`read_file("notes.txt")`) bypasses governance entirely.
+Run through a `ToolGroup`, `execute_tool()` / `async_execute_tool()`, `run_tools()` or an agent without an `approval_handler`, every call to them with valid arguments returns `approval_denied` (invalid arguments return `validation_error` first); supply a handler to let them run (see [Human approval](#human-approval)). Calling the function directly (`read_file("notes.txt")`) bypasses governance entirely.
 
 `DangerousToolGate` blocks tools by name before approval is even requested — use it to switch them off outright:
 
@@ -177,7 +177,7 @@ ApprovalDecision.approve(*, modified_args=None, reviewer=None, reason="", metada
 ApprovalDecision.deny(*, reviewer=None, reason="", metadata=None)
 ```
 
-Returning `modified_args` from `approve(...)` runs the tool with **substituted arguments** — useful for narrowing a request (e.g. forcing a safe target) before letting it through. `modified_args={}` runs it with no arguments; only `None` keeps the model's. The full request/decision is recorded under `result.metadata["audit"]["approval"]`.
+Returning `modified_args` from `approve(...)` runs the tool with **substituted arguments** — useful for narrowing a request (e.g. forcing a safe target) before letting it through. `modified_args={}` runs it with no arguments; only `None` keeps the model's. The full request/decision is recorded under `result.metadata["audit"]["approval"]` (not when the approved call then raises or times out: that result carries no audit).
 
 The handler may be sync or async — with one caveat: on the **synchronous** execution path (`group.execute()`, `execute_tool()`) an async handler cannot be awaited, so it is **auto-denied** with reason `"Synchronous execution cannot await approval handler"`. Use the async path (`async_execute()` / `async_execute_tool()`) whenever your handler is a coroutine.
 
@@ -238,7 +238,7 @@ result = await async_execute_tool(tool_call, [get_weather], approval_handler=Non
 Traces and tool results can carry secrets. The redactor walks a payload recursively — through dicts, lists, tuples, and dataclasses — masking them by **key name** and by **value pattern**:
 
 - **Sensitive key fragments** (case-insensitive, `-`/`_` normalized — any key *containing* one is masked wholesale): `api_key`/`apikey`, `authorization`, `bearer`, `client_secret`, `connection_string`, `database_url`, `password`, `private_key`, `secret`, `token`.
-- **Value patterns**: PEM private-key blocks, `Bearer <token>`, `sk-…` keys, database URLs (`postgres`/`postgresql`/`mysql`/`mongodb`/`redis://…`), uppercase env-style assignments (`…API_KEY=`, `…TOKEN=`, `…SECRET=`, `…PASSWORD=`, `…PRIVATE_KEY=`), and inline `key: value` / `key=value` pairs for api-key/token/secret/password/private-key.
+- **Value patterns**: PEM private-key blocks, `Bearer <token>`, `sk-…` keys (ten or more characters after `sk-`), database URLs (`postgres`/`postgresql`/`mysql`/`mongodb`/`redis://…`), env-style assignments that start a line, in any case, with a name containing `API_KEY`, `TOKEN`, `SECRET`, `PASSWORD` or `PRIVATE_KEY` (`OPENAI_API_KEY=…`; not after `export `), and inline `key: value` / `key=value` pairs whose key ends in api-key/token/secret/password/private-key as a whole word (`token: …` or `X-Api-Key: …`; `access_token: …` is not matched).
 
 ```python
 from ai_arch_toolkit import redact, redact_text, RedactionPolicy
@@ -264,15 +264,15 @@ redact(payload, RedactionPolicy(replacement="***"))         # custom marker
 
 | `trace_mode` | Effect |
 |--------------|--------|
-| `metadata_only` | keep only metadata, drop payloads |
+| `metadata_only` | a serialized trace (`trace.to_dict(trace_mode="metadata_only")`) keeps only metadata and drops payloads; `redact()` itself masks as in `redacted` |
 | `redacted` | **default** — keep payloads but mask secrets |
 | `full_debug` | no redaction (local debugging only) |
 
-Redaction works on what the trace recorded. What a flow records in the first place is set by `Flow(trace_capture=...)`: by default (`"keys"`) a step's trace keeps the key names it read and returned but not the state values or artifacts, so those never reach a serialized trace. `"none"` keeps only metadata; `"full"` keeps deep copies of the values, which the redactor then masks. See [What a trace captures](flow-architecture.md#what-a-trace-captures).
+Redaction works on what the trace recorded. What a flow records in the first place is set by `Flow(trace_capture=...)`: by default (`"keys"`) a step's trace keeps the key names it could read and returned but not the state values or artifacts — its result's own `value` and `error` are kept, and the run's initial state is recorded with its values. `"none"` keeps only metadata, with no initial state; `"full"` keeps deep copies of the values. The redactor masks whatever was recorded. See [What a trace captures](flow-architecture.md#what-a-trace-captures).
 
 `trace_mode` accepts the string literals above or the equivalent `RedactionMode` enum (`RedactionMode.REDACTED`, `.METADATA_ONLY`, `.FULL_DEBUG`). `Redactor(policy)` is the reusable object behind `redact()`; `redact()` / `redact_text()` are the one-shot helpers (a `None` policy uses the safe default).
 
-Type handling to know about: `bytes` values are replaced wholesale; dataclasses are converted (`asdict`) then redacted; nested containers are walked element-by-element. One caveat — plain non-string scalars (`int`, `float`, `bool`, `None`) pass through **unredacted**, so a numeric secret is only caught when it sits under a sensitive *key* (e.g. `{"token": 12345}` is masked; a bare `12345` is not).
+Type handling to know about: `bytes` values are replaced wholesale; dataclasses are converted (`asdict`) then redacted; dicts, lists and tuples are walked element by element, and any other object (a set included) is redacted as its `repr()` text. One caveat — plain non-string scalars (`int`, `float`, `bool`, `None`) pass through **unredacted**, so a numeric secret is only caught when it sits under a sensitive *key* (e.g. `{"token": 12345}` is masked; a bare `12345` is not).
 
 ---
 
@@ -295,18 +295,18 @@ flow = Flow(
 result = flow.run_sync(state)
 ```
 
-`BudgetPolicy` caps (all optional, `None` = unlimited): `max_llm_calls`, `max_tool_calls`, `max_input_tokens`, `max_output_tokens`, `max_total_tokens`, `max_cost` (USD), `max_wall_s`. Two knobs shape the cost cap:
+`BudgetPolicy` caps (all optional, `None` = unlimited): `max_llm_calls`, `max_tool_calls`, `max_input_tokens`, `max_output_tokens`, `max_total_tokens`, `max_cost` (USD), `max_wall_s`. Two knobs shape the token and cost caps:
 
-- `reserve` (`"none"` default | `"strict"`) — `"strict"` reserves a worst-case token/cost hold *before* each call, including tools with a registered custom price; unknown or raising prices deny admission. `"none"` charges after the outcome (concurrent in-flight calls can overshoot a soft cap).
-- `unpriced` (`"fail_closed"` default | `"allow"`) — under a `max_cost` cap, `"fail_closed"` denies further work after an **unbounded** unknown cost (a provider-hosted server tool, or a custom pricer that fails when a call settles). A model without a price does not run under a meter at all: the call raises `UnpricedModelError` before anything is sent ([Pricing](pricing.md#unpriced-models-under-a-meter)). Bounded uncertainty consumes the cap and allows work within the remaining amount. `"allow"` permits unbounded unknowns (the cap may undercount). A soft budget admits a server-tool call; its unpriced settlement then blocks subsequent work.
+- `reserve` (`"none"` default | `"strict"`) — `"strict"` reserves an estimated worst-case token/cost hold *before* each call, including a tool that a custom pricer (`budget_scope(..., pricer=...)`) prices; unknown or raising prices deny admission. `"none"` charges after the outcome, so the call that crosses a soft cap, and any in flight beside it, overshoots it.
+- `unpriced` (`"fail_closed"` default | `"allow"`) — under a `max_cost` cap, `"fail_closed"` denies further work after an **unbounded** unknown cost (a provider-hosted server tool, a response that reports no usage, or a custom pricer that fails when an LLM call settles; a tool whose price fails is recorded as free). A model without a price does not run under a meter at all: the call raises `UnpricedModelError` before anything is sent ([Pricing](pricing.md#unpriced-models-under-a-meter)). Bounded uncertainty consumes the cap and allows work within the remaining amount. `"allow"` permits unbounded unknowns (the cap may undercount). A soft budget admits a server-tool call; its unpriced settlement then blocks subsequent work.
 
-Enforcement happens **at the charge site**: the meter denies the operation that would breach a cap, the call never happens, and nothing is charged. The denial (`BudgetExceeded`, a neutral `AdmissionDenied`) is terminal; the owning (outermost) flow converts it to `policy_decision="budget_exceeded"` in the trace, so `flow.run()` returns a normal `FlowResult` rather than raising.
+Enforcement happens **at the charge site**: the meter denies the operation that would breach a cap, the call never happens, and nothing is charged. The denial (`BudgetExceeded`, a neutral `AdmissionDenied`; the plain `AdmissionDenied` when the meter's re-check under its lock catches a race) is terminal; the owning (outermost) flow converts it to `policy_decision="budget_exceeded"` in the trace, so `flow.run()` returns a normal `FlowResult` rather than raising. A flow run inside `budget_scope(...)` does not own the meter: there the denial propagates out of `flow.run()`.
 
 How *tight* the cap is depends on the dimension:
 
 - **Call caps are hard** — `max_llm_calls` / `max_tool_calls` are checked against committed + outstanding *counts* under the meter's lock, so they are exact even under concurrent (parallel-DAG) execution: a run can never overshoot them.
-- **Token and cost caps under `reserve="none"` (the default) are soft** — a call is admitted while its token usage / cost is still unknown and only denied *after* it settles, so the total can overshoot `max_input_tokens` / `max_output_tokens` / `max_total_tokens` / `max_cost` by the combined in-flight calls. Use `reserve="strict"` to reserve a worst-case token/cost hold up front and make them hard (it fails closed on unknown prices). An unbounded (unknown) cost fails closed regardless — see `unpriced` above.
-- **Wall-time is checked between steps**, so a single long-running step is not interrupted mid-flight (use `Policy(timeout=...)` for that).
+- **Token and cost caps under `reserve="none"` (the default) are soft** — a call is admitted while its token usage / cost is still unknown, and the cap denies only the calls that come after the settled total has passed it, so the total can overshoot `max_input_tokens` / `max_output_tokens` / `max_total_tokens` / `max_cost` by the combined in-flight calls. Use `reserve="strict"` to reserve a worst-case token/cost hold up front and make them hard as far as that hold is right: it is an estimate (input at four characters a token of the request written out as text, image and document parts included, output at the call's `max_tokens`), and a call that uses more than its hold still settles in full. It fails closed on unknown prices. An unbounded (unknown) cost fails closed regardless — see `unpriced` above.
+- **Wall-time is checked between steps and whenever an LLM or tool call is admitted**, so work already running is not interrupted mid-flight (use `Policy(timeout=...)` for that).
 
 The **meter is the single source of truth** for what a run consumed — read it off the result, never by summing anything yourself:
 
@@ -327,18 +327,18 @@ Delivery disposition determines cost independently of retry eligibility. This ta
 failure-matrix contract for `complete`, `stream`, and `stream_events` and their sync wrappers.
 Each adapter sets the disposition by its provider's documented billing: Anthropic does not
 charge error responses, Gemini does not charge a 400 or a 500, and a 429 is unbilled everywhere;
-where billing is not documented (OpenAI, xAI, Meta, and any error inside a stream), the error is
-`indeterminate`. An adapter also knows whether its SDK handed the request to the transport, so a
-failure before that point is `not_sent`.
+where billing is not documented, or documented as possible (OpenAI, xAI, Meta, and any error
+inside a stream), the error is `indeterminate`. An adapter also knows whether its SDK handed the
+request to the transport, so a failure before that point is `not_sent`.
 
 | Failure | Disposition | Failed-attempt cost | Automatic recovery |
 |---|---|---|---|
-| Request refused before sending (`RequestError`: common validation, a model rule of the adapter, the SDK's own checks, `UnpricedModelError`) | `not_sent` | Known zero; no operation opens | Fix the request; no provider retry/fallback |
+| Request refused before sending (`RequestError`: common validation, a model rule of the adapter, the SDK's own checks, `UnpricedModelError`) | `not_sent` | Known zero; no operation opens, except when the SDK refuses the request while sending it (after `prepare()`), which counts as a started call | Fix the request; no provider retry/fallback |
 | HTTP 429 (`RateLimitError`) | `unbilled` | Known zero | Retry or fallback before delivery |
 | HTTP 5xx (`APIError`, including 529) | `unbilled` (Anthropic; Gemini's 500), else `indeterminate` | Known zero when unbilled; else unknown, bounded with a budget estimator | Retry for configured statuses; fallback before delivery |
 | Other HTTP errors (`APIError`, including 4xx) | `unbilled` (Anthropic; Gemini's 400), else `indeterminate` | Known zero when unbilled; else unknown, bounded with a budget estimator | Fallback before delivery; retry only for configured statuses |
-| Connection failure (`TransportError`) | `not_sent` while connecting, else `indeterminate` | Known zero when not sent; else unknown, bounded with a budget estimator | Retry or fallback before delivery |
-| Timeout (`ProviderTimeout`) | `not_sent` while connecting, else `indeterminate` | Known zero when not sent; else unknown, bounded with a budget estimator | Retry or fallback before delivery |
+| Connection failure (`TransportError`) | `not_sent` while connecting (never on xAI, whose gRPC errors do not say), else `indeterminate` | Known zero when not sent; else unknown, bounded with a budget estimator | Retry or fallback before delivery |
+| Timeout (`ProviderTimeout`) | `not_sent` while connecting (never on xAI), else `indeterminate` | Known zero when not sent; else unknown, bounded with a budget estimator | Retry or fallback before delivery |
 | Unreadable successful response, or a failure reported without a status (`ResponseError`) | `indeterminate` | Unknown, bounded with a budget estimator | Fallback before delivery |
 | Caller cancellation after dispatch | `indeterminate` | Unknown, bounded with a budget estimator | Propagates; a later call or step recovery can run |
 | Error after a stream item | Error's disposition | Unknown for an indeterminate error, bounded with an estimator | Propagates; no replay after delivery |
@@ -378,12 +378,15 @@ Separate from run-wide budgets, a `Policy` on a `Step` or `Flow` decides what ha
 |-------|---------|------|
 | `on_timeout` | `"halt"` \| `"fallback"` | step exceeds `timeout` |
 | `on_low_confidence` | `"retry"` \| `"escalate"` \| `"fallback"` | step result below `confidence_threshold` |
-| `on_exhausted` | `"halt"` \| `"continue"` \| `"fallback"` | retries used up |
+| `on_exhausted` | `"halt"` \| `"continue"` \| `"fallback"` | the last attempt failed, retries used up |
+
+`"retry"` on low confidence runs the attempts the policy's `retry=RetryConfig(...)` allows — none by default (`max_retries=0`) — and once they are used up the step keeps its last result.
 
 ```python
-from ai_arch_toolkit import Policy, Step
+from ai_arch_toolkit import Policy, RetryConfig, Step
 
 policy = Policy(
+    retry=RetryConfig(max_retries=2),
     timeout=10.0,
     on_timeout="fallback",
     confidence_threshold=0.7,

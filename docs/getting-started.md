@@ -2,16 +2,18 @@
 
 ## Installation
 
+The package is not on PyPI — install it from the repository:
+
 ```bash
 # Pick the provider extra that matches the model you plan to use
-uv add "ai-arch-toolkit[openai]"
+uv add "git+https://github.com/rgesteves5/ai-arch-toolkit.git#egg=ai-arch-toolkit[openai]"
 # or: [anthropic], [gemini], [xai], [meta], [all]
 ```
 
-Or with pip:
+Or with pip, which takes the direct-URL form:
 
 ```bash
-pip install "ai-arch-toolkit[openai]"
+pip install "ai-arch-toolkit[openai] @ git+https://github.com/rgesteves5/ai-arch-toolkit.git"
 # or: [anthropic], [gemini], [xai], [meta], [all]
 ```
 
@@ -62,7 +64,7 @@ response = llm.complete_sync(
     "What's the weather in Paris?",
     tools=tools,
 )
-print(response.text)
+print(response.tool_calls)  # the model asks for get_weather; run_tools_sync() runs it
 ```
 
 ### ReAct Flow
@@ -201,7 +203,7 @@ print(g.node_count_sync())          # 3
 print(g.get_stats_sync())           # {node_count: 3, edge_count: 3, ...}
 
 # Algorithms
-pr = g.pagerank_sync()              # {alice: 0.33, bob: 0.38, p1: 0.29}
+pr = g.pagerank_sync()              # {alice: 0.2, bob: 0.28, p1: 0.52}
 desc = g.get_descendants_sync("alice")  # {bob, p1}
 
 # Persistence

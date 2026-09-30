@@ -10,16 +10,18 @@ This document summarizes the **ai-arch-toolkit** package: its structure, feature
 2. **Middleware** with before/after hooks for caching, cost tracking, guardrails
 3. A **tool layer** (`@tool` decorator + `ToolGroup`) for LLM function calling
 4. A **Flow orchestration system** — composable Steps, Policies, Traces, and Scopes
-5. **Built-in agent flow factories** built on the same core primitives
+5. **Built-in agent flow factories** built on the same core primitives, and the `Agent`/`ReasoningSpec` facade over them
 6. **Pre-built safe tools** plus explicit opt-in dangerous tools for files, shell, Python, and arbitrary URL fetching
 7. A **general-purpose graph layer** (`Graph`, `Node[T]`, `Edge`, algorithms)
 8. **Graph-backed memory** for agents (search, views, middleware, presets)
 9. **Resources** for reusable file loading, parsing, selection, and provenance
 10. **Knowledge registry** for categorized prompt-injectable reference data
 11. **Structured prompts** with files, templates, layouts, manifests, and exact fingerprints
-11. **Moderation helpers** for classifier-style guardrails and middleware
+12. **Moderation helpers** for classifier-style guardrails and middleware
+13. **Metering and budgets** — a neutral meter in core, run-wide caps (`BudgetPolicy`) in the toolkit
 
-The public API is re-exported from the top level:
+Most of the public API is re-exported from the top level; the subpackages export their own
+parts (`Agent` and `ReasoningSpec` only from `ai_arch_toolkit.toolkit.agents`):
 
 ```python
 from ai_arch_toolkit import LLM, tool, ToolGroup, ...
@@ -37,13 +39,13 @@ Stateless, async-first foundation. All new code should build on this.
 ### LLM Facade
 
 - **`LLM`** (`_llm.py`) — user-facing facade. Async: `complete()`, `stream()`, `stream_events()`. Sync wrappers: `complete_sync()`, `stream_sync()`, `stream_events_sync()`.
-- Accepts `Content` (str or multimodal parts). Stream methods support fallback + middleware.
+- Accepts a string or a list of messages whose content is `Content` (str or multimodal parts). Stream methods support fallback + middleware.
 - Model prefix routes to the correct provider automatically.
 
 ### Providers
 
 - **`BaseProvider`** ABC → `AnthropicProvider`, `OpenAIProvider`, `XAIProvider`, `GeminiProvider`, `MetaProvider`
-- Factory: `create_provider()` routes by model prefix (`claude-` → Anthropic, `gpt-`/`o1-`/`o3-`/`o4-` → OpenAI, `grok-` → xAI, `gemini-` → Gemini, `muse-spark-` → Meta)
+- Factory: `create_provider()` routes by model prefix (`claude-` → Anthropic, `gpt-`/`chat-`/`o1-`/`o3-`/`o4-` and the bare `o1`/`o3`/`o4` → OpenAI, `grok-` → xAI, `gemini-` → Gemini, `muse-spark-` → Meta); an unknown model with `base_url=` falls back to the OpenAI-compatible adapter (Ollama, LM Studio, vLLM)
 
 ```python
 from ai_arch_toolkit import LLM
@@ -93,7 +95,8 @@ Core primitives for the Flow orchestration system:
 | `_server_tools.py` | `ServerTool`, `code_execution()`, `web_search()` for provider-hosted tools |
 | `_batch.py` | `BatchRequest`, `BatchResult` for batch API jobs |
 | `_sync.py` | `_run_sync()` and `_stream_sync()` helpers used by LLM and agents |
-| `_exceptions.py` | `APIError`, `RateLimitError` |
+| `_exceptions.py` | `ProviderError` and its subclasses: `RequestError`, `UnpricedModelError`, `APIError`, `RateLimitError`, `TransportError`, `ProviderTimeout`, `ResponseError` |
+| `_metering/` | The neutral meter: `MeterScope`, `RunConfig`, `MeterSnapshot`, usage events, admission control |
 
 ### Graph Layer (`core/graph/`)
 
@@ -121,7 +124,7 @@ Composable orchestration framework built on core/ primitives. See [Flow Architec
 - **`Flow`** — composes Steps into sequential, cyclic, or DAG execution graphs.
 - **`FlowStep`** — wraps a Step with optional `when` conditions and `after` dependencies.
 - **`FlowResult`** — total cost, duration, usage, and full Trace.
-- **`FlowEvent`** — streaming events (`flow_start`, `step_start`, `step_end`, `step_skipped`, `flow_end`).
+- **`FlowEvent`** — streaming events (`flow_start`, `step_start`, `step_end`, `step_skipped`, `flow_end`, plus `retry`, `fallback`, `timeout`, and `policy_decision`).
 - **`Scope`** — controls what keys a Step can see (include/exclude/transform/enrich).
 - **`execute_flow()`** / **`iter_flow()`** — execution and streaming entry points.
 
@@ -181,23 +184,21 @@ sources and variables; Prompt controls final section order; layouts produce mode
 
 ### Pre-built Tools (`toolkit/tools/`)
 
-Pre-built tools are organized across the toolkit tool modules and use stdlib-only implementations.
-The default public namespace is safe-by-default; shell execution, filesystem
-access, arbitrary URL fetching, and Python execution require explicit opt-in via
-`ai_arch_toolkit.toolkit.tools.dangerous`.
+132 pre-built tools across 44 modules, stdlib-only except the three `youtube_*` tools, which
+need the `youtube` extra. The default public namespace is safe-by-default; shell execution,
+filesystem access, arbitrary URL fetching, and Python execution require explicit opt-in via
+`ai_arch_toolkit.toolkit.tools.dangerous`. The per-tool list is in the
+[Tools Catalog](tools-catalog.md).
 
-| Module | Tools |
-|--------|-------|
-| `_datetime.py` | current time, date math |
-| `_math.py` | calculator, unit conversion |
-| `_text.py` | word count, text summarization helpers |
-| `_json.py` | JSON/CSV parsing |
-| `_weather.py` | Open-Meteo forecast |
-| `_wikipedia.py` | Wikipedia search and article retrieval |
-| `_dictionary.py` | Free Dictionary lookups |
-| `_geo.py` | geocoding, IP lookup, country info |
-| `_news.py` | Hacker News |
-| `tools.dangerous` | filesystem, shell, Python execution, arbitrary URL fetching |
+| Domain | Modules |
+|--------|---------|
+| General & utility | `_datetime.py` (time zones, date math), `_math.py` (calculator, unit conversion), `_text.py` (regex search, text stats, base64), `_json.py` (JSON path extraction) |
+| Weather, geo & places | `_weather.py`, `_air_quality.py` (Open-Meteo), `_geo.py` (geocoding, IP lookup, country info, distances, time zones), `_osm.py`, `_overpass.py` (OpenStreetMap) |
+| Reference & knowledge | `_wikipedia.py`, `_wikidata.py`, `_mediawiki.py`, `_dictionary.py`, `_news.py` (Hacker News), `_gdelt.py`, `_youtube.py` (transcripts) |
+| Scholarly & research | `_arxiv.py`, `_pubmed.py`, `_europe_pmc.py`, `_semantic_scholar.py`, `_crossref.py`, `_ror.py`, `_datacite.py`, `_open_library.py`, `_internet_archive.py` |
+| Biomedical & chemistry | `_uniprot.py`, `_pdb.py`, `_chembl.py`, `_rxnorm_dailymed.py`, `_clinical_trials.py` |
+| Earth, life & public data | `_gbif.py`, `_open_food_facts.py`, `_openfda_food.py`, `_foodon.py`, `_earthquake.py`, `_eonet.py`, `_world_bank.py`, `_who_gho.py`, `_eurostat.py`, `_nvd.py` |
+| `tools.dangerous` (opt-in) | `_filesystem.py`, `_shell.py`, `_python.py`, `_web.py`, and `csv_read` from `_json.py`: filesystem, shell, Python execution, arbitrary URL fetching |
 
 All use `@tool` decorator from core/. All return error strings (never raise) for graceful agent handling.
 
@@ -209,11 +210,11 @@ All use `@tool` decorator from core/. All return error strings (never raise) for
 
 Graph-backed memory for LLM agents, built on `core/graph/`.
 
-- **`GraphStore`** — wraps `Graph` with memory-specific `Node` (adds `timestamp`, `source`, `confidence`, `access_count`, `last_accessed`, `embedding`), keyword/vector search, and access tracking.
+- **`GraphStore`** — built on the same facade base as `Graph`, with a memory-specific `Node` (adds `timestamp`, `source`, `confidence`, `access_count`, `last_accessed`, `embedding`), keyword/vector search, and access tracking. It and the views are async-only.
 - **Views**: `TemporalView` (recent, since), `RelationalView` (neighbors, path), `PropertyView` (by_confidence, by_source, most_accessed), `SimilarityView` (vector search).
 - **`MemoryMiddleware`** — auto-injects relevant memories into LLM context.
 - **Presets**: `conversational()` and `cognitive()` for common configurations.
-- **`memory_tools()`** — generates `@tool`-decorated functions for agent use.
+- **`memory_tools()`** — builds a `ToolGroup` of four `@tool` functions (`remember`, `recall`, `explore_memory`, `forget_memory`) for agent use.
 
 ### Knowledge (`toolkit/knowledge/`)
 
@@ -239,6 +240,7 @@ Helpers for classifier-style safety checks and middleware integration.
 ```
 src/ai_arch_toolkit/
 ├── __init__.py          # Re-exports from core/ + toolkit/
+├── _cli.py              # The ai-arch CLI (prompt and agent manifests)
 ├── core/                # Stateless async-first foundation
 │   ├── _llm.py          # LLM facade
 │   ├── _content.py      # Messages, multimodal types
@@ -250,6 +252,7 @@ src/ai_arch_toolkit/
 │   ├── _step_engine.py  # execute_step() — policy-enforced execution
 │   ├── _providers/      # BaseProvider → Anthropic, OpenAI, xAI, Gemini, Meta
 │   ├── _tools/          # @tool decorator, ToolGroup, schema inference
+│   ├── _metering/       # The neutral meter: MeterScope, RunConfig, admission
 │   ├── graph/           # General-purpose graph layer
 │   │   ├── _types.py    # Node[T], Edge, NodeID, Direction
 │   │   ├── _backends.py # GraphBackend, GraphAlgorithms protocols
@@ -262,9 +265,9 @@ src/ai_arch_toolkit/
 │   ├── _server_tools.py # Provider-hosted tools
 │   ├── _batch.py        # Batch API types
 │   ├── _sync.py         # Async-to-sync bridging
-│   └── _exceptions.py   # APIError, RateLimitError
+│   └── _exceptions.py   # ProviderError and its subclasses
 └── toolkit/             # Convenience utilities built on core/
-    ├── agents/          # Built-in agent flow factories
+    ├── agents/          # Agent, ReasoningSpec, strategy registry, agent manifests
     │   └── flows/       # Flow-based agent factories
     │       ├── _react.py
     │       ├── _reflexion.py
@@ -279,6 +282,7 @@ src/ai_arch_toolkit/
     │   ├── _scope.py    # Scope, apply_scope()
     │   ├── _flow.py     # Flow, FlowStep, FlowResult, FlowEvent
     │   └── _executor.py # execute_flow(), iter_flow()
+    ├── budget/          # BudgetPolicy, BudgetController, BudgetReport, budget_scope
     ├── tools/           # Pre-built tools
     ├── memory/          # Graph-backed memory (GraphStore, views, search)
     ├── resources/       # Resource loading, codecs, selectors, serializers
@@ -321,6 +325,7 @@ Supporting directories:
 | **Prompts** | Literal sections, typed templates, manifests, layouts, spans, fingerprints. |
 | **Moderation** | `Moderator` protocol with `LLMModerator`, `OpenAIModerator`, and `ModerationMiddleware`. |
 | **Server tools** | `code_execution()`, `web_search()` for provider-hosted capabilities. |
+| **Metering & budgets** | LLM and tool calls inside a `MeterScope` are metered (a flow or agent run opens one, or joins the one around it); run-wide caps with `BudgetPolicy`; a `BudgetReport` on each run. |
 
 ---
 

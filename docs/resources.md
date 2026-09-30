@@ -13,7 +13,9 @@ print(resource.fingerprint)
 ```
 
 Built-in formats are TXT, Markdown, JSON, TOML, YAML, and raw bytes. YAML requires the
-`yaml` or `prompts` extra.
+`yaml` or `prompts` extra. Raw bytes cover files of unknown type; a file whose extension maps
+to another media type (a `.pdf` is `application/pdf`) needs a registered codec or
+`media_type="application/octet-stream"`.
 
 Resources can also be created without touching the filesystem. This is useful when an
 application receives a generated fragment, a database value, or bytes from another adapter:
@@ -30,7 +32,9 @@ binary_resource = Resource.from_bytes(
 ```
 
 Use `Prompt.from_resource()` / `PromptSection.from_resource()` or
-`KnowledgeRegistry.register_resource()` to consume these snapshots.
+`KnowledgeRegistry.register_resource()` to consume these snapshots. The default `text`
+serializer refuses bytes, so a binary resource needs a selector or serializer that turns it
+into text.
 
 ## Select fragments
 
@@ -45,6 +49,7 @@ rules = select_resource(resource, "/writing/rules/0")
 Text selectors are explicit:
 
 ```python
+from ai_arch_toolkit import Prompt
 from ai_arch_toolkit.toolkit.resources import MarkdownHeading, LineRange, NamedBlock
 
 Prompt.from_file("guide.md", selector=MarkdownHeading(heading="Rules"))
@@ -70,6 +75,12 @@ Custom serializers are isolated per `ResourceResolver`:
 from ai_arch_toolkit import PromptSection
 from ai_arch_toolkit.toolkit.resources import ResourceResolver
 
+class CompactSerializer:
+    name = "compact"
+
+    def serialize(self, value):
+        return ";".join(str(item) for item in value)
+
 resolver = ResourceResolver()
 resolver.register_serializer("compact", CompactSerializer())
 section = PromptSection.from_file(
@@ -89,7 +100,9 @@ from ai_arch_toolkit.toolkit.resources import load_resources
 resources = load_resources("knowledge/", recursive=True)
 ```
 
-Results are sorted by full relative path.
+Only files with a known extension are loaded (`.txt`, `.md`, `.markdown`, `.json`, `.toml`,
+`.yaml`, `.yml`, and any registered with a codec); `extensions={".md", ...}` sets the list
+instead. Results are sorted by full relative path.
 
 ## Policies
 

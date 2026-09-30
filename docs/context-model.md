@@ -6,8 +6,8 @@ Several framework concepts can contain text, but they answer different questions
 |---|---|---|
 | `Content` | What input type is sent to a provider? | One model call |
 | `Resource` | Where did this content come from and how was it parsed? | Loaded snapshot |
-| `Knowledge` | How does the application name, classify, and retrieve reference content? | Application/session |
-| `Memory` | What has an agent learned or recorded over time? | Multiple runs |
+| Knowledge | How does the application name, classify, and retrieve reference content? | Application/session |
+| Memory | What has an agent learned or recorded over time? | Multiple runs |
 | `PromptTemplate` | Which sources and variables are needed? | Reusable definition |
 | `Prompt` | What resolved literal sections will be rendered? | One compiled snapshot |
 | `PromptLayout` | How are sections serialized for the model? | Render policy |
@@ -25,4 +25,4 @@ written by an agent during earlier runs are Memory.
 
 Input format, prompt layout, and response format are independent. A YAML resource can be
 selected and serialized into an XML prompt while the model response is constrained by a
-Pydantic `OutputSchema`.
+Pydantic model passed as `output_schema`.

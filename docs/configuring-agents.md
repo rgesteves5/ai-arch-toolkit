@@ -3,8 +3,8 @@
 This is the canonical path for wiring agents with ai-arch-toolkit, from a
 five-line script to a team-owned, audited manifest. It is written to be handed
 directly to a new team member **or to a coding agent** working on a downstream
-project: every example is complete, uses current model ids, and states where
-each piece of configuration is expected to live.
+project: every example uses current model ids and states where each piece of
+configuration is expected to live.
 
 **The one rule everything follows from:** configuration splits into two kinds,
 and they never mix.
@@ -121,10 +121,11 @@ agent = Agent(spec, llm, tools, deps={"planner_llm": haiku})
 ```
 
 **The `{tools}` token** is the *only* substitution the framework performs on a
-prompt: at build time it is replaced with the phase's resolved tool catalog
-(`- name: description` lines, `(none)` when empty). A prompt without the token
-is never modified — no silent appends. The default planner prompts of
-`plan_execute`, `rewoo`, and `llm_compiler` carry the token.
+prompt, and only planner prompts take it: at build time it is replaced with the
+catalog of the tools that execute the plan (`executor_tools` when set, else the
+agent's tools), as `- name: description` lines, `(none)` when empty. A planner
+prompt without the token is never modified — no silent appends. The default
+planner prompts of `plan_execute`, `rewoo`, and `llm_compiler` carry the token.
 
 Full phase map:
 
@@ -176,7 +177,7 @@ Three levels, in order of sophistication:
    spec = ReasoningSpec(strategy="react", system=rendered.text)
    ```
 
-3. **`system_file` in a manifest** (next section) — verbatim text from a file,
+3. **`system_file` in a manifest** (Layer 2 below) — verbatim text from a file,
    pinned by the manifest fingerprint. Deliberately *without* variables:
    pointing it at a `.prompt.*` manifest is rejected at load. For templates,
    render app-side and pass the result.
@@ -199,20 +200,22 @@ class Answer(BaseModel):
     year: int
 
 spec = ReasoningSpec(strategy="react", output_schema=Answer)
-result = agent.run_sync(
+result = Agent(spec, llm, tools).run_sync(
     "Who wrote Dune and when?",
     budget_policy=BudgetPolicy(max_llm_calls=8, max_cost=0.25),
 )
 if result.report and result.report.over_budget:
-    print("halted on:", result.report.breached)
+    print("caps reached:", result.report.breached)
 ```
 
 With `generate_review`, read the generated structured value from
 `result.response.parsed`; the reviewer still returns plain-text `ACCEPT` / `RETRY`
 control messages and never receives the output schema.
 
-Caps are enforced hard at the charge site — the call that would exceed a cap
-never runs. Nested agents share one cumulative budget.
+Caps are enforced at the charge site — a denied call never runs. Call caps are
+exact; token and cost caps are soft, and `reserve="strict"` tightens them with an
+estimated hold before each call ([Cumulative budgets](safety.md#cumulative-budgets)).
+Nested agents share one cumulative budget.
 
 ---
 
@@ -291,7 +294,10 @@ What the manifest layer guarantees:
 - **Secrets are rejected** — `api_key`-like fields anywhere in a manifest fail
   the load.
 - **Static validation for CI** — registry-aware checks (strategy name, phase
-  names, knob values) without executing anything:
+  names, knob values) without executing anything, on the base config or on the
+  profile named with `--profile`. The `ai-arch` process knows only the built-in
+  strategies, and model ids, tools, and output schemas stay unchecked
+  ([what `validate` checks](agents.md#per-phase-prompts-and-models-strategyphases)):
 
   ```bash
   ai-arch agent validate agents/support.agent.yaml --allowed-root .
@@ -302,7 +308,7 @@ What the manifest layer guarantees:
 
 ## Layer 3 — escape hatches
 
-**Flow factories** — every strategy's factory is public and exposes the full
+**Flow factories** — every flow factory is public and exposes the full
 per-phase surface as kwargs when you want to wire a `Flow` by hand:
 
 ```python
@@ -319,8 +325,10 @@ agent = Agent.from_flow(my_flow, init_state=lambda task: {"messages": [user(task
 ```
 
 **Custom strategies** — register a builder under a stable name and it becomes
-usable from specs *and* manifests. Declare `allowed_knobs`/`allowed_deps` so
-typos fail at build time, like the built-ins:
+usable from specs *and* manifests in the process that registers it;
+`ai-arch agent validate` runs in its own process, where the name is unknown, and
+reports `unknown strategy`. Declare `allowed_knobs`/`allowed_deps` so typos fail
+at build time, like the built-ins:
 
 ```python
 from ai_arch_toolkit.toolkit.agents import BuildContext, FlowStrategy, register_strategy
@@ -350,15 +358,19 @@ model, these are the moves — each is independent:
    token where you want the catalog; delete any code that concatenates tool
    descriptions into prompt strings.
 3. **`review_llm`/`review_tools` deps → `reviewer_llm`/`reviewer_tools`.**
-   The legacy keys still work as aliases; passing both is an error.
+   The legacy keys still work as aliases; passing a key together with its alias
+   is an error.
 4. **Hardcoded per-phase models → manifest `strategy.phases.*.model` +
    `llm_factory`.** Model choice becomes reviewable data; the app keeps key
    handling.
 5. **Prompt files read ad hoc → `system_file` (static) or `toolkit.prompts`
-   (templated).** Either way the effective prompt is exactly what was
-   declared — the framework performs no substitution beyond `{tools}`.
-6. **Add `ai-arch agent validate` to CI** for every manifest, so a typo'd
-   phase or knob fails the build, not the runtime.
+   (templated).** Either way the framework performs no substitution beyond
+   `{tools}`.
+6. **Add `ai-arch agent validate` to CI** for every manifest of a built-in
+   strategy, on its base config and on each profile (`--profile NAME`), so a
+   typo'd phase or knob fails the build, not the runtime. For a strategy your
+   application registers, build the agent with `agent_from_manifest` in a test
+   that registers it first.
 7. **Budgets at call time.** Replace any bespoke token counting with
    `BudgetPolicy` per run (or `limits` in the manifest); read spend from
    `result.report` — never sum costs yourself.
@@ -380,4 +392,4 @@ model, these are the moves — each is independent:
 
 Deeper reference: [Agent & ReasoningSpec](agents.md) (field-by-field),
 [Prompts](prompts.md), [Tool Governance & Safety](safety.md), and runnable
-examples `examples/09`–`27` and `examples/47_per_phase_agents.py`.
+examples in `examples/`: `09`–`10`, `12`–`19`, `26`–`27` and `47_per_phase_agents.py`.

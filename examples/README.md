@@ -1,6 +1,6 @@
 # Examples
 
-Forty-five runnable scripts that walk through the main public surfaces in the
+Forty-seven runnable scripts that walk through the main public surfaces in the
 toolkit, from a one-line completion to budgets and metering. Each file is
 self-contained — pick a number, copy-paste, run.
 
@@ -29,10 +29,10 @@ The shortest path from zero to a working call, plus the basic building blocks.
 | # | File | What it shows | Key |
 |---|------|---------------|-----|
 | 01 | [`01_hello_world.py`](01_hello_world.py) | One completion, inspect text and usage | OpenAI |
-| 02 | [`02_multi_turn_conversation.py`](02_multi_turn_conversation.py) | Conversation history with `user()` / `assistant()` | OpenAI |
+| 02 | [`02_multi_turn_conversation.py`](02_multi_turn_conversation.py) | Conversation history with `user()` and `Response.to_message()` | Anthropic |
 | 03 | [`03_streaming.py`](03_streaming.py) | `stream_sync()` and accessing `.response` after consumption | OpenAI |
-| 04 | [`04_structured_output.py`](04_structured_output.py) | Pydantic-typed responses via `output_config` | OpenAI |
-| 07 | [`07_thinking.py`](07_thinking.py) | Extended reasoning (Claude / Gemini thinking blocks) | Anthropic |
+| 04 | [`04_structured_output.py`](04_structured_output.py) | Strict JSON output via `OutputSchema`, read from `response.parsed` | OpenAI |
+| 07 | [`07_thinking.py`](07_thinking.py) | Extended thinking with `thinking_budget` and `thinking_effort` (Claude) | Anthropic |
 | 08 | [`08_async.py`](08_async.py) | `await llm.complete(...)` and concurrent calls | OpenAI |
 | 11 | [`11_multimodal.py`](11_multimodal.py) | Image + text input | OpenAI |
 
@@ -41,7 +41,7 @@ The shortest path from zero to a working call, plus the basic building blocks.
 | # | File | What it shows | Key |
 |---|------|---------------|-----|
 | 20 | [`20_rich_streaming_events.py`](20_rich_streaming_events.py) | `stream_events()` — typed events for text, thinking, tool calls | OpenAI |
-| 21 | [`21_stream_fallback.py`](21_stream_fallback.py) | Stream fallback across providers when the primary fails | OpenAI |
+| 21 | [`21_stream_fallback.py`](21_stream_fallback.py) | Stream fallback across providers when the primary fails | Anthropic + OpenAI |
 
 ### 🔧 Tools
 
@@ -52,41 +52,41 @@ toolkit tools.
 |---|------|---------------|-----|
 | 05 | [`05_tool_calling.py`](05_tool_calling.py) | Manual tool definition + `tool_result()` round-trip | Anthropic |
 | 06 | [`06_tool_loop.py`](06_tool_loop.py) | `@tool` + `ToolGroup` + `run_tools_sync` loop | OpenAI |
-| 24 | [`24_toolkit_tools_showcase.py`](24_toolkit_tools_showcase.py) | Tour of pre-built tools (weather, geo, wiki, …) | OpenAI |
-| 25 | [`25_server_tools.py`](25_server_tools.py) | Provider-hosted tools: `web_search()`, `code_execution()` | OpenAI |
+| 24 | [`24_toolkit_tools_showcase.py`](24_toolkit_tools_showcase.py) | Calls a few pre-built tools directly (math, text, datetime, dictionary) and names some others | None |
+| 25 | [`25_server_tools.py`](25_server_tools.py) | Provider-hosted `web_search()` | Anthropic |
 
 ### 🛡️ Reliability
 
 | # | File | What it shows | Key |
 |---|------|---------------|-----|
 | 22 | [`22_retry_config.py`](22_retry_config.py) | `RetryConfig` exponential backoff on transient errors | OpenAI |
-| 23 | [`23_prompt_caching.py`](23_prompt_caching.py) | Anthropic prompt cache breakpoints + cost savings | Anthropic |
-| 36 | [`36_fallback_chains_and_attempts.py`](36_fallback_chains_and_attempts.py) | Multi-provider fallback with attempt tracking | OpenAI |
+| 23 | [`23_prompt_caching.py`](23_prompt_caching.py) | Anthropic prompt cache breakpoints + cache read/write token counts | Anthropic |
+| 36 | [`36_fallback_chains_and_attempts.py`](36_fallback_chains_and_attempts.py) | Fallback chains with attempt tracking | OpenAI |
 
 ### 🤖 Agent flows
 
-Eight numbered built-in agent architecture examples, plus tool / multimodal /
-structured output / middleware variants of ReAct.
+Eight numbered built-in agent architecture examples, plus streaming / multimodal /
+structured output / middleware variants of ReAct and per-phase configuration (47).
 
 | # | File | Pattern | Key |
 |---|------|---------|-----|
 | 09 | [`09_react_agent.py`](09_react_agent.py) | ReAct: thought → tool → observation loop | OpenAI |
-| 10 | [`10_react_agent_streaming.py`](10_react_agent_streaming.py) | ReAct with rich streaming events | OpenAI |
+| 10 | [`10_react_agent_streaming.py`](10_react_agent_streaming.py) | ReAct with `flow.iter_sync()` flow events | OpenAI |
 | 12 | [`12_react_agent_multimodal.py`](12_react_agent_multimodal.py) | ReAct over image + text input | OpenAI |
-| 13 | [`13_structured_output_agent.py`](13_structured_output_agent.py) | ReAct producing a typed Pydantic answer | OpenAI |
-| 14 | [`14_middleware_agent.py`](14_middleware_agent.py) | Tracing + custom middleware inside a flow | OpenAI |
+| 13 | [`13_structured_output_agent.py`](13_structured_output_agent.py) | ReAct producing typed JSON via `OutputSchema` | OpenAI |
+| 14 | [`14_middleware_agent.py`](14_middleware_agent.py) | Custom cost-logging middleware inside a flow | OpenAI |
 | 15 | [`15_reflexion_agent.py`](15_reflexion_agent.py) | Reflexion: inner ReAct + evaluator + reflect retry | OpenAI |
 | 16 | [`16_rewoo_agent.py`](16_rewoo_agent.py) | ReWOO: plan → execute → solve, three phases | OpenAI |
 | 17 | [`17_plan_execute_agent.py`](17_plan_execute_agent.py) | Plan-Execute: numbered plan, per-step ReAct, solve | OpenAI |
 | 18 | [`18_tot_agent.py`](18_tot_agent.py) | Tree of Thoughts (DFS / BFS search) | OpenAI |
 | 19 | [`19_lats_agent.py`](19_lats_agent.py) | LATS — Language Agent Tree Search (MCTS) | OpenAI |
-| 26 | [`26_self_discovery_agent.py`](26_self_discovery_agent.py) | Self-Discovery: select reasoning modules → adapt → solve | OpenAI |
-| 27 | [`27_llm_compiler_agent.py`](27_llm_compiler_agent.py) | LLMCompiler: plan DAG → parallel execute → join | OpenAI |
+| 26 | [`26_self_discovery_agent.py`](26_self_discovery_agent.py) | Self-Discovery: select reasoning modules → adapt → solve | Anthropic |
+| 27 | [`27_llm_compiler_agent.py`](27_llm_compiler_agent.py) | LLMCompiler: plan DAG → parallel execute → join | Anthropic |
 | 47 | [`47_per_phase_agents.py`](47_per_phase_agents.py) | Per-phase models/prompts via `deps`+`knobs`, and declaratively via a manifest | Anthropic |
 
 > **Generate-Review flow** (`generate_review_flow`) is the ninth built-in agent
-> architecture. It isn't in the numbered examples yet — see
-> `tests/agents/flows/test_generate_review.py` and `docs/flow-architecture.md`
+> architecture. It has no numbered example — see
+> `tests/agents/flows/test_generate_review_flow.py` and `docs/flow-architecture.md`
 > for usage.
 
 ### 🧠 Memory
@@ -116,7 +116,7 @@ Prompt-injectable reference data.
 | # | File | What it shows | Key |
 |---|------|---------------|-----|
 | 34 | [`34_knowledge_registry.py`](34_knowledge_registry.py) | `KnowledgeRegistry`, categories, tags, legacy `as_context()` | None |
-| 35 | [`35_knowledge_loaders.py`](35_knowledge_loaders.py) | Compatibility file/directory loaders built on Resources | None |
+| 35 | [`35_knowledge_loaders.py`](35_knowledge_loaders.py) | `KnowledgeRegistry.load()` / `from_directory()` file and directory loaders built on Resources | None |
 
 ### 🧩 Structured prompts
 
@@ -124,7 +124,7 @@ Deterministic prompt composition and experiment provenance.
 
 | # | File | What it shows | Key |
 |---|------|---------------|-----|
-| 38 | [`38_structured_prompts.py`](38_structured_prompts.py) | Literal `PromptSection`, stability, spans, and fingerprints | None |
+| 38 | [`38_structured_prompts.py`](38_structured_prompts.py) | Literal `PromptSection`, stability, stable prefix, and fingerprints | None |
 | 39 | [`39_prompt_files.py`](39_prompt_files.py) | File sources, JSON Pointer, and Markdown selectors | None |
 | 40 | [`40_prompt_templates.py`](40_prompt_templates.py) | Explicit templates and typed variables | None |
 | 41 | [`41_prompt_layouts.py`](41_prompt_layouts.py) | Text, Markdown, XML, JSON, boundary separators | None |
@@ -132,6 +132,7 @@ Deterministic prompt composition and experiment provenance.
 | 43 | [`43_prompt_knowledge.py`](43_prompt_knowledge.py) | Resource-backed Knowledge prompt integration | None |
 | 44 | [`44_custom_prompt_extension.py`](44_custom_prompt_extension.py) | Custom Resource codec | None |
 | 45 | [`45_prompt_messages.py`](45_prompt_messages.py) | Ordered and multimodal Content messages | None |
+| 46 | [`46_prompt_subsections.py`](46_prompt_subsections.py) | Nested sections: deeper Markdown headings, nested XML elements, subtree slices | None |
 
 ### 💰 Budgets & metering
 
@@ -149,11 +150,11 @@ than strict numerical order:
 1. **Get a call working** — 01, 02, 03 (then 11 if you care about images).
 2. **Add structure** — 04 (structured output), 07 (thinking), 08 (async).
 3. **Bring in tools** — 06, then 24 and 25.
-4. **Step up to agents** — 09, 10, 13, 14, then any of 15–27 depending on the
-   architecture you need; 47 shows per-phase model/prompt configuration and
+4. **Step up to agents** — 09, 10, 13, 14, then any of 15–19, 26, and 27 depending on
+   the architecture you need; 47 shows per-phase model/prompt configuration and
    agent manifests.
 5. **Memory** — 28 → 29 → 30.
 6. **Compose your own flows** — 31, 32, 33.
-7. **Prompts and context** — 38 → 39 → 40 → 41 → 42 → 43 (then 44 for extensions).
+7. **Prompts and context** — 38 → 39 → 40 → 41 → 42 → 43 → 45 → 46 (then 44 for extensions).
 8. **Reliability** — 22, 23, 36.
 9. **Budgets & cost** — 37 (measure a run, then cap it).

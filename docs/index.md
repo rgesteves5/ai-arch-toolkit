@@ -20,6 +20,7 @@ A lightweight, unified LLM client and agent architecture toolkit for Python.
 - **Streaming** — text chunks and rich structured events (thinking, tool calls)
 - **Middleware** — before/after hooks for caching, cost tracking, guardrails
 - **Fallback** — automatic provider failover on errors
+- **Metering & budgets** — every flow and agent run is metered; `BudgetPolicy` caps LLM calls, tool calls, tokens, cost, and wall time
 - **Batch operations** — `LLM.batch_submit()` / `batch_status()` / `batch_results()` with batch request/result types
 
 ## Quick install

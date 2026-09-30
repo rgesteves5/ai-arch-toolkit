@@ -10,7 +10,7 @@ axes — reach for the one that matches what you're protecting.
 | Protects | a shared resource (local GPU, rate-limited endpoint, connection pool) | orchestration width (memory, forked state, non-LLM work) |
 | Default | unlimited | unlimited |
 
-Both are **opt-in** — set neither and behaviour is exactly as before. They
+Both are **opt-in** — set neither and nothing is capped. They
 **compose**: use them together when you want to bound both the resource and the
 orchestration (see [Using both](#using-both)).
 
@@ -74,7 +74,7 @@ flow = Flow(*scrape_steps, synthesize, max_parallelism=5)
 
 - **Per-flow, not global.** A nested flow gets its *own* semaphore, so this never
   deadlocks — but it also means total concurrency across nesting can reach
-  `n × depth`. For a hard global ceiling, use `inference_limit`.
+  `n ** depth`. For a hard global ceiling, use `inference_limit`.
 - **Bounds step *starts*.** Unlike `inference_limit` (where all steps start and
   then block at the LLM call), `max_parallelism` limits how many steps become
   *live* — so it bounds forked-state **memory**, **non-LLM** parallel work (tool
@@ -114,4 +114,4 @@ the other.
 - Shaping the width of one orchestration (memory, non-LLM fan-out, rollout) →
   **`Flow(max_parallelism=...)`**.
 - Both at once → the swarm pattern above.
-- Neither set → unlimited, exactly as before.
+- Neither set → unlimited.

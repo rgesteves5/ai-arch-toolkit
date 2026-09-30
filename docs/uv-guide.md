@@ -26,12 +26,14 @@ uv sync --extra dev
 uv sync --extra dev --extra docs
 ```
 
-Prompt features keep the base package dependency-free. Select extras as needed:
+Prompt features keep the base package dependency-free. Select extras as needed (the package is
+not on PyPI, so a project installs it from the repository):
 
 ```bash
-uv add "ai-arch-toolkit[yaml]"       # YAML resources/manifests
-uv add "ai-arch-toolkit[templates]"  # Jinja templates
-uv add "ai-arch-toolkit[prompts]"    # complete YAML/Jinja/JSON-Schema support
+REPO="git+https://github.com/rgesteves5/ai-arch-toolkit.git"
+uv add "ai-arch-toolkit[yaml] @ $REPO"       # YAML resources/manifests
+uv add "ai-arch-toolkit[templates] @ $REPO"  # Jinja templates
+uv add "ai-arch-toolkit[prompts] @ $REPO"    # complete YAML/Jinja/JSON-Schema support
 ```
 
 That's it. `uv sync` reads `pyproject.toml`, resolves dependencies using

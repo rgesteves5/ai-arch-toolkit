@@ -29,7 +29,15 @@ llm = LLM("grok-4.3")                  # → xAI
 llm = LLM("muse-spark-1.3")            # → Meta
 ```
 
-See [Model Compatibility](model-compatibility.md) for per-provider support and [Framework Overview](framework-overview.md) for routing/`base_url` details (local OpenAI-compatible servers, forcing an adapter, etc.).
+See [Model Compatibility](model-compatibility.md) for per-provider support and [Getting Started](getting-started.md#multi-provider-support) for routing/`base_url` details (local OpenAI-compatible servers, forcing an adapter, etc.).
+
+Every call starts from the `LLM`'s defaults: `temperature=0.0`, `max_tokens=4096`, and any other
+keyword argument given to the constructor (a provider parameter such as `top_p`); a call's own
+keyword arguments override them. `timeout=` is the SDK client's request timeout, in seconds. An
+`LLM` holds its provider's SDK client, which its async calls share, so build one and reuse it
+(the sync wrappers run each call on a new event loop and rebuild the client for it).
+`await llm.close()` closes the client, and those of the fallbacks built from model names;
+`async with LLM(...) as llm:` (or `with` in sync code) closes it on exit.
 
 ---
 
@@ -73,7 +81,7 @@ for event in llm.stream_events_sync("Hello"):   # sync rich events (SyncRichStre
     ...
 ```
 
-The task/messages argument accepts `Content` — a string or a multimodal list. See [Content & Messages](content.md).
+The messages argument is a string (one user message) or a list of message dicts, and a message's content is `Content` — a string or a multimodal list. See [Content & Messages](content.md).
 
 `system=` never replaces the `system()` messages in `messages`, or the other way round: Anthropic, Gemini and xAI receive one system prompt with `system=` first and the `system()` messages after it, separated by a blank line, while the OpenAI adapter (and OpenAI-compatible servers) sends `system=` as a leading system message and keeps each `system()` message at its position — batch requests included. The Meta adapter behaves like the OpenAI one, with `system=` sent as the Responses API's `instructions`.
 
@@ -93,7 +101,7 @@ response.parsed         # structured output (if output_schema used)
 response.usage          # Usage(input_tokens, output_tokens, cache_write_tokens, cache_read_tokens)
 response.cost           # exact provider cost when reported, otherwise estimated USD
 response.provider_cost  # exact provider-reported USD, or None
-response.stop_reason    # "end_turn", "tool_use", "max_tokens", etc.
+response.stop_reason    # the provider's own value: "end_turn" (Anthropic), "stop" (OpenAI), etc.
 response.model          # actual model used
 response.citations      # tuple of Citation (web search results)
 response.attempts       # tuple of Attempt (retry/fallback history)
@@ -139,9 +147,13 @@ documented billing:
 |---|---|---|
 | Anthropic | `unbilled` ("failed requests aren't charged") | `indeterminate` (a client timeout is billed) |
 | Gemini | `unbilled` for 400 and 500, else `indeterminate` | `indeterminate` |
-| OpenAI, xAI, Meta | `indeterminate` (billing of errors is not documented) | `indeterminate` |
+| OpenAI | `indeterminate` (billing of errors is not documented) | `indeterminate` |
+| xAI | `indeterminate` (a request that breaks its usage guidelines is billed) | `indeterminate` |
+| Meta | `indeterminate` (failed requests "may still incur charges") | `indeterminate` |
 
 A 429 is `unbilled` everywhere, and an error that arrives inside a stream is `indeterminate`.
+xAI's gRPC transport does not say whether a failed connection sent the request, so its
+`TransportError` and `ProviderTimeout` are always `indeterminate`.
 When a failed response reports its usage (Meta's `response.failed`), the error carries it as
 `ProviderError.usage`; `Response.attempts` records it and a meter settles the failure at that
 usage's price.
@@ -186,7 +198,8 @@ llm = LLM(
 The adapters disable retry loops built into the provider SDKs. `RetryConfig`
 is therefore the single retry owner: every attempt is metered and appears in
 `Response.attempts`. `max_retries=N` means at most `N + 1` physical attempts
-for that `LLM`. Retries are opt-in; omitting `retry=` performs one attempt.
+for that `LLM`. Retries are opt-in; omitting `retry=` performs one attempt, and
+`retry=True` uses the `RetryConfig()` defaults, the values shown above.
 Besides the statuses in `retry_on_status` and rate limits, a request that got no
 HTTP response — a refused or dropped connection, a timeout — is retried: the
 adapters raise `TransportError` or `ProviderTimeout`, which also trigger fallbacks and remain
@@ -236,14 +249,16 @@ with inference_limit(2):            # ≤ 2 concurrent inferences, across all ne
 
 It is a global, run-scoped, opt-in cap (default: unlimited). See
 [Concurrency & Throttling](concurrency.md) for the full model and how it differs
-from `Flow(max_parallelism=...)`. Streaming calls are deliberately not throttled
-because their lifetime spans caller-controlled yields.
+from `Flow(max_parallelism=...)`. A streaming call holds a slot only until its first
+item arrives, since the rest of its lifetime follows the caller's consumption.
 
 ---
 
 ## Token counting
 
-Provider-accurate counts (may call the provider's token-counting endpoint):
+Provider-accurate counts from the provider's token-counting endpoint (Anthropic, Gemini, and Meta;
+the OpenAI and xAI adapters raise `NotImplementedError`, and on Gemini a system prompt raises
+`RequestError` and tools are not counted):
 
 ```python
 token_count = await llm.count_tokens(messages, system="...", tools=tools)
@@ -251,7 +266,7 @@ token_count = await llm.count_tokens(messages, system="...", tools=tools)
 token_count = llm.count_tokens_sync(messages)
 ```
 
-For fast, offline estimates with no network call, use the local heuristics:
+For fast estimates that never call the provider, use the local heuristics:
 
 ```python
 from ai_arch_toolkit import (
@@ -264,7 +279,10 @@ chars_to_tokens(4000)                                  # rough char→token
 tokens_to_chars(1000)                                  # rough token→char
 ```
 
-These are approximations (character-ratio based, with an optional `correction` factor) — use them for pre-flight budget checks, not billing.
+These are approximations: the first two count with `tiktoken` (the `tokens` extra) and scale by a
+per-family correction factor (`correction=` overrides it), the last two assume about 4 characters
+per token (`chars_to_tokens` also applies the factor of its `model=`). Use them for pre-flight
+budget checks, not billing.
 
 ---
 
@@ -304,6 +322,11 @@ for res in llm.batch_results_sync(batch_id):
 - **`BatchRequest`** — `messages`, plus optional `system`, `tools`, `custom_id`, `kwargs` (e.g. `max_tokens`). `custom_id` ties a request to its result.
 - **`BatchResult`** — `custom_id`, `response` (a `Response`, or `None` on failure), `error`.
 - Async equivalents: `batch_submit()`, `batch_status()`, `batch_results()`.
+- A batch goes straight to the provider's batch endpoint. Middleware, `retry=`, fallbacks, and the
+  `LLM`'s defaults do not apply: each request is built from its own `system`, `tools`, and
+  `kwargs`, with `max_tokens=4096` unless its `kwargs` set one. Nor is a batch metered: inside an
+  enforcing budget `batch_submit()` raises `NotMeteredOperationError` unless the run's
+  `RunConfig` sets `allow_unmetered_batch=True`, and a measure-only run lets it through unrecorded.
 
 ---
 

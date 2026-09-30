@@ -3,7 +3,7 @@
 `Agent` and `ReasoningSpec` are the high-level way to run an agent. A
 `ReasoningSpec` *describes* how an agent reasons (a named strategy plus limits);
 an `Agent` *binds* that spec to a runtime `LLM` and `ToolGroup` and runs it. The
-spec is declarative and serializable; the LLM and tools are not.
+spec is declarative and loads from config; the LLM and tools do not.
 
 For the guided end-to-end path — code-first specs, per-phase configuration,
 prompts, budgets, and manifests — start with
@@ -11,7 +11,8 @@ prompts, budgets, and manifests — start with
 
 This is the recommended entry point. The underlying `*_flow()` factories
 ([Flow Architecture](flow-architecture.md)) remain available when you want to
-build and wire a `Flow` by hand — `Agent` compiles down to exactly one of them.
+build and wire a `Flow` by hand — `Agent` compiles every built-in strategy but
+`completion` down to exactly one of them.
 
 ```
 ReasoningSpec        →  build_flow()  →   Flow   →   Agent.run()  →  AgentResult
@@ -33,7 +34,7 @@ agent = Agent(spec, llm, tools)
 
 result = agent.run_sync("Who wrote Dune, and what year was it published?")
 print(result.text)
-print(f"cost: ${result.cost:.4f}  tokens: {result.usage.total_tokens}")
+print(f"cost: ${result.cost:.4f}  tokens: {result.report.total_tokens}")
 ```
 
 `Agent` compiles the `Flow` **once** in its constructor, so a single agent can be
@@ -62,27 +63,29 @@ own cannot be written to. The copy is shallow — a nested value is still yours.
 `policy` applies to the steps of the strategy's own flow (listed per strategy in
 [Flow Architecture](flow-architecture.md#agent-flows)). Strategies that run an inner
 ReAct loop inside one step — `reflexion`, `plan_execute`, `llm_compiler`, `lats`,
-`self_discovery`, and `generate_review` with tools — do not pass it down, so a step
+`self_discovery`, and `generate_review` — do not pass it down, so a step
 timeout there bounds that step's whole inner loop. Bound individual model calls
 with `LLM(timeout=..., retry=...)` and the whole run with `timeout`. When `timeout`
 elapses, the step in flight is cancelled, nothing else starts, and the trace ends
 with a `flow_timeout` step. Manifests set it with `strategy.timeout` or
 `limits.timeout_seconds`.
 
-`trace_capture` defaults to `"keys"`: each step's trace keeps the state keys it read and
-the artifact keys it returned, not the values. Use `"full"` to record deep copies of the
-values when debugging, or `"none"` for metadata only. Strategies with an inner ReAct
-loop pass it to that loop. Manifests set it with `strategy.trace_capture`.
+`trace_capture` defaults to `"keys"`: each step's trace keeps the state keys it could read
+and the artifact keys it returned, not their values (its result's own `value` and `error`
+are kept). Use `"full"` to record deep copies of the values when debugging, or `"none"` for
+metadata only. Strategies with an inner ReAct loop pass it to that loop. Manifests set it
+with `strategy.trace_capture`.
 
-`knobs` vs the dedicated fields: a field is dedicated when every strategy uses it
-the same way (`system`, `timeout`, `policy`, `trace_capture`). Anything strategy-specific —
-`n_candidates` for `tot`, `threshold` for `reflexion`, `max_cycles` for
-`generate_review` — lives in `knobs`, so a spec stays a flat, config-friendly
-object.
+`knobs` vs the dedicated fields: a field is dedicated when every strategy takes it
+(`system`, `timeout`, `policy`, `trace_capture`; which phases get `system` varies
+by strategy). Anything strategy-specific — `n_candidates` for `tot`, `threshold`
+for `reflexion`, `max_cycles` for `generate_review` — lives in `knobs`, so a spec
+stays a flat, config-friendly object.
 
 > **Budgets are not on the spec.** A `ReasoningSpec` carries no `budget_policy`.
 > Attach a run-level [budget](#budgets) at call time (`agent.run(task,
-> budget_policy=…)`) or on the `Flow`/factory — see below.
+> budget_policy=…)`). Only a flow you build yourself — a `Flow` or a factory, run
+> through [`Agent.from_flow`](#escape-hatch-agentfrom_flow) — carries one of its own.
 
 ## Strategies
 
@@ -133,7 +136,7 @@ agent = Agent(spec, llm, tools, deps={"evaluator": my_scorer})
 Built-in strategies validate `deps` the same way they validate `knobs`: an
 unknown key or a wrongly-typed value raises `ValueError` at build time, so a
 typo like `evalutor` cannot be silently ignored. Custom strategies registered
-without `allowed_deps` keep the old accept-anything behavior.
+without `allowed_deps` accept any dep name; their `dep_validators`, if any, still run.
 
 Callable deps: `reflexion` → `evaluator`; `lats` → `evaluator_fn`. The
 per-phase LLM/tool deps are listed in the next section.
@@ -184,8 +187,9 @@ Notes:
 
 - Planner prompts may contain a literal `{tools}` token — the **only**
   substitution the framework performs. At build time it is replaced with the
-  phase's resolved tool catalog (`- name: description` lines, `(none)` when
-  empty); a prompt without the token is never modified. The default planner
+  catalog of the tools that execute the plan (`executor_tools` when set, else
+  the agent's tools), as `- name: description` lines, `(none)` when empty; a
+  prompt without the token is never modified. The default planner
   prompts of `plan_execute`, `rewoo`, and `llm_compiler` carry the token, so
   tool awareness is visible in the declared text instead of appended silently.
   (`rewoo`'s planner needs the tool names to emit `#E1 = ToolName[arg]` steps —
@@ -193,8 +197,8 @@ Notes:
 - `self_discovery`'s reasoning phase has no single system prompt — its three
   sub-prompts (`select_system`, `adapt_system`, `plan_system`) are plain knobs.
 - `generate_review` still accepts the legacy `review_llm` / `review_tools` dep
-  keys as aliases of `reviewer_llm` / `reviewer_tools`; passing both is an
-  error.
+  keys as aliases of `reviewer_llm` / `reviewer_tools`; passing a key together
+  with its alias is an error.
 - The spec-level `llm_kwargs` apply to **every** phase's LLM calls; a phase
   override changes who is called, not what is passed. `reviewer_kwargs` merges
   on top of the global `llm_kwargs`, winning per key.
@@ -207,12 +211,12 @@ Notes:
 | Attribute | Type | Meaning |
 |---|---|---|
 | `text` | `str` | The final answer, extracted from the flow's state |
-| `response` | `Response \| None` | The last full `Response` (usage, citations, tool calls), if any |
+| `response` | `Response \| None` | The `Response` the answer came from (usage, citations, tool calls), if any |
 | `flow_result` | `FlowResult` | The complete flow trace — step results, timing, metadata |
 | `usage` | `Usage` | Cumulative token usage across the run |
 | `cost` | `float` | Cumulative USD cost |
-| `report` | `BudgetReport \| None` | The run's meter projection — `None` if the run was unmetered ([Budgets](#budgets)) |
-| `errors` | `tuple[str, ...]` | Error strings from any failed steps |
+| `report` | `BudgetReport \| None` | The run's meter projection, set on every run — one without a budget is still measured ([Budgets](#budgets)) |
+| `errors` | `tuple[str, ...]` | Error strings from the flow's failed steps (an inner loop's stay in the trace) |
 
 The meter is the single source of truth for spend — read totals off the result,
 never by summing yourself. `result.cost` / `result.usage` are conveniences over
@@ -235,8 +239,9 @@ alone leaves the step in flight running while you still hold the execution.
 
 Events come from the steps of the strategy's flow ([Flow Architecture](flow-architecture.md#streaming)).
 An inner ReAct loop that runs inside one step reports through that step's
-`step_start`/`step_end`, and its steps appear in the trace as that step's
-`children`. `iter()` is not token streaming: model output arrives with `step_end`.
+`step_start`/`step_end`, and each inner run appears in the trace among that step's
+`children`, as a `react` entry holding its steps. `iter()` is not token streaming:
+model output arrives with `step_end`.
 
 ## Budgets
 
@@ -255,15 +260,17 @@ result = Agent(spec, llm, tools).run_sync(
 )
 
 if result.report and result.report.over_budget:
-    print("halted on:", result.report.breached)   # the caps that were reached
+    print("caps reached:", result.report.breached)
 ```
 
 `BudgetReport` exposes `llm_calls`, `tool_calls`, token tallies, `cost`,
 `cost_uncertain` (a call couldn't be priced, so `cost` undercounts), `elapsed_s`,
-`over_budget`, and `breached`. Enforcement is **hard at the charge site**: the
-call that would exceed a cap never runs. See [Run-Level Budgets in the safety
-guide](safety.md#cumulative-budgets) for hard-vs-soft caps, `reserve` /
-`unpriced`, and the full model.
+`over_budget`, and `breached`. Enforcement happens **at the charge site**: a call
+the meter denies never runs. Call caps are exact; token and cost caps are soft
+under the default `reserve="none"` — a call admitted under the cap can overshoot
+it — while `reserve="strict"` holds a worst-case estimate before each call. See
+[Cumulative budgets in the safety guide](safety.md#cumulative-budgets) for
+hard-vs-soft caps, `reserve` / `unpriced`, and the full model.
 
 To attach usage sinks, a custom pricer, or retained meter events to one run, pass a
 full `RunConfig` instead. It fully specifies the run's meter and takes precedence
@@ -293,11 +300,15 @@ spec = ReasoningSpec.from_mapping({
 ```
 
 `policy` accepts a `Policy` instance or a mapping of its fields
-(`{"timeout": 30, "retry": {"max_retries": 2}, "on_timeout": "fallback"}`); a
-`fallback` step has no mapping form, so set it on a `Policy` in code. `output_schema`
-accepts a `{"name", "schema", "strict"}` mapping, an `OutputSchema`, or a supported
-model class such as a Pydantic model. Nothing is dropped silently: an unknown key, or
-a value that cannot be used, raises `ValueError` naming it.
+(`{"timeout": 30, "retry": {"max_retries": 2}}`). A `fallback` step has no mapping form,
+so a policy that falls back is built as a `Policy` in code: the built-in strategies' steps
+have no fallback of their own, so from a mapping `"on_timeout": "fallback"` finds nothing to
+run and a timed-out step fails as with `"halt"`. `output_schema` accepts a
+`{"name", "schema", "strict"}` mapping, an `OutputSchema`, or a supported model class such
+as a Pydantic model. An unknown key, top-level or in `policy`, raises `ValueError` naming
+it, as does a `policy`, `output_schema`, or `trace_capture` value in none of the accepted
+forms. Other values are converted as given (`int(max_iterations)`, `dict(knobs)`, …), and
+`timeout` is first checked when the flow is built.
 
 ## File-backed agent manifests
 
@@ -372,7 +383,7 @@ it. A wrong type or an unknown field fails with its path
 not set. The same declaration is packaged as a JSON Schema,
 `ai_arch_toolkit/toolkit/agents/schemas/agent-manifest-v1.schema.json`, for
 editors and other tools. JSON cannot tell `1` from `1.0`, so only the loader
-refuses a float where an integer goes.
+refuses an integer written as `1.0`.
 
 ### Per-phase prompts and models: `strategy.phases`
 
@@ -398,8 +409,8 @@ the load-time hash so a file that changed since loading raises instead of
 running unaudited content — into the canonical `<phase>_system` knobs.
 `system_file` is **verbatim text**: no variables, no rendering (pointing it at
 a `.prompt.*`/`.agent.*` manifest is rejected); to use the prompts system,
-render in the application and declare the result. Declared prompt text may
-carry the `{tools}` token like any other phase prompt; the fingerprint pins the
+render in the application and declare the result. A declared planner prompt may
+carry the `{tools}` token like the `planner_system` knob; the fingerprint pins the
 declared form, and the token resolves against the runtime tools at build time.
 Declaring both `strategy.phases.<name>.system` and
 `strategy.knobs.<name>_system` is a load error: one declaration site per value.
@@ -440,6 +451,19 @@ only the manifest's own directory may be referenced, so layouts that keep
 profiles or prompt files in sibling directories need it. `inspect` prints the
 resolved config and fingerprint.
 
+`validate` runs the loader with all its checks, then checks one resolved config —
+the base one, or the one `--profile NAME` selects, so run it for the base and for
+each profile — against the strategy registry of the `ai-arch` process: the
+strategy name, the declared phases, a phase `model` only where the strategy takes
+that `<phase>_llm`, and knob names and values, phase prompts included. That registry
+holds only the built-in strategies, so a manifest naming a strategy your
+application registers fails with `unknown strategy`; check it where the strategy
+is registered — `agent_from_manifest` runs its knob and dep checks when it builds
+the agent. `validate` does not check what the application resolves at run time —
+model ids and providers, tools, output schemas, `llm_kwargs`, deps — and only
+fingerprints the files under `prompts` and `tools.manifest`
+(`ai-arch prompt validate` checks a prompt manifest); it takes no overrides.
+
 ## Escape hatch: `Agent.from_flow`
 
 When you have built a `Flow` by hand (any composition of `Step`s) and want the
@@ -458,7 +482,7 @@ The run's answer (`AgentResult.text`) is the text the flow leaves under `"answer
 and `AgentResult.response` the `Response` it leaves under `"response"`. A flow that
 leaves no `"answer"` answers with its last step's value, the way a nested flow's
 value is its last step's: the text of a `Response` (which is then also
-`AgentResult.response`), or `str()` of anything else.
+`AgentResult.response`), an empty string for `None`, or `str()` of anything else.
 
 ## Composition: `Agent.as_step`
 
@@ -495,8 +519,9 @@ turns (see [`Agent.from_flow`](#escape-hatch-agentfrom_flow) for a flow that doe
 `BuildContext` carries `spec`, `llm`, `tools`, and `deps` — read serializable
 config from `spec`/`spec.knobs` and runtime objects from `deps`. `FlowStrategy`
 also accepts `allowed_knobs`/`knob_validators` and, symmetrically,
-`phases`/`allowed_deps`/`dep_validators`; leave `allowed_deps` as `None` to skip
-dep validation, or declare a set so typos fail at build time like the built-ins.
+`phases`/`allowed_deps`/`dep_validators`; leave `allowed_deps` as `None` to accept
+any dep name (`dep_validators` still run), or declare a set so typos fail at build
+time like the built-ins.
 
 ## Lower-level functions
 

@@ -68,7 +68,7 @@ from ai_arch_toolkit.core.graph._networkx import NetworkXBackend
 graph = Graph(NetworkXBackend())
 ```
 
-All methods are **async-first** with `_sync` wrappers (e.g., `graph.add()` / `graph.add_sync()`).
+All methods are **async-first** with `_sync` wrappers (e.g., `graph.add()` / `graph.add_sync()`); `to_dict()` has no sync wrapper.
 
 ### Node CRUD
 
@@ -111,6 +111,12 @@ people = await graph.list(type="person")
 count = await graph.count(type="person")
 ```
 
+The index belongs to the `Graph` object and holds the nodes added through it (`add`, `add_many`,
+`from_dict`, `load`) or retyped by its `update`. A type it has never seen is listed and counted by
+the backend; once it has seen a type, a node of that type that reached the backend another way
+(another facade on the same backend, a backend that already held nodes) is left out of
+`list(type=...)` and `count(type=...)`.
+
 ### Edge Operations
 
 ```python
@@ -147,14 +153,14 @@ total_edges = await graph.edge_count()
 ### Basic Traversal
 
 ```python
-# Neighbors (BFS within depth)
+# Neighbors (BFS along outgoing edges, within depth)
 neighbors = await graph.neighbors("alice", depth=2)
 neighbors = await graph.neighbors("alice", relation="knows")
 ```
 
 ### Graph Algorithms
 
-These require the backend to implement the `GraphAlgorithms` protocol (the default `NetworkXBackend` does). Check with `graph.has_algorithms`.
+These require the backend to implement the `GraphAlgorithms` protocol (the shipped `NetworkXBackend` does); without it they raise `TypeError`. Check with `graph.has_algorithms`.
 
 ```python
 # Breadth-first search
@@ -240,7 +246,7 @@ graph = await Graph.from_dict(data, NetworkXBackend())
 
 ### Content Loader
 
-When deserializing, use `content_loader` to reconstruct typed content from JSON:
+When deserializing, use `content_loader` to reconstruct typed content from JSON (a dataclass content is saved as a dict of its fields):
 
 ```python
 def load_content(raw: Any) -> MyDataclass:
@@ -250,13 +256,18 @@ graph = await Graph.from_dict(data, backend, content_loader=load_content)
 graph = await Graph.load("graph.json", backend, content_loader=load_content)
 ```
 
-### Deep Copy
+### Copy
 
 ```python
 copy = await graph.copy()
 # or with a specific backend:
 copy = await graph.copy(backend=NetworkXBackend())
 ```
+
+`copy()` rebuilds the graph in a new backend through `to_dict()` and `from_dict()`, with no
+`content_loader`: a dataclass content comes back as a dict of its fields, and other values (a dict
+content, `metadata`) are shared with the original, not copied. Without `backend`, it creates one of
+the same type, which needs a constructor that takes no arguments.
 
 ---
 
@@ -272,13 +283,13 @@ class GraphBackend(Protocol):
     async def get_node(self, node_id: NodeID) -> Node[Any] | None: ...
     async def update_node(self, node_id: NodeID, **attrs: object) -> Node[Any] | None: ...
     async def remove_node(self, node_id: NodeID) -> bool: ...
-    async def list_nodes(self, *, type: NodeType | None, limit: int | None) -> Sequence[Node[Any]]: ...
-    async def count_nodes(self, *, type: NodeType | None) -> int: ...
+    async def list_nodes(self, *, type: NodeType | None = None, limit: int | None = None) -> Sequence[Node[Any]]: ...
+    async def count_nodes(self, *, type: NodeType | None = None) -> int: ...
     async def add_edge(self, edge: Edge) -> None: ...
-    async def get_edges(self, node_id: NodeID, *, direction: Direction, relation: str | None) -> Sequence[Edge]: ...
+    async def get_edges(self, node_id: NodeID, *, direction: Direction = "out", relation: str | None = None) -> Sequence[Edge]: ...
     async def remove_edge(self, source: NodeID, target: NodeID, relation: str) -> bool: ...
-    async def neighbors(self, node_id: NodeID, *, depth: int, relation: str | None) -> Sequence[Node[Any]]: ...
-    async def clear(self, *, type: NodeType | None) -> int: ...
+    async def neighbors(self, node_id: NodeID, *, depth: int = 1, relation: str | None = None) -> Sequence[Node[Any]]: ...
+    async def clear(self, *, type: NodeType | None = None) -> int: ...
 ```
 
 ### GraphAlgorithms (optional)
@@ -287,17 +298,17 @@ Extended interface for graph algorithms. When a backend implements this, `Graph`
 
 ```python
 class GraphAlgorithms(Protocol):
-    async def bfs(self, start: NodeID, *, relation: str | None) -> Sequence[Node[Any]]: ...
-    async def dfs(self, start: NodeID, *, relation: str | None) -> Sequence[Node[Any]]: ...
-    async def shortest_path(self, source: NodeID, target: NodeID, *, relation: str | None) -> Sequence[Node[Any]] | None: ...
-    async def centrality(self, *, relation: str | None) -> dict[NodeID, float]: ...
-    async def connected_components(self, *, relation: str | None) -> Sequence[Sequence[NodeID]]: ...
+    async def bfs(self, start: NodeID, *, relation: str | None = None) -> Sequence[Node[Any]]: ...
+    async def dfs(self, start: NodeID, *, relation: str | None = None) -> Sequence[Node[Any]]: ...
+    async def shortest_path(self, source: NodeID, target: NodeID, *, relation: str | None = None) -> Sequence[Node[Any]] | None: ...
+    async def centrality(self, *, relation: str | None = None) -> dict[NodeID, float]: ...
+    async def connected_components(self, *, relation: str | None = None) -> Sequence[Sequence[NodeID]]: ...
     async def subgraph(self, node_ids: Sequence[NodeID]) -> GraphBackend: ...
-    async def find_all_paths(self, source: NodeID, target: NodeID, *, max_depth: int | None) -> Sequence[Sequence[NodeID]]: ...
+    async def find_all_paths(self, source: NodeID, target: NodeID, *, max_depth: int | None = None) -> Sequence[Sequence[NodeID]]: ...
     async def ancestors(self, node_id: NodeID) -> set[NodeID]: ...
     async def descendants(self, node_id: NodeID) -> set[NodeID]: ...
-    async def ego_graph(self, node_id: NodeID, *, radius: int) -> GraphBackend: ...
-    async def pagerank(self, *, alpha: float) -> dict[NodeID, float]: ...
+    async def ego_graph(self, node_id: NodeID, *, radius: int = 1) -> GraphBackend: ...
+    async def pagerank(self, *, alpha: float = 0.85) -> dict[NodeID, float]: ...
 ```
 
 Check at runtime:
@@ -322,7 +333,7 @@ graph = Graph(backend)
 Import-guarded — requires the `[graph]` extra:
 
 ```bash
-pip install ai-arch-toolkit[graph]
+pip install "ai-arch-toolkit[graph] @ git+https://github.com/rgesteves5/ai-arch-toolkit.git"
 ```
 
 The `NetworkXBackend` is not re-exported from the `core.graph` package to keep the import guard effective. Import it directly from `core.graph._networkx`.
@@ -331,18 +342,21 @@ The `NetworkXBackend` is not re-exported from the `core.graph` package to keep t
 
 ## Connection to Memory
 
-The Memory system (`toolkit/memory/`) wraps `Graph` with memory-specific features:
+The Memory system (`toolkit/memory/`) has its own facade, `GraphStore`. It shares `Graph`'s basic
+node and edge methods (`add`, `get`, `list`, `count`, `connect`, `edges`, `neighbors`, `save`, …)
+but not the algorithms, stats, or `copy()`, and adds memory-specific features. It takes a
+`MemoryBackend`, a backend that can also search, such as the memory package's own
+`NetworkXBackend` (the core one plus keyword search):
 
 ```python
 from ai_arch_toolkit import GraphStore
-from ai_arch_toolkit.core.graph import Graph
+from ai_arch_toolkit.toolkit.memory.graph._networkx import NetworkXBackend
 
-graph = Graph()
-store = GraphStore(graph.backend)
+store = GraphStore(NetworkXBackend())
 ```
 
 `GraphStore` adds:
-- Memory-specific `Node` fields (`timestamp`, `source`, `confidence`, `access_count`, `last_accessed`, `embedding`)
+- Memory-specific `Node` fields (`timestamp`, `created_at`, `source`, `confidence`, `access_count`, `last_accessed`, `embedding`)
 - Keyword and vector search
 - Access tracking (automatic `access_count` and `last_accessed` updates on `get()`)
 - Views: `TemporalView`, `RelationalView`, `PropertyView`, `SimilarityView`

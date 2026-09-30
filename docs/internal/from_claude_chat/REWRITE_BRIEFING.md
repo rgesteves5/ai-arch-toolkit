@@ -74,7 +74,7 @@ Cinco operadores: Sequence, Parallel, Conditional, Loop, Recursion.
 
 Boundary = Memory com access_control=read_only que constrains composição. É a constitution, o frozen prompt, o budget, as safety rules.
 
-Para referência completa do paradigma, ler `docs/from_claude_chat/FIRST_PRINCIPLES.md`.
+Para referência completa do paradigma, ler `docs/internal/from_claude_chat/FIRST_PRINCIPLES.md`.
 
 ---
 
@@ -375,7 +375,7 @@ orchestrator = Agent(model="...", tools=[research_tool, write_tool])
 
 ## Referência
 
-- `docs/from_claude_chat/FIRST_PRINCIPLES.md` — paradigma conceptual completo
-- `docs/from_claude_chat/transform_api.py` — contrato LLM (nota: usa nome Transform, o nome real é LLM)
-- `docs/from_claude_chat/agent_api.py` — contrato Agent
-- `docs/from_claude_chat/tools_memory_prompt_api.py` — contrato Tools/Memory/Prompt
+- `docs/internal/from_claude_chat/FIRST_PRINCIPLES.md` — paradigma conceptual completo
+- `docs/internal/from_claude_chat/transform_api.py` — contrato LLM (nota: usa nome Transform, o nome real é LLM)
+- `docs/internal/from_claude_chat/agent_api.py` — contrato Agent
+- `docs/internal/from_claude_chat/tools_memory_prompt_api.py` — contrato Tools/Memory/Prompt

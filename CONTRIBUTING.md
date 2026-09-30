@@ -17,15 +17,15 @@ CI checks that `uv.lock` matches `pyproject.toml` before installing
 dependencies. Run `uv lock --check` before pushing when dependency metadata
 changes, and update the lockfile with `uv lock` when needed.
 
-For running the examples or integration tests, copy `.env.example` to `.env`
-and populate `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY`,
-and/or `MODEL_API_KEY` (Meta). Load them with `set -a && source .env && set +a` or via
-`direnv`.
+For running the examples or the `live_api` tests, copy `.env.example` to `.env`
+and populate `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY` (`GEMINI_API_KEY` is read
+when it is unset), `XAI_API_KEY`, and/or `MODEL_API_KEY` (Meta). Load them with
+`set -a && source .env && set +a` or via `direnv`.
 
 ## Day-to-day commands
 
 ```bash
-uv run pytest                                # full suite (2400+ tests)
+uv run pytest                                # full suite (5700+ tests; live_api too if keys set)
 uv run pytest tests/test_llm.py              # one file
 uv run pytest -k "stream"                    # by pattern
 uv run pytest -m "integration and not live_api"  # deterministic system tests
@@ -69,12 +69,13 @@ docstrings/comments, and when to use classes vs functions — see
 
 1. Add a class extending `BaseProvider` in `src/ai_arch_toolkit/core/_providers/_<name>.py`.
    The base owns `complete()` and `stream()`; the adapter implements `prepare()` (pure, returns
-   the SDK's own request type, raises `RequestError` for what a model does not take), `send()`,
-   `open_stream()`, `assemble()`, `usage()`, and `map_error()` (the only place that knows the
-   SDK's exceptions, with each error's `delivery` from the provider's documented billing). Put
-   per-model rules in a profile table resolved with `core/_model_id.py`. `_openai.py` is the
-   reference.
-2. Route the model family in `core/_providers/__init__.py` (`_MODEL_PREFIXES`).
+   the SDK's own request type in a `Prepared`, raises `RequestError` for what a model does not
+   take), `send()`, `open_stream()`, `assemble()`, `usage()`, and `map_error()` (the only place
+   that knows the SDK's exceptions, with each error's `delivery` from the provider's documented
+   billing). Put per-model rules in a profile table resolved with `core/_model_id.py`.
+   `_openai.py` is the reference.
+2. Route the model family in `core/_providers/__init__.py`: its prefix in `_MODEL_PREFIXES`, and a
+   branch in `create_provider()` that builds the adapter with its environment key.
 3. If the provider has its own SDK, declare it as its own extra in
    `[project.optional-dependencies]` in `pyproject.toml` and add that extra to
    `all` (the `dev` extra installs `all`, so CI gets it) — never as a hard
@@ -102,20 +103,23 @@ docstrings/comments, and when to use classes vs functions — see
    `api.php` uses `mediawiki_error` (a test checks). A call to a service that answers "nothing
    found" with `204 No Content` or an empty body passes `allow_empty=True`. `_weather.py` and
    `_mediawiki.py` are the templates; an architecture test refuses `urllib.request`,
-   `http.client` and `socket` anywhere else.
+   `urllib.error`, `http.client`, `socket` and `ssl` anywhere else in the package (`nanope/`
+   aside).
 4. Declare the tool's `capability` (`network`, `compute`, …); the invariants test compares it
    with what the tool reaches. Set `max_output_chars`/`timeout_s` on `@tool` when the defaults
    do not fit. Declare numeric limits in the signature, `Annotated[int, Range(1, 25)]`, instead of
-   clamping inside the tool.
+   clamping inside the tool (the existing tools, the templates included, clamp).
 5. **Never cut without a way on.** Return part of something longer through
    `toolkit/tools/_window.py` — `text_window` (a document by characters, ending on a line),
    `find_window` (the passages around a term), `list_window` (a page the source cut) or
    `page_window` (a page of a list the tool holds) — and return `window.result()`. Its footer
    tells the model what was shown, the total, and the exact call that reads on
-   (`[chars 0-4000 of 34651 | next: offset=4000]`), and `metadata["window"]` tells the app.
+   (`[chars 0-4000 of 34651 | next: offset=4000]`), and `metadata["window"]` tells the app. The
+   existing tools do not use it: those that mark a cut do so in their own words.
 6. **Return error strings, never raise.** Agents read the return value as the
    tool result.
-7. Export from `toolkit/tools/__init__.py`.
+7. Export from `toolkit/tools/__init__.py`, or from `toolkit/tools/dangerous.py` for a tool with
+   side effects (files, a shell, an evaluator, any URL), which also requires approval.
 8. Tests in `tests/toolkit/test_<file>.py`: patch `HTTP_OPEN` with `respond(...)` or
    `http_error(...)` from `tests/toolkit/http_fakes.py` (sockets are blocked there); use
    `tmp_path` for filesystem tools. `tests/toolkit/test_tool_invariants.py` also runs every tool
@@ -134,16 +138,20 @@ docstrings/comments, and when to use classes vs functions — see
    the simplest reference; `lats_flow` shows search-based composition.
 4. Add a numbered example under `examples/` that runs end-to-end with a real
    model.
-5. Tests in `tests/agents/flows/test_<name>.py`. Mock `LLM.complete` with an
+5. Tests in `tests/agents/flows/test_<name>_flow.py`. Mock `LLM.complete` with an
    `AsyncMock` and feed it a `side_effect` of pre-built `Response` objects
    from the `make_response` factory in `tests/agents/conftest.py`.
-6. Mention it in the README matrix and `docs/agents-and-capabilities.md`.
+6. Export it from `flows/__init__.py` and `toolkit/agents/__init__.py`, register it as a strategy
+   with `register_strategy(...)` in `toolkit/agents/_builders.py`, and add it to the README's
+   Agent architectures table, the strategy table in `docs/agents.md` and
+   `docs/agents-and-capabilities.md`.
 
 ## Extending resources and prompts
 
 - Resource origin loaders, codecs, selectors, and serializers belong under
   `toolkit/resources/` and must respect `ResourcePolicy`.
-- Prompt layouts must return one valid `SectionSpan` per ordered section.
+- Prompt layouts must return a `LayoutResult` with one valid `SectionSpan` per section,
+  subsections included, in preorder.
 - Template engines are always explicit, strict on missing values, and must not
   expose arbitrary Python execution.
 - Add focused tests under `tests/resources/` or `tests/prompts/`, including
@@ -153,8 +161,8 @@ docstrings/comments, and when to use classes vs functions — see
 
 ## Commit + PR format
 
-- Short imperative subject (under ~70 chars). Match the existing style:
-  `Add X`, `Fix Y`, `Update Z`.
+- Short imperative subject (under ~70 chars). Match the existing style,
+  Conventional Commits: `feat(tools): …`, `fix(agents): …`, `docs: …`.
 - Body explains the **why**, the surface area, and what tests/docs were
   touched.
 - Add an `[Unreleased]` entry to `CHANGELOG.md` (Added/Changed/Fixed) when
@@ -165,8 +173,8 @@ docstrings/comments, and when to use classes vs functions — see
 ## Tests must pass before pushing
 
 Run `uv lock --check`, `uv run pytest`, `uv run ruff check src tests examples`,
-and `uv run ruff format --check src tests examples` locally. `pre-commit`
-runs the lint/format hooks on every commit, but the full test suite is still
-on you.
+`uv run ruff format --check src tests examples` and `uv run pyright src`
+locally. `pre-commit` runs the lint/format hooks on every commit, but the full
+test suite is still on you.
 
 Pyright is blocking in CI. New code must remain clean in standard mode.

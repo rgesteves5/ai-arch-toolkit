@@ -46,8 +46,8 @@ messages, system = conversation.render().to_llm_request()
 ```
 
 At most one textual `system` message is extracted by `to_llm_request()`. User and assistant
-messages stay in order and keep their multimodal parts. A non-text system message is rejected
-because the core LLM facade currently models `system` as text.
+messages stay in order and keep their multimodal parts. A non-text system message is rejected,
+because `to_llm_request()` returns the system prompt as `LLM`'s string `system` argument.
 
 `PromptConversation` is a composition utility; it does not call an LLM, choose a provider, or
 activate prompt caching. Pass its plain `(messages, system)` result to `LLM` and configure

@@ -14,7 +14,7 @@ dependencies; bring your own provider SDK.
 
 - **One client, every provider.** `LLM("claude-…")`, `LLM("gpt-…")`, `LLM("gemini-…")`, `LLM("grok-…")`, `LLM("muse-spark-…")` — same call surface, automatic routing.
 - **Local models.** Point at Ollama, LM Studio, or vLLM with `base_url=` — arbitrary model tags, no API key needed on localhost, real-time reasoning events.
-- **Async-first, sync everywhere.** Every coroutine has a `_sync` wrapper, so you never have to choose.
+- **Async-first, with sync wrappers.** Most coroutines have a `_sync` twin (`complete_sync`, `run_sync`, …); `GraphStore` and the memory views are async-only.
 - **Agent architectures as building blocks.** ReAct, Reflexion, ReWOO, Plan-Execute, Tree of Thoughts, LATS, Self-Discovery, LLM Compiler, and Generate-Review — as declarative `Agent` strategies or standalone `Flow` factories.
 - **No mandatory deps.** Install only the provider SDKs you actually use.
 
@@ -27,7 +27,9 @@ uv add "git+https://github.com/rgesteves5/ai-arch-toolkit.git#egg=ai-arch-toolki
 # or substitute another extra: [anthropic], [gemini], [xai], [meta], or [all]
 ```
 
-Pip works the same way. Extras:
+With pip, use the direct-URL form:
+`pip install "ai-arch-toolkit[openai] @ git+https://github.com/rgesteves5/ai-arch-toolkit.git"`.
+Extras:
 
 | Extra       | Pulls in                                              |
 | ----------- | ----------------------------------------------------- |
@@ -42,7 +44,7 @@ Pip works the same way. Extras:
 | `templates` | `jinja2>=3.1` (optional Jinja prompt templates)       |
 | `prompts`   | YAML, Jinja, and JSON Schema prompt support            |
 | `youtube`   | `youtube-transcript-api>=1.2.4`                       |
-| `all`       | Every provider plus every optional feature            |
+| `all`       | Every extra above                                     |
 | `app`       | Reflex app support plus `graph,yaml`                  |
 | `bench`     | Inspect AI benchmark tooling                          |
 | `docs`      | MkDocs and pdoc                                       |
@@ -120,8 +122,9 @@ print(response.text)
 
 ### An agent from a spec (recommended)
 
-`Agent` binds a declarative, serializable `ReasoningSpec` to an `LLM` and tools,
-compiles it to a `Flow` once, and returns a structured result.
+`Agent` binds a declarative `ReasoningSpec` (built in code or from plain config
+data) to an `LLM` and tools, compiles it to a `Flow` once, and returns a
+structured result.
 
 ```python
 from ai_arch_toolkit import LLM, ToolGroup
@@ -186,14 +189,15 @@ plain text, Markdown, XML, or JSON. Validate them locally with
 | Structured output     | ✅ native | ✅     | ✅     | ✅  | ✅   |
 | Multimodal (image)    | ✅        | ✅     | ✅     | —   | ✅   |
 | Documents (PDF, etc.) | ✅        | ✅     | ✅     | —   | ✅   |
-| Prompt caching        | ✅        | ✅     | —      | —   | ✅ automatic |
+| Prompt caching        | ✅        | ✅ automatic | ✅ automatic | ✅ automatic | ✅ automatic |
 | Extended thinking     | ✅ adaptive or budget | ✅ effort | ✅ level or budget | ✅ effort | ✅ effort + summaries |
 | Server-hosted tools   | ✅ code+web | —      | ✅ code+web | —   | ✅ web |
 | Batch API             | ✅        | ✅     | —      | —   | —    |
 
 ## Agent architectures
 
-Each factory returns a `Flow` and has a matching `*_initial_state(task)` helper.
+Each factory, imported from `ai_arch_toolkit.toolkit.agents`, returns a `Flow` and has a matching
+`*_initial_state(task)` helper.
 Each is also a named `Agent` strategy; `completion` (a single LLM call, no tool
 loop) is registered as a tenth strategy with no standalone factory.
 
@@ -225,7 +229,7 @@ ai_arch_toolkit/
 ```
 
 For a deeper read, see [`docs/framework-overview.md`](docs/framework-overview.md)
-and the 45 runnable scripts under [`examples/`](examples/).
+and the 47 runnable scripts under [`examples/`](examples/).
 
 ## Documentation
 

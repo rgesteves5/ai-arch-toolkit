@@ -30,6 +30,7 @@ All examples live in the `examples/` directory. Each is a self-contained script.
 | 19 | `19_lats_agent.py` | `lats_flow` — Monte Carlo Tree Search with ReAct rollouts and backpropagation |
 | 26 | `26_self_discovery_agent.py` | `self_discovery_flow` — select reasoning modules, adapt, operationalize, solve |
 | 27 | `27_llm_compiler_agent.py` | `llm_compiler_flow` — plan a DAG of tasks, execute in parallel, join results |
+| 47 | `47_per_phase_agents.py` | `Agent` running `plan_execute` with a cheaper planner LLM (`deps`) and a custom planner prompt (`knobs`), then the same declared in an agent manifest (`strategy.phases`) and built with `agent_from_manifest` |
 
 ## Multimodal
 
@@ -49,8 +50,9 @@ All examples live in the `examples/` directory. Each is a self-contained script.
 | 22 | `22_retry_config.py` | Automatic retries with exponential backoff for transient API failures |
 | 23 | `23_prompt_caching.py` | Anthropic prompt caching with `cache()` for reduced latency and cost |
 | 24 | `24_toolkit_tools_showcase.py` | Pre-built safe tools and explicit opt-in dangerous tools |
-| 25 | `25_server_tools.py` | Provider-hosted server tools (web search, code execution) |
+| 25 | `25_server_tools.py` | A provider-hosted server tool (`web_search()`) run by an Anthropic model |
 | 36 | `36_fallback_chains_and_attempts.py` | Fallback chains, attempt tracking across retries/fallbacks, flow-level traces |
+| 37 | `37_budgets_and_metering.py` | Read a run's cost from `result.meter`, cap runs with `BudgetPolicy` (on the `Flow` and per run), wrap raw LLM calls in `budget_scope`, and audit usage events with `MeterScope` |
 
 ## Memory
 
@@ -77,3 +79,4 @@ All examples live in the `examples/` directory. Each is a self-contained script.
 | 43 | `43_prompt_knowledge.py` | Integrate Resource-backed Knowledge without manual context concatenation |
 | 44 | `44_custom_prompt_extension.py` | Register and consume a custom Resource codec |
 | 45 | `45_prompt_messages.py` | Compose ordered text and multimodal Content messages |
+| 46 | `46_prompt_subsections.py` | Nest sections into a tree: Markdown deepens headings, XML nests elements, and `section_text()` slices a subtree |

@@ -74,9 +74,12 @@ Package manifests can be loaded without copying them to the current working dire
 template = load_prompt("package://my_prompts/manifests/story.prompt.yaml")
 ```
 
-The package URI is restricted to the named import package and rejects `.` / `..` path
-segments. Relative includes and section sources remain constrained to the extracted manifest
-directory.
+The part after the package name, without its leading slashes, is a path under the package root that
+`importlib.resources.files()` returns; empty, `.`, and `..` segments in it are rejected. A package
+in a regular directory is read in place. Any other package, such as a zipped one, is copied to a
+temporary directory that is removed once the manifest has loaded; every included manifest and file
+source is read during the load. From there the manifest loads like a file path: relative includes
+and section sources resolve against it and, by default, stay inside its directory.
 
 ## Includes and inheritance
 
@@ -84,6 +87,7 @@ directory.
 base definition. Child sections use explicit operations:
 
 ```yaml
+version: 1
 extends: base.prompt.yaml
 sections:
   - name: rules
@@ -99,6 +103,7 @@ section's subsections without restating the parent, use the explicit `merge` fla
 merge entry may only define `sections`, whose entries are themselves operations:
 
 ```yaml
+version: 1
 extends: base.prompt.yaml
 sections:
   - name: context
@@ -117,10 +122,13 @@ base declarations; included manifests may not introduce duplicate variables.
 The loader checks every manifest file (extended and included ones too) against one declared
 shape, and the packaged JSON Schema,
 `ai_arch_toolkit/toolkit/prompts/schemas/prompt-manifest-v1.schema.json`, is generated from the
-same declaration, so an editor that uses it flags what the loader refuses. Errors name the
-field's path, as in `sections[0].source.select.start must be a positive integer`. An inline
-template (`template: {content: ...}`) takes no `select` or `serialize_as`: those read a template
-file.
+same declaration, so an editor that uses it flags the same shape errors. Only the loader refuses
+`1.0` where an integer goes, since JSON cannot tell `1` from `1.0`. Rules that involve
+several fields, files, or a registry (one source per section, `remove`/`replace`/`merge`, a
+template's path or content, paths, serializer and engine names, knowledge) are checked by the
+loader alone. Errors name the field's path, as in
+`sections[0].source.select.start must be a positive integer`. An inline template
+(`template: {content: ...}`) takes no `select` or `serialize_as`: those read a template file.
 
 ## CLI
 
@@ -129,6 +137,10 @@ ai-arch prompt validate prompts/story-writer.prompt.yaml
 ai-arch prompt inspect prompts/story-writer.prompt.yaml
 ai-arch prompt render prompts/story-writer.prompt.yaml --var genre=mystery
 ```
+
+`render` also takes `--vars FILE` (a JSON, YAML, or TOML object of variables) and `--layout`
+(`json`, `markdown`, `text`, or `xml`). A `--var` value that parses as JSON is passed decoded, so
+`--var n=3` is the integer `3`.
 
 Knowledge-backed sections can be supplied to the CLI with `--knowledge-dir DIR` (and
 `--knowledge-recursive`) or repeated `--knowledge KEY=FILE` options.

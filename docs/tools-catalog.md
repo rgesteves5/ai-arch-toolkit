@@ -1,6 +1,6 @@
 # Tools Catalog
 
-The complete list of pre-built tools, grouped by domain. All are built on the [`@tool`](tools.md) decorator, use the standard library only (zero extra pip dependencies), and return an error string rather than raising — so agents degrade gracefully.
+The complete list of pre-built tools, grouped by domain. All are built on the [`@tool`](tools.md) decorator, use the standard library only (zero extra pip dependencies; the three `youtube_*` tools need the `youtube` extra), and return an error string rather than raising — so agents degrade gracefully. None declares [`Range`](tools.md#defining-tools) bounds: a numeric argument outside a limit given below is moved to the nearest limit without a word, not refused.
 
 Import any of them and drop them into a `ToolGroup`:
 
@@ -260,7 +260,7 @@ These execute real side effects and live in the explicit `ai_arch_toolkit.toolki
 
 **Shell** — `dangerous`
 
-- `run_command` — Execute shell commands and return output (timeout 1–600 s, output 1–100 000 characters)
+- `run_command` — Execute shell commands and return output (timeout 1–600 s, output 1–100 000 characters); governed execution gives up at the tool's default 120 s `timeout_s` with a `timeout` failure, and the command runs on until it ends or its own timeout stops it
 
 **Python** — `dangerous`
 

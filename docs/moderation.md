@@ -6,7 +6,7 @@ Content moderation that plugs into the LLM middleware chain to screen **input** 
 
 ### OpenAIModerator
 
-Uses OpenAI's free `omni-moderation-latest` endpoint. Returns a flagged verdict, the triggered category names, and per-category scores.
+Uses OpenAI's free `omni-moderation-latest` endpoint. Returns a flagged verdict, the triggered category names, and the non-zero per-category scores.
 
 ```python
 from ai_arch_toolkit.toolkit.moderation import OpenAIModerator
@@ -18,7 +18,7 @@ result.categories   # list[str]
 result.scores       # dict[str, float]
 ```
 
-`OpenAIModerator(*, api_key=None, model="omni-moderation-latest")`. It's an async context manager (`async with OpenAIModerator() as mod: ...`) and exposes `moderate()` / `moderate_sync()`.
+`OpenAIModerator(*, api_key=None, model="omni-moderation-latest")` needs the `openai` extra. It's an async context manager (`async with OpenAIModerator() as mod: ...`) and exposes `moderate()` / `moderate_sync()`.
 
 ### LLMModerator
 
@@ -33,7 +33,7 @@ mod = LLMModerator(classifier, ["Violence", "Harassment", "PII"], fail_behavior=
 result = await mod.moderate("some text")
 ```
 
-`LLMModerator(llm, categories, *, fail_behavior="closed")`. With `fail_behavior="closed"` (default) a classification failure flags the content (fail safe); `"open"` lets it through. Don't attach `ModerationMiddleware` to the classifier `LLM` itself — that would recurse.
+`LLMModerator(llm, categories, *, fail_behavior="closed")`. With `fail_behavior="closed"` (default) a classification failure flags the content (fail safe); `"open"` lets it through. A budget denial (`AdmissionDenied`) is raised, not treated as a failure. Don't attach `ModerationMiddleware` to the classifier `LLM` itself — that would recurse.
 
 Both return a **`ModerationResult`**: `flagged`, `categories`, `scores`, `explanation`, `raw`.
 
@@ -58,6 +58,8 @@ response = llm.complete_sync("User prompt here")  # raises ModerationError if fl
 ```
 
 `ModerationMiddleware(*, input=None, output=None, on_flagged="raise")` — supply at least one of `input` / `output`. When flagged, `"raise"` throws `ModerationError` (carrying `categories` and `explanation`); `"warn"` only logs.
+
+Input moderation screens the text of the latest `user` message: string content, or dict parts that carry a `text` key. A list of core `Content` parts (plain strings, `cache()`, images, documents) yields no text, and the call goes ahead unscreened. Output moderation screens `response.text`.
 
 > Input moderation runs before the provider is called, for `complete()` and streams alike. Output moderation on a stream runs once it has been fully consumed — the text has already reached the consumer by then — so screen input, or buffer the stream yourself, when output must be blocked before display.
 

@@ -77,5 +77,5 @@ prompt.render(layout=JsonLayout(mode="object", include_stability=True))
 
 Every built-in layout produces section spans — one per tree node, tagged with `depth`. A
 parent's span covers its whole subtree while `content_start`/`content_end` bound only its
-own content. `RenderedPrompt.section_text(name)` returns the exact layout-visible slice,
-and stable-prefix diagnostics use those offsets.
+own content (the JSON layout leaves them unset). `RenderedPrompt.section_text(name)` returns
+the exact layout-visible slice, and stable-prefix diagnostics use those offsets.

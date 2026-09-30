@@ -4,9 +4,9 @@ Tools let an LLM call your Python functions. The toolkit gives you three things:
 
 1. The **`@tool`** decorator — turn any typed function into a tool (JSON Schema is generated for you).
 2. **`ToolGroup`** — a governed collection that validates, executes, and structures results.
-3. A library of **132 pre-built tools** across 25 domains, ready to drop into a group.
+3. A library of **132 pre-built tools** across 31 domains, ready to drop into a group.
 
-Provider-hosted **server tools** (code execution, web search) are covered at the end. Safety controls — risk levels, approval gates, dangerous-tool blocking, trace redaction, and budgets — live on their own page: see [Tool Governance & Safety](safety.md).
+Provider-hosted **server tools** (code execution, web search) are covered after `ToolGroup`. Safety controls — risk levels, approval gates, dangerous-tool blocking, trace redaction, and budgets — live on their own page: see [Tool Governance & Safety](safety.md).
 
 ---
 
@@ -62,7 +62,7 @@ def delete_table(name: str) -> str:
 
 These attach a `ToolRuntimePolicy` to the tool that gates read at execution time — see [Tool Governance & Safety](safety.md). A result longer than `max_output_chars` is cut on a line break when one lies in the second half of the kept text, and ends with `[chars 0-200000 of 5000000 | cut at the output limit; ask for less]`; `result.metadata["truncated"]` holds the two sizes.
 
-A tool built on the toolkit's window (`toolkit/tools/_window.py`, see `CONTRIBUTING.md`) that returns part of something longer ends its text with a footer in the same vocabulary, naming the call that reads on — `[chars 0-4000 of 34651 | next: offset=4000]`, `[results 21-40 of 1234 | next: offset=40]`, `[matches 1-3 of 5 for "1960" | next: find="1960", offset=16500]` — and put the same facts in `result.metadata["window"]` (`unit`, `first`, `last`, `total`, `next_call`).
+A tool built on the toolkit's window (`toolkit/tools/_window.py`, see `CONTRIBUTING.md`) that returns part of something longer ends its text with a footer in the same vocabulary, naming the call that reads on — `[chars 0-4000 of 34651 | next: offset=4000]`, `[results 21-40 of 1234 | next: offset=40]`, `[matches 1-3 of 5 for "1960" | next: find="1960", offset=16500]` — and puts the same facts in `result.metadata["window"]` (`unit`, `first`, `last`, `total`, `next_call`). None of the pre-built tools is built on it: those that mark a cut do so in their own words.
 
 Full `@tool` signature:
 
@@ -70,7 +70,7 @@ Full `@tool` signature:
 @tool(
     *,
     name: str | None = None,            # override the inferred tool name
-    schema: dict | None = None,         # override the inferred JSON Schema
+    schema: dict[str, dict[str, object]] | None = None,  # per-parameter schema keywords
     capability: str | None = None,      # logical capability label
     risk_level: RiskLevel = "low",      # "low" | "medium" | "high" | "critical"
     requires_approval: bool = False,    # gate behind an approval handler
@@ -80,7 +80,9 @@ Full `@tool` signature:
 )
 ```
 
-Gemini function declarations take an OpenAPI subset of JSON Schema that has no `prefixItems` or `$defs`/`$ref`. A schema outside it (a `tuple` parameter, or a `schema=` override with references) is sent through Gemini's `parameters_json_schema` field instead, unchanged.
+`schema=` does not replace the inferred input schema: it maps a parameter's name to JSON Schema keywords merged into what was inferred for that parameter — `@tool(schema={"unit": {"enum": ["km", "mi"]}})` on `get_distance` keeps `unit`'s type, description and default and adds the `enum`, which the executor then checks.
+
+Gemini function declarations take an OpenAPI subset of JSON Schema that has no `prefixItems` or `$defs`/`$ref`. A schema outside it (a fixed-length `tuple` parameter, or a `schema=` override with references) is sent through Gemini's `parameters_json_schema` field instead, unchanged.
 
 ---
 
@@ -105,7 +107,7 @@ ToolGroup(
     *fns,                          # the tool callables
     approval_handler=None,         # ApprovalHandler for tools requiring approval (see safety.md)
     gates=(),                      # extra pre-execution ToolGate instances (see safety.md)
-    max_calls=None,                # cap total executions across the group's lifetime
+    max_calls=None,                # cap executions, counted until group.reset()
     max_output_chars=None,         # ceiling on every tool's max_output_chars
     timeout_s=None,                # ceiling on every tool's timeout_s
 )
@@ -117,7 +119,7 @@ The two ceilings only tighten: each call runs under the stricter of the group's 
 
 Both `execute()` (sync) and `async_execute()` (async) take a `ToolCall` and return a structured **`ToolResult`** — they never raise on tool failure.
 
-`execute()` also runs `async def` tools, completing them on a private event loop — or on a worker thread when called from inside a running loop, which blocks that loop until the tool returns — so prefer `async_execute()` in async code. A synchronous tool runs in a daemon thread of its own on both paths, so its `timeout_s` holds: past it the call returns a `timeout` failure and the executor stops waiting. An async tool that needs the caller's loop (a client or lock created on it) cannot finish there and fails once the sync timeout expires. Both check the call's arguments against the tool's schema before any gate runs, coercing values such as `"3"` for an integer; see [Argument validation](safety.md#argument-validation).
+`execute()` also runs `async def` tools, completing them on a private event loop — or on a worker thread when called from inside a running loop, which blocks that loop until the tool returns — so prefer `async_execute()` in async code. A synchronous tool runs in a daemon thread of its own on both paths, so its `timeout_s` holds: past it the call returns a `timeout` failure and the executor stops waiting. An async tool that needs the caller's loop (a client or lock created on it) cannot finish there and fails — at the latest at its `timeout_s`, or at the sync wrapper's timeout (`AI_ARCH_SYNC_TIMEOUT`, 300 s by default) when that comes first. Both check the call's arguments against the tool's schema before any gate runs, coercing values such as `"3"` for an integer; see [Argument validation](safety.md#argument-validation).
 
 ```python
 result = await group.async_execute(tool_call)   # tool_call: ToolCall from a Response
@@ -134,13 +136,13 @@ text = result.to_model_text()      # LLM-safe string to feed back as a tool_resu
 
 ### run_tools helper
 
-When you have a `Response` that contains tool calls, `run_tools()` executes all of them and returns ready-to-send `tool_result` message parts — handy for a manual LLM loop.
+When you have a `Response` that contains tool calls, `run_tools()` executes all of them and returns ready-to-send `tool_result` messages — handy for a manual LLM loop.
 
 ```python
 from ai_arch_toolkit import run_tools, run_tools_sync
 
 response = llm.complete_sync("What's the distance from Lisbon to Porto?", tools=group)
-results = run_tools_sync(response, group)        # list[dict] — tool_result parts
+results = run_tools_sync(response, group)        # list[dict] — tool_result messages
 # feed `results` back into the next llm.complete(...) call
 ```
 
@@ -162,15 +164,15 @@ response = llm.complete_sync(
 )
 ```
 
-`code_execution(**config)` and `web_search(**config)` return a `ServerTool`. The Anthropic and Gemini adapters send both, and the Meta adapter sends `web_search`; the OpenAI adapter (Chat Completions takes function tools only) and the xAI adapter raise `RequestError` for any server tool. A config (`web_search(max_uses=3)`, for example) raises `RequestError` on every provider for now: the adapters used to drop it without a word. See [Model Compatibility](model-compatibility.md) for each provider.
+`code_execution(**config)` and `web_search(**config)` return a `ServerTool`. The Anthropic and Gemini adapters send both, and the Meta adapter sends `web_search`; the OpenAI adapter (Chat Completions takes function tools only) and the xAI adapter raise `RequestError` for any server tool. A config (`web_search(max_uses=3)`, for example) raises `RequestError` on every provider. See [Model Compatibility](model-compatibility.md) for each provider.
 
 ---
 
 ## Pre-built tools catalog
 
-132 tools across 25 domains, all built on the `@tool` decorator and the standard library only (zero extra pip dependencies; the `youtube_*` tools need the `youtube` extra). Each returns an error string rather than raising, so agents degrade gracefully, and each declares its `capability`.
+132 tools across 31 domains and 44 modules, all built on the `@tool` decorator and the standard library only (zero extra pip dependencies; the `youtube_*` tools need the `youtube` extra). Each returns an error string rather than raising, so agents degrade gracefully, and each declares its `capability`. None declares `Range` bounds: each keeps its numeric arguments within its limits itself, most by moving an out-of-range value to the nearest limit without saying so, some by returning an error string.
 
-Every network tool goes through one module, `toolkit/tools/_http.py`: HTTPS to the host its module declares (path segments quoted one by one, so arguments cannot move a request elsewhere), redirects only on that host and never down to `http`, a body read bounded in bytes and time, the API's documented rate limit on a clock shared across threads, and one error wording ("HTTP error 500: …", "rate limited by … (HTTP 429). Try again later.", "request timed out.", "could not parse API response: …"). A response of an unexpected shape becomes that last error instead of an exception. An error the API sends with a success status (MediaWiki's `error` object, a World Bank `message`, a PubMed search `ERROR`, an Internet Archive `error`, an Overpass "runtime error" remark, the line of text GDELT sends in place of the JSON) is the tool's error too, in the API's own words, never an empty result. The same reader explains an error status whose body says why (Eurostat's `label`, arXiv's error entry) in place of the status's reason. A source that answers "nothing found" with `204 No Content` or an empty body is declared on the request (`allow_empty=True`, as the RCSB search does), and that answer reads as an empty result; anywhere else it is a parse error.
+Every network tool but the three `youtube_*` ones (which go through `youtube-transcript-api`) uses one module, `toolkit/tools/_http.py`: HTTPS to the host its module declares (path segments quoted one by one, so arguments cannot move a request elsewhere; the dangerous `http_get` and `scrape_text` fetch the http(s) URL they are given), redirects only on that host and never down to `http`, a body read bounded in bytes and time, the API's documented rate limit on a clock shared across threads, and one error wording ("HTTP error 500: …", "rate limited by … (HTTP 429). Try again later.", "request timed out.", "could not parse API response: …"). A response of an unexpected shape becomes that last error instead of an exception. An error the API sends with a success status (MediaWiki's `error` object, a World Bank `message`, a PubMed search `ERROR`, an Internet Archive `error`, an Overpass "runtime error" remark, the line of text GDELT sends in place of the JSON) is the tool's error too, in the API's own words, never an empty result. The same reader explains an error status whose body says why (Eurostat's `label`, arXiv's error entry) in place of the status's reason. A source that answers "nothing found" with `204 No Content` or an empty body is declared on the request (`allow_empty=True`, as the RCSB search does), and that answer reads as an empty result; anywhere else it is a parse error.
 
 ```python
 from ai_arch_toolkit.toolkit.tools import get_weather, arxiv_search, pubmed_search
@@ -183,13 +185,13 @@ The domains at a glance:
 
 | Theme | Domains |
 |-------|---------|
-| General & utility | date/time, math, text, JSON/CSV |
+| General & utility | date & time, math, text processing, data (JSON) |
 | Weather, geo & places | weather, air quality, geography, OpenStreetMap |
-| Reference & knowledge | Wikipedia, Wikidata/MediaWiki, dictionary, news, video transcripts |
-| Scholarly & research | arXiv, PubMed, Europe PMC, Semantic Scholar, Crossref, ROR, DataCite, Open Library, Internet Archive |
-| Biomedical & chemistry | UniProt, PDB, ChEMBL, RxNorm/DailyMed, ClinicalTrials |
-| Earth, life & public data | GBIF, Open Food Facts, openFDA, FoodOn, USGS/EONET, World Bank, WHO, Eurostat, NVD |
-| Dangerous (opt-in) | filesystem, shell, Python, web fetch |
+| Reference & knowledge | Wikipedia, Wikidata & MediaWiki, dictionary, news & events, video transcripts |
+| Scholarly & research | papers (arXiv, PubMed, Europe PMC), academic graph & metadata (Semantic Scholar, Crossref, ROR, DataCite), books (Open Library), digital archives (Internet Archive) |
+| Biomedical & chemistry | proteins & structures (UniProt, PDB), chemistry & bioactivity (ChEMBL), medication labels (RxNorm, DailyMed), clinical studies (ClinicalTrials.gov) |
+| Earth, life & public data | biodiversity (GBIF), food products (Open Food Facts), food safety & ontology (openFDA, FoodOn), natural events (USGS, NASA EONET), official statistics (World Bank, WHO, Eurostat), security (NVD) |
+| Dangerous (opt-in) | filesystem, shell, Python, web |
 
 **→ Full per-tool list: [Tools Catalog](tools-catalog.md).** The filesystem/shell/Python/web tools execute real side effects and must be gated — see [Tool Governance & Safety](safety.md#dangerous-tools).
 

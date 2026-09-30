@@ -13,7 +13,7 @@ reference content under stable keys), or a [Prompt](prompts.md) (resolved instru
 
 Graph-backed memory for agents. Built on the [`core/graph/`](graph.md) layer: every memory is a `Node`, relationships are `Edge`s, and a `GraphStore` coordinates the backend, an optional vector index, and an optional embedding function.
 
-The whole API is async-first. All symbols below are re-exported from the top-level package (`from ai_arch_toolkit import GraphStore, Node, ...`) or from `ai_arch_toolkit.toolkit.memory`.
+The whole API is async-first. All symbols below are re-exported from the top-level package (`from ai_arch_toolkit import GraphStore, Node, ...`) or from `ai_arch_toolkit.toolkit.memory`, except two: `NetworkXBackend` is import-guarded, so import it from `ai_arch_toolkit.toolkit.memory.graph._networkx` as shown, and the `MemoryBackend` protocol comes from `ai_arch_toolkit.toolkit.memory.graph`.
 
 ---
 
@@ -50,7 +50,7 @@ Constructor:
 GraphStore(
     backend,                # MemoryBackend (e.g. NetworkXBackend())
     *,
-    embed=None,             # EmbedFn: async (str) -> list[float], enables vector search
+    embed=None,             # async (str) -> list[float]; enables vector search
     index=None,             # VectorIndex; defaults to BruteForceIndex when embed is set
 )
 ```
@@ -87,6 +87,8 @@ A memory `Node` is a `core.graph.Node[dict[str, Any]]` with the bookkeeping memo
 
 1. **If an `embed` function is configured** — embed the query, then try the backend's native vector search; fall back to the `VectorIndex` (`BruteForceIndex` by default, cosine similarity).
 2. **Otherwise** — keyword search over the string values in `content`.
+
+Only the `VectorIndex` path sets `score` (the index's similarity; cosine for `BruteForceIndex`). Keyword results and a backend's native vector results come in rank order, each with `score=1.0`.
 
 ```python
 results = await store.search("capital France", type="fact", k=5)
@@ -138,7 +140,7 @@ node = await temporal.append({"text": "..."}, link_previous=True)  # writes a NE
 ```python
 similarity = SimilarityView(store, node_type="fact")
 
-hits = await similarity.find("query text", k=5)        # SearchResult list
+hits = await similarity.find("query text", k=5)        # SearchResult list, via store.search()
 related = await similarity.similar_to(node_id, k=5)    # nearest to an existing node
 ```
 
@@ -190,7 +192,7 @@ ranked = sorted(
 
 ## Presets
 
-A `MemoryPreset` bundles named views over a store and adds a `consolidate()` helper (dedups nodes by content key). Both factories take a `GraphStore` and return a `MemoryPreset`.
+A `MemoryPreset` bundles named views over a store and adds a `consolidate()` helper (dedups every node in the store, of any type, by the scalar entries of its `content`). Both factories take a `GraphStore` and return a `MemoryPreset`.
 
 ```python
 from ai_arch_toolkit.toolkit.memory import conversational, cognitive
@@ -221,7 +223,7 @@ Generate `@tool`-decorated functions so an agent can manage its own memory. Retu
 
 ```python
 from ai_arch_toolkit.toolkit.memory import memory_tools
-from ai_arch_toolkit import ToolGroup
+from ai_arch_toolkit import ToolGroup, react_flow
 
 mem = memory_tools(store)                  # ToolGroup with 4 tools
 tools = ToolGroup(*mem.tools, get_weather) # combine with other tools
@@ -250,9 +252,11 @@ mw = MemoryMiddleware(
     header="Relevant memories:",
 )
 llm = LLM("claude-sonnet-5", middleware=[mw])
-# Every call now gets the top-k memories prepended to the system prompt,
-# and each turn is recorded back into the store.
+# The top-k memories for the latest user message are now prepended to the
+# system prompt, and each turn is recorded back into the store.
 ```
+
+The recall query is the text of the latest `user` message: string content, or dict parts that carry a `text` key. A list of core `Content` parts (plain strings, images, documents) yields no query, so nothing is injected. A turn with a query or a reply text is recorded as `{"query": ..., "response_summary": ...}`, the summary being the reply's first 200 characters.
 
 > Injection happens in the **async** hooks (`abefore` / `aafter`), which run for every call — `complete()`, `stream()`, `stream_events()`, and their sync wrappers; the sync hooks are no-ops.
 

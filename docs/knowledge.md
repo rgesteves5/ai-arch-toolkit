@@ -41,8 +41,9 @@ knowledge.load(
 )
 ```
 
-`KnowledgeEntry` exposes model-ready `content`, parsed `data`, `media_type`, source
-`fingerprint`, category, tags, metadata, and source.
+`KnowledgeEntry` exposes model-ready `content`, the source's parsed `data` (the whole file,
+not just the selected fragment), `media_type`, source `fingerprint`, category, tags, metadata,
+and source.
 
 ## Load a directory
 
@@ -113,6 +114,15 @@ template = load_prompt("writer.prompt.yaml", knowledge=knowledge)
 The original functions remain available and delegate to Resources:
 
 ```python
+from ai_arch_toolkit.toolkit.knowledge import (
+    load_directory,
+    load_json,
+    load_markdown,
+    load_text,
+    load_toml,
+    load_yaml,
+)
+
 load_text(registry, "style", "style.txt")
 load_json(registry, "schema", "schema.json")
 load_yaml(registry, "rules", "rules.yaml")

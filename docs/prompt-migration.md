@@ -19,7 +19,8 @@ Compatibility loader signatures remain `load_text(registry, key, path, ...)` and
 for other formats. They delegate to Resources and retain legacy return types.
 
 Knowledge duplicate registration now requires `overwrite=True`; this prevents accidental
-replacement. Directory stem collisions remain errors.
+replacement. The compatibility loaders pass it, so they still replace an existing key.
+Directory stem collisions remain errors.
 
 Nanope retains built-in and `extra_sections` prompts and additionally accepts:
 
