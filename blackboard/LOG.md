@@ -485,3 +485,14 @@ R01 publicada em `main` (`b3dae3f`); a R02 começa com a leitura obrigatória da
 - O `main` recebeu entretanto o resto do anexo C (`6a34668`, entrada acima); o branch fez merge
   dele para o PR #71 não ficar em conflito (só o `LOG.md` chocou).
 - Próximo: o dono faz o merge do PR #71; a T01 já não tem a sessão paralela à frente.
+
+## 2026-09-30 · Worktrees e branches locais arrumados (Claude, a pedido do dono)
+
+- Com o PR #71 em `main` (`84c0ee2`) não ficou nenhum PR aberto nem branch remoto além de `main`.
+- `exciting-germain-a41255` (branch `claude/elegant-euclid-2e5020`, de 2026-09-24): as alterações
+  por commitar eram, linha a linha, o `1433016`. Só o `tests/agents/flows/test_common.py` (o
+  `parse_score` sozinho) tinha ficado de fora; entrou em `main` no `81c3699`.
+- `beautiful-feistel-20d1c5` (a sessão do `missingtitle`) estava limpa, com tudo em `main`.
+- O dono removeu as duas worktrees e apagou os três branches `claude/*`; o `BOARD.md` deixa de
+  pedir para não tocar na primeira.
+- Gate em `main` com o teste novo: 5744 passed, 42 skipped.

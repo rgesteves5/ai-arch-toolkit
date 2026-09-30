@@ -195,7 +195,6 @@ capacidades (ver "Por fazer").
 - **Base:** `main` @ `48a43ac`. Baseline: 2608 passed, 7 skipped; pyright e ruff limpos.
 - **Commits:** publicados em `main` a pedido do dono (`14e623d`..`cc83cb9` e o registo).
 - **Coordenador:** sessão principal. Aplica os diffs das worktrees, corre a suite, escreve o `CHANGELOG`.
-- **Não tocar:** `.claude/worktrees/exciting-germain-a41255` é de uma sessão anterior.
 
 ### Vaga 1 — independentes (workers em worktrees; coordenador no checkout principal)
 
