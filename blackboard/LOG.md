@@ -437,3 +437,19 @@ R01 publicada em `main` (`b3dae3f`); a R02 começa com a leitura obrigatória da
 - Com a frente C: a C07 e a C08 esperam pela T01 e pela T03; a C02 e a T04a aplicam-se em série; o
   resto segue em paralelo.
 - Próximo: o dono escolhe quem pega na vaga 1 (T01, T03, T04a).
+
+## 2026-09-30 · Vaga 1 da frente T: T04a e T03 num branch (Claude, a pedido do dono)
+
+- O dono deu a vaga 1, se não interferisse com a sessão paralela e num branch novo. Essa sessão
+  (a do `missingtitle`, a trabalhar na worktree `beautiful-feistel-20d1c5`) mexe na porta
+  `_http.py` (o 204 e o texto dos erros) e em nove módulos (arXiv, Eurostat, GDELT, UniProt, PDB,
+  EONET, Wikidata, Open Library, Hacker News): a T01 esperaria por ela. A T03 e a T04a não tocam
+  nesses ficheiros.
+- Branch `feat/tools-contract-wave1`, numa worktree própria criada a partir de `origin/main`
+  (`b9d7524`), sem upstream, para o checkout principal não mudar de branch.
+- T04a (`aa54ba1`): `Range` no schema e no validador; o `infer_schema` e o `validate_arguments`
+  repartidos em funções pequenas, e três entradas saem da baseline de complexidade.
+- T03: `toolkit/tools/_window.py` (texto, `find`, listas), `line_cut` no core e o `_bounded` do
+  executor no mesmo vocabulário. Nenhuma tool a usa ainda.
+- Gate no branch: 5686 passed, 42 deselected; ruff, formatação e pyright limpos.
+- Próximo: o dono revê o branch; a T01 começa quando a sessão paralela terminar e for commitada.

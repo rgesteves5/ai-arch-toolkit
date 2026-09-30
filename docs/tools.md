@@ -60,7 +60,9 @@ def delete_table(name: str) -> str:
     ...
 ```
 
-These attach a `ToolRuntimePolicy` to the tool that gates read at execution time — see [Tool Governance & Safety](safety.md).
+These attach a `ToolRuntimePolicy` to the tool that gates read at execution time — see [Tool Governance & Safety](safety.md). A result longer than `max_output_chars` is cut on a line break when one lies in the second half of the kept text, and ends with `[chars 0-200000 of 5000000 | cut at the output limit; ask for less]`; `result.metadata["truncated"]` holds the two sizes.
+
+A tool built on the toolkit's window (`toolkit/tools/_window.py`, see `CONTRIBUTING.md`) that returns part of something longer ends its text with a footer in the same vocabulary, naming the call that reads on — `[chars 0-4000 of 34651 | next: offset=4000]`, `[results 21-40 of 1234 | next: offset=40]`, `[matches 1-3 of 5 for "1960" | next: find="1960", offset=16500]` — and put the same facts in `result.metadata["window"]` (`unit`, `first`, `last`, `total`, `next_call`).
 
 Full `@tool` signature:
 

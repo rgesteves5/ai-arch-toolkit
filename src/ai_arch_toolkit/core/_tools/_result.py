@@ -92,3 +92,17 @@ def _format_value(value: Any) -> str:
     if isinstance(value, str):
         return value
     return json.dumps(value)
+
+
+def line_cut(text: str, start: int, end: int) -> int:
+    """Where to end ``text[start:end]`` so a cut part keeps whole lines.
+
+    Just after the last line break in the second half of the span, so a table row or a paragraph
+    is not split; at ``end`` when the span reaches the end of ``text`` or has no break there (one
+    long line is cut where the limit falls). The executor's output bound and the toolkit's text
+    windows both cut here.
+    """
+    if end >= len(text):
+        return len(text)
+    brk = text.rfind("\n", start + (end - start) // 2, end)
+    return brk + 1 if brk >= 0 else end

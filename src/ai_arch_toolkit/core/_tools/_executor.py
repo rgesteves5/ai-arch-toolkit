@@ -33,7 +33,7 @@ from ai_arch_toolkit.core._tools._governance import (
     ToolGate,
     default_redactor,
 )
-from ai_arch_toolkit.core._tools._result import ToolResult, _format_value
+from ai_arch_toolkit.core._tools._result import ToolResult, _format_value, line_cut
 from ai_arch_toolkit.core._tools._schema import callable_name, tool_schema
 from ai_arch_toolkit.core._tools._validation import (
     ArgumentError,
@@ -174,23 +174,27 @@ def _stricter[N: (int, float)](ceiling: N | None, own: N | None) -> N | None:
     return min(ceiling, own)
 
 
-_TRUNCATION_NOTE = "\n\n[Output truncated: kept {kept} of {chars} characters.]"
+# The footer vocabulary of the toolkit's windows; the executor knows no call that reads on.
+_TRUNCATION_NOTE = "\n[chars 0-{kept} of {chars} | cut at the output limit; ask for less]"
 
 
 def _bounded(result: ToolResult, max_output_chars: int | None) -> ToolResult:
     """``result`` with the text the model reads cut to ``max_output_chars``, and the cut noted.
 
-    A value (structured or not) becomes its cut model text; an error keeps its type and has its
-    message cut.
+    The cut falls on a line break when one lies in the kept text's second half. A value
+    (structured or not) becomes its cut model text; an error keeps its type and has its message
+    cut the same way.
     """
     text = result.to_model_text()
     if max_output_chars is None or len(text) <= max_output_chars:
         return result
-    note = _TRUNCATION_NOTE.format(kept=max_output_chars, chars=len(text))
-    metadata = {**result.metadata, "truncated": {"chars": len(text), "kept": max_output_chars}}
+    kept = line_cut(text, 0, max_output_chars)
+    note = _TRUNCATION_NOTE.format(kept=kept, chars=len(text))
+    metadata = {**result.metadata, "truncated": {"chars": len(text), "kept": kept}}
     if result.error is None:
-        return replace(result, value=text[:max_output_chars] + note, metadata=metadata)
-    message = result.error.message[:max_output_chars] + note
+        return replace(result, value=text[:kept] + note, metadata=metadata)
+    message = result.error.message
+    message = message[: line_cut(message, 0, max_output_chars)] + note
     return replace(result, error=replace(result.error, message=message), metadata=metadata)
 
 

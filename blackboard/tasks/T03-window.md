@@ -64,4 +64,62 @@ Migrar tools para a janela (T05 a T09) e apagar os helpers copiados, que desapar
 
 ## Registo do dono
 
-- **Estado:** todo.
+- **Estado:** `review` no branch `feat/tools-contract-wave1` (Claude, 2026-09-30).
+
+### Nota de desenho
+
+- **`toolkit/tools/_window.py`**, interno às tools:
+  - `Window`, dataclass `frozen`/`slots`/`kw_only`, com `body`, `unit` (`chars`, `results` ou
+    `matches`), `first`, `last`, `total`, `next_call` (os argumentos da chamada seguinte, ou
+    `None`) e `label` (o termo de um `find`). Métodos `footer()`, `text()` (corpo e rodapé) e
+    `result()`, que devolve `ToolResult.success(text, metadata={"window": {...}})`. O
+    `_coerce_result` do executor já aceita um `ToolResult` devolvido pela tool.
+  - `text_window(text, offset=0, limit=…)`: a janela acaba numa quebra de linha quando há uma na
+    segunda metade, para uma linha de tabela ou um parágrafo não ficar cortado; a janela seguinte
+    começa exactamente onde esta acaba.
+  - `find_window(text, needle, offset=0, limit=…, context=400)`: sem distinguir maiúsculas; cada
+    bloco é feito de linhas inteiras à volta da ocorrência, com a posição à cabeça (`[at char
+    13860]`); blocos que se tocam fundem-se; a continuação procura a partir do fim do último bloco.
+  - `list_window(lines, first=1, total=None, next_call=None)`, para uma página que a fonte já
+    cortou; `page_window(items, offset=0, limit=…, param="offset")`, para uma lista que a tool tem
+    inteira.
+- **Rodapé**, em ASCII para não haver dúvidas de tokens, com os números sem separadores, para o
+  valor do rodapé ser o que o modelo passa:
+  - `[chars 0-4000 of 34651 | next: offset=4000]` e, na última janela, `| end]`;
+  - `[results 21-40 of 1234 | next: offset=40]`, `[results 1-20 | next: page_token="abc"]`;
+  - `[matches 1-3 of 5 for "1960" | next: find="1960", offset=16500]`, `[no matches for "1960"]`;
+  - os argumentos vão como `nome=valor`, com o valor em JSON.
+  - Só aparece quando falta alguma coisa ou a janela não começa no início; o de um `find` aparece
+    sempre, porque diz quantas ocorrências há.
+- **`metadata`:** fica em `metadata["window"]` (`unit`, `first`, `last`, `total`, `next_call`), e
+  não em `truncated`, que é a chave do corte do executor (um dict com `chars` e `kept`).
+  Desvio consciente da ficha, que sugeria `truncated`/`total`/`next`.
+- **Um só sítio sabe cortar numa linha:** `line_cut(text, start, end)` em `core/_tools/_result.py`,
+  usado pelo `_bounded` do executor e pela janela; o core não importa o toolkit.
+- **Executor:** o `_bounded` corta numa linha e usa o mesmo vocabulário:
+  `[chars 0-200000 of 5000000 | cut at the output limit; ask for less]`.
+- **O que desaparece:** nada nesta ficha; os `_truncate`/`_trim` saem com cada módulo (T05 a T09).
+- **Testes:** `tests/toolkit/test_window.py` (reconstrução seguindo os rodapés, fim de linha, `find`
+  com todas as ocorrências por ordem e contagem, blocos fundidos, listas com e sem total, página
+  local, `result()` com a `metadata`) e `tests/test_tool_limits.py` (corte numa linha e o texto
+  novo).
+
+### Registo
+
+- **Feito:** `toolkit/tools/_window.py` (novo); `line_cut` em `core/_tools/_result.py`; `_bounded`
+  no `_executor.py`; `CONTRIBUTING.md` (o passo 5 do guia de tools, "Never cut without a way on",
+  e os limites com `Range`); `docs/tools.md` (a nota de corte e o rodapé); entrada `Changed` no
+  `CHANGELOG`.
+- **Desvio da nota:** a nota do executor ficou mais curta do que a primeira versão ("cut at the
+  output limit; ask for less"). Com 82 caracteres, um erro cortado passava o limite de 200 100 do
+  `test_a_long_error_message_is_cut`; em vez de afrouxar o teste, encurtou-se o texto.
+- **Testes novos:** 20 em `tests/toolkit/test_window.py`; em `tests/test_tool_limits.py`, um novo
+  (o corte numa linha) e dois corrigidos (o texto da nota). Contra o código de antes, numa cópia
+  em scratch: `test_window.py` falha no import (`_window` não existe) e os três de
+  `test_tool_limits.py` falham no texto e no corte.
+- **Verificação:** 5686 passed, 42 deselected; ruff, formatação e pyright limpos; a baseline de
+  qualidade passa sem mudanças (as funções novas ficam abaixo de 10).
+- **Linhas:** `_window.py` 0 → 241; `_result.py` 94 → 108; `_executor.py` 574 → 578.
+- **Para as fichas seguintes:** uma tool devolve `window.result()`, que o `_coerce_result` do
+  executor aceita; a chamada crua passa a devolver um `ToolResult` em vez de uma `str`, e os testes
+  das tools lêem `result.value`.

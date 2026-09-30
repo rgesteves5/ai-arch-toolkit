@@ -103,11 +103,18 @@ docstrings/comments, and when to use classes vs functions — see
    `http.client` and `socket` anywhere else.
 4. Declare the tool's `capability` (`network`, `compute`, …); the invariants test compares it
    with what the tool reaches. Set `max_output_chars`/`timeout_s` on `@tool` when the defaults
-   do not fit.
-5. **Return error strings, never raise.** Agents read the return value as the
+   do not fit. Declare numeric limits in the signature, `Annotated[int, Range(1, 25)]`, instead of
+   clamping inside the tool.
+5. **Never cut without a way on.** Return part of something longer through
+   `toolkit/tools/_window.py` — `text_window` (a document by characters, ending on a line),
+   `find_window` (the passages around a term), `list_window` (a page the source cut) or
+   `page_window` (a page of a list the tool holds) — and return `window.result()`. Its footer
+   tells the model what was shown, the total, and the exact call that reads on
+   (`[chars 0-4000 of 34651 | next: offset=4000]`), and `metadata["window"]` tells the app.
+6. **Return error strings, never raise.** Agents read the return value as the
    tool result.
-6. Export from `toolkit/tools/__init__.py`.
-7. Tests in `tests/toolkit/test_<file>.py`: patch `HTTP_OPEN` with `respond(...)` or
+7. Export from `toolkit/tools/__init__.py`.
+8. Tests in `tests/toolkit/test_<file>.py`: patch `HTTP_OPEN` with `respond(...)` or
    `http_error(...)` from `tests/toolkit/http_fakes.py` (sockets are blocked there); use
    `tmp_path` for filesystem tools. `tests/toolkit/test_tool_invariants.py` also runs every tool
    against hostile arguments and response bodies.
