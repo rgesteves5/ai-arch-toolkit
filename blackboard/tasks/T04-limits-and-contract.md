@@ -1,6 +1,6 @@
 # T04 · Limites na assinatura e invariante de contrato
 
-- **Dono:** por atribuir · **Estado:** todo
+- **Dono:** T04a Claude; T04b por atribuir · **Estado:** T04a done (PR #71, `84c0ee2`); T04b todo
 - **Depende de:** T04a de nada (em série com a C02, que também mexe em `core/_tools`); T04b de T01,
   T02, T03 e T04a
 - **Origem:** plano, secções 3.4 e 4 · **Decisões:** D37 a D42 · **Regras:** `T00-rules.md`
@@ -73,8 +73,8 @@ Migrar as tools (T05 a T09).
 
 ## Registo do dono
 
-- **Estado:** T04a em `review` no branch `feat/tools-contract-wave1` (Claude, 2026-09-30); T04b
-  todo.
+- **Estado:** T04a done — revista no branch `feat/tools-contract-wave1` e aplicada em `main` pelo
+  PR #71 (`84c0ee2`, 2026-09-30); T04b todo.
 
 ### T04a · Nota de desenho
 

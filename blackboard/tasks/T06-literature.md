@@ -28,8 +28,6 @@
     tipos de várias palavras (suspeita);
   - o `nvd_cve_search` não diz o limite de 120 dias da NVD para intervalos de datas, e o motivo do
     404 que daí vem perde-se.
-- **Erro como sucesso (suspeita):** a entrada de erro do arXiv apareceria como um artigo com o título
-  "Error".
 - **Saída:** a pontuação CVSS da NVD aparece sem a versão.
 
 ## Objectivo

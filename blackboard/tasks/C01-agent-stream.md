@@ -5,6 +5,9 @@
   (`docs/internal/agentes-app-toolkit-review.md:283-307`, `:733-737`, `:784-831`); plano §4 item 10
   (`docs/internal/toolkit-fix-plan.md:648-652`)
 - **Decisões:** por fixar (ver abaixo)
+- **Actualização (2026-09-30):** a C01a saiu na R02: o `stream()` e o `stream_events()` finalizam
+  como o `complete()`. As referências a ficheiros e linhas são de 2026-09-15, anteriores às frentes
+  R e T: relê-as contra o `main` antes de começar.
 
 ## Problema
 

@@ -4,6 +4,9 @@
 - **Origem:** `docs/internal/agentes-app-toolkit-review.md` — L9 (`:360-379`), §10 (`:184-190`), §4
   `ResourcePolicy.check_path` para âmbitos (`:460-462`), ponto C (`:739-757`)
 - **Decisões:** por fixar (ver abaixo); respeita D4 (aprovação) e D7 (validar antes dos gates)
+- **Actualização (2026-09-30):** espera pela T01 e pela T03 e nasce com o contrato das tools (D37 a
+  D42). As referências a ficheiros e linhas são de 2026-09-15, anteriores às frentes R e T: relê-as
+  contra o `main` antes de começar.
 
 ## Problema
 
@@ -26,7 +29,8 @@
 Escrita tipada (`write_file`, `append_file`, `make_directory`, `move_path`) e uma `FilesystemPolicy`
 com raízes por acção, aplicada com o mesmo `check` no `PathScopeGate` (recusa antes do humano) e nas
 tools de `filesystem_tools(policy)` imediatamente antes do syscall (a garantia). Atómica, sem seguir
-symlinks, com preview legível e dry-run; stdlib, erros como strings, leituras actuais intactas.
+symlinks, com preview legível e dry-run; stdlib, falhas tipadas (D37: o `ToolFailure` da T01),
+leituras actuais intactas.
 
 ## API proposta
 

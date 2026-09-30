@@ -104,8 +104,8 @@ async with MCPClient(github, name="github", timeout=60.0, on_tools_changed=refre
    pede timeouts, e o timeout de step (D1) continua a cancelar.
 10. **Extra.** `mcp = ["mcp>=2.2,<3"]` em `optional-dependencies`, `all` e `dev`, depois `uv lock`;
     `toolkit/mcp/__init__.py` exporta os transportes e dá `MCPClient`, `MCPTool` e erros por
-    `__getattr__` (como `toolkit/moderation/__init__.py:10-22`), com `require_sdk("mcp", "mcp")`
-    (`core/_providers/_imports.py:6-12`). Nada entra em `toolkit/__init__.py`.
+    `__getattr__` (como `toolkit/moderation/__init__.py:10-22`), com `with require_sdk("mcp"):`
+    (`core/_providers/_imports.py`). Nada entra em `toolkit/__init__.py`.
 
 ## Sub-tarefas, por ordem
 

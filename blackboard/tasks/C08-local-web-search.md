@@ -4,6 +4,10 @@
 - **Origem:** L13 (`docs/internal/agentes-app-toolkit-review.md:424-446`, `:586-588`);
   `toolkit/tools/CANDIDATE_TOOLS.md:134-142` (DuckDuckGo), `:234-284` (Brave #22, Tavily #23)
 - **Decisões:** por fixar (ver abaixo)
+- **Actualização (2026-09-30):** a C08c saiu na R01 (o `HeuristicEstimator` reserva o preço de uma
+  tool, `toolkit/budget/_estimator.py`). Espera pela T01 e pela T03 e nasce com o contrato das tools
+  (D37 a D42). As referências a ficheiros e linhas são de 2026-09-15, anteriores às frentes R e T:
+  relê-as contra o `main` antes de começar.
 
 ## Problema
 
@@ -48,9 +52,10 @@ tavily_search_tool(api_key, *, name="tavily_search", search_depth="basic", topic
 - **Saída:** `Results from <Brave Search|Tavily> for '<query>' (untrusted third-party content):` e por
   hit título, URL, data, snippet; sem HTML nem controlo, espaços colapsados (um snippet não forja
   hits), só `http(s)`, título ≤ 200 e snippet ≤ 500 caracteres, total ≤ `max_chars`, 1–10 hits.
-- **Erros → string** (`"Brave web search failed: …"`): 401/403; 400/422 com `detail`; 429 com a
-  espera (`X-RateLimit-Reset` e `RATE_LIMITED`/`QUOTA_LIMITED`; `retry-after`); Tavily 432/433;
-  timeout, `URLError`, `OSError`, `http.client.HTTPException`; JSON inválido; zero hits.
+- **Falhas tipadas** (D37: o `ToolFailure` da T01, com a mensagem `"Brave web search failed: …"`):
+  401/403; 400/422 com `detail`; 429 com a espera (`X-RateLimit-Reset` e
+  `RATE_LIMITED`/`QUOTA_LIMITED`; `retry-after`); Tavily 432/433; timeout, `URLError`, `OSError`,
+  `http.client.HTTPException`; JSON inválido; zero hits.
 - **Governança e metering:** `@tool(name=name, capability="web_search", risk_level="medium",
   requires_approval=True, approval_reason=…)`, num `ToolGroup` com o handler da app. Custo 0 por
   omissão; a app preça por `request.metadata["tool"]` e delega o resto em `pricing` (receita nas

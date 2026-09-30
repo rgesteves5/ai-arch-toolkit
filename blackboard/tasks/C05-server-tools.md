@@ -4,6 +4,11 @@
 - **Origem:** `docs/internal/agentes-app-toolkit-review.md` (L13, "O que escapou" §10, ponto D,
   dívida 13); `docs/internal/toolkit-fix-plan.md` §4 itens 3 e 10
 - **Decisões:** por fixar (ver abaixo)
+- **Actualização (2026-09-30):** o código já segue a opção (a) das decisões 5 e 6: a Anthropic manda
+  `web_search_20250305` e `code_execution_20250825`, e o OpenAI recusa server tools com
+  `RequestError`; qualquer config de server tool dá `RequestError` em todos os adaptadores (R02). As
+  referências a ficheiros e linhas são de 2026-09-15, anteriores às frentes R e T: relê-as contra o
+  `main` antes de começar.
 
 ## Problema
 

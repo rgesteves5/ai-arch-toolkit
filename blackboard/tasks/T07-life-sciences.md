@@ -25,9 +25,6 @@
   - o `offset` do `uniprot_search` é provavelmente ignorado, porque a UniProt pagina por cursor
     (suspeita);
   - o `gbif_species_match` promete "common names", mas a API resolve nomes científicos (suspeita).
-- **Erro como sucesso (suspeitas):**
-  - a RCSB responde "sem resultados" com HTTP 204 e corpo vazio (usa a declaração de vazio da T02);
-  - as entradas inactivas da UniProt perdem o destino da fusão.
 - **Saída:**
   - a lista de elegibilidade do `clinical_trial_study` fica numa só linha;
   - o `pdb_search` só dá identificadores, e cada título custa outra chamada.

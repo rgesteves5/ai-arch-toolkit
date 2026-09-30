@@ -798,3 +798,161 @@ dígitos do `str()`; `'x' * 10**7` também é instantâneo. Os casos grandes nã
 prenderiam a máquina. A tool está em `dangerous` e pede aprovação, por isso fica para o dono. O
 `math_eval` já tem o guarda certo (a estimativa do tamanho do resultado, D32); partilhá-lo aqui
 fecha a porta para `**` e `*`.
+
+## 2026-09-30 · revisão dos docs contra o código (Claude, a pedido do dono)
+
+Quatro passagens de agentes compararam cada página dos docs com o código e correram os exemplos
+com sondas offline (FakeProvider, `prepare()` dos adaptadores, sockets bloqueados). Os docs passaram
+a dizer o que o código faz; os defeitos do próprio código ficam aqui, todos sem tarefa salvo
+indicação. Já estavam registados, e não se repetem: o `LLM("grok-…")` depois de um `asyncio.run`,
+o batch à tarifa normal, as imagens que o xAI larga, o `thinking_effort` que o OpenAI ignora, o
+`@tool(schema=)` com schema completo (C02b) e o `_inline_local_refs` (C02e).
+
+### Núcleo e fornecedores
+
+- **`inference_limit` e `RateLimitMiddleware` presos ao primeiro loop.** O `asyncio.Semaphore`
+  (`core/_concurrency.py:46`) e o `asyncio.Lock` (`core/_rate_limit.py:36`) nascem fora do loop:
+  um segundo `asyncio.run`/`*_sync` com contenção dentro do mesmo `with` dá `RuntimeError: … bound
+  to a different event loop`. Com `requests_per_minute < 1` e sem `burst`, `burst=int(rpm)=0` e o
+  `abefore` espera para sempre (`_rate_limit.py:31`).
+- **`TracingMiddleware` deixa chaves no pedido.** Põe `_otel_span`/`_otel_start` em
+  `request.kwargs` (`core/_telemetry.py:40-44`); com OpenTelemetry instalado, cada chamada avisa
+  "Unknown parameter(s) ignored" (`_base.py:352-358`), e uma chamada que falha nunca fecha o span.
+- **Batch.** `batch_submit` ignora os defaults do `LLM` (manda `max_tokens` 4096 e nenhuma
+  `temperature`: `_openai.py:707`, `_anthropic.py:746`), o middleware e o retry; no batch da
+  Anthropic o `parsed` nunca se preenche (`_anthropic.py:767`).
+- **Fallbacks em string não herdam o `timeout=`**: `_normalize_fallbacks` só passa `api_key`,
+  `base_url` e `provider`.
+- **`claude-sonnet-5-5` não está nos perfis nem nos preços**: um `tool_choice` forçado passa no
+  `prepare()` e daria 400; numa chamada medida dá `UnpricedModelError`.
+- **Gemini, `count_tokens`** (`_gemini.py:454-469`): um prompt de sistema dá `RequestError` (o
+  google-genai recusa `system_instruction` na Developer API) e as tools não se contam.
+- **`thinking_budget=-1`** é recusado em `_llm.py:199`, embora o adaptador Gemini o aceite e o
+  sugira na sua mensagem de erro (`_gemini.py:536-543`).
+- **Partes e parâmetros.** Os adaptadores mandam `str(part)` para partes que não conhecem, em vez de
+  `RequestError` (`_openai.py:209`, `_anthropic.py:202`). `stop`/`stop_sequences` não se traduzem
+  entre fornecedores, e um `response_format` explícito é trocado em silêncio pelo `output_schema`
+  (`_openai.py:604-611`). A cache explícita do Gemini (`cached_content`) e do OpenAI
+  (`prompt_cache_key`, `prompt_cache_retention`) e o `safety_settings` do Gemini caem em "Unknown
+  parameter". O `stop_reason` vem cru de cada fornecedor. O xAI devolve em `Response.model` o id
+  pedido, não o que respondeu (`_xai.py:305`).
+- **Estimativa do `reserve="strict"`.** `_request_size` (`core/_attempts.py:84-97`) só conta como
+  não-texto as partes `dict`; `ImagePart`/`DocumentPart` são dataclasses, por isso a margem de
+  4000 tokens do `HeuristicEstimator` nunca se aplica. A reserva também fica curta com o thinking
+  da Anthropic (`_attempts.py:128` contra `_anthropic.py:617`).
+- **Tecto brando com um a mais.** `limit_denial` (`core/_metering/_admission.py:207-219`) só nega
+  quando o gasto passa o tecto: ao chegar exactamente a ele ainda deixa passar uma chamada
+  (`max_total_tokens=15` → 2 chamadas, 30 tokens), e o `BudgetReport` marca-o em `>=`
+  (`toolkit/budget/_report.py:14-27`).
+- **Política de step.** `on_low_confidence="escalate"` (e o fallback por baixa confiança) salta o
+  `max_cost` (`core/_step_engine.py:118-131`: custo 1.8 com tecto 1e-6, sem `cost_exceeded`).
+  `on_timeout="halt"` não pára o flow com `on_exhausted="continue"`
+  (`toolkit/flow/_executor.py:621-624`). A `Policy` aceita qualquer valor em `on_timeout`,
+  `on_exhausted` e `on_low_confidence`.
+- **`PricingRegistry` sem lock** — por confirmar: um `get()` em paralelo com `reset()`/`load()`
+  pode fixar `None` no memo `_cache`; decide-o um teste com threads.
+- **Coroutines públicas sem `_sync`**, contra a regra do `AGENTS.md`: `GraphStore` e as vistas,
+  `Graph.to_dict`, `execute_step`, `execute_flow`, `Agent.iter`, `LLMModerator.moderate`,
+  `OpenAIModerator.moderate`, `MemoryPreset.consolidate`, os métodos de `BruteForceIndex` e
+  `VectorIndex`.
+- **Docstrings desactualizadas:** `APIError` ("An HTTP error response"), o `todo` do `ServerTool`
+  (diz que a config é ignorada; os cinco adaptadores levantam `RequestError`) e
+  `toolkit/flow/_executor.py:790` ("enforced precisely").
+
+### Tools
+
+- **O validador não vê os elementos das listas**: `list[int]` aceita `["wrong"]`
+  (`core/_tools/_validation.py:257` só verifica `isinstance(value, list)`).
+- **`@tool` num método**: `ToolGroup(obj.m)` corre o wrapper sem `self` e dá `validation_error`
+  "missing a required argument: 'self'", embora o schema omita o `self`.
+- **`bind_arguments` corre depois das gates**: uma entrada de `schema=` para um nome que não é
+  parâmetro passa a validação e só falha depois de o approval handler ser consultado.
+- **`_failed`** (`core/_tools/_executor.py:451-468`) larga o `admitted.audit` (aprovação ou
+  `GateModify`) quando a tool levanta ou esgota o prazo.
+- **`_bounded` num erro** (`_executor.py:188-198`): a nota conta o texto com o prefixo "Tool error
+  [tipo]: ", mas só a mensagem é cortada; com limite 40 o modelo recebe 68 caracteres e a nota diz
+  "chars 0-40 of 128".
+- **`DangerousToolGate`** manda usar `--allow-dangerous-tools`, uma flag que não existe
+  (`core/_tools/_governance.py:131-133`).
+- **`run_command`** aceita até 600 s, mas o `timeout_s` fica em 120: o executor desiste e o comando
+  continua.
+- **Redacção.** O fragmento "token" mascara `input_tokens`/`output_tokens` nos traces; escapam
+  `export X=`, `access_token:`, camelCase, `bearer` em minúsculas, `mongodb+srv://` e `rediss://`.
+- **Uma tool cujo pricer falha fica de graça** (`_executor.py:338-345`).
+- **`max_calls` no caminho síncrono** conta sem lock (`_run_tool_sync` → `_spent`); com threads
+  não se reproduziu (30 ensaios × 40 threads).
+- **Pistas de instalação pelo PyPI**, onde o pacote não está: `_youtube.py`,
+  `_providers/_imports.py:19`, `_tokens.py:49`, `graph/_networkx.py:15`, `resources/_codecs.py:89`,
+  `resources/_serializers.py:67`, `agents/_manifest.py:353`, `prompts/_variables.py:84`,
+  `prompts/_template_engines.py:65`.
+
+### Agentes e flows
+
+- **Tarefa multimodal em texto.** Fora de `react` e `completion`, as oito estratégias fazem
+  `str(task)`: um `ImagePart`/`DocumentPart` entra no prompt como repr Python, com os bytes
+  (`_plan_execute.py:143`, `_reflexion.py:146`, `_rewoo.py:163`, `_tot.py:192`, `_lats.py:263`,
+  `_self_discovery.py:162`, `_llm_compiler.py:201`, `_generate_review.py:148`). Saídas: recusar
+  tarefas que não são texto, ou propagar as partes.
+- **ReWOO.** Ignora o `system` (nem a spec nem o parâmetro da factory chegam a uma chamada);
+  substitui `#E1` como substring, o que estraga `#E10` (`_rewoo.py:97-102`; o `llm_compiler` já foi
+  corrigido); ordena as evidências como strings (`#E10` antes de `#E2`).
+- **Iterações a zero.** `Flow(max_iterations=0)` é aceite (`_flow.py:166`), e o `reflexion` aceita
+  `max_retries: 0`: zero tentativas, zero chamadas, resposta vazia.
+- **LATS.** `best_score` começa em 0.0 com `>` (`_lats.py:179-183`): com todas as notas a 0.0, o
+  solver recebe "Best answer: " vazio.
+- **Replan.** O `plan_execute` e o `llm_compiler` voltam a chamar o planner com as mesmas entradas,
+  sem o feedback da falha; o `llm_compiler` detecta "REPLAN" como substring ("No need to replan"
+  dispara um replan).
+- **Chamadas sem uso:** o `reflexion` corre o `reflect` depois da última tentativa falhada, e o
+  `lats` no último rollout.
+- **`ReasoningSpec.from_mapping`** (`_spec.py:50-73`) aceita `timeout: "30"` (falha no build com
+  `TypeError`), dá `TypeError` com `knobs: 5`, aceita `max_iterations: 0`, transforma `system: null`
+  e `strategy: null` na string "None", e o mapping de `output_schema` ignora chaves desconhecidas. A
+  spec não aceita `deepcopy`, `pickle` nem `asdict` (`MappingProxyType`) e não tem `to_dict`.
+- **`Flow.as_step()`** põe o `scope` do flow aninhado no step que o envolve (`_flow.py:367`) e a
+  execução aninhada aplica-o outra vez: `transform` e `enrich` correm duas vezes.
+- **`State.merge(strategy="collect")`** (`_state.py:209-214`) estende a lista no sítio (a mudança
+  aparece num snapshot anterior), perde um valor escalar que já lá estava e, com um só escritor,
+  substitui em vez de acrescentar.
+- **`ai-arch agent validate`** corre noutro processo: um manifesto com estratégia custom dá
+  "unknown strategy".
+- **`generate_review_flow`/`generate_review_initial_state`** não estão no topo nem em
+  `ai_arch_toolkit.toolkit`, ao contrário das outras oito factories. Via `Agent`, o
+  `generate_review` corre sempre ReAct interno, porque recebe sempre um `ToolGroup` (talvez
+  intencional).
+
+### Memória, grafo, prompts e recursos
+
+- **Conteúdo em lista.** `_extract_text` (`toolkit/moderation/_middleware.py:96-106`) e
+  `_extract_query` (`toolkit/memory/_middleware.py:90-100`) só lêem strings e dicts com `"text"`:
+  com `user(["texto"])`, `user(["x", image(…)])` ou `user([cache(…)])` nada é moderado, e o
+  `MemoryMiddleware` não injecta memórias. O teste `tests/moderation/test_middleware.py:142-146` só
+  cobre dicts.
+- **`MemoryPreset.consolidate()` apaga o que não é duplicado**: os nós sem valores escalares
+  colidem na chave `""`, também entre tipos (`toolkit/memory/_presets.py`); cinco nós diferentes
+  deram três removidos.
+- **Grafo.** O índice de tipos fica velho depois de `get_subgraph()` + `add`, ou com um backend
+  partilhado (`_facade.py:112-129`); `Graph.copy()` diz "deep copy" mas partilha metadados e
+  conteúdo (`_store.py:210-221`); `NetworkXBackend.find_all_paths` repete o caminho por cada aresta
+  paralela.
+- **Serializers.** `TextSerializer` e `MarkdownSerializer` passam folhas não escalares ao
+  `json.dumps` (`_serializers.py:84-93`): uma `date` de TOML ou YAML dá `TypeError` nu em vez de
+  `ResourceSerializationError`.
+- **`load_resources(extensions={"md"})`**, sem o ponto, não carrega nada e não avisa
+  (`_resolver.py:152`), enquanto `register_codec(extensions=("md",))` aceita sem ponto.
+- **Fingerprint com caminhos absolutos.** `PromptTemplate.fingerprint` inclui o
+  `metadata["manifest"]` e a proveniência das secções (`_manifest.py:260-265`,
+  `_templates.py:153-166`, `:361-368`): depende da máquina e, num manifesto `package://` em zip,
+  muda a cada carga e aponta para um directório temporário já apagado.
+- **`_infer_manifest_variables`** (`_manifest.py:685`) salta as secções `template:` com `select`:
+  as variáveis do excerto nunca se inferem e o render falha sempre, a menos que estejam em
+  `variables:`.
+- **Por confirmar:** um selector com `${var}` grava o valor resolvido na proveniência
+  (`_sources.py:123-135`), contra a regra "nomes, não valores"; no layout de texto, uma secção que
+  só tem subsecções duplica o separador (`_layouts.py:176-189`).
+
+### Exemplos
+
+29 dos 47 exemplos não têm `from __future__ import annotations`; o `24` lista o `csv_read` como
+seguro e escreve "All tools available" com 19 nomes; a docstring do `32` promete passos com `when`
+que o código não usa; a do `36` fala de chaves da Anthropic e do xAI que o script não usa.

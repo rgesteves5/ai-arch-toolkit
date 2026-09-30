@@ -107,8 +107,9 @@ sources.tools = { kind = "adapter", ref = "core/_providers/_openai.py:456-460", 
 
 - **C06a** `Provenance`, `ModelCapabilities`, `ModelCatalog`, loader, `model_catalog`, exports.
 - **C06b** Semente (decisão 6) com as fontes consultadas; factos de probes com a data do run.
-- **C06c** Contrato adaptador → catálogo sobre `_build_sdk_kwargs`; thinking Anthropic 4.7+ como
-  `xfail(strict=True)` ligado ao achado. **C06d** Fragmento de catálogo em `scripts/probe_models.py`.
+- **C06c** Contrato adaptador → catálogo sobre o `prepare()` de cada adaptador e as tabelas de
+  perfis (`core/_model_id.py`); o thinking da Anthropic 4.7+ já segue as regras de cada modelo
+  desde a R02, sem `xfail`. **C06d** Fragmento de catálogo em `scripts/probe_models.py`.
 - **C06e** (adiável) `BaseProvider.describe_model()` (`NotImplementedError` por omissão), Anthropic,
   Gemini, xAI, `LLM.describe_model()`; `scripts/check_model_catalog.py` compara a semente com as APIs.
 - **C06f** Docs: página nova, diferença face ao `pricing`, relação com a matriz, exemplo do `Auto`.

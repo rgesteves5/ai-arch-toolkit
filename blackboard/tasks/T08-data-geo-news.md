@@ -36,11 +36,6 @@
     docstring;
   - o "count" do `earthquake_search` é provavelmente o da página (suspeita);
   - o World Bank arredonda sem o dizer.
-- **Erro como sucesso (suspeitas):**
-  - os `eurostat_dataset`, `_dimensions` e `_series` não verificam erros;
-  - o `eonet_event` mostra um evento em branco;
-  - um QID fundido lê-se como "not found" no `wikidata_entity`;
-  - o `hacker_news` deixa cair, sem nota, as histórias que falham.
 - **Saída:**
   - os tempos do `earthquake_*` vêm em milissegundos epoch;
   - o `wikidata_entity` mostra códigos sem rótulo ("P31: Q5"), perde as unidades e escreve as

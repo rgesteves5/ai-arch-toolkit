@@ -4,6 +4,10 @@
 - **Origem:** `agentes-app-toolkit-review.md` §2.6, L1 (último parágrafo), "Dívida de desenho" 15;
   `toolkit-fix-plan.md` §4.10; `docs/internal/core_audit.md` SILENT-5
 - **Decisões:** por fixar (ver abaixo)
+- **Actualização (2026-09-30):** a C02a (grupo vazio mantém a identidade) saiu na F24, e com ela a
+  decisão 6. A validação (C02d) leva o número de decisão que o coordenador der, a partir de D43. As
+  referências a ficheiros e linhas são de 2026-09-15, anteriores às frentes R e T: relê-as contra o
+  `main` antes de começar.
 
 ## Problema
 
@@ -71,8 +75,9 @@ group.remove("github_search")         # -> ToolDefinition; KeyError se não exis
   (`inspect.signature` seguiria o handler). `async def` corre no loop, síncrono numa thread; um
   `ToolResult` passa intacto; uma excepção vira `runtime_error` redigido. Governança, metering e caminho
   síncrono não mudam (`_executor.py:255-365`; cobrança só em `_meter_tool_open`).
-- Validação (propõe D15): `oneOf` e `type` em lista coagem como `anyOf`; `additionalProperties: false`
-  na raiz recusa chaves desconhecidas mesmo com `**kwargs`; aninhados intactos (D7).
+- Validação (propõe uma decisão nova): `oneOf` e `type` em lista coagem como `anyOf`;
+  `additionalProperties: false` na raiz recusa chaves desconhecidas mesmo com `**kwargs`; aninhados
+  intactos (D7).
 - `ToolSchema.__post_init__` aplica a regra de nomes (as 133 tools decoradas do pacote cumprem; uma
   `lambda` passa a `ValueError`); `@tool(schema=)` com valor que não é mapping → `TypeError`.
 - `ToolGroup` com cópia na escrita: a mudança vale na próxima leitura; uma chamada em curso acaba com a
@@ -103,9 +108,10 @@ As decisões 4–6 são quebras visíveis: entrada `Changed` e aviso antes de ac
 ## Sub-tarefas, por ordem
 
 - **C02a** Grupo vazio mantém a identidade no `Agent` e nas cinco estratégias.
-- **C02b** Regra de nomes em `ToolSchema`; `TypeError` em `@tool(schema=)`; corrigir `docs/tools.md:53`.
+- **C02b** Regra de nomes em `ToolSchema`; `TypeError` em `@tool(schema=)`; corrigir `docs/tools.md`.
 - **C02c** `ToolGroup.add(replace=)`, `remove()`, colisões, cópia na escrita.
-- **C02d** Validação D15. **C02e** `tool_from_schema` com normalização e orçamento; exports; docs.
+- **C02d** Validação (a decisão nova). **C02e** `tool_from_schema` com normalização e orçamento;
+  exports; docs.
 - **C02f** (só local, `live_api`) schema com a forma MCP (`$defs`/`$ref`, `title`, `default`,
   `additionalProperties`, `oneOf`) aceite e chamado por Anthropic, OpenAI, Gemini, xAI e Meta.
 
@@ -122,8 +128,9 @@ As decisões 4–6 são quebras visíveis: entrada `Changed` e aviso antes de ac
   (partilhado com C04, C06), `test_tools_decorator.py`, `test_tools_group.py` (partilhados com C07),
   `tests/agents/test_configurable.py`, `tests/agents/test_phase_overrides.py`,
   `tests/integration/test_provider_contracts_live.py`
-- Docs: `docs/tools.md` (partilhado com C03–C05, C07, C08), `docs/safety.md` (partilhado com C04, C07,
-  C08), `docs/agents.md` (partilhado com C01, C04), `docs/api.md` (partilhado); D15 pelo coordenador
+- Docs: `docs/tools.md` (partilhado com C03–C05, C07, C08), `docs/safety.md` (partilhado com C04,
+  C07, C08), `docs/agents.md` (partilhado com C01, C04), `docs/api.md` (partilhado); a decisão nova
+  pelo coordenador
 
 ## Prova
 

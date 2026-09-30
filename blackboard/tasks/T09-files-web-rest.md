@@ -27,8 +27,6 @@
 - **Promessas:**
   - o `youtube_transcript` diz "Increase max_chars" mesmo quando já está no tecto de 50 000;
   - o `unit_convert` arredonda para 4 ou 6 algarismos significativos sem o dizer.
-- **Erro como sucesso (suspeita):** registos da Open Library redireccionados ou apagados aparecem
-  como "(untitled)".
 - **Saída:** os autores da Open Library aparecem como chaves `/authors/OL…A`, não como nomes.
 - **O que não se repete:** a saída de um comando (`run_command`) ou de código (`python_repl`) não se
   relê com `offset` sem o correr outra vez. Aí o rodapé diz o tamanho e como estreitar a saída, por

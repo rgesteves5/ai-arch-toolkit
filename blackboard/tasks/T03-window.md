@@ -1,7 +1,6 @@
 # T03 · A janela: nenhum corte é beco sem saída
 
-- **Dono:** por atribuir · **Estado:** todo · **Depende de:** nada; aplicar depois da T01 (ambas
-  mexem no `_executor.py`)
+- **Dono:** Claude · **Estado:** done (PR #71, em `main` como `84c0ee2`) · **Depende de:** nada
 - **Origem:** plano, secção 3.3 e anexo A · **Decisões:** D39 · **Regras:** `T00-rules.md`
 
 ## Problema
@@ -64,7 +63,8 @@ Migrar tools para a janela (T05 a T09) e apagar os helpers copiados, que desapar
 
 ## Registo do dono
 
-- **Estado:** `review` no branch `feat/tools-contract-wave1` (Claude, 2026-09-30).
+- **Estado:** done — revista no branch `feat/tools-contract-wave1` e aplicada em `main` pelo PR #71
+  (`84c0ee2`, 2026-09-30).
 
 ### Nota de desenho
 

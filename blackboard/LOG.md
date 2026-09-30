@@ -496,3 +496,25 @@ R01 publicada em `main` (`b3dae3f`); a R02 começa com a leitura obrigatória da
 - O dono removeu as duas worktrees e apagou os três branches `claude/*`; o `BOARD.md` deixa de
   pedir para não tocar na primeira.
 - Gate em `main` com o teste novo: 5744 passed, 42 skipped.
+
+## 2026-09-30 · Docs contra o código (Claude, a pedido do dono)
+
+- O dono pediu todos os docs actualizados contra o código real, uma nova revisão, e só depois
+  commit e push.
+- Quatro passagens de agentes com sondas offline (FakeProvider, `prepare()` dos adaptadores): a 1.ª
+  corrigiu a deriva conhecida e o resto de cada página; a 2.ª reviu em modo adversarial as mudanças
+  e as páginas; a 3.ª e a 4.ª só factos, a 4.ª nas páginas onde a 3.ª ainda corrigira erros. A 4.ª
+  ainda achou casos-limite (o `count_tokens` do Gemini com `system`, `tuple[int, ...]`, decisões
+  `continue` que o trace não regista), já corrigidos.
+- Nos docs públicos, entre outros: os tectos de tokens e custo são brandos por omissão;
+  `@tool(schema=)` é por parâmetro; só `react` e `completion` mandam partes multimodais; como o
+  `Flow` escolhe o modo; os defaults do `LLM` e o que o batch salta; de onde se importam `Agent` e
+  `ReasoningSpec`; a instalação por git; os 34 modelos do inventário; as contagens das tools;
+  exemplos que não corriam. Entrada no `CHANGELOG`.
+- Internos e blackboard: índice de `docs/internal/`, estado do desenho de prompts e caminhos do
+  briefing; T03 e T04a done; as fichas T06–T09 sem o que o `6a34668` fechou; notas nas fichas C;
+  "Por fazer" e o plano de robustez actualizados.
+- Os defeitos do código encontrados pelo caminho estão em `FINDINGS.md` (2026-09-30).
+- Uma sonda de um agente da 3.ª passagem saiu para a Anthropic com uma chave falsa (`APIError`, sem
+  custo); a 4.ª correu com sockets bloqueados.
+- Gate: 5744 passed, 42 skipped; `mkdocs build --strict` com validação de links e âncoras limpo.

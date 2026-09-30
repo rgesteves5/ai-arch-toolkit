@@ -3,9 +3,8 @@
 ## Frente activa: contrato das tools
 
 - **Estado:** aberta em 2026-09-30. Fichas T00 (regras) e T01 a T09 escritas. A T03 e a T04a
-  estão feitas e revistas no PR #71 (branch `feat/tools-contract-wave1`), à espera de merge. A T01
-  já pode começar: a sessão paralela, que mexia no `_http.py` e em nove módulos, terminou
-  (`6a34668`).
+  estão feitas: PR #71, em `main` desde 2026-09-30 (`84c0ee2`). A T01 já pode começar: a sessão
+  paralela, que mexia no `_http.py` e em nove módulos, terminou (`6a34668`).
 - **Plano:** `docs/internal/tools-contract-plan.md`. **Regras:** `tasks/T00-rules.md`, que remete
   para `tasks/R00-rules.md`. **Decisões:** D37 a D42, tomadas pelo coordenador por delegação do dono.
 - **Origem:** duas conversas do ai-network em que o agente não chegou ao que as páginas tinham, e o
@@ -31,8 +30,8 @@
 |---|---|---|---|---|
 | T01 | Falhas tipadas: `ToolFailure`, executor, `is_error`, os 44 módulos sem strings de erro | — | todo | nada |
 | T02 | Porta HTTP: um leitor de erros por fonte, 404 por endpoint, erro da fonte na mensagem | — | todo | T01 |
-| T03 | Janela: primitiva de corte com rodapé e continuação | Claude | review | nada |
-| T04a | Limites na assinatura: marcador no schema e no validador | Claude | review | nada; em série com a C02 |
+| T03 | Janela: primitiva de corte com rodapé e continuação | Claude | done | nada |
+| T04a | Limites na assinatura: marcador no schema e no validador | Claude | done | nada; em série com a C02 |
 | T04b | Invariante de contrato e lista de dívida | — | todo | T01, T02, T03, T04a |
 | T05 | Família wiki: HTML, navegação e fusão (8 tools) | — | todo | T04b |
 | T06 | Literatura e identificadores (8 módulos, 18 tools) | — | todo | T05 |
@@ -73,7 +72,8 @@
   declarações dos manifestos mudaram o terreno de C02, C05, C07 e C08).
 - **Estado:** aberta em 2026-09-15. As nove fichas estão escritas; nenhuma tarefa começou.
 - **Antes de codificar:** o dono fixa as "Decisões a fixar" de cada ficha. Cada decisão tomada entra
-  em `DECISIONS.md` a partir de D15, com o número dado pelo coordenador.
+  em `DECISIONS.md` a partir de D43 (as D15 a D42 foram para as frentes R e T), com o número dado
+  pelo coordenador.
 - **Origem:** o que `docs/internal/agentes-app-toolkit-review.md` pediu ao toolkit (L1, L3–L7, L9, L13
   e o ponto D) e que `docs/internal/toolkit-fix-plan.md` §4 (itens 3 e 10) deixou de fora por ser
   âmbito, não contrato partido.
@@ -132,8 +132,9 @@ As primeiras a fixar. As alternativas e as razões estão nas fichas.
 ### Achados da abertura
 
 Vinte entradas em `FINDINGS.md` (2026-09-15): catorze reproduzidas pelo coordenador, um risco medido e
-cinco confirmadas no código e na documentação oficial. Onze não têm tarefa: são correcções, não
-capacidades (ver "Por fazer").
+cinco confirmadas no código e na documentação oficial. Onze não tinham tarefa, por serem correcções
+e não capacidades: o plano de robustez agrupou-as nas suas seis causas, que a frente R corrigiu. O
+que ficou aberto está em "Por fazer".
 
 ## Frente anterior: robustez (três fases)
 
@@ -150,11 +151,14 @@ capacidades (ver "Por fazer").
   verificações ao vivo (comandos no relatório final da ficha).
 - **R03:** concluída (Claude) em 2026-09-18; commitada e publicada em `main` a pedido do dono
   (`6ceb516` código e testes, e o registo). A árvore do primeiro commit foi verificada sozinha.
-  Gate: 5465 passed, 42 deselected, zero `xfail`; ruff, formatação, pyright e lock limpos. Dívida
-  de complexidade 121 → 46. Falta o dono correr as verificações ao vivo, tools gratuitas e sem
-  chave (comandos no relatório). Ficam para decisão do dono: o risco polinomial do regex, o
-  `pdb_ligands`, o arXiv, a UniProt e o guarda de tamanho do `python_repl` (em `FINDINGS.md`), e o
-  levantamento do `__all__` de topo (ficha, passo 4.7).
+  Gate: 5465 passed, 42 deselected, zero `xfail`; ruff, formatação, pyright e lock limpos. Dívida de
+  complexidade 121 → 46. As verificações ao vivo das tools gratuitas e sem chave (comandos no
+  relatório) estão feitas só em parte: a 28/09 viram-se seis tools e cinco estavam partidas; quatro
+  foram corrigidas em `d892cfd`, e o `define_word` depende do dictionaryapi.dev, que não responde.
+  Ficam para decisão do dono: o risco polinomial do regex, o `pdb_ligands`, o arXiv e o guarda de
+  tamanho do `python_repl` (em `FINDINGS.md`; a UniProt ficou resolvida em `d892cfd`), o
+  levantamento do `__all__` de topo (ficha, passo 4.7) e o saldo positivo da dívida de manutenção,
+  por causa dos +593 do `_shape.py` (ficha, passo 4.4).
 - **Como correr:** uma fase de cada vez, por ordem, cada uma num agente com contexto limpo. A fase
   seguinte só começa depois de o dono rever e commitar a anterior. Os agentes não fazem commits nem
   chamadas a fornecedores.
@@ -237,7 +241,13 @@ capacidades (ver "Por fazer").
 - **xAI:** repor créditos na conta e depois correr `uv run pytest -m live_api -k xai` (custo por
   pedido) e um probe com uma tool cujo parâmetro seja `Any` (schema sem tipo) e com `system=` +
   `system()` ao mesmo tempo — únicas mudanças desta frente que o xAI ainda não confirmou.
-- **Frente C, decisões:** fixar as da vaga 1 (C02, C06, C07, C08) antes de atribuir donos.
+- **Modelos novos ao vivo:** o GPT-6 Astra não tem probes (recusa tools na Chat Completions), e o
+  Grok 4.7 e o Opus 5.5 ainda não correram ao vivo (`docs/model-compatibility.md`).
+- **Frente C, decisões:** fixar as da vaga 1 (C02, C06, C07, C08) antes de atribuir donos; a C07 e
+  a C08 só começam depois da T01 e da T03.
+- **Decidir, achados de 2026-09-18 sem tarefa (`FINDINGS.md`):** o `LLM("grok-…")` criado depois de
+  um `asyncio.run` levanta `RuntimeError`; o OpenAI ignora o `thinking_effort` sem `thinking=True`,
+  sem aviso; o batch é preçado à tarifa normal; o xAI larga imagens e documentos.
 - **Decidir (sem pressa, não bloqueia nada): o tecto de uma falha sem `BudgetPolicy`.** Um step com
   `Policy(max_cost=...)` num run sem `BudgetPolicy` falha depois de uma chamada `indeterminate` (5xx
   do OpenAI, xAI ou Meta; timeout ou queda depois do envio, em qualquer fornecedor), mesmo que o retry
@@ -256,8 +266,9 @@ capacidades (ver "Por fazer").
   próprio sistema de medição que calcula o pior caso, seja quem for que fixa o orçamento.
 - **R02, verificação ao vivo:** comandos no relatório final de `tasks/R02-providers.md` (o do Gemini
   decide se sai a nota "Known issue").
-- **Plano de robustez (2026-09-17):** `docs/internal/hardening-plan.md` agrupa os achados sem tarefa
-  em seis causas e propõe corrigi-las antes da frente C. Um é impeditivo: qualquer chamada LLM falhada
-  fica com custo desconhecido e, sob `max_cost`, nega retry, fallback e o resto do run. Falta fixar as
-  decisões R1–R15 do plano; só depois se abre a frente com fichas. As dependências já estão actualizadas (2026-09-17; falta correr o CI e verificar os SDKs novos ao vivo). O plano absorve C01a, C02a, C02b,
-  C08c e a validade do fio do C05a. Protótipos em `blackboard/prototypes/2026-09-hardening/`.
+- **Plano de robustez (`docs/internal/hardening-plan.md`):** as decisões R1–R15 foram fixadas na D20
+  e a frente R (R01–R03) está concluída. Ficam por cumprir a R10 (as verificações ao vivo acima) e a
+  R11 (uma tag de pré-release por vaga; ainda não há nenhuma). Do que o plano absorveu da frente C,
+  a C01a (R02), a C02a (F24), a C08c (R01) e a validade do fio do C05a (R02) estão feitas; o
+  `@tool(schema=)` com um schema completo (C02b) continua por fazer. Protótipos em
+  `blackboard/prototypes/2026-09-hardening/`.
