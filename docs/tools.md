@@ -33,6 +33,24 @@ def get_distance(origin: str, destination: str, unit: str = "km") -> str:
     ...
 ```
 
+Declare a numeric parameter's limits in its annotation with `Range`, instead of adjusting the value inside the tool. The model reads them in the schema (`minimum`/`maximum`), and the executor refuses a value outside them with a `validation_error` that names the range (`expected integer from 1 to 25, got int 40`). One bound is enough (`Range(maximum=1.0)`), and `Annotated[int | None, Range(1, 25)]` bounds an optional parameter. A `Range` on a type with no numbers is a `ValueError` when the tool is decorated. Bounds written in a `schema=` override are enforced the same way.
+
+```python
+from typing import Annotated
+
+from ai_arch_toolkit import Range, tool
+
+@tool
+def search_papers(query: str, max_results: Annotated[int, Range(1, 25)] = 10) -> str:
+    """Search papers by keyword.
+
+    Args:
+        query: Keywords.
+        max_results: How many papers to return.
+    """
+    ...
+```
+
 The decorator also accepts governance metadata — `capability`, `risk_level`, `requires_approval`, `approval_reason` — and the bounds the executor holds each call to, `max_output_chars` and `timeout_s`:
 
 ```python
@@ -42,7 +60,9 @@ def delete_table(name: str) -> str:
     ...
 ```
 
-These attach a `ToolRuntimePolicy` to the tool that gates read at execution time — see [Tool Governance & Safety](safety.md).
+These attach a `ToolRuntimePolicy` to the tool that gates read at execution time — see [Tool Governance & Safety](safety.md). A result longer than `max_output_chars` is cut on a line break when one lies in the second half of the kept text, and ends with `[chars 0-200000 of 5000000 | cut at the output limit; ask for less]`; `result.metadata["truncated"]` holds the two sizes.
+
+A tool built on the toolkit's window (`toolkit/tools/_window.py`, see `CONTRIBUTING.md`) that returns part of something longer ends its text with a footer in the same vocabulary, naming the call that reads on — `[chars 0-4000 of 34651 | next: offset=4000]`, `[results 21-40 of 1234 | next: offset=40]`, `[matches 1-3 of 5 for "1960" | next: find="1960", offset=16500]` — and put the same facts in `result.metadata["window"]` (`unit`, `first`, `last`, `total`, `next_call`).
 
 Full `@tool` signature:
 

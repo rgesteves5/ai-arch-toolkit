@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import enum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import pytest
 
@@ -14,6 +14,7 @@ from ai_arch_toolkit.core._tools._decorator import tool
 from ai_arch_toolkit.core._tools._governance import ExecutionContext, GateModify, GateResult
 from ai_arch_toolkit.core._tools._group import ToolGroup
 from ai_arch_toolkit.core._tools._result import ToolResult
+from ai_arch_toolkit.core._tools._schema import Range
 
 type Count = int
 
@@ -415,3 +416,76 @@ async def test_null_is_accepted_for_untyped_and_any_parameters() -> None:
     result = await ToolGroup(loose).async_execute(_call("loose", anything=None, untyped=None))
 
     assert result.ok and result.value == "None None"
+
+
+@tool
+def top(n: Annotated[int, Range(1, 25)] = 10) -> str:
+    """Take the first n."""
+    return f"n={n}"
+
+
+@tool
+def scale(factor: Annotated[float, Range(maximum=1.0)]) -> str:
+    """Scale by a factor."""
+    return f"factor={factor}"
+
+
+@tool
+def slot(value: Annotated[int | str, Range(1, 5)]) -> str:
+    """Take a slot number or a name."""
+    return f"{type(value).__name__}:{value}"
+
+
+@tool(schema={"count": {"type": "integer", "minimum": 0}})
+def countdown(count: int) -> str:
+    """Count down from a number."""
+    return f"count={count}"
+
+
+@pytest.mark.parametrize("mode", MODES)
+async def test_values_inside_a_range_pass_bounds_included(mode: str) -> None:
+    group = ToolGroup(top)
+
+    assert (await _execute(group, _call("top", n=1), mode)).value == "n=1"
+    assert (await _execute(group, _call("top", n="25"), mode)).value == "n=25"
+
+
+@pytest.mark.parametrize("mode", MODES)
+async def test_a_value_outside_the_range_is_refused_naming_the_range(mode: str) -> None:
+    result = await _execute(ToolGroup(top), _call("top", n=40), mode)
+
+    assert not result.ok and result.error is not None
+    assert result.error.type == "validation_error"
+    assert "argument 'n': expected integer from 1 to 25, got int 40" in result.error.message
+
+
+async def test_a_numeric_string_is_checked_after_coercion() -> None:
+    result = ToolGroup(top).execute(_call("top", n="0"))
+
+    assert result.error is not None and result.error.type == "validation_error"
+    assert "from 1 to 25" in result.error.message
+
+
+async def test_a_one_sided_range_names_its_bound() -> None:
+    group = ToolGroup(scale)
+
+    assert group.execute(_call("scale", factor=0.5)).value == "factor=0.5"
+    refused = group.execute(_call("scale", factor=1.5))
+    assert refused.error is not None
+    assert "expected number at most 1.0, got float 1.5" in refused.error.message
+
+
+async def test_a_range_on_a_union_bounds_numbers_only() -> None:
+    group = ToolGroup(slot)
+
+    assert group.execute(_call("slot", value=3)).value == "int:3"
+    assert group.execute(_call("slot", value="north")).value == "str:north"
+    refused = group.execute(_call("slot", value=9))
+    assert refused.error is not None and "from 1 to 5" in refused.error.message
+
+
+async def test_bounds_written_in_a_schema_override_are_enforced_too() -> None:
+    refused = ToolGroup(countdown).execute(_call("countdown", count=-1))
+
+    assert refused.error is not None
+    assert "expected integer at least 0, got int -1" in refused.error.message

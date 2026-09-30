@@ -460,3 +460,28 @@ R01 publicada em `main` (`b3dae3f`); a R02 começa com a leitura obrigatória da
 - Fica para a frente T: os `status_messages={404: ...}` de 12 módulos e o 404 por endpoint (T02),
   o texto de erro em HTML do Overpass (400) e os erros tipados (T01). As fichas T02 e T05 a T09
   dizem o que já está feito.
+
+## 2026-09-30 · Vaga 1 da frente T: T04a e T03 num branch (Claude, a pedido do dono)
+
+- O dono deu a vaga 1, se não interferisse com a sessão paralela e num branch novo. Essa sessão
+  (a do `missingtitle`, a trabalhar na worktree `beautiful-feistel-20d1c5`) mexe na porta
+  `_http.py` (o 204 e o texto dos erros) e em nove módulos (arXiv, Eurostat, GDELT, UniProt, PDB,
+  EONET, Wikidata, Open Library, Hacker News): a T01 esperaria por ela. A T03 e a T04a não tocam
+  nesses ficheiros.
+- Branch `feat/tools-contract-wave1`, numa worktree própria criada a partir de `origin/main`
+  (`b9d7524`), sem upstream, para o checkout principal não mudar de branch.
+- T04a (`aa54ba1`): `Range` no schema e no validador; o `infer_schema` e o `validate_arguments`
+  repartidos em funções pequenas, e três entradas saem da baseline de complexidade.
+- T03: `toolkit/tools/_window.py` (texto, `find`, listas), `line_cut` no core e o `_bounded` do
+  executor no mesmo vocabulário. Nenhuma tool a usa ainda.
+- Revisão antes do push, a pedido do dono:
+  - o `find` fundia passagens sem tecto, e um termo frequente podia devolver o texto todo;
+  - os termos com acentos saíam escapados no rodapé;
+  - um termo vazio contava ocorrências vazias.
+
+  Os três foram corrigidos, com testes que falham na versão anterior. Ficou documentado que o
+  validador aplica os `minimum`/`maximum` de um `schema=` escrito à mão.
+- Gate no branch: 5691 passed, 42 deselected; ruff, formatação e pyright limpos.
+- O `main` recebeu entretanto o resto do anexo C (`6a34668`, entrada acima); o branch fez merge
+  dele para o PR #71 não ficar em conflito (só o `LOG.md` chocou).
+- Próximo: o dono faz o merge do PR #71; a T01 já não tem a sessão paralela à frente.

@@ -2,8 +2,10 @@
 
 ## Frente activa: contrato das tools
 
-- **Estado:** aberta em 2026-09-30. Fichas T00 (regras) e T01 a T09 escritas; nenhuma tarefa
-  começou.
+- **Estado:** aberta em 2026-09-30. Fichas T00 (regras) e T01 a T09 escritas. A T03 e a T04a
+  estão feitas e revistas no PR #71 (branch `feat/tools-contract-wave1`), à espera de merge. A T01
+  já pode começar: a sessão paralela, que mexia no `_http.py` e em nove módulos, terminou
+  (`6a34668`).
 - **Plano:** `docs/internal/tools-contract-plan.md`. **Regras:** `tasks/T00-rules.md`, que remete
   para `tasks/R00-rules.md`. **Decisões:** D37 a D42, tomadas pelo coordenador por delegação do dono.
 - **Origem:** duas conversas do ai-network em que o agente não chegou ao que as páginas tinham, e o
@@ -29,8 +31,8 @@
 |---|---|---|---|---|
 | T01 | Falhas tipadas: `ToolFailure`, executor, `is_error`, os 44 módulos sem strings de erro | — | todo | nada |
 | T02 | Porta HTTP: um leitor de erros por fonte, 404 por endpoint, erro da fonte na mensagem | — | todo | T01 |
-| T03 | Janela: primitiva de corte com rodapé e continuação | — | todo | nada; aplicar depois da T01 |
-| T04a | Limites na assinatura: marcador no schema e no validador | — | todo | nada; em série com a C02 |
+| T03 | Janela: primitiva de corte com rodapé e continuação | Claude | review | nada |
+| T04a | Limites na assinatura: marcador no schema e no validador | Claude | review | nada; em série com a C02 |
 | T04b | Invariante de contrato e lista de dívida | — | todo | T01, T02, T03, T04a |
 | T05 | Família wiki: HTML, navegação e fusão (8 tools) | — | todo | T04b |
 | T06 | Literatura e identificadores (8 módulos, 18 tools) | — | todo | T05 |

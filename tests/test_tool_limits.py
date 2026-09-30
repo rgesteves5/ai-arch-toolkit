@@ -59,6 +59,12 @@ def unbounded() -> str:
     return "u" * 300_000
 
 
+@tool(max_output_chars=50)
+def rows() -> str:
+    """Return a hundred short lines."""
+    return "abcdefg\n" * 100
+
+
 class TestOutputBound:
     def test_a_five_megabyte_result_is_cut_at_the_default_limit_and_marked(self) -> None:
         result = execute_tool(call("huge"), [huge])
@@ -66,8 +72,18 @@ class TestOutputBound:
         text = result.to_model_text()
         assert result.ok
         assert text.startswith("x" * 200_000)
-        assert text[200_000:] == "\n\n[Output truncated: kept 200000 of 5000000 characters.]"
+        assert text[200_000:] == (
+            "\n[chars 0-200000 of 5000000 | cut at the output limit; ask for less]"
+        )
         assert result.metadata["truncated"] == {"chars": FIVE_MB, "kept": 200_000}
+
+    def test_the_cut_falls_on_a_line_break(self) -> None:
+        result = execute_tool(call("rows"), [rows])
+
+        assert result.value == "abcdefg\n" * 6 + (
+            "\n[chars 0-48 of 800 | cut at the output limit; ask for less]"
+        )
+        assert result.metadata["truncated"] == {"chars": 800, "kept": 48}
 
     async def test_the_async_path_cuts_too(self) -> None:
         result = await async_execute_tool(call("huge"), [huge])
@@ -92,7 +108,7 @@ class TestOutputBound:
         assert result.metadata["truncated"]["chars"] > FIVE_MB
 
     def test_a_tool_declares_its_own_bound_or_none(self) -> None:
-        assert execute_tool(call("terse"), [terse]).value.startswith("t" * 50 + "\n\n[Output")
+        assert execute_tool(call("terse"), [terse]).value.startswith("t" * 50 + "\n[chars 0-50")
         assert execute_tool(call("unbounded"), [unbounded]).value == "u" * 300_000
 
     def test_a_group_tightens_and_never_widens(self) -> None:

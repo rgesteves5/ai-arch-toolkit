@@ -7,7 +7,8 @@ actually run and an invalid call never reaches a human:
 * ``integer`` accepts ints, integral floats, and integer strings (``"3"``, ``"3.0"``); never bools;
 * ``number`` accepts ints, finite floats, and numeric strings; never bools;
 * ``boolean`` accepts bools and the strings ``"true"`` / ``"false"`` (any case);
-* ``enum`` is checked after coercion;
+* ``enum`` is checked after coercion, and so are a parameter's top-level ``minimum``/``maximum``
+  (from a ``Range`` in the signature or a ``schema=`` override), whose refusal names the range;
 * ``anyOf`` keeps a value that already matches a branch, and otherwise takes the first branch that
   coerces it (``int | str`` keeps ``"1"`` as a string);
 * ``string``, ``array``, ``object`` and untyped schemas (``Any``) are left as they are — the schema
@@ -54,41 +55,76 @@ def validate_arguments(
     properties = schema.get("properties")
     if not isinstance(properties, Mapping):
         return coerced
-
-    required = schema.get("required")
-    if isinstance(required, Sequence) and not isinstance(required, str):
-        missing = [name for name in required if name not in coerced]
-        if missing:
-            raise ArgumentError(f"is missing required argument(s) {_names(missing)}", missing[0])
-
-    if not _accepts_extra_keywords(fn):
-        unexpected = [name for name in coerced if name not in properties]
-        if unexpected:
-            expected = ", ".join(properties) or "none"
-            raise ArgumentError(
-                f"got unexpected argument(s) {_names(unexpected)}; expected: {expected}",
-                unexpected[0],
-            )
+    _check_required(schema.get("required"), coerced)
+    _check_declared(fn, properties, coerced)
 
     none_allowed = _none_allowed(fn)
     for name, value in arguments.items():
         declared = properties.get(name)
-        if not isinstance(declared, Mapping):
-            continue
-        if value is None and not none_allowed.get(name, True):
-            raise ArgumentError(
-                f"argument {name!r}: expected {_describe(declared)}, got null", name
-            )
-        ok, value_out, expected = _coerce(value, declared)
-        if not ok:
-            got = f"{type(value).__name__} {_short(value)}"
-            raise ArgumentError(f"argument {name!r}: expected {expected}, got {got}", name)
-        coerced[name] = value_out
+        if isinstance(declared, Mapping):
+            coerced[name] = _checked(name, value, declared, none_allowed.get(name, True))
 
     for param in _parameters(fn):
         if param.name in properties and param.name not in coerced and _needs_value(param):
             coerced[param.name] = None  # optional in the schema, required by the signature
     return coerced
+
+
+def _check_required(required: object, arguments: Mapping[str, Any]) -> None:
+    if isinstance(required, Sequence) and not isinstance(required, str):
+        missing = [name for name in required if name not in arguments]
+        if missing:
+            raise ArgumentError(f"is missing required argument(s) {_names(missing)}", missing[0])
+
+
+def _check_declared(
+    fn: Callable[..., Any], properties: Mapping[str, Any], arguments: Mapping[str, Any]
+) -> None:
+    if _accepts_extra_keywords(fn):
+        return
+    unexpected = [name for name in arguments if name not in properties]
+    if unexpected:
+        expected = ", ".join(properties) or "none"
+        raise ArgumentError(
+            f"got unexpected argument(s) {_names(unexpected)}; expected: {expected}",
+            unexpected[0],
+        )
+
+
+def _checked(name: str, value: Any, declared: Mapping[str, Any], admits_none: bool) -> Any:
+    """``value`` coerced to its declared schema and inside its bounds, else ``ArgumentError``."""
+    if value is None and not admits_none:
+        raise ArgumentError(f"argument {name!r}: expected {_describe(declared)}, got null", name)
+    ok, coerced, expected = _coerce(value, declared)
+    if ok and not _within(coerced, declared):
+        ok, expected = False, _describe_bounds(declared)
+    if not ok:
+        got = f"{type(value).__name__} {_short(value)}"
+        raise ArgumentError(f"argument {name!r}: expected {expected}, got {got}", name)
+    return coerced
+
+
+def _within(value: Any, schema: Mapping[str, Any]) -> bool:
+    """Whether a number is inside the schema's ``minimum``/``maximum``; other values always are."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return True
+    low, high = schema.get("minimum"), schema.get("maximum")
+    too_low = isinstance(low, int | float) and value < low
+    too_high = isinstance(high, int | float) and value > high
+    return not (too_low or too_high)
+
+
+def _describe_bounds(schema: Mapping[str, Any]) -> str:
+    """``integer from 1 to 25``, ``number at least 0``, ``integer at most 100``."""
+    branches = [branch for branch in schema.get("anyOf") or () if isinstance(branch, Mapping)]
+    kinds = [b.get("type") for b in branches or [schema] if b.get("type") in ("integer", "number")]
+    kind = kinds[0] if kinds else "number"
+    low, high = schema.get("minimum"), schema.get("maximum")
+    if low is not None and high is not None:
+        return f"{kind} from {low} to {high}"
+    if low is not None:
+        return f"{kind} at least {low}"
+    return f"{kind} at most {high}"
 
 
 def _none_allowed(fn: Callable[..., Any]) -> dict[str, bool]:

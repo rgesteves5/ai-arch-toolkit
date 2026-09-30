@@ -7,8 +7,9 @@ import enum
 import functools
 import json
 import warnings
-from typing import Any, Literal, Optional, TypedDict, Union
+from typing import Annotated, Any, Literal, Optional, TypedDict, Union
 
+import pytest
 from google.genai import types as genai_types
 from pydantic import BaseModel, Field
 
@@ -16,6 +17,7 @@ from ai_arch_toolkit.core._providers import _anthropic, _gemini, _openai, _xai
 from ai_arch_toolkit.core._tools import prepare_tools
 from ai_arch_toolkit.core._tools._decorator import tool
 from ai_arch_toolkit.core._tools._schema import (
+    Range,
     _get_summary,
     _hint_to_json_schema,
     _parse_param_descriptions,
@@ -627,3 +629,99 @@ class TestAnyOfReachesProviderAdapters:
         parameters = config.tools[0].function_declarations[0].parameters
         assert _variant_types(parameters.properties["query"]) == GEMINI_INT_OR_STR
         assert _variant_types(parameters.properties["tags"].items) == GEMINI_INT_OR_STR
+
+
+class TestRange:
+    """``Annotated[int, Range(...)]`` puts the bounds in the schema the model reads."""
+
+    def test_bounds_reach_the_schema(self):
+        def search(max_results: Annotated[int, Range(1, 25)] = 10) -> str:
+            """Search.
+
+            Args:
+                max_results: How many results to return.
+            """
+            return ""
+
+        prop = infer_schema(search)["input_schema"]["properties"]["max_results"]
+        assert prop == {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 25,
+            "description": "How many results to return.",
+            "default": 10,
+        }
+
+    def test_one_bound_is_enough(self):
+        def scale(factor: Annotated[float, Range(maximum=1.0)]) -> str:
+            return ""
+
+        prop = infer_schema(scale)["input_schema"]["properties"]["factor"]
+        assert prop == {"type": "number", "maximum": 1.0}
+
+    def test_an_optional_parameter_keeps_its_bounds(self):
+        def page(limit: Annotated[int | None, Range(1, 100)] = None) -> str:
+            return ""
+
+        schema = infer_schema(page)["input_schema"]
+        assert schema["properties"]["limit"] == {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": None,
+        }
+        assert schema["required"] == []
+
+    def test_a_range_on_a_member_of_a_union_is_found(self):
+        def page(limit: Annotated[int, Range(1, 5)] | None = None) -> str:
+            return ""
+
+        prop = infer_schema(page)["input_schema"]["properties"]["limit"]
+        assert (prop["minimum"], prop["maximum"]) == (1, 5)
+
+    def test_a_union_with_a_numeric_branch_takes_the_bounds(self):
+        def pick(value: Annotated[int | str, Range(1, 5)]) -> str:
+            return ""
+
+        prop = infer_schema(pick)["input_schema"]["properties"]["value"]
+        assert prop == {"anyOf": INT_OR_STR, "minimum": 1, "maximum": 5}
+
+    def test_other_metadata_is_ignored(self):
+        def note(text: Annotated[str, "free text"]) -> str:
+            return ""
+
+        assert infer_schema(note)["input_schema"]["properties"]["text"] == {"type": "string"}
+
+    def test_a_range_on_a_type_without_numbers_is_refused_when_decorated(self):
+        with pytest.raises(ValueError, match="Range"):
+
+            @tool
+            def label(name: Annotated[str, Range(1, 5)]) -> str:
+                """Label something."""
+                return name
+
+    @pytest.mark.parametrize(
+        ("minimum", "maximum"),
+        [(None, None), (5, 1), (True, 5), (float("nan"), 1), (0, float("inf")), ("1", 5)],
+    )
+    def test_bounds_must_be_finite_ordered_numbers(self, minimum: Any, maximum: Any):
+        with pytest.raises(ValueError):
+            Range(minimum, maximum)
+
+    def test_bounds_reach_every_provider(self):
+        @tool
+        def top(n: Annotated[int, Range(1, 25)] = 10) -> str:
+            """Take the first n."""
+            return str(n)
+
+        definitions = prepare_tools([top])
+        assert definitions is not None
+        definition = definitions[0]
+        anthropic = _anthropic._tool_to_sdk(definition)["input_schema"]["properties"]["n"]
+        openai = _openai._tool_to_sdk(definition)["function"]["parameters"]["properties"]["n"]
+        xai = json.loads(_xai._tool_to_sdk(definition).function.parameters)["properties"]["n"]
+        for prop in (anthropic, openai, xai):
+            assert (prop["minimum"], prop["maximum"]) == (1, 25)
+        gemini = _gemini._tool_to_sdk(definition).parameters
+        assert gemini is not None and gemini.properties is not None
+        assert (gemini.properties["n"].minimum, gemini.properties["n"].maximum) == (1, 25)

@@ -7,9 +7,10 @@ import enum
 import functools
 import inspect
 import logging
+import math
 import types
 import typing
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, get_type_hints
 
 from ai_arch_toolkit.core._tools._definition import ToolSchema
@@ -22,6 +23,52 @@ _PYTHON_TYPE_TO_JSON: dict[type, str] = {
     float: "number",
     bool: "boolean",
 }
+_NUMERIC_TYPES = ("integer", "number")
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class Range:
+    """Inclusive bounds for a numeric tool parameter.
+
+    Put it in the parameter's annotation, ``max_results: Annotated[int, Range(1, 25)] = 10``: the
+    schema the model reads carries the bounds as ``minimum`` and ``maximum``, and the executor
+    refuses a value outside them with a ``validation_error`` that names the range, so the tool
+    never has to adjust a value without saying so. It works on ``int``, ``float`` and unions with a
+    numeric member (``Annotated[int | None, Range(1, 25)]``).
+
+    Attributes:
+        minimum: The smallest value allowed, or ``None`` for no lower bound.
+        maximum: The largest value allowed, or ``None`` for no upper bound.
+
+    Raises:
+        ValueError: When there is no bound, a bound is not a finite number (``bool`` included),
+            or ``minimum`` is above ``maximum``.
+    """
+
+    minimum: int | float | None = None
+    maximum: int | float | None = None
+
+    def __post_init__(self) -> None:
+        bounds = [bound for bound in (self.minimum, self.maximum) if bound is not None]
+        if not bounds:
+            raise ValueError("Range needs a minimum, a maximum or both")
+        if not all(_finite_number(bound) for bound in bounds):
+            raise ValueError(f"Range bounds must be finite numbers, got {self!r}")
+        if self.minimum is not None and self.maximum is not None and self.minimum > self.maximum:
+            raise ValueError(f"Range minimum {self.minimum} is above its maximum {self.maximum}")
+
+    def schema(self) -> dict[str, object]:
+        """The JSON Schema keywords for these bounds."""
+        keywords: dict[str, object] = {}
+        if self.minimum is not None:
+            keywords["minimum"] = self.minimum
+        if self.maximum is not None:
+            keywords["maximum"] = self.maximum
+        return keywords
+
+
+def _finite_number(value: object) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value)
 
 
 def _hint_to_json_schema(hint: Any) -> tuple[dict[str, object], bool]:
@@ -372,63 +419,38 @@ def infer_schema(
 ) -> dict[str, Any]:
     """Build a tool definition dict from a function's type hints and docstring.
 
-    Variadic ``*args`` / ``**kwargs`` parameters are never part of the schema.
+    Variadic ``*args`` / ``**kwargs`` parameters are never part of the schema. A :class:`Range`
+    in a parameter's ``Annotated`` hint adds its bounds.
 
     Returns ``{"name": ..., "description": ..., "input_schema": {...}}``.
+
+    Raises:
+        ValueError: A :class:`Range` on a parameter whose type has no numbers.
     """
     described = _described_function(fn)
     tool_name = name or callable_name(fn)
-    try:
-        hints = get_type_hints(described)
-    except (NameError, AttributeError, TypeError):
-        logger.warning("Could not resolve type hints for %s, using annotations", tool_name)
-        hints = getattr(described, "__annotations__", {})
-
-    sig = inspect.signature(fn)
-    param_descriptions = _parse_param_descriptions(described)
+    hints = _type_hints(described, tool_name)
+    annotated = _annotated_hints(described)
+    descriptions = _parse_param_descriptions(described)
 
     properties: dict[str, object] = {}
     required: list[str] = []
-
-    for param_name, param in sig.parameters.items():
-        if param_name in ("self", "cls"):
+    for param_name, param in inspect.signature(fn).parameters.items():
+        if not _in_schema(param):
             continue
-        # Arguments arrive by name, which can never bind a variadic parameter itself.
-        if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
-            continue
-        hint = hints.get(param_name)
-        if hint is not None:
-            try:
-                schema, is_optional = _hint_to_json_schema(hint)
-            except (NameError, AttributeError, TypeError):
-                logger.warning("Could not convert hint for parameter %r", param_name)
-                schema, is_optional = {"type": "string"}, False
-        else:
-            schema, is_optional = {"type": "string"}, False
-
-        desc = param_descriptions.get(param_name)
-        if desc:
-            schema = {**schema, "description": desc}
-
-        # Include default value in schema when JSON-serializable
-        if param.default is not inspect.Parameter.empty:
-            if _is_json_serializable(param.default):
-                schema = {**schema, "default": param.default}
-        elif not is_optional:
-            required.append(param_name)
-
+        schema, needed = _parameter_schema(
+            param, hints.get(param_name), _range_of(annotated.get(param_name))
+        )
+        if description := descriptions.get(param_name):
+            schema = {**schema, "description": description}
+        if param.default is not inspect.Parameter.empty and _is_json_serializable(param.default):
+            schema = {**schema, "default": param.default}
         properties[param_name] = schema
-
-    # Apply overrides
-    if overrides:
-        for pname, override in overrides.items():
-            if pname in properties:
-                properties[pname] = {
-                    **properties[pname],  # type: ignore[arg-type]
-                    **override,
-                }
-            else:
-                properties[pname] = override
+        if needed:
+            required.append(param_name)
+    for param_name, override in (overrides or {}).items():
+        current = properties.get(param_name)
+        properties[param_name] = {**current, **override} if isinstance(current, dict) else override
 
     input_schema = _hoist_definitions(
         {"type": "object", "properties": properties, "required": required}
@@ -439,6 +461,71 @@ def infer_schema(
         "description": _get_summary(described),
         "input_schema": input_schema,
     }
+
+
+def _type_hints(described: Callable[..., Any], tool_name: str) -> dict[str, Any]:
+    """The function's resolved hints, or its raw annotations when they do not resolve."""
+    try:
+        return get_type_hints(described)
+    except (NameError, AttributeError, TypeError):
+        logger.warning("Could not resolve type hints for %s, using annotations", tool_name)
+        return getattr(described, "__annotations__", {})
+
+
+def _annotated_hints(described: Callable[..., Any]) -> dict[str, Any]:
+    """The hints with their ``Annotated`` metadata, where a :class:`Range` lives.
+
+    The schema itself comes from the plain hints, which keep every nested type as before; these
+    are read only for the bounds. Empty when the hints do not resolve.
+    """
+    try:
+        return get_type_hints(described, include_extras=True)
+    except (NameError, AttributeError, TypeError):
+        return {}
+
+
+def _in_schema(param: inspect.Parameter) -> bool:
+    """Arguments arrive by name, which never binds ``self``/``cls`` or a variadic parameter."""
+    variadic = (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+    return param.name not in ("self", "cls") and param.kind not in variadic
+
+
+def _parameter_schema(
+    param: inspect.Parameter, hint: Any, bounds: Range | None
+) -> tuple[dict[str, object], bool]:
+    """``(schema, required)`` for one parameter: its hint's schema, bounded by ``bounds``."""
+    schema: dict[str, object] = {"type": "string"}
+    is_optional = False
+    if hint is not None:
+        try:
+            schema, is_optional = _hint_to_json_schema(hint)
+        except (NameError, AttributeError, TypeError):
+            logger.warning("Could not convert hint for parameter %r", param.name)
+    if bounds is not None:
+        if not _numeric(schema):
+            raise ValueError(f"Range on parameter {param.name!r} needs an int or float type")
+        schema = {**schema, **bounds.schema()}
+    return schema, param.default is inspect.Parameter.empty and not is_optional
+
+
+def _range_of(hint: Any) -> Range | None:
+    """The :class:`Range` of ``Annotated[..., Range(...)]``, also as a member of a union."""
+    members = [hint]
+    if typing.get_origin(hint) in (types.UnionType, typing.Union):
+        members = list(typing.get_args(hint))
+    for member in members:
+        if typing.get_origin(member) is typing.Annotated:
+            found = [item for item in typing.get_args(member)[1:] if isinstance(item, Range)]
+            if found:
+                return found[0]
+    return None
+
+
+def _numeric(schema: Mapping[str, object]) -> bool:
+    """Whether the schema admits a number, itself or through an ``anyOf`` branch."""
+    branches = schema.get("anyOf")
+    candidates = branches if isinstance(branches, list) else [schema]
+    return any(isinstance(c, dict) and c.get("type") in _NUMERIC_TYPES for c in candidates)
 
 
 def tool_schema(

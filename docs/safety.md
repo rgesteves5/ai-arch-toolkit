@@ -106,6 +106,7 @@ Before any gate runs, the arguments are checked against the tool's input schema 
 | `boolean` | booleans | `"true"` / `"false"`, any case |
 | `null` | `null` | nothing |
 | `enum` | listed values | checked after coercion |
+| `minimum` / `maximum` at a parameter's top level (a `Range`, or a `schema=` override) | numbers inside the bounds, both included | checked after coercion; the refusal names the range |
 | `anyOf` | a value that already matches a branch | otherwise the first branch that coerces it (`int \| str` keeps `"1"` a string) |
 | `string`, `array`, `object`, untyped | anything | nothing |
 

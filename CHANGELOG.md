@@ -54,6 +54,13 @@ flows, manifests) needs these changes; each one is detailed below.
   - `select` or `serialize_as` on an inline template.
 
 ### Added
+- `Range`, inclusive bounds for a numeric tool parameter: `Annotated[int, Range(1, 25)]` puts
+  `minimum`/`maximum` in the schema the model reads, and the executor refuses a value outside them
+  with a `validation_error` that names the range. One bound is enough, and a `Range` on a type with
+  no numbers is a `ValueError` when the tool is decorated. Exported from `ai_arch_toolkit` and
+  `ai_arch_toolkit.core`. The executor checks `minimum`/`maximum` at a parameter's top level
+  whatever put them there, so bounds written in a `@tool(schema=...)` override, which used to reach
+  only the model, are now enforced too.
 - Claude Opus 5.5 (`claude-opus-5-5`), GPT-6 Sol and Luna (`gpt-6-sol`, `gpt-6-luna`), and Grok
   4.7 (`grok-4.7`), from the providers' pages on 2026-09-25: prices (with the cache, batch,
   long-context and fast rates each provider publishes), per-model request rules, and probe
@@ -174,6 +181,10 @@ flows, manifests) needs these changes; each one is detailed below.
   [docs/agents.md](docs/agents.md#file-backed-agent-manifests).
 
 ### Changed
+- A tool result longer than `max_output_chars` is cut on a line break when one lies in the second
+  half of the kept text, and ends with `[chars 0-200000 of 5000000 | cut at the output limit; ask
+  for less]` instead of `[Output truncated: kept 200000 of 5000000 characters.]`;
+  `metadata["truncated"]["kept"]` is the length actually kept.
 - OpenAI, GPT-5.4 and later: tools with `thinking=True` at an effort other than `"none"` raise
   `RequestError` before sending, since Chat Completions takes their tool calls only at `"none"`
   (https://developers.openai.com/api/docs/guides/migrate-to-responses). The request used to reach
