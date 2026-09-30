@@ -29,26 +29,26 @@ def hacker_news(count: int = 5) -> str:
         return f"Failed to fetch HN top stories: {e}"
 
     stories: list[str] = []
-    for story_id in story_ids:
-        story = _story(story_id)
-        if story is None:
-            continue
-        stories.append(f"  {len(stories) + 1}. {story}")
+    missed: list[str] = []
+    for rank, story_id in enumerate(story_ids, start=1):
+        try:
+            stories.append(f"  {rank}. {_story(story_id)}")
+        except HttpError as e:
+            missed.append(f"#{rank} (item {story_id}: {e})")
 
     if not stories:
-        return "Failed to fetch any stories."
+        return "Failed to fetch HN top stories: " + "; ".join(missed)
+    text = f"Hacker News — Top {len(story_ids)} stories:\n\n" + "\n\n".join(stories)
+    if missed:
+        text += f"\n\nCould not load {len(missed)} of them: " + "; ".join(missed)
+    return text
 
-    return f"Hacker News — Top {len(stories)} stories:\n\n" + "\n\n".join(stories)
 
-
-def _story(story_id: str) -> str | None:
-    """The story's lines after its number; ``None`` when its item could not be fetched."""
-    try:
-        return _API.get_json(
-            "item", f"{story_id}.json", parse=lambda item: _story_text(item, story_id)
-        )
-    except HttpError:
-        return None
+def _story(story_id: str) -> str:
+    """The story's lines after its number."""
+    return _API.get_json(
+        "item", f"{story_id}.json", parse=lambda item: _story_text(item, story_id)
+    )
 
 
 def _story_text(item: dict[str, Any], story_id: str) -> str:

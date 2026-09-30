@@ -4,6 +4,8 @@
 - **Módulos:** `_mediawiki` (4 tools), `_wikipedia` (3), `_dictionary` (1)
 - **Origem:** plano, secções 1, 3.5 e 3.6, e os anexos A a E destes módulos · **Decisões:** D39,
   D40, D41 · **Regras:** `T00-rules.md`
+- **Já feito:** `6a34668`: o `wikipedia_related` diz porque pesquisa (não há página, ou a página não
+  tem ligações), em vez de trocar em silêncio.
 
 ## Problema
 

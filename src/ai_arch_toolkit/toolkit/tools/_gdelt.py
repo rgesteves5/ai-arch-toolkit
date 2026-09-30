@@ -15,10 +15,11 @@ def _query_error(answer: object) -> str | None:
 
     GDELT answers a request it cannot run with a line of text instead of JSON, still with HTTP
     200 (seen 2026-09-29: "Your query was too short or too long.", "Invalid/Unsupported
-    Country."). Text that starts like JSON is a broken answer, not a message.
+    Country."), and explains a 429 the same way. Text that starts like JSON is a broken answer,
+    and markup is a page, not a message.
     """
     message = " ".join(answer.split()) if isinstance(answer, str) else ""
-    return message if message and not message.startswith(("{", "[")) else None
+    return message if message and not message.startswith(("{", "[", "<")) else None
 
 
 # At most one request every 5 seconds, with a margin: GDELT answers faster callers with a 429.

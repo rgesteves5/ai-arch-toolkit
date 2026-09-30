@@ -438,6 +438,29 @@ R01 publicada em `main` (`b3dae3f`); a R02 começa com a leitura obrigatória da
   resto segue em paralelo.
 - Próximo: o dono escolhe quem pega na vaga 1 (T01, T03, T04a).
 
+## 2026-09-30 · O resto do anexo C (Claude, a pedido do dono)
+
+- O que ficou do anexo C depois de `c259e0b`, com cada suspeita vista ao vivo antes de mexer.
+- Porta: o `body_error` lê também o corpo de um 4xx ou 5xx e o seu texto toma o lugar da razão do
+  estado. Um pedido cuja fonte responde "nada encontrado" com `204 No Content` ou corpo vazio
+  declara-o (`allow_empty=True`, por chamada, como a T02 prevê) e lê essa resposta como vazia; sem
+  a declaração continua a ser erro de leitura. Leitores novos: `label` do Eurostat, entrada de erro
+  do arXiv (também num 200) e `messages` da UniProt. O do GDELT recusa HTML, que agora também lhe
+  chega.
+- Por tool: UniProt inactivo (fundido, separado ou apagado) diz o destino; Open Library segue um
+  registo fundido (até três) e diz que um apagado foi apagado; `wikidata_entity` segue um QID
+  fundido; `eonet_event` explica o 500 que o EONET dá a um ID que não conhece e recusa uma resposta
+  sem evento; `hacker_news` numera por posição e diz quais não carregou; `wikipedia_related` diz
+  porque pesquisa.
+- Visto ao vivo: 204 da RCSB, 404 e 413 do Eurostat com `{"error": [...]}`, 400 do arXiv com a
+  entrada de erro, `entryType: Inactive` da UniProt, `/type/redirect` e `/type/delete` da Open
+  Library, o redirect que o Special:EntityData segue, `null` do HN. Não se confirmou: o evento em
+  branco do EONET (um ID desconhecido dá 500) e a entrada de erro do arXiv com 200 (hoje vem com
+  400); ficam as guardas.
+- Fica para a frente T: os `status_messages={404: ...}` de 12 módulos e o 404 por endpoint (T02),
+  o texto de erro em HTML do Overpass (400) e os erros tipados (T01). As fichas T02 e T05 a T09
+  dizem o que já está feito.
+
 ## 2026-09-30 · Vaga 1 da frente T: T04a e T03 num branch (Claude, a pedido do dono)
 
 - O dono deu a vaga 1, se não interferisse com a sessão paralela e num branch novo. Essa sessão
@@ -459,5 +482,6 @@ R01 publicada em `main` (`b3dae3f`); a R02 começa com a leitura obrigatória da
   Os três foram corrigidos, com testes que falham na versão anterior. Ficou documentado que o
   validador aplica os `minimum`/`maximum` de um `schema=` escrito à mão.
 - Gate no branch: 5691 passed, 42 deselected; ruff, formatação e pyright limpos.
-- Próximo: o dono faz o merge do branch; a T01 começa quando a sessão paralela terminar e for
-  commitada.
+- O `main` recebeu entretanto o resto do anexo C (`6a34668`, entrada acima); o branch fez merge
+  dele para o PR #71 não ficar em conflito (só o `LOG.md` chocou).
+- Próximo: o dono faz o merge do PR #71; a T01 já não tem a sessão paralela à frente.

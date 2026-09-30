@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from ai_arch_toolkit.core import tool
@@ -88,9 +89,9 @@ def wikipedia_related(title: str, limit: int = 5) -> str:
         )
     except HttpError as e:
         return f"Wikipedia related lookup failed: {e}"
-    if related is None:
-        return wikipedia_search(title, results=limit)
-    return related
+    if isinstance(related, str):
+        return related
+    return f"{related.why}; searching instead.\n" + wikipedia_search(title, results=limit)
 
 
 def _search_text(data: dict[str, Any], query: str) -> str:
@@ -133,23 +134,27 @@ def _article_text(data: dict[str, Any], title: str, max_chars: int) -> str:
     return f"{page.get('title', title)}:\n{extract}"
 
 
-def _related_text(data: dict[str, Any], title: str, limit: int) -> str | None:
-    """The page's outgoing links, or ``None`` to fall back to a search."""
+@dataclass(frozen=True, slots=True)
+class _NoLinks:
+    """Why a page gave no related pages, for the search that stands in for them."""
+
+    why: str
+
+
+def _related_text(data: dict[str, Any], title: str, limit: int) -> str | _NoLinks:
+    """The page's outgoing links, or why there are none, to fall back to a search."""
     page = _page(data)
     if page is None or "missing" in page:
-        return None
+        return _NoLinks(f"No Wikipedia page {title!r}")
 
-    links = page.get("links", [])
-    if not links:
-        return None
-
-    lines = [f"Related Wikipedia pages for {page.get('title', title)!r}:"]
-    for item in links[:limit]:
+    name = page.get("title", title)
+    lines = [f"Related Wikipedia pages for {name!r}:"]
+    for item in page.get("links", [])[:limit]:
         link_title = item.get("title", "")
         if link_title:
             lines.append(f"  - {link_title}")
     if len(lines) == 1:
-        return None
+        return _NoLinks(f"The Wikipedia page {name!r} links to no articles")
     return "\n".join(lines)
 
 

@@ -6,7 +6,7 @@ from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 from ai_arch_toolkit.toolkit.tools._eonet import eonet_categories, eonet_event, eonet_events
-from tests.toolkit.http_fakes import HTTP_OPEN, respond
+from tests.toolkit.http_fakes import HTTP_OPEN, http_error, respond
 
 _EVENT = {
     "id": "EONET_1",
@@ -49,3 +49,25 @@ class TestEonet:
         assert "invalid start_date" in eonet_events(start_date="2026")
         assert "invalid event_id" in eonet_event("bad/id")
         mock_urlopen.assert_not_called()
+
+
+@patch(HTTP_OPEN)
+def test_the_500_eonet_sends_for_an_unknown_event_says_what_it_may_mean(mock_urlopen):
+    # EONET answered every unknown ID with this page (2026-09-30).
+    mock_urlopen.side_effect = http_error(
+        500, "Internal Server Error", body=b"<!DOCTYPE html><title>Server Error</title>"
+    )
+
+    assert eonet_event("EONET_0") == (
+        "NASA EONET event failed: HTTP error 500: Internal Server Error (EONET answers this for "
+        "an event ID it does not know; eonet_events lists the current IDs)"
+    )
+
+
+@patch(HTTP_OPEN)
+def test_an_answer_without_an_event_is_not_a_blank_event(mock_urlopen):
+    mock_urlopen.return_value = respond({})
+
+    assert eonet_event("EONET_1") == (
+        "NASA EONET event failed: could not parse API response: no event in the answer"
+    )

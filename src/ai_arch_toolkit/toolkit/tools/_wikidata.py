@@ -119,7 +119,8 @@ def wikidata_entity(qid: str, language: str = "en") -> str:
     if entity is None:
         return f"Wikidata entity not found: {normalized}"
 
-    return f"Wikidata entity {normalized}:\n" + _format_entity(entity)
+    merged = f" (redirects to {entity.qid})" if entity.qid != normalized else ""
+    return f"Wikidata entity {normalized}{merged}:\n" + _format_entity(entity)
 
 
 @tool(capability="network")
@@ -161,10 +162,18 @@ def _search_results(data: dict[str, Any]) -> list[_WikidataSearchResult]:
 
 
 def _entity(data: dict[str, Any], qid: str, language: str) -> _WikidataEntity | None:
-    entity_data = data.get("entities", {}).get(qid)
+    """The entity ``qid`` names, or for a merged QID the one it redirects to.
+
+    Special:EntityData follows the redirect (https://www.wikidata.org/wiki/Help:Redirects), so
+    the answer holds only the target, under its own ID.
+    """
+    entities = data.get("entities", {})
+    target, entity_data = qid, entities.get(qid)
+    if entity_data is None and len(entities) == 1:
+        target, entity_data = next(iter(entities.items()))
     if not isinstance(entity_data, dict) or "missing" in entity_data:
         return None
-    return _parse_entity(qid, entity_data, language)
+    return _parse_entity(target, entity_data, language)
 
 
 def _sparql_text(data: dict[str, Any], max_results: int) -> str:

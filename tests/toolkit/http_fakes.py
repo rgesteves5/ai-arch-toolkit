@@ -19,8 +19,9 @@ HTTP_OPEN = "ai_arch_toolkit.toolkit.tools._http._open"
 class FakeResponse:
     """What ``_http`` reads from a response: its headers and a bounded ``read1``."""
 
-    def __init__(self, body: bytes, content_type: str) -> None:
+    def __init__(self, body: bytes, content_type: str, status: int = 200) -> None:
         self._body = io.BytesIO(body)
+        self.status = status
         self.headers = email.message.Message()
         self.headers["Content-Type"] = content_type
         self.bytes_read = 0
@@ -41,14 +42,18 @@ class FakeResponse:
 
 
 def respond(
-    data: dict[str, Any] | list[Any] | str | bytes = b"", *, content_type: str = ""
+    data: dict[str, Any] | list[Any] | str | bytes = b"",
+    *,
+    content_type: str = "",
+    status: int = 200,
 ) -> FakeResponse:
-    """A 200 answer: a dict or list as JSON, a str as UTF-8 text, bytes as they are."""
+    """A success answer (200 unless ``status`` says otherwise): a dict or list as JSON, a str as
+    UTF-8 text, bytes as they are."""
     if isinstance(data, dict | list):
-        return FakeResponse(json.dumps(data).encode(), content_type or "application/json")
+        return FakeResponse(json.dumps(data).encode(), content_type or "application/json", status)
     if isinstance(data, str):
-        return FakeResponse(data.encode(), content_type or "text/plain; charset=utf-8")
-    return FakeResponse(data, content_type or "application/octet-stream")
+        return FakeResponse(data.encode(), content_type or "text/plain; charset=utf-8", status)
+    return FakeResponse(data, content_type or "application/octet-stream", status)
 
 
 def http_error(status: int, reason: str = "", *, body: bytes = b"") -> urllib.error.HTTPError:

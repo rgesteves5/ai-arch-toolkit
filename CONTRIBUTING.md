@@ -96,9 +96,11 @@ docstrings/comments, and when to use classes vs functions — see
    from type hints + Google-style docstring.
 3. Stdlib only. Reach the network only through `toolkit/tools/_http.py`: declare an `Api` for
    the service's HTTPS origin and read each response inside `parse=`, so a malformed answer
-   becomes the tool's error string. If the service sends some errors with a success status, give
-   its `Api` a `body_error=` that reads them, so no `parse` takes an error for an empty result;
-   every `Api` on a MediaWiki `api.php` uses `mediawiki_error` (a test checks). `_weather.py` and
+   becomes the tool's error string. If the service explains errors in the body, in a success or
+   an error status, give its `Api` a `body_error=` that reads them, so no `parse` takes an error
+   for an empty result and the model reads the service's own words; every `Api` on a MediaWiki
+   `api.php` uses `mediawiki_error` (a test checks). A call to a service that answers "nothing
+   found" with `204 No Content` or an empty body passes `allow_empty=True`. `_weather.py` and
    `_mediawiki.py` are the templates; an architecture test refuses `urllib.request`,
    `http.client` and `socket` anywhere else.
 4. Declare the tool's `capability` (`network`, `compute`, …); the invariants test compares it

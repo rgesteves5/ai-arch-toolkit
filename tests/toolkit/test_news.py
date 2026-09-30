@@ -63,7 +63,7 @@ class TestHackerNews:
         assert "Failed" in result
 
     @patch(HTTP_OPEN)
-    def test_skips_failed_items(self, mock_urlopen):
+    def test_says_which_stories_it_could_not_load(self, mock_urlopen):
         # First call returns IDs, second fails, third succeeds
         mock_urlopen.side_effect = [
             respond([100, 200]),
@@ -78,4 +78,16 @@ class TestHackerNews:
             ),
         ]
         result = hacker_news(count=2)
-        assert "Good Story" in result
+
+        assert result.startswith("Hacker News — Top 2 stories:\n\n  2. Good Story")
+        assert result.endswith("Could not load 1 of them: #1 (item 100: request timed out.)")
+
+    @patch(HTTP_OPEN)
+    def test_says_why_when_no_story_loads(self, mock_urlopen):
+        # The API answers an item it does not have with null (2026-09-30).
+        mock_urlopen.side_effect = [respond([100]), respond(b"null")]
+
+        assert hacker_news(count=1) == (
+            "Failed to fetch HN top stories: #1 (item 100: could not parse API response: "
+            "expected a JSON object, got null)"
+        )

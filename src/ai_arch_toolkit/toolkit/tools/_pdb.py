@@ -51,8 +51,10 @@ def pdb_search(query: str, max_results: int = 10, start: int = 0) -> str:
         "request_options": {"paginate": {"start": start, "rows": _bounded(max_results)}},
     }
     try:
+        # A query that matches nothing is answered 204 No Content:
+        # https://search.rcsb.org/#empty-results
         return _SEARCH.post_json(
-            payload=payload, parse=lambda data: _search_text(data, query, start)
+            payload=payload, parse=lambda data: _search_text(data, query, start), allow_empty=True
         )
     except HttpError as e:
         return f"RCSB PDB search failed: {e}"
@@ -123,7 +125,7 @@ def pdb_chemical_component(component_id: str) -> str:
 def _search_text(data: dict[str, Any], query: str, start: int) -> str:
     results = data.get("result_set", [])
     if not isinstance(results, list) or not results:
-        return "No RCSB PDB entries found."
+        return f"No RCSB PDB entries found for {query!r}."
     total = _string(data.get("total_count")) or "?"
     lines = [
         f"RCSB PDB entries for {query!r} (returned {len(results)}, total {total}, start {start}):"

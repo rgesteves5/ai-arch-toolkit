@@ -8,11 +8,46 @@ from typing import Any
 from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
+
+def _uniprot_error(answer: object) -> str | None:
+    """The error a UniProt answer explains; ``None`` for a result.
+
+    A request UniProt refuses says why in ``messages``, with the error status
+    (https://www.uniprot.org/help/rest-api-headers).
+    """
+    messages = answer.get("messages") if isinstance(answer, dict) else None
+    if isinstance(messages, list) and messages:
+        return "; ".join(_string(message) for message in messages)
+    return _inactive(answer)
+
+
+def _inactive(answer: object) -> str | None:
+    """Why an accession has no entry, when UniProt says it is inactive; ``None`` otherwise.
+
+    An accession merged, demerged or deleted (https://www.uniprot.org/help/deleted_accessions)
+    still answers HTTP 200: ``{"entryType": "Inactive", "inactiveReason": {...}}`` (seen
+    2026-09-30), which read as an entry with no name, features or cross-references.
+    """
+    if not isinstance(answer, dict) or answer.get("entryType") != "Inactive":
+        return None
+    accession = _string(answer.get("primaryAccession")) or "the accession"
+    reason = answer.get("inactiveReason")
+    reason = reason if isinstance(reason, dict) else {}
+    kind = _string(reason.get("inactiveReasonType")).lower()
+    targets = reason.get("mergeDemergeTo")
+    if kind and isinstance(targets, list) and targets:
+        return f"{accession} is inactive: {kind} into {', '.join(map(_string, targets))}"
+    why = _string(reason.get("deletedReason"))
+    detail = (f": {kind}" if kind else "") + (f" ({why})" if why else "")
+    return f"{accession} is inactive{detail}"
+
+
 _API = Api(
     base="https://rest.uniprot.org/uniprotkb",
     name="UniProt",
     timeout_s=20,
     status_messages={404: "no matching records found."},
+    body_error=_uniprot_error,
 )
 _MAX_LIMIT = 25
 _TEXT_RE = re.compile(r"^[\w\s,.'()/%:+-]{1,180}$", re.UNICODE)

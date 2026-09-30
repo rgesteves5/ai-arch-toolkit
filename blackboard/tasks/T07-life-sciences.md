@@ -5,6 +5,8 @@
   `_gbif` (4), `_rxnorm_dailymed` (6), `_openfda_food` (2), `_open_food_facts` (4): 34 tools
 - **Origem:** os anexos A a E do plano para estes módulos · **Decisões:** D37 a D42 · **Regras:**
   `T00-rules.md`
+- **Já feito:** `6a34668`: o 204 da RCSB lê-se como sem resultados (`allow_empty`); a UniProt diz o
+  destino de uma entrada inactiva e o motivo de um pedido recusado (`messages`).
 
 ## O que está partido
 

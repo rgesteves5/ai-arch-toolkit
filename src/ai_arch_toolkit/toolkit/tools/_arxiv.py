@@ -10,7 +10,24 @@ from datetime import date
 from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
-_API = Api(base="https://export.arxiv.org/api/query", name="arXiv")
+
+def _feed_error(answer: object) -> str | None:
+    """The error an arXiv feed reports; ``None`` for a feed of papers.
+
+    The API answers a request it cannot run with a feed whose one entry is the error
+    (https://info.arxiv.org/help/api/user-manual.html#34-errors), with HTTP 400 (seen
+    2026-09-30).
+    """
+    if not isinstance(answer, str):
+        return None
+    try:
+        entries = ET.fromstring(answer).findall(f"{_ATOM}entry")
+    except ET.ParseError:
+        return None
+    return next((error for entry in entries if (error := _entry_error(entry))), None)
+
+
+_API = Api(base="https://export.arxiv.org/api/query", name="arXiv", body_error=_feed_error)
 _MAX_RESULTS_LIMIT = 20
 _SUMMARY_MAX_CHARS = 700
 _VALID_CATEGORIES = re.compile(r"^[A-Za-z0-9.-]+$")
@@ -31,6 +48,7 @@ _ADVANCED_QUERY_TOKENS = (
 )
 _ATOM = "{http://www.w3.org/2005/Atom}"
 _ARXIV = "{http://arxiv.org/schemas/atom}"
+_ERROR_ID_RE = re.compile(r"^https?://arxiv\.org/api/errors(?:#.*)?$")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -215,6 +233,8 @@ def _parse_atom(xml_text: str) -> list[_ArxivPaper]:
     root = ET.fromstring(xml_text)
     papers: list[_ArxivPaper] = []
     for entry in root.findall(f"{_ATOM}entry"):
+        if error := _entry_error(entry):
+            raise HttpError(error)
         entry_id = _text(entry, "id")
         paper_id = _id_from_abs_url(entry_id)
         abs_url = _normalize_abs_url(entry_id, paper_id)
@@ -248,6 +268,13 @@ def _parse_atom(xml_text: str) -> list[_ArxivPaper]:
             )
         )
     return papers
+
+
+def _entry_error(entry: ET.Element) -> str | None:
+    """The error an entry reports, in its summary; ``None`` for a paper."""
+    if not _ERROR_ID_RE.fullmatch(_text(entry, "id").strip()):
+        return None
+    return _normalize_text(_text(entry, "summary")) or "unknown error"
 
 
 def _text(element: ET.Element, tag: str) -> str:

@@ -4,7 +4,10 @@
 - **Origem:** plano, secção 3.2 e anexos C e F · **Decisões:** D38, D42 · **Regras:** `T00-rules.md`
 - **Já feito:** `c259e0b` deu ao `Api` o `body_error`, que lê os erros que uma fonte manda num 2xx,
   e declarou leitores para a MediaWiki (`mediawiki_error`), o World Bank, o ESearch do PubMed, o
-  Internet Archive, o Overpass e o GDELT. Ainda devolvem strings.
+  Internet Archive, o Overpass e o GDELT. Ainda devolvem strings. `6a34668` pôs o `body_error` a
+  ler também o corpo de um 4xx ou 5xx (o texto toma o lugar da razão do estado; leitores novos no
+  Eurostat, no arXiv e na UniProt) e criou a declaração de vazio por chamada (`allow_empty=True`,
+  usada pelo `pdb_search`). O estado já chega ao `_json_answer`; os cabeçalhos ainda não.
 
 ## Problema
 

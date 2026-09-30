@@ -184,3 +184,17 @@ class TestWikidataSparql:
         result = wikidata_sparql("ASK { wd:Q42 wdt:P31 wd:Q5 . }")
 
         assert "rate limited by Wikidata Query Service (HTTP 429)" in result
+
+
+@patch(HTTP_OPEN)
+def test_a_merged_qid_reads_as_the_item_it_redirects_to(mock_urlopen):
+    # Special:EntityData follows the redirect, so the answer holds only Q48 (2026-09-30); it
+    # read as "not found".
+    mock_urlopen.return_value = respond(
+        {"entities": {"Q48": {"id": "Q48", "labels": {"en": {"value": "Asia"}}}}}
+    )
+
+    result = wikidata_entity("Q65439041")
+
+    assert result.startswith("Wikidata entity Q65439041 (redirects to Q48):\nAsia")
+    assert "Wikidata: https://www.wikidata.org/wiki/Q48" in result
