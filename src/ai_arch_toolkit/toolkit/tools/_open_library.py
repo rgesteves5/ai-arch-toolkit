@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -13,6 +14,8 @@ _API = Api(base="https://openlibrary.org", name="Open Library")
 _MAX_RESULTS_LIMIT = 20
 _DESCRIPTION_MAX_CHARS = 1000
 _WORK_ID_RE = re.compile(r"^OL\d+W$", re.IGNORECASE)
+_RECORD_KEY_RE = re.compile(r"^/(works|books)/(OL\d+[WM])$")
+_MAX_REDIRECTS = 3
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -96,7 +99,7 @@ def open_library_work(work_id: str) -> str:
         return f"Open Library work lookup failed: invalid work_id: {work_id!r}"
 
     try:
-        book = _API.get_json("works", f"{normalized}.json", parse=_parse_work)
+        book = _record("works", normalized, _parse_work)
     except HttpError as e:
         if e.status == 404:
             return f"Open Library work not found: {normalized}"
@@ -105,7 +108,10 @@ def open_library_work(work_id: str) -> str:
     if book is None:
         return f"Open Library work not found: {normalized}"
 
-    return f"Open Library work {normalized}:\n" + _format_books(
+    heading = normalized
+    if book.key.startswith("/works/") and book.key != f"/works/{normalized}":
+        heading += f" (merged into {book.key.removeprefix('/works/')})"
+    return f"Open Library work {heading}:\n" + _format_books(
         [book],
         include_index=False,
         include_description=True,
@@ -124,7 +130,7 @@ def open_library_isbn(isbn: str) -> str:
         return f"Open Library ISBN lookup failed: invalid ISBN: {isbn!r}"
 
     try:
-        book = _API.get_json("isbn", f"{normalized}.json", parse=_parse_isbn)
+        book = _record("isbn", normalized, _parse_isbn)
     except HttpError as e:
         if e.status == 404:
             return f"Open Library ISBN not found: {normalized}"
@@ -138,6 +144,45 @@ def open_library_isbn(isbn: str) -> str:
         include_index=False,
         include_description=True,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class _Merged:
+    """A record merged into another: Open Library keeps it as a redirect to ``segments``."""
+
+    segments: tuple[str, str]
+
+
+def _record(
+    section: str, identifier: str, parse: Callable[[dict[str, Any]], _OpenLibraryBook | None]
+) -> _OpenLibraryBook | None:
+    """The record at ``/{section}/{identifier}.json``, followed through merges.
+
+    Open Library keeps a merged record as a ``/type/redirect`` to the one it went into, and a
+    deleted one as ``/type/delete`` (https://openlibrary.org/type/redirect), both with HTTP 200
+    (seen 2026-09-30); read as books, they had no title.
+    """
+    segments = (section, f"{identifier}.json")
+    for _ in range(_MAX_REDIRECTS + 1):
+        record = _API.get_json(*segments, parse=lambda data: _live_record(data, parse))
+        if not isinstance(record, _Merged):
+            return record
+        segments = record.segments
+    raise HttpError(f"more than {_MAX_REDIRECTS} redirects between Open Library records")
+
+
+def _live_record(
+    data: dict[str, Any], parse: Callable[[dict[str, Any]], _OpenLibraryBook | None]
+) -> _OpenLibraryBook | _Merged | None:
+    kind = _string(data.get("type", {}).get("key"))
+    if kind == "/type/delete":
+        raise HttpError(f"{_string(data.get('key')) or 'the record'} was deleted")
+    if kind != "/type/redirect":
+        return parse(data)
+    target = _RECORD_KEY_RE.fullmatch(_string(data.get("location")))
+    if target is None:
+        raise HttpError("could not parse API response: a redirect without a record to go to")
+    return _Merged((target.group(1), f"{target.group(2)}.json"))
 
 
 def _search_books(data: dict[str, Any]) -> list[_OpenLibraryBook]:

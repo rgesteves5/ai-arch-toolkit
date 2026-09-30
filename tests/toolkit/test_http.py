@@ -570,3 +570,107 @@ def test_a_toolkit_test_cannot_reach_the_network_whatever_else_runs_with_it() ->
     # interleaves this directory's files with others' (pytest 9.1, measured in R03).
     with pytest.raises(OSError, match="network access is blocked"):
         socket.getaddrinfo("localhost", 443)  # resolved locally even if the guard were gone
+
+
+class TestNoContent:
+    """A source that answers "nothing found" with no content is declared per request (RCSB)."""
+
+    @pytest.mark.parametrize(
+        ("method", "kwargs", "empty"),
+        [
+            ("get_json", {}, {}),
+            ("get_json_list", {}, []),
+            ("post_json", {"payload": {}}, {}),
+            ("post_form", {"form": {}}, {}),
+        ],
+    )
+    @pytest.mark.parametrize(("status", "body"), [(204, b""), (200, b""), (200, b" \n")])
+    def test_a_request_that_allows_an_empty_answer_reads_it_as_empty(
+        self,
+        web: _Transport,
+        method: str,
+        kwargs: dict[str, Any],
+        empty: object,
+        status: int,
+        body: bytes,
+    ) -> None:
+        web.add("https://api.example.org/v1/x", body, status=status)
+
+        call = getattr(REPORTING, method)
+        assert call("x", parse=lambda data: data, allow_empty=True, **kwargs) == empty
+
+    @pytest.mark.parametrize("status", [204, 200])
+    def test_elsewhere_an_empty_answer_is_a_parse_error(
+        self, web: _Transport, status: int
+    ) -> None:
+        web.add("https://api.example.org/v1/x", b"", status=status)
+
+        with pytest.raises(HttpError, match=r"^could not parse API response"):
+            API.get_json("x", parse=dict)
+
+    def test_an_answer_with_content_is_read_as_usual(self, web: _Transport) -> None:
+        web.add("https://api.example.org/v1/x", {"error": "no such thing"})
+
+        with pytest.raises(HttpError, match=r"^no such thing$"):
+            REPORTING.get_json("x", parse=_refuse, allow_empty=True)
+
+
+class TestErrorBodies:
+    """The ``body_error`` that reads a success also explains an error status in the API's words."""
+
+    @pytest.mark.parametrize("method", ["get_json", "get_json_list", "get_text"])
+    def test_an_error_status_is_explained_in_the_apis_words(
+        self, web: _Transport, method: str
+    ) -> None:
+        web.add("https://api.example.org/v1/x", {"error": "no such dataset"}, status=404)
+
+        with pytest.raises(HttpError) as caught:
+            getattr(REPORTING, method)("x", parse=_refuse)
+
+        assert str(caught.value) == "HTTP error 404: no such dataset"
+        assert caught.value.status == 404
+        assert json.loads(caught.value.body) == {"error": "no such dataset"}
+
+    def test_the_apis_words_come_before_a_status_message(self, web: _Transport) -> None:
+        web.add("https://api.example.org/v1/x", {"error": "no such dataset"}, status=404)
+
+        with pytest.raises(HttpError, match=r"^HTTP error 404: no such dataset$"):
+            _STATUS_MESSAGES.get_json("x", parse=_refuse)
+
+    @pytest.mark.parametrize(
+        ("status", "message"),
+        [
+            (404, "no matching records found."),
+            (429, "rate limited by Example (HTTP 429). Try again later."),
+            (500, "HTTP error 500: Internal Server Error"),
+        ],
+    )
+    def test_a_body_that_explains_nothing_keeps_the_status_text(
+        self, web: _Transport, status: int, message: str
+    ) -> None:
+        web.add("https://api.example.org/v1/x", "<html>Server Error</html>", status=status)
+
+        with pytest.raises(HttpError) as caught:
+            _STATUS_MESSAGES.get_json("x", parse=_refuse)
+
+        assert str(caught.value) == message
+
+    def test_a_reader_that_trips_on_an_error_body_keeps_the_status_text(
+        self, web: _Transport
+    ) -> None:
+        def strict(data: Any) -> str | None:
+            return data["error"]
+
+        api = Api(base="https://api.example.org/v1", name="Example", body_error=strict)
+        web.add("https://api.example.org/v1/x", {"items": []}, status=500)
+
+        with pytest.raises(HttpError, match=r"^HTTP error 500: Internal Server Error$"):
+            api.get_json("x", parse=_refuse)
+
+
+_STATUS_MESSAGES = Api(
+    base="https://api.example.org/v1",
+    name="Example",
+    status_messages={404: "no matching records found."},
+    body_error=_reported,
+)

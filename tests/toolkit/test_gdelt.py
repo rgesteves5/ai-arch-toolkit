@@ -10,7 +10,7 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 
 from ai_arch_toolkit.toolkit.tools._gdelt import gdelt_news_search, gdelt_timeline
-from tests.toolkit.http_fakes import HTTP_OPEN, respond
+from tests.toolkit.http_fakes import HTTP_OPEN, http_error, respond
 
 
 def _called_params(mock_urlopen) -> dict[str, list[str]]:
@@ -170,3 +170,14 @@ def test_a_query_that_matches_nothing_is_not_an_error(mock_urlopen):
     mock_urlopen.return_value = respond(b"{}", content_type="application/json; charset=utf-8")
 
     assert gdelt_news_search("zzqqxxyyvvww") == "No GDELT articles found for: 'zzqqxxyyvvww'"
+
+
+@patch(HTTP_OPEN)
+def test_an_error_page_is_not_a_message(mock_urlopen):
+    mock_urlopen.side_effect = http_error(
+        500, "Internal Server Error", body=b"<html><body>Server Error</body></html>"
+    )
+
+    assert gdelt_timeline("climate") == (
+        "GDELT timeline failed: HTTP error 500: Internal Server Error"
+    )

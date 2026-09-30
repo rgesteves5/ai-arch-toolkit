@@ -437,3 +437,26 @@ R01 publicada em `main` (`b3dae3f`); a R02 começa com a leitura obrigatória da
 - Com a frente C: a C07 e a C08 esperam pela T01 e pela T03; a C02 e a T04a aplicam-se em série; o
   resto segue em paralelo.
 - Próximo: o dono escolhe quem pega na vaga 1 (T01, T03, T04a).
+
+## 2026-09-30 · O resto do anexo C (Claude, a pedido do dono)
+
+- O que ficou do anexo C depois de `c259e0b`, com cada suspeita vista ao vivo antes de mexer.
+- Porta: o `body_error` lê também o corpo de um 4xx ou 5xx e o seu texto toma o lugar da razão do
+  estado. Um pedido cuja fonte responde "nada encontrado" com `204 No Content` ou corpo vazio
+  declara-o (`allow_empty=True`, por chamada, como a T02 prevê) e lê essa resposta como vazia; sem
+  a declaração continua a ser erro de leitura. Leitores novos: `label` do Eurostat, entrada de erro
+  do arXiv (também num 200) e `messages` da UniProt. O do GDELT recusa HTML, que agora também lhe
+  chega.
+- Por tool: UniProt inactivo (fundido, separado ou apagado) diz o destino; Open Library segue um
+  registo fundido (até três) e diz que um apagado foi apagado; `wikidata_entity` segue um QID
+  fundido; `eonet_event` explica o 500 que o EONET dá a um ID que não conhece e recusa uma resposta
+  sem evento; `hacker_news` numera por posição e diz quais não carregou; `wikipedia_related` diz
+  porque pesquisa.
+- Visto ao vivo: 204 da RCSB, 404 e 413 do Eurostat com `{"error": [...]}`, 400 do arXiv com a
+  entrada de erro, `entryType: Inactive` da UniProt, `/type/redirect` e `/type/delete` da Open
+  Library, o redirect que o Special:EntityData segue, `null` do HN. Não se confirmou: o evento em
+  branco do EONET (um ID desconhecido dá 500) e a entrada de erro do arXiv com 200 (hoje vem com
+  400); ficam as guardas.
+- Fica para a frente T: os `status_messages={404: ...}` de 12 módulos e o 404 por endpoint (T02),
+  o texto de erro em HTML do Overpass (400) e os erros tipados (T01). As fichas T02 e T05 a T09
+  dizem o que já está feito.

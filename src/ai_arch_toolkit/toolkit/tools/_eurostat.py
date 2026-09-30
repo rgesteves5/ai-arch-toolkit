@@ -8,6 +8,21 @@ from typing import Any
 from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
+
+def _eurostat_error(answer: object) -> str | None:
+    """The error a Eurostat answer explains: ``{"error": [{"status", "id", "label"}]}``.
+
+    Both APIs send it with the error status (seen 2026-09-30): 404 for a dataset they do not
+    disseminate, 413 for a request they would only serve asynchronously.
+    """
+    errors = answer.get("error") if isinstance(answer, dict) else None
+    errors = [errors] if isinstance(errors, dict) else errors
+    if not isinstance(errors, list):
+        return None
+    labels = [_string(item.get("label")) for item in errors if isinstance(item, dict)]
+    return "; ".join(label for label in labels if label) or None
+
+
 # Stubs are each dataset's ID and title, about 1.5 MB; the full catalogue is 20 MB, nine tenths of
 # it annotations. eurostat_dataset reads one dataset's details.
 _DATAFLOWS = Api(
@@ -16,6 +31,7 @@ _DATAFLOWS = Api(
     timeout_s=30,
     params={"format": "JSON", "lang": "en", "detail": "allstubs"},
     status_messages={404: "no matching records found."},
+    body_error=_eurostat_error,
 )
 _DATA = Api(
     base="https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data",
@@ -23,6 +39,7 @@ _DATA = Api(
     timeout_s=30,
     params={"format": "JSON", "lang": "en"},
     status_messages={404: "no matching records found."},
+    body_error=_eurostat_error,
 )
 _MAX_LIMIT = 50
 _DATASET_RE = re.compile(r"^[A-Za-z0-9_]{2,60}$")

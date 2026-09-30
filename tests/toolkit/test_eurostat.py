@@ -5,6 +5,8 @@ from __future__ import annotations
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
+import pytest
+
 from ai_arch_toolkit.toolkit.tools._eurostat import (
     eurostat_compare,
     eurostat_dataset,
@@ -12,7 +14,7 @@ from ai_arch_toolkit.toolkit.tools._eurostat import (
     eurostat_dimensions,
     eurostat_series,
 )
-from tests.toolkit.http_fakes import HTTP_OPEN, respond
+from tests.toolkit.http_fakes import HTTP_OPEN, http_error, respond
 
 # A dataflow stub, as ``detail=allstubs`` returns it: the ID and the title.
 _DATAFLOW = {
@@ -94,3 +96,43 @@ class TestEurostat:
         assert "Eurostat comparison TPS00001:" in result
         assert "geo=PT" in result
         assert "invalid dataset_id" in eurostat_dataset("bad/id")
+
+
+# As both APIs answered live (2026-09-30); they read as "no matching records found." and
+# "HTTP error 413: Request Entity Too Large".
+_NOT_DISSEMINATED = (
+    b'{ "error": [{"status": 404,"id": 100,"label": "ERR_NOT_FOUND_4: NOT_A_DATASET '
+    b'(DATA_FLOW:ALL,1.0) is not available for dissemination."}]}'
+)
+_ASYNCHRONOUS = (
+    b'{ "error": [{"status": 413,"id": 413,"label": "ASYNCHRONOUS_RESPONSE. Your request will '
+    b'be treated asynchronously. Please try again later."}]}'
+)
+
+
+@pytest.mark.parametrize(
+    ("call", "failure"),
+    [
+        (lambda: eurostat_dataset("NOT_A_DATASET"), "Eurostat dataset lookup failed"),
+        (lambda: eurostat_dimensions("NOT_A_DATASET"), "Eurostat dimensions failed"),
+        (lambda: eurostat_series("NOT_A_DATASET"), "Eurostat series failed"),
+    ],
+)
+@patch(HTTP_OPEN)
+def test_a_dataset_eurostat_does_not_have_is_explained(mock_urlopen, call, failure):
+    mock_urlopen.side_effect = http_error(404, "Not Found", body=_NOT_DISSEMINATED)
+
+    assert call() == (
+        f"{failure}: HTTP error 404: ERR_NOT_FOUND_4: NOT_A_DATASET (DATA_FLOW:ALL,1.0) is not "
+        "available for dissemination."
+    )
+
+
+@patch(HTTP_OPEN)
+def test_a_request_eurostat_would_only_serve_later_says_so(mock_urlopen):
+    mock_urlopen.side_effect = http_error(413, "Request Entity Too Large", body=_ASYNCHRONOUS)
+
+    assert eurostat_series("nama_10_gdp", filters="geo=ZZ") == (
+        "Eurostat series failed: HTTP error 413: ASYNCHRONOUS_RESPONSE. Your request will be "
+        "treated asynchronously. Please try again later."
+    )

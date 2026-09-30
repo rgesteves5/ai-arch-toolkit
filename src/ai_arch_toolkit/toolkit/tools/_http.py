@@ -49,6 +49,9 @@ class HttpError(Exception):
 
 class _Response(Protocol):
     @property
+    def status(self) -> int: ...
+
+    @property
     def headers(self) -> Message: ...
 
     def read1(self, amt: int, /) -> bytes: ...
@@ -200,20 +203,25 @@ def _fetch(
     *,
     timeout_s: float,
     max_bytes: int,
-    describe: Callable[[int, str], str],
-) -> tuple[bytes, str, bool]:
-    """Send ``request`` and read its body: ``(body, charset, complete)``, or ``HttpError``."""
+    describe: Callable[[int, str, str], str],
+) -> tuple[int, bytes, str, bool]:
+    """Send ``request`` and read its body: ``(status, body, charset, complete)``, or ``HttpError``.
+
+    ``describe(status, reason, body)`` words the error of a response with an error status.
+    """
     deadline = time.monotonic() + timeout_s
     try:
         response = _open(request, timeout_s)
         try:
+            status = response.status
             body, complete = _body(response, deadline, max_bytes)
             charset = response.headers.get_content_charset() or "utf-8"
         finally:
             response.close()
     except urllib.error.HTTPError as error:
         status, body = error.code, _error_body(error)
-        raise HttpError(describe(status, str(error.reason)), status=status, body=body) from error
+        message = describe(status, str(error.reason), body)
+        raise HttpError(message, status=status, body=body) from error
     except _Redirected as refused:
         target = refused.target
         raise HttpError(f"refused a redirect to {target} (only same-host HTTPS)") from refused
@@ -223,7 +231,7 @@ def _fetch(
         raise HttpError("request timed out.") from error
     except (OSError, http.client.HTTPException) as error:
         raise HttpError(f"network error: {str(error) or type(error).__name__}") from error
-    return body, charset, complete
+    return status, body, charset, complete
 
 
 def _text(body: bytes, charset: str) -> str:
@@ -238,6 +246,14 @@ def _json(text: str) -> object:
         return json.loads(text)
     except (ValueError, RecursionError) as error:
         raise HttpError(f"could not parse API response: {error}") from error
+
+
+def _decoded(text: str) -> object:
+    """``text`` as JSON, or the text itself when it is not JSON."""
+    try:
+        return json.loads(text)
+    except (ValueError, RecursionError):
+        return text
 
 
 def _kind(value: object) -> str:
@@ -291,8 +307,11 @@ class Api:
     Every request takes the function that reads its answer (``parse``), and whatever that
     function raises on a shape it did not expect becomes an ``HttpError``: no raw response leaves
     this module unguarded, so a tool cannot crash on a body it did not foresee. An API that
-    reports errors inside a successful answer declares how to read them (``body_error``), so no
-    ``parse`` mistakes such an answer for an empty result.
+    explains its errors in the body declares how to read them (``body_error``), so no ``parse``
+    mistakes an error for an empty result and no explanation is lost. A request to a source that
+    answers "nothing found" with ``204 No Content`` or an empty body says so (``allow_empty``),
+    and ``parse`` reads such an answer as an empty object (or array); anywhere else it is a parse
+    error.
 
     Attributes:
         base: ``https://host/path`` without credentials, port, query, fragment or final slash.
@@ -305,12 +324,12 @@ class Api:
         segment_safe: Characters left raw in path segments.
         query_safe: Characters left raw in the query string.
         status_messages: The text shown for particular HTTP statuses.
-        body_error: For an API that answers some errors with a success status: reads the answer
-            and returns the error it reports, as the text shown to the model, or ``None`` when
-            it reports none. The JSON requests raise that text as an ``HttpError`` before
-            ``parse`` runs. It reads the decoded JSON or, for an API that sends an error as text
-            in place of the JSON, the start of a body that is not JSON; such a body that reports
-            no error is a parse error.
+        body_error: For an API that explains its errors in the body: reads an answer and
+            returns the error it reports, as the text shown to the model, or ``None`` when it
+            reports none. It reads the decoded JSON, or the start of a body that is not JSON. On
+            a success, the JSON requests raise that text as an ``HttpError`` before ``parse``
+            runs, and a body that is not JSON and reports no error is a parse error. On an error
+            status, of any request, the text takes the place of the status's reason.
     """
 
     base: str
@@ -366,45 +385,74 @@ class Api:
         return urllib.parse.urlsplit(self.base).hostname or ""
 
     def get_json[T](
-        self, *segments: str, parse: Callable[[dict[str, Any]], T], params: Params | None = None
+        self,
+        *segments: str,
+        parse: Callable[[dict[str, Any]], T],
+        params: Params | None = None,
+        allow_empty: bool = False,
     ) -> T:
         """GET a JSON object from ``base/segment/...`` and read it with ``parse``."""
-        return _parsed(parse, _object(self._json_answer(segments, params)))
+        empty = {} if allow_empty else None
+        return _parsed(parse, _object(self._json_answer(segments, params, empty=empty)))
 
     def get_json_list[T](
-        self, *segments: str, parse: Callable[[list[Any]], T], params: Params | None = None
+        self,
+        *segments: str,
+        parse: Callable[[list[Any]], T],
+        params: Params | None = None,
+        allow_empty: bool = False,
     ) -> T:
         """GET a JSON array from ``base/segment/...`` and read it with ``parse``."""
-        return _parsed(parse, _array(self._json_answer(segments, params)))
+        empty = [] if allow_empty else None
+        return _parsed(parse, _array(self._json_answer(segments, params, empty=empty)))
 
     def get_text[T](
         self, *segments: str, parse: Callable[[str], T], params: Params | None = None
     ) -> T:
         """GET a text body (XML, FASTA, a count) and read it with ``parse``."""
-        return _parsed(parse, self._send(segments, params))
+        _, text = self._send(segments, params)
+        return _parsed(parse, text)
 
     def post_json[T](
-        self, *segments: str, payload: Mapping[str, Any], parse: Callable[[dict[str, Any]], T]
+        self,
+        *segments: str,
+        payload: Mapping[str, Any],
+        parse: Callable[[dict[str, Any]], T],
+        allow_empty: bool = False,
     ) -> T:
         """POST a JSON payload and read the JSON object back with ``parse``."""
         body = (json.dumps(payload).encode(), "application/json")
-        return _parsed(parse, _object(self._json_answer(segments, None, body)))
+        empty = {} if allow_empty else None
+        return _parsed(parse, _object(self._json_answer(segments, None, body, empty=empty)))
 
     def post_form[T](
-        self, *segments: str, form: Mapping[str, str], parse: Callable[[dict[str, Any]], T]
+        self,
+        *segments: str,
+        form: Mapping[str, str],
+        parse: Callable[[dict[str, Any]], T],
+        allow_empty: bool = False,
     ) -> T:
         """POST a form and read the JSON object back with ``parse``."""
         body = (urllib.parse.urlencode(form).encode(), "application/x-www-form-urlencoded")
-        return _parsed(parse, _object(self._json_answer(segments, None, body)))
+        empty = {} if allow_empty else None
+        return _parsed(parse, _object(self._json_answer(segments, None, body, empty=empty)))
 
     def _json_answer(
         self,
         segments: tuple[str, ...],
         params: Params | None,
         body: tuple[bytes, str] | None = None,
+        *,
+        empty: object | None,
     ) -> object:
-        """The decoded JSON answer, unless it reports an error (``body_error``)."""
-        text = self._send(segments, params, body)
+        """The decoded JSON answer, unless it reports an error (``body_error``).
+
+        ``empty`` is what an answer with nothing in it (``204 No Content``, an empty body) stands
+        for, when the request allows one.
+        """
+        status, text = self._send(segments, params, body)
+        if empty is not None and (status == http.HTTPStatus.NO_CONTENT or not text.strip()):
+            return empty
         try:
             value = _json(text)
         except HttpError as not_json:
@@ -424,7 +472,8 @@ class Api:
         segments: tuple[str, ...],
         params: Params | None,
         body: tuple[bytes, str] | None = None,
-    ) -> str:
+    ) -> tuple[int, str]:
+        """Send one request: its answer's status and text."""
         path = "".join(f"/{_segment(segment, self.segment_safe)}" for segment in segments)
         query = urllib.parse.urlencode(
             {**self.params, **(params or {})}, doseq=True, safe=self.query_safe
@@ -436,19 +485,34 @@ class Api:
         url = f"{self.base}{path}?{query}" if query else f"{self.base}{path}"
         request = urllib.request.Request(url, data=data, headers=headers)
         _THROTTLE.wait(self.host, self.min_interval_s)
-        raw, charset, complete = _fetch(
+        status, raw, charset, complete = _fetch(
             request, timeout_s=self.timeout_s, max_bytes=self.max_bytes, describe=self._describe
         )
         if not complete:
             raise HttpError(f"response larger than {self.max_bytes} bytes")
-        return _text(raw, charset)
+        return status, _text(raw, charset)
 
-    def _describe(self, status: int, reason: str) -> str:
+    def _describe(self, status: int, reason: str, body: str) -> str:
+        """The error of an error status: in the API's words when its body gives them."""
+        if explained := self._explained(body):
+            return _status_text(status, explained)
         if status in self.status_messages:
             return self.status_messages[status]
         if status == 429:
             return f"rate limited by {self.name} (HTTP 429). Try again later."
         return _status_text(status, reason)
+
+    def _explained(self, body: str) -> str | None:
+        """The error an error status's body reports (``body_error``), or ``None``.
+
+        A reader that trips on the body explains nothing: the status still says what happened.
+        """
+        if self.body_error is None or not body.strip():
+            return None
+        try:
+            return self.body_error(_decoded(body))
+        except _SHAPE_ERRORS:
+            return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -472,7 +536,10 @@ def fetch_page(url: str, *, max_bytes: int, timeout_s: float = 10.0) -> Page:
         msg = f"Invalid URL: {url!r}. Use an http:// or https:// URL without credentials."
         raise HttpError(msg)
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    raw, charset, complete = _fetch(
-        request, timeout_s=timeout_s, max_bytes=max_bytes, describe=_status_text
+    _, raw, charset, complete = _fetch(
+        request,
+        timeout_s=timeout_s,
+        max_bytes=max_bytes,
+        describe=lambda status, reason, _body: _status_text(status, reason),
     )
     return Page(_text(raw, charset), complete)

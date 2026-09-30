@@ -203,3 +203,23 @@ def test_max_chars_is_clamped(mock_urlopen):
     assert wikipedia_article("T", max_chars=-1).startswith("e\n\n[Truncated]")
     mock_urlopen.return_value = respond(page)
     assert len(wikipedia_article("T", max_chars=10**9)) < 100_100
+
+
+@pytest.mark.parametrize(
+    ("page", "why"),
+    [
+        ({"title": "Xyz", "missing": ""}, "No Wikipedia page 'Xyz'"),
+        ({"title": "Xyz", "links": []}, "The Wikipedia page 'Xyz' links to no articles"),
+    ],
+)
+@patch(HTTP_OPEN)
+def test_the_search_that_stands_in_for_related_pages_says_why(mock_urlopen, page, why):
+    # The switch to a search was silent.
+    mock_urlopen.side_effect = [
+        respond({"query": {"pages": {"-1": page}}}),
+        respond({"query": {"search": [{"title": "Python", "snippet": "A language."}]}}),
+    ]
+
+    result = wikipedia_related("Xyz")
+
+    assert result.startswith(f"{why}; searching instead.\nWikipedia results for 'Xyz':")

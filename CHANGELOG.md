@@ -481,6 +481,26 @@ flows, manifests) needs these changes; each one is detailed below.
   (`{"timeline": [{"series": …, "data": [points]}]}`), and the tool read each series as a point, so
   every answer came back as "No GDELT timeline points found". It now lists the series' points, and
   when it shows only the first 20 it says of how many (the default 30-day timespan has 31).
+- **An error status explained in the body reaches the agent.** `body_error` also reads the body of
+  a 4xx or 5xx answer, and its text replaces the status's reason: an unknown Eurostat dataset says
+  `HTTP error 404: ERR_NOT_FOUND_4: … is not available for dissemination.` (it said "no matching
+  records found."), a request Eurostat would only serve later says so (`ASYNCHRONOUS_RESPONSE. …`,
+  was "Request Entity Too Large"), and a query arXiv or UniProt cannot read says why
+  (`Invalid query string: …`, `'x' is not a valid search field`; both were "Bad Request"). An
+  arXiv error entry sent with a 200 fails too, instead of reading as a paper titled "Error". A
+  request to a source that answers "nothing found" with `204 No Content` or an empty body says so
+  (`allow_empty=True`), and reads that answer as an empty result: a `pdb_search` without hits says
+  `No RCSB PDB entries found for '…'.` instead of "could not parse API response".
+- **Tools say what became of a record that is gone, and what they left out.** An inactive UniProt
+  accession fails with its fate (`P00001 is inactive: demerged into P99999, P99998`) in
+  `uniprot_entry`, `uniprot_features` and `uniprot_crossrefs`, which showed a nameless entry or
+  no features or cross-references. `open_library_work` and `open_library_isbn` follow a merged
+  record to the one it went into and say a deleted one was deleted; both read as an untitled
+  book. `wikidata_entity` reads a merged QID as the item it redirects to (it said "not found").
+  `eonet_event` says EONET answers an unknown ID with HTTP 500, and fails on an answer without an
+  event instead of showing a blank one. `hacker_news` numbers stories by rank and names the ones
+  it could not load, which it dropped without a word, and `wikipedia_related` says why it
+  searched instead: no such page, or a page without links.
 - **Tree of Thoughts searches best first and always answers.** DFS expanded the worst-scored child
   first (`frontier.pop()` took the last of the children sorted best to worst); it now expands the
   most promising one. BFS kept every state of each level, so with the defaults it made 40 calls,

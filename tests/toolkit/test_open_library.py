@@ -182,3 +182,72 @@ class TestOpenLibraryIsbn:
 
         assert "invalid ISBN" in result
         mock_urlopen.assert_not_called()
+
+
+# Records as Open Library answered them live, with HTTP 200 (2026-09-30).
+_MERGED = {
+    "location": "/works/OL27448W",
+    "key": "/works/OL100005W",
+    "type": {"key": "/type/redirect"},
+    "latest_revision": 4,
+    "revision": 4,
+}
+_DELETED = {
+    "key": "/works/OL1000619W",
+    "type": {"key": "/type/delete"},
+    "latest_revision": 2,
+    "revision": 2,
+}
+
+
+@patch(HTTP_OPEN)
+def test_a_merged_work_is_followed_to_the_work_it_went_into(mock_urlopen):
+    # It read as an untitled work.
+    mock_urlopen.side_effect = [respond(_MERGED), respond(_WORK)]
+
+    result = open_library_work("OL100005W")
+
+    assert result.startswith("Open Library work OL100005W (merged into OL27448W):\nThe Lord")
+    paths = [urlparse(call.args[0].full_url).path for call in mock_urlopen.call_args_list]
+    assert paths == ["/works/OL100005W.json", "/works/OL27448W.json"]
+
+
+@patch(HTTP_OPEN)
+def test_a_deleted_work_says_so(mock_urlopen):
+    mock_urlopen.return_value = respond(_DELETED)
+
+    assert open_library_work("OL1000619W") == (
+        "Open Library work lookup failed: /works/OL1000619W was deleted"
+    )
+
+
+@patch(HTTP_OPEN)
+def test_redirects_that_do_not_end_are_an_error(mock_urlopen):
+    loop = {**_MERGED, "location": "/works/OL100005W"}
+    mock_urlopen.side_effect = [respond(loop) for _ in range(4)]
+
+    assert open_library_work("OL100005W") == (
+        "Open Library work lookup failed: more than 3 redirects between Open Library records"
+    )
+    assert mock_urlopen.call_count == 4
+
+
+@patch(HTTP_OPEN)
+def test_an_isbn_whose_edition_was_merged_reads_the_edition_it_went_into(mock_urlopen):
+    merged = {"key": "/books/OL1M", "type": {"key": "/type/redirect"}, "location": "/books/OL2M"}
+    mock_urlopen.side_effect = [respond(merged), respond(_ISBN)]
+
+    result = open_library_isbn("9780140328721")
+
+    assert result.startswith("Open Library ISBN 9780140328721:\nFantastic Mr. Fox")
+    assert urlparse(_called_request(mock_urlopen).full_url).path == "/books/OL2M.json"
+
+
+@patch(HTTP_OPEN)
+def test_a_redirect_to_something_that_is_not_a_record_is_an_error(mock_urlopen):
+    mock_urlopen.return_value = respond({**_MERGED, "location": "/../admin"})
+
+    assert open_library_work("OL100005W") == (
+        "Open Library work lookup failed: could not parse API response: a redirect without a "
+        "record to go to"
+    )

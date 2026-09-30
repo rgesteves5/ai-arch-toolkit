@@ -80,6 +80,12 @@ def eonet_event(event_id: str) -> str:
             "events", event_id.strip(), parse=lambda data: _event_text(data, event_id.strip())
         )
     except HttpError as e:
+        if e.status == 500:
+            # EONET answers an ID it does not know with a 500 page (seen 2026-09-30).
+            return (
+                f"NASA EONET event failed: {e} (EONET answers this for an event ID it does not "
+                "know; eonet_events lists the current IDs)"
+            )
         return f"NASA EONET event failed: {e}"
 
 
@@ -117,6 +123,8 @@ def _events_text(data: dict[str, Any]) -> str:
 
 
 def _event_text(data: dict[str, Any], event_id: str) -> str:
+    if not _string(data.get("id")):
+        raise HttpError("could not parse API response: no event in the answer")
     lines = [f"NASA EONET event {event_id}:"]
     lines.extend(_format_event(data, index=None, details=True))
     return "\n".join(lines)

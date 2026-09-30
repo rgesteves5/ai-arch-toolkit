@@ -69,3 +69,11 @@ class TestPdb:
         assert "invalid pdb_id" in pdb_entry("bad")
         assert "invalid component_id" in pdb_chemical_component("bad/id")
         mock_urlopen.assert_not_called()
+
+
+@patch(HTTP_OPEN)
+def test_a_search_without_hits_is_no_entries_not_a_parse_error(mock_urlopen):
+    # RCSB answers it 204 No Content with an empty body (2026-09-30).
+    mock_urlopen.return_value = respond(b"", content_type="application/json", status=204)
+
+    assert pdb_search("zzqqxxyyvvww") == "No RCSB PDB entries found for 'zzqqxxyyvvww'."
