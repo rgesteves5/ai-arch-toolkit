@@ -518,3 +518,28 @@ R01 publicada em `main` (`b3dae3f`); a R02 começa com a leitura obrigatória da
 - Uma sonda de um agente da 3.ª passagem saiu para a Anthropic com uma chave falsa (`APIError`, sem
   custo); a 4.ª correu com sockets bloqueados.
 - Gate: 5744 passed, 42 skipped; `mkdocs build --strict` com validação de links e âncoras limpo.
+
+## 2026-10-01 · GPT-6.1 Sol e frente O: OpenAI pela Responses (Claude, a pedido do dono)
+
+- O catálogo da OpenAI tem agora como modelos de topo o `gpt-6-astra`, o `gpt-6.1-sol` e o
+  `gpt-6-luna`. O `gpt-6.1-sol` não estava registado e recebia as regras da geração actual, que
+  supõem um `none`: o sampling e as tool calls saíam sem mudança e o `thinking_effort="none"` era
+  aceite. Segundo a página do modelo, não tem `none` nem `minimal`, raciocina a `medium` por
+  omissão, e a Chat Completions "is supported without tool calling".
+- Registado como o Astra: perfil `_SOL_6_1` no `_openai.py`, preços (os do GPT-6 Sol, com a cache a
+  5% da entrada), inventário de probes sem tools, docs, `AGENTS.md` e `CHANGELOG`. Os testes
+  (`TestAlwaysReasoning` parametrizado com os dois modelos e `test_gpt61_sol_prices`) falharam antes
+  pela razão certa. Gate: 5763 passed, 42 skipped; ruff, formatação e pyright limpos. Ao vivo
+  ainda não correu: o comando está no "Por fazer".
+- O dono aceitou a recomendação e pediu a frente. Ficaram a D43 e as fichas O01 a O04: uma sonda
+  ao vivo antes de tudo, um núcleo Responses tirado do `_meta.py`, o OpenAI no host oficial pela
+  Responses, e no fim os docs e a verificação.
+- A D43 responde aos custos que o LOG de 2026-09-28 registava:
+  - a latência mede-a a O01;
+  - os pares de raciocínio já os trata o código da Meta;
+  - o raciocínio preso à família resolve-se no reenvio, que passa a verificar fornecedor e família
+    (O02);
+  - o `strict` vai explícito a `false`.
+- Commitado e publicado em `main` a pedido do dono: `e18fcb5` (o `gpt-6.1-sol`) e o registo da
+  frente O.
+- Próximo: a O02 pode começar; a O01 precisa do script e de o dono o correr.

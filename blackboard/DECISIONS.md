@@ -462,3 +462,46 @@ Só acrescentar. Uma decisão revista ganha uma nova entrada que diz qual substi
     outros fornecedores, o `Tool error [type]: …` do `to_model_text()` já o diz no texto.
   - O `HttpError` da porta é uma subclasse de `ToolFailure`.
 - **Consequência:** a D37 lê-se com estes nomes; o `ToolError` não muda.
+
+## D43 · OpenAI pela Responses API no host oficial; Chat Completions só para servidores compatíveis (frente O)
+
+- **Contexto:** desde o GPT-5.4 a Chat Completions só aceita tool calls com `reasoning_effort` a
+  `none` (https://developers.openai.com/api/docs/guides/migrate-to-responses). O GPT-6 Astra e o
+  GPT-6.1 Sol não têm `none`, e a Chat Completions "is supported without tool calling" para o
+  6.1 Sol (https://developers.openai.com/api/docs/models/gpt-6.1-sol). A GPT-6 Luna e o GPT-6 Sol
+  só chamam tools sem raciocinar. Por isso, dos três modelos de topo do catálogo de 2026-10-01
+  (Astra, 6.1 Sol, Luna), nenhum corre aqui um agente com tools a raciocinar. A OpenAI mantém a
+  Chat Completions ("remains supported"), mas recomenda a Responses "for all new projects". Só a
+  Responses dá resumos do raciocínio, raciocínio cifrado entre voltas e as tools alojadas. O
+  adaptador da Meta já é Responses sobre o mesmo SDK (D11, D12). O LOG de 2026-09-28 tinha deixado
+  a porta fora de âmbito pelos custos relatados; a O01 mede-os.
+- **Decisão:**
+  - Os modelos no host oficial (sem `base_url`, ou com `api.openai.com`) vão pela Responses, sem
+    estado (`store: false`), com o raciocínio cifrado reenviado do `_raw`, como a Meta (D12).
+  - A Chat Completions fica para os servidores compatíveis (um `base_url` de outro host: Ollama,
+    LM Studio, vLLM…), sem as regras dos modelos OpenAI, como hoje.
+  - A API pública não ganha escolha de endpoint, nem como nome de fornecedor nem como opção: o host
+    decide. O endpoint é um pormenor de implementação (`docs/internal/api-semantics-audit.md`, §6).
+  - O que é da Responses e não da Meta passa para um núcleo partilhado, e OpenAI e Meta ficam dois
+    perfis sobre ele.
+  - Um `_raw` só se reenvia ao mesmo fornecedor e à mesma família de modelos ("Persisted reasoning
+    can be reused only within the same model family",
+    https://developers.openai.com/api/docs/guides/reasoning). Fora disso, a mensagem reconstrói-se
+    sem raciocínio.
+  - No host oficial, as kwargs que a Responses não tem (`stop`, `seed`, `frequency_penalty`,
+    `presence_penalty`) levantam `RequestError`; os servidores compatíveis continuam a recebê-las.
+- **Alternativas rejeitadas:**
+  - Ficar só com a Chat Completions: os agentes não raciocinam com tools em nenhum modelo de topo
+    da OpenAI.
+  - As duas APIs para os mesmos modelos, à escolha: duplica regras e testes para ganhar quatro
+    parâmetros, e mete o endpoint na API pública.
+  - Tudo pela Responses, servidores compatíveis incluídos: a maioria fala sobretudo Chat
+    Completions.
+- **Consequência:**
+  - Quebra visível no host oficial: as quatro kwargs.
+  - Passa a funcionar: `thinking=True` com tools do GPT-5.4 em diante; o Astra e o 6.1 Sol chamam
+    tools; o OpenAI dá resumos do raciocínio.
+  - Substitui a consequência da D11 ("o adaptador OpenAI continua só com Chat Completions") e a
+    linha do OpenAI no `AGENTS.md`.
+  - Nada sai antes da sonda da O01. Se a latência medida for claramente pior, decide o dono, com os
+    números à frente.

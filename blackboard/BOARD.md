@@ -1,5 +1,46 @@
 # Quadro
 
+## Frente activa: OpenAI pela Responses API
+
+- **Estado:** aberta em 2026-10-01, a pedido do dono. Fichas O01 a O04 escritas; nenhuma começou.
+- **Decisão:** D43. O host oficial passa à Responses, a Chat Completions fica para os servidores
+  compatíveis, e a API pública não ganha escolha de endpoint.
+- **Origem:** desde o GPT-5.4 a Chat Completions só aceita tools com effort `none`. Dos três
+  modelos de topo do catálogo da OpenAI (`gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna`), nenhum corre
+  aqui um agente com tools a raciocinar. O LOG de 2026-09-28 tinha deixado a porta fora de âmbito,
+  pelos custos relatados; a O01 mede-os.
+- **Já feito na abertura:** o `gpt-6.1-sol` registado (perfil como o do Astra, preços e inventário
+  de probes), commitado e publicado em `main` a pedido do dono (`e18fcb5`). Gate: 5763 passed, 42
+  skipped.
+- **Base:** `main` @ `e18fcb5`.
+- **Com as outras frentes:**
+  - A C01, a C05 e a C06 mexem nos mesmos adaptadores: a O02 e a O03 aplicam-se em série com elas.
+  - Na C05, a decisão 6 (server tools do OpenAI) ganha a Responses como caminho: é a opção (c).
+  - A C06 descreve o que funciona através do adaptador: o "Astra sem tools" deixa de valer depois
+    da O03.
+  - A frente T não toca em adaptadores.
+- **Como correr:**
+  - A O01 escreve-a um agente, mas corre-a o dono, porque são chamadas pagas.
+  - A O02 pode começar já, num agente com contexto limpo.
+  - A O03 espera pelos resultados da O01 e pela O02.
+  - Os agentes não fazem commits nem chamadas a fornecedores; o dono revê e commita.
+
+| ID | Tarefa | Dono | Estado | Depende de |
+|---|---|---|---|---|
+| O01 | Sonda ao vivo: a Responses do OpenAI contra a Chat Completions (latência, reenvio, `strict`) | — (script); dono (execução) | todo | nada |
+| O02 | Núcleo Responses partilhado, extraído do `_meta.py`; reenvio só ao mesmo fornecedor e família | — | todo | nada |
+| O03 | OpenAI pela Responses no host oficial; Chat Completions só para servidores compatíveis | — | todo | O01, O02 |
+| O04 | Documentação, quebras visíveis e verificação ao vivo final | — (docs); dono (ao vivo) | todo | O03 |
+
+### Quebras visíveis
+
+- **O03:**
+  - No host oficial, `stop`, `seed`, `frequency_penalty` e `presence_penalty` levantam
+    `RequestError`.
+  - `thinking=True` com tools deixa de levantar do GPT-5.4 em diante, e o Astra e o 6.1 Sol passam
+    a chamar tools.
+  - O OpenAI passa a dar resumos do raciocínio e um `_raw` reenviável.
+
 ## Frente activa: contrato das tools
 
 - **Estado:** aberta em 2026-09-30. Fichas T00 (regras) e T01 a T09 escritas. A T03 e a T04a
@@ -72,8 +113,8 @@
   declarações dos manifestos mudaram o terreno de C02, C05, C07 e C08).
 - **Estado:** aberta em 2026-09-15. As nove fichas estão escritas; nenhuma tarefa começou.
 - **Antes de codificar:** o dono fixa as "Decisões a fixar" de cada ficha. Cada decisão tomada entra
-  em `DECISIONS.md` a partir de D43 (as D15 a D42 foram para as frentes R e T), com o número dado
-  pelo coordenador.
+  em `DECISIONS.md` a partir de D44 (as D15 a D42 foram para as frentes R e T, e a D43 para a frente
+  O), com o número dado pelo coordenador.
 - **Origem:** o que `docs/internal/agentes-app-toolkit-review.md` pediu ao toolkit (L1, L3–L7, L9, L13
   e o ponto D) e que `docs/internal/toolkit-fix-plan.md` §4 (itens 3 e 10) deixou de fora por ser
   âmbito, não contrato partido.
@@ -241,8 +282,10 @@ que ficou aberto está em "Por fazer".
 - **xAI:** repor créditos na conta e depois correr `uv run pytest -m live_api -k xai` (custo por
   pedido) e um probe com uma tool cujo parâmetro seja `Any` (schema sem tipo) e com `system=` +
   `system()` ao mesmo tempo — únicas mudanças desta frente que o xAI ainda não confirmou.
-- **Modelos novos ao vivo:** o GPT-6 Astra não tem probes (recusa tools na Chat Completions), e o
-  Grok 4.7 e o Opus 5.5 ainda não correram ao vivo (`docs/model-compatibility.md`).
+- **Modelos novos ao vivo:** os probes do GPT-6 Astra e do GPT-6.1 Sol (todos menos tools, que
+  eles recusam na Chat Completions) nunca correram, e o Grok 4.7 e o Opus 5.5 ainda não correram ao
+  vivo (`docs/model-compatibility.md`). Para os dois da OpenAI:
+  `uv run python scripts/probe_models.py --suite full --model gpt-6-astra --model gpt-6.1-sol`.
 - **Frente C, decisões:** fixar as da vaga 1 (C02, C06, C07, C08) antes de atribuir donos; a C07 e
   a C08 só começam depois da T01 e da T03.
 - **Decidir, achados de 2026-09-18 sem tarefa (`FINDINGS.md`):** o `LLM("grok-…")` criado depois de
