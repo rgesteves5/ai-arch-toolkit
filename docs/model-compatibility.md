@@ -1,6 +1,6 @@
 # Model Compatibility
 
-This page lists the 34 model IDs tracked by the live probe inventory
+This page lists the 35 model IDs tracked by the live probe inventory
 (`scripts/model_probe_models.toml`) and what framework features were verified against them.
 
 The baseline below comes from the manual live probe runner:
@@ -19,10 +19,10 @@ Latest recorded full run, over the 28 models the inventory held then:
 - Failed: 3
 - Report artifact: `scripts/output/model-probes/20260428T015941Z.md`
 
-Of the six models added since, `muse-spark-1.3` (2026-09-13), `gpt-6-sol`, and `gpt-6-luna`
-(2026-09-25) passed runs of their own. `gpt-6-astra`, `grok-4.7`, and `claude-opus-5-5` have no
-live result: Astra's probes have not been run, and the 2026-09-25 run of the other two stopped
-at their accounts' credit limits.
+Of the seven models added since, `muse-spark-1.3` (2026-09-13), `gpt-6-sol`, and `gpt-6-luna`
+(2026-09-25) passed runs of their own. `gpt-6-astra`, `gpt-6.1-sol` (2026-10-01), `grok-4.7`, and
+`claude-opus-5-5` have no live result: the probes of Astra and GPT-6.1 Sol have not been run, and
+the 2026-09-25 run of the other two stopped at their accounts' credit limits.
 
 Generated probe artifacts are local diagnostic files and are ignored by git.
 
@@ -67,6 +67,17 @@ Tool calling requires Responses and is rejected with an explanatory error by thi
 Chat Completions adapter. Astra therefore cannot run tool-using agents here.
 See the [official Astra guide](https://developers.openai.com/api/docs/guides/latest-model)
 and [model pricing](https://developers.openai.com/api/docs/models/gpt-6-astra).
+
+### GPT-6.1 Sol (added 2026-10-01)
+
+`gpt-6.1-sol` is registered with standard, cached, batch, long-context (above 272K input
+tokens), and fast pricing: GPT-6 Sol's rates, with cached input at 5% of input instead of 10%.
+Unlike `gpt-6-sol`, it takes no `none` (nor `minimal`) effort: it reasons at `medium` unless
+sent `low`, `high`, `xhigh`, or `max`. So the adapter treats it like Astra: sampling and logprob
+parameters are dropped, and tool calls raise `RequestError`, since OpenAI documents that Chat
+Completions takes its requests without tools. Its probes (every scenario but tools) are in the
+inventory but have **not been run live**. See the
+[model page](https://developers.openai.com/api/docs/models/gpt-6.1-sol).
 
 ### GPT-6 Sol and Luna (added 2026-09-25)
 

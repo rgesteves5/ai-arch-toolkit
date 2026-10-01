@@ -197,6 +197,34 @@ class TestPricingRegistryGet:
             assert (p.batch_input, p.batch_output) == batch
             assert (p.fast_input, p.fast_output) == fast
 
+    def test_gpt61_sol_prices(self):
+        # https://developers.openai.com/api/docs/models/gpt-6.1-sol (2026-10-01): cached input at
+        # 5% of input (GPT-6 Sol's is 10%), cache writes at 1.25x; above 272K input tokens 2x input
+        # and cache rates and 1.5x output; Batch and Flex 50% of Standard; Fast mode 2x.
+        p = pricing.get("gpt-6.1-sol")
+        assert p is not None
+        assert (p.input, p.cache_read, p.cache_write, p.output) == (2.0, 0.10, 2.50, 10.0)
+        assert p.long_context_threshold == 272_000
+        assert not p.long_context_inclusive
+        long = (
+            p.long_context_input,
+            p.long_context_cache_read,
+            p.long_context_cache_write,
+            p.long_context_output,
+        )
+        assert long == (4.0, 0.20, 5.0, 15.0)
+        batch = (p.batch_input, p.batch_cache_read, p.batch_cache_write, p.batch_output)
+        assert batch == (1.0, 0.05, 1.25, 5.0)
+        fast = (p.fast_input, p.fast_cache_read, p.fast_cache_write, p.fast_output)
+        assert fast == (4.0, 0.20, 5.0, 20.0)
+        fast_long = (
+            p.fast_long_context_input,
+            p.fast_long_context_cache_read,
+            p.fast_long_context_cache_write,
+            p.fast_long_context_output,
+        )
+        assert fast_long == (8.0, 0.40, 10.0, 30.0)
+
     def test_current_anthropic_pricing(self):
         sonnet = pricing.get("claude-sonnet-5")
         opus_48 = pricing.get("claude-opus-4-8")

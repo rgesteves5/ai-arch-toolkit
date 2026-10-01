@@ -54,6 +54,14 @@ flows, manifests) needs these changes; each one is detailed below.
   - `select` or `serialize_as` on an inline template.
 
 ### Added
+- GPT-6.1 Sol (`gpt-6.1-sol`), from OpenAI's model page on 2026-10-01: prices (GPT-6 Sol's
+  rates, with cached input at 5% of input; batch, long-context and fast rates included), request
+  rules and a probe inventory entry, not yet run live. Unlike GPT-6 Sol it takes no `"none"` (nor
+  `"minimal"`) effort and reasons at `medium` by default, so it follows Astra's rules: sampling
+  parameters are dropped, and tool calls raise `RequestError`, since Chat Completions takes its
+  requests only without tools. Before, it got the current generation's rules, which assume a
+  `"none"` effort: sampling parameters and tool calls went out unchanged, and
+  `thinking_effort="none"` was accepted.
 - `Range`, inclusive bounds for a numeric tool parameter: `Annotated[int, Range(1, 25)]` puts
   `minimum`/`maximum` in the schema the model reads, and the executor refuses a value outside them
   with a `validation_error` that names the range. One bound is enough, and a `Range` on a type with

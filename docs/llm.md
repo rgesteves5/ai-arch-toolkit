@@ -396,8 +396,8 @@ current generation.
 From GPT-5.4 on, OpenAI's Chat Completions takes tool calls only at the `"none"` effort: with
 tools, `thinking=True` raises `RequestError` unless `thinking_effort="none"` (reasoning with tools
 needs the Responses API). GPT-6 Sol and Luna reason at `medium` when no effort is sent, so a tool
-call that asks for no thinking is sent at `"none"`; GPT-6 Astra takes no `"none"` and calls no
-tools here.
+call that asks for no thinking is sent at `"none"`; GPT-6 Astra and GPT-6.1 Sol take no `"none"`
+and call no tools here.
 
 On the Anthropic models that take a budget, the budget is added to `max_tokens`, so the answer
 keeps its room; elsewhere reasoning tokens count toward `max_tokens`, so keep that budget

@@ -848,12 +848,17 @@ class TestOpenAIProviderLifecycle:
             assert provider._client is not None
 
 
-class TestAstra:
+@pytest.mark.parametrize("model", ["gpt-6-astra", "gpt-6.1-sol"])
+class TestAlwaysReasoning:
+    """GPT-6 Astra and GPT-6.1 Sol take no "none" (nor "minimal") effort, so they always reason:
+    no sampling parameters, and tool calls only through the Responses API
+    (https://developers.openai.com/api/docs/models/gpt-6-astra, .../gpt-6.1-sol)."""
+
     @pytest.mark.parametrize("thinking", [False, True])
-    async def test_request_parameters(self, thinking):
+    async def test_request_parameters(self, model, thinking):
         client = AsyncMock()
         client.chat.completions.create.return_value = _sdk_completion()
-        provider = OpenAIProvider("gpt-6-astra", "test-key")
+        provider = OpenAIProvider(model, "test-key")
         provider._client = client
         await complete(
             provider,
@@ -867,23 +872,31 @@ class TestAstra:
             thinking_effort="max",
         )
         params = client.chat.completions.create.call_args.kwargs
-        assert params["model"] == "gpt-6-astra"
+        assert params["model"] == model
         assert params["max_completion_tokens"] == 4096
         assert (
             not {"max_tokens", "temperature", "top_p", "logprobs", "top_logprobs"} & params.keys()
         )
         assert params.get("reasoning_effort") == ("max" if thinking else None)
 
+    @pytest.mark.parametrize("effort", ["low", "medium", "high", "xhigh", "max"])
+    def test_every_documented_effort_is_sent(self, model, effort):
+        params = prepare(
+            OpenAIProvider(model, "test-key"), HI, thinking=True, thinking_effort=effort
+        )
+        assert params.params["reasoning_effort"] == effort
+
     @pytest.mark.parametrize("effort", ["none", "minimal", "ultra"])
-    def test_invalid_reasoning_effort(self, effort):
-        provider = OpenAIProvider("gpt-6-astra", "test-key")
+    def test_invalid_reasoning_effort(self, model, effort):
+        provider = OpenAIProvider(model, "test-key")
         with pytest.raises(RequestError, match="thinking_effort"):
             prepare(provider, HI, thinking=True, thinking_effort=effort)
 
-    def test_tools_require_responses(self):
-        provider = OpenAIProvider("gpt-6-astra", "test-key")
+    @pytest.mark.parametrize("thinking", [False, True])
+    def test_tools_require_responses(self, model, thinking):
+        provider = OpenAIProvider(model, "test-key")
         with pytest.raises(RequestError, match="requires the Responses API"):
-            prepare(provider, HI, tools=[{"name": "lookup"}])
+            prepare(provider, HI, tools=[{"name": "lookup"}], thinking=thinking)
 
 
 LOOKUP = {"name": "lookup", "description": "d", "input_schema": {"type": "object"}}

@@ -138,6 +138,12 @@ _COMPATIBLE = _Profile(thinking="passthrough", tools_while_reasoning=True)
 _ASTRA = _Profile(
     efforts=frozenset({"low", "medium", "high", "xhigh", "max"}), sampling_while_reasoning=False
 )
+# GPT-6.1 Sol takes no "none" (nor "minimal") either and reasons at "medium" by default; Chat
+# Completions takes its requests without tools
+# (https://developers.openai.com/api/docs/models/gpt-6.1-sol).
+_SOL_6_1 = _Profile(
+    efforts=_ASTRA.efforts, sampling_while_reasoning=False, default_effort="medium"
+)
 # Sol and Luna take "none" and reason at "medium" when the request sends no effort
 # (https://developers.openai.com/api/docs/models/gpt-6-sol and .../gpt-6-luna).
 _SOL_LUNA = _Profile(
@@ -150,6 +156,7 @@ _SOL_LUNA = _Profile(
 # one) gets the current generation's rules. https://developers.openai.com/api/docs/models
 _PROFILES: dict[str, _Profile] = {
     "gpt-6-astra": _ASTRA,
+    "gpt-6.1-sol": _SOL_6_1,
     **dict.fromkeys(("gpt-6-sol", "gpt-6-luna"), _SOL_LUNA),
     **dict.fromkeys(
         (
