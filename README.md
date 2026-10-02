@@ -190,8 +190,8 @@ plain text, Markdown, XML, or JSON. Validate them locally with
 | Multimodal (image)    | ✅        | ✅     | ✅     | —   | ✅   |
 | Documents (PDF, etc.) | ✅        | ✅     | ✅     | —   | ✅   |
 | Prompt caching        | ✅        | ✅ automatic | ✅ automatic | ✅ automatic | ✅ automatic |
-| Extended thinking     | ✅ adaptive or budget | ✅ effort | ✅ level or budget | ✅ effort | ✅ effort + summaries |
-| Server-hosted tools   | ✅ code+web | —      | ✅ code+web | —   | ✅ web |
+| Extended thinking     | ✅ adaptive or budget | ✅ effort + summaries | ✅ level or budget | ✅ effort | ✅ effort + summaries |
+| Server-hosted tools   | ✅ code+web | ✅ web | ✅ code+web | —   | ✅ web |
 | Batch API             | ✅        | ✅     | —      | —   | —    |
 
 ## Agent architectures

@@ -73,7 +73,8 @@ docstrings/comments, and when to use classes vs functions — see
    take), `send()`, `open_stream()`, `assemble()`, `usage()`, and `map_error()` (the only place
    that knows the SDK's exceptions, with each error's `delivery` from the provider's documented
    billing). Put per-model rules in a profile table resolved with `core/_model_id.py`.
-   `_openai.py` is the reference.
+   `_anthropic.py` is the reference; `_openai.py` and `_meta.py` show two profiles over a shared
+   core (`_responses.py`, the Responses API).
 2. Route the model family in `core/_providers/__init__.py`: its prefix in `_MODEL_PREFIXES`, and a
    branch in `create_provider()` that builds the adapter with its environment key.
 3. If the provider has its own SDK, declare it as its own extra in

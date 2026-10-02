@@ -19,18 +19,29 @@ Latest recorded full run, over the 28 models the inventory held then:
 - Failed: 3
 - Report artifact: `scripts/output/model-probes/20260428T015941Z.md`
 
-Of the seven models added since, `muse-spark-1.3` (2026-09-13), `gpt-6-sol`, and `gpt-6-luna`
-(2026-09-25) passed runs of their own. `gpt-6-astra`, `gpt-6.1-sol` (2026-10-01), `grok-4.7`, and
-`claude-opus-5-5` have no live result: the probes of Astra and GPT-6.1 Sol have not been run, and
-the 2026-09-25 run of the other two stopped at their accounts' credit limits.
+Latest OpenAI run, over the inventory's 13 OpenAI models, after OpenAI's own host moved to the
+Responses API:
+
+- Date: 2026-10-02
+- Models: 13
+- Probe scenarios: 77
+- Passed: 77
+- Failed: 0
+- Report artifact: `scripts/output/model-probes/20261002T041947Z.md`
+
+Of the seven models added since 2026-04-28, `muse-spark-1.3` (2026-09-13), `gpt-6-sol`,
+`gpt-6-luna` (2026-09-25), `gpt-6-astra`, and `gpt-6.1-sol` (2026-10-02) passed runs of their
+own. `grok-4.7` and `claude-opus-5-5` have no live result: the 2026-09-25 run stopped at their
+accounts' credit limits.
 
 Generated probe artifacts are local diagnostic files and are ignored by git.
 
 The tables record each model's latest live run. The text above each table gives the adapter's
-current rules, which follow each provider's documentation per model: an option a model does not
-take raises `RequestError` before anything is sent, and a model the adapter does not know gets the
-rules of the provider's current generation. `tests/integration/test_provider_hardening_live.py`
-holds the cheap owner-run checks of those rules (`pytest -m live_api -k <provider>`).
+current rules, which follow each provider's documentation per model (OpenAI's efforts were also
+measured live): an option a model does not take raises `RequestError` before anything is sent,
+and a model the adapter does not know gets the rules of the provider's current generation.
+`tests/integration/test_provider_hardening_live.py` holds the cheap owner-run checks of those
+rules (`pytest -m live_api -k <provider>`).
 
 ## Status Legend
 
@@ -55,18 +66,81 @@ holds the cheap owner-run checks of those rules (`pytest -m live_api -k <provide
 
 ## OpenAI
 
+The host decides the API. OpenAI's own host (no `base_url`, or a `base_url` on `api.openai.com`)
+is driven through the Responses API, the only OpenAI API that takes tool calls while GPT-5.4 and
+later models reason
+([migration guide](https://developers.openai.com/api/docs/guides/migrate-to-responses)). Any
+other `base_url` is an OpenAI-compatible server: it gets Chat Completions, with `max_tokens` and
+none of the rules below.
+
+On OpenAI's host:
+
+- Requests are stateless (`store: false`). Each response carries its reasoning encrypted, and
+  appending `response.to_message()` to the conversation replays it on the next call, to the same
+  model family only ("Persisted reasoning can be reused only within the same model family",
+  [reasoning guide](https://developers.openai.com/api/docs/guides/reasoning)). The adapter takes
+  a generation as a family: `gpt-6` (Astra, Sol, Luna), `gpt-6.1`, `gpt-5.6`, and so on.
+- `max_tokens` is sent as `max_output_tokens`. `thinking=True` sends `reasoning.effort`
+  (`thinking_effort`, else `"high"`), checked against the model's efforts (below), with
+  `summary: "auto"`: the summaries become `Response.thinking` (there is none at `"none"`).
+  Without `thinking=True` no effort is sent, and the model runs at its default effort.
+- Tool calls work at any effort. Function tools are sent with `strict: false`: left out, OpenAI
+  rewrites the schema into strict mode and makes its optional parameters required (live,
+  2026-10-02). `web_search()` without config runs as the hosted `web_search` tool (billed per
+  call, so metering treats its cost as unknown); `code_execution()`, or a server tool with a
+  config, raises `RequestError`.
+- Structured output goes in `text.format`: `output_schema` (a strict schema is normalized to
+  OpenAI's strict subset) or `json_mode`. `stop`, `seed`, `frequency_penalty`,
+  `presence_penalty`, and a raw `response_format` raise `RequestError` before sending, since the
+  Responses API has no place for them (live, `stop` and `seed` got a 400 and the two penalties a
+  500 after about 90 seconds).
+- `logprobs=True` asks for the output text's token logprobs, which `Response.logprobs` holds (a
+  tuple of the SDK's `Logprob`).
+- `count_tokens` uses `POST /v1/responses/input_tokens`. Batches are submitted to
+  `/v1/responses` ([batch guide](https://developers.openai.com/api/docs/guides/batch)); a batch
+  submitted to Chat Completions before still reads.
+- A failure reported inside a response or a stream gets status 429 for `rate_limit_exceeded` and
+  500 for `server_error` ([error codes](https://developers.openai.com/api/docs/guides/error-codes));
+  any other code raises `ResponseError`.
+- The models OpenAI shuts down by 2026-10-23 (`gpt-3.5-turbo`, `gpt-4`, `gpt-4-turbo`,
+  `gpt-4.1-nano`, `o1`, `o1-pro`, `o3-mini`, `o4-mini`) have no price or rules of their own here
+  ([deprecations](https://developers.openai.com/api/docs/deprecations)).
+
+### Efforts per model
+
+Each reasoning model's efforts, and the effort a request without one runs at, were measured live
+on 2026-10-02: one request per effort and model, reading back the effort the response reports.
+Some models take less than their pages list (GPT-5.5 refuses `max`). A model that reasons, at the
+effort sent or by default, takes no `temperature` other than 1, so the adapter drops it (the `LLM`
+always sends one); a GPT-6 model that reasons takes no sampling parameter or logprobs at all
+("When reasoning effort is not `none`, remove `temperature`, `top_p`, and `top_logprobs`",
+[latest-model guide](https://developers.openai.com/api/docs/guides/latest-model)).
+
+| Models | Efforts | With no effort sent | Sampling while it reasons |
+|---|---|---|---|
+| `gpt-6-astra`, `gpt-6.1-sol` | `low`, `medium`, `high`, `xhigh`, `max` | `medium` (always reasons) | dropped, logprobs too |
+| `gpt-6-sol`, `gpt-6-luna` | `none`, `low`, `medium`, `high`, `xhigh`, `max` | `medium` | dropped, logprobs too |
+| `gpt-5.6`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` | `none`, `low`, `medium`, `high`, `xhigh`, `max` | `medium` | `temperature` only at 1 |
+| `gpt-5.5` | `none`, `low`, `medium`, `high`, `xhigh` | `medium` | `temperature` only at 1 |
+| `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-5.3-codex`, `gpt-5.2` | `none`, `low`, `medium`, `high`, `xhigh` | `none` | `temperature` only at 1 |
+| `gpt-5.4-pro`, `gpt-5.2-pro` | `medium`, `high`, `xhigh` | `medium` (always reasons) | `temperature` only at 1 |
+| `gpt-5.5-pro` | `medium`, `high`, `xhigh` | `high` (always reasons) | `temperature` only at 1 |
+| `gpt-5-pro` | `high` | `high` (always reasons) | `temperature` only at 1 |
+| `gpt-5.1` | `none`, `low`, `medium`, `high` | `none` | `temperature` only at 1 |
+| `gpt-5`, `gpt-5-mini`, `gpt-5-nano` | `minimal`, `low`, `medium`, `high` | `medium` | `temperature` only at 1 |
+| `o3` | `low`, `medium`, `high` | `medium` | `temperature` only at 1 |
+| `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`, `gpt-4.1-mini` | none (`thinking` or an effort raises `RequestError`) | does not reason | — |
+| A model not listed | every effort the SDK names | `medium` | `temperature` only at 1 |
+
+`thinking_effort` applies on its own: to keep a model that reasons by default from reasoning,
+pass `thinking_effort="none"` where it takes `"none"`.
+
 ### GPT-6 Astra (added 2026-09-04)
 
-`gpt-6-astra` is registered with standard, cached, batch, long-context, and fast
-pricing. The Chat Completions adapter translates `max_tokens`, removes unsupported
-sampling/logprob parameters, and accepts reasoning efforts `low`, `medium`, `high`, and
-`xhigh`. The model page also lists `max`, but Chat Completions refuses it ("Supported values
-are: 'low', 'medium', 'high', and 'xhigh'", live on 2026-10-02); only the Responses API takes
-it. Its probes (every scenario but tools) are in the inventory but have **not been run live**
-for this model.
-
-Tool calling requires Responses and is rejected with an explanatory error by this
-Chat Completions adapter. Astra therefore cannot run tool-using agents here.
+`gpt-6-astra` is registered with standard, cached, batch, long-context, and fast pricing. It
+takes no `none` (nor `minimal`) effort, so it always reasons, at `medium` unless sent another
+effort, and takes no sampling or logprob parameters. It calls tools at any effort; every probe
+passed live on 2026-10-02.
 See the [official Astra guide](https://developers.openai.com/api/docs/guides/latest-model)
 and [model pricing](https://developers.openai.com/api/docs/models/gpt-6-astra).
 
@@ -74,67 +148,49 @@ and [model pricing](https://developers.openai.com/api/docs/models/gpt-6-astra).
 
 `gpt-6.1-sol` is registered with standard, cached, batch, long-context (above 272K input
 tokens), and fast pricing: GPT-6 Sol's rates, with cached input at 5% of input instead of 10%.
-Unlike `gpt-6-sol`, it takes no `none` (nor `minimal`) effort: it reasons at `medium` unless
-sent `low`, `high`, or `xhigh` (its page lists `max` too, which Chat Completions refuses, as for
-every GPT-6 model). So the adapter treats it like Astra: sampling and logprob parameters are
-dropped, and tool calls raise `RequestError`, since Chat Completions takes its requests without
-tools. The front O probe confirmed these rules live on 2026-10-02 (plain requests at `low` pass;
-`temperature`, tools, `none`, and `max` are refused); the inventory's probes have **not been
-run**. See the [model page](https://developers.openai.com/api/docs/models/gpt-6.1-sol).
+Unlike `gpt-6-sol`, it takes no `none` (nor `minimal`) effort, so it follows Astra's rules: it
+always reasons, at `medium` unless sent another effort, takes no sampling or logprob parameters,
+and calls tools at any effort. Every probe passed live on 2026-10-02. See the
+[model page](https://developers.openai.com/api/docs/models/gpt-6.1-sol).
 
 ### GPT-6 Sol and Luna (added 2026-09-25)
 
 The GPT-6 family is Astra, Sol, and Luna; Terra is a GPT-5.6 tier (`gpt-5.6-terra`). `gpt-6-sol`
 and `gpt-6-luna` are registered with standard, cached, batch, long-context (above 272K input
-tokens), and fast pricing. They take efforts `none` to `xhigh` (no `minimal`; Chat
-Completions refuses the `max` their pages list, live on 2026-10-02) and reason at `medium` when
-no effort is sent. Chat Completions takes their tool calls and sampling parameters
-(`temperature`, `top_p`, logprobs) only at `none`, so the adapter:
+tokens), and fast pricing. They take efforts `none` to `max` (no `minimal`) and reason at
+`medium` when no effort is sent. They take sampling parameters (`temperature`, `top_p`,
+logprobs) only at `none`, so a request without an effort, which runs at `medium`, loses them:
+pass `thinking_effort="none"` to sample. Tool calls go at any effort.
 
-- sends a tool call that asks for no thinking at `reasoning_effort="none"`, which keeps the
-  sampling parameters;
-- raises `RequestError` for tools with `thinking=True` at another effort (reasoning with tools
-  needs the Responses API);
-- drops the sampling parameters whenever the model reasons.
-
-Both passed every probe live on 2026-09-25 (`scripts/probe_models.py --suite full`, report
-`20260925T013106Z`). See the model pages for
+Both passed every probe live on 2026-09-25 through Chat Completions (report `20260925T013106Z`),
+and again on 2026-10-02 through the Responses API. See the model pages for
 [Sol](https://developers.openai.com/api/docs/models/gpt-6-sol) and
 [Luna](https://developers.openai.com/api/docs/models/gpt-6-luna).
 
-| Model | Plain | Tools | Structured | JSON Mode | Stream | Thinking | Notes |
-|---|---|---|---|---|---|---|---|
-| `gpt-6-sol` | Pass | Pass | Pass | Pass | Pass | Pass | Tool calls sent at `none`; `thinking_effort="low"` in probes. |
-| `gpt-6-luna` | Pass | Pass | Pass | Pass | Pass | Pass | Tool calls sent at `none`; `thinking_effort="low"` in probes. |
-
 ### Recorded live baseline
 
-On `api.openai.com` every model receives `max_completion_tokens` (the provider translates
-`max_tokens`, which OpenAI deprecates and the o-series refuses); an OpenAI-compatible server
-(`base_url=`) receives `max_tokens` and no OpenAI model rule. `thinking=True` sends
-`reasoning_effort` (`thinking_effort`, else `"high"`), checked against the model's efforts, and
-drops a `temperature` other than 1 unless the effort is `"none"`. The models that do not reason
-(`gpt-4o`, `gpt-4o-mini`, `gpt-4.1`, `gpt-4.1-mini`) raise `RequestError` on `thinking=True`.
-The models OpenAI shuts down by 2026-10-23 (`gpt-3.5-turbo`, `gpt-4`, `gpt-4-turbo`,
-`gpt-4.1-nano`, `o1`, `o1-pro`, `o3-mini`, `o4-mini`) have no price or rules of their own here
-([deprecations](https://developers.openai.com/api/docs/deprecations)). Chat Completions takes
-function tools only: a server tool raises `RequestError`. From GPT-5.4 on it takes tool calls
-only at the `none` effort
-([migration guide](https://developers.openai.com/api/docs/guides/migrate-to-responses)): tools with
-`thinking=True` raise `RequestError` unless `thinking_effort="none"`, while the earlier reasoning
-models (`gpt-5` to `gpt-5.3`, `o3`, and `o4-mini-deep-research`) take them at any effort.
+Every OpenAI model in the inventory passed every scenario on 2026-10-02, through the Responses
+API (`scripts/probe_models.py --suite full`, report `20261002T041947Z`: 77 of 77), Astra and
+GPT-6.1 Sol with tools for the first time. The OpenAI live checks
+(`pytest -m live_api tests/integration -k openai`: system prompt merging, a plain Pydantic
+`output_schema`, a parallel tool-call replay, complete and streamed, thinking on and off, and a
+4xx under a cost cap) passed 6 of 6, in three runs.
 
 | Model | Plain | Tools | Structured | JSON Mode | Stream | Thinking | Notes |
 |---|---|---|---|---|---|---|---|
+| `gpt-6-astra` | Pass | Pass | Pass | Pass | Pass | Pass | Uses `thinking_effort="low"` in probes. |
+| `gpt-6.1-sol` | Pass | Pass | Pass | Pass | Pass | Pass | Uses `thinking_effort="low"` in probes. |
+| `gpt-6-sol` | Pass | Pass | Pass | Pass | Pass | Pass | Uses `thinking_effort="low"` in probes. |
+| `gpt-6-luna` | Pass | Pass | Pass | Pass | Pass | Pass | Uses `thinking_effort="low"` in probes. |
 | `gpt-5.5` | Pass | Pass | Pass | Pass | Pass | Pass | Uses `thinking_effort="low"` in probes. |
 | `gpt-5.4` | Pass | Pass | Pass | Pass | Pass | Pass | Uses `thinking_effort="low"` in probes. |
 | `gpt-5.4-mini` | Pass | Pass | Pass | Pass | Pass | Pass | Uses `thinking_effort="low"` in probes. |
 | `gpt-5.4-nano` | Pass | Pass | Pass | Pass | Pass | Pass | Uses `thinking_effort="low"` in probes. |
-| `gpt-4.1` | Pass | Pass | Pass | Pass | Pass | Not probed | No thinking scenario enabled. |
+| `gpt-4.1` | Pass | Pass | Pass | Pass | Pass | Not probed | Does not reason: no thinking scenario. |
 | `gpt-5-mini` | Pass | Pass | Pass | Pass | Pass | Pass | Needs a larger output budget than newer GPT-5 IDs in probes. |
 | `gpt-5-nano` | Pass | Pass | Pass | Pass | Pass | Pass | Needs a larger output budget than newer GPT-5 IDs in probes. |
 | `gpt-5` | Pass | Pass | Pass | Pass | Pass | Pass | Needs a larger output budget than newer GPT-5 IDs in probes. |
-| `o3` | Pass | Pass | Pass | Pass | Pass | Pass | Exact `o3` routes to OpenAI and uses `max_completion_tokens`. |
+| `o3` | Pass | Pass | Pass | Pass | Pass | Pass | Exact `o3` routes to OpenAI. |
 
 ## xAI
 
@@ -311,6 +367,11 @@ pricing entries of their own but were not probed.
 - `claude-opus-4-7` returned incomplete tool arguments in repeated live probes, although the
   adapter sends the expected schema.
 - The prepared live checks (`tests/integration/test_provider_hardening_live.py`) of the
-  per-model thinking rules above have not run live.
+  per-model thinking rules above have run live only for OpenAI (2026-10-02).
+- On OpenAI's host, a batch on `/v1/responses` passed OpenAI's validation live on 2026-10-02 (the
+  requests are well formed), but its results have not been read live yet. An assistant turn
+  rebuilt from its fields (its `_raw` dropped, edited, or from another provider) was accepted live
+  the same day. OpenAI's reasoning guide says reasoning summaries may require a verified
+  organization; what `thinking=True` gets without one has not been seen.
 - The results above are only as current as the last probe run: SDK upgrades, provider API
   changes, and inventory changes call for a new full run.

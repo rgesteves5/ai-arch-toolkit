@@ -83,7 +83,7 @@ for event in llm.stream_events_sync("Hello"):   # sync rich events (SyncRichStre
 
 The messages argument is a string (one user message) or a list of message dicts, and a message's content is `Content` — a string or a multimodal list. See [Content & Messages](content.md).
 
-`system=` never replaces the `system()` messages in `messages`, or the other way round: Anthropic, Gemini and xAI receive one system prompt with `system=` first and the `system()` messages after it, separated by a blank line, while the OpenAI adapter (and OpenAI-compatible servers) sends `system=` as a leading system message and keeps each `system()` message at its position — batch requests included. The Meta adapter behaves like the OpenAI one, with `system=` sent as the Responses API's `instructions`.
+`system=` never replaces the `system()` messages in `messages`, or the other way round: Anthropic, Gemini and xAI receive one system prompt with `system=` first and the `system()` messages after it, separated by a blank line, while the OpenAI and Meta adapters send `system=` as the Responses API's `instructions` and keep each `system()` message at its position — batch requests included. An OpenAI-compatible server (Chat Completions) gets `system=` as a leading system message, and each `system()` message at its position.
 
 A system message's content is text: a string, or a list of strings and `cache()` parts, joined by a blank line. The Anthropic adapter keeps a `cache()` part's cache marker, sending the system prompt as text blocks, so a long system prompt can be cached; the other adapters send its text. An image or a document in a system message raises `TypeError` — send it in a user message.
 
@@ -101,7 +101,7 @@ response.parsed         # structured output (if output_schema used)
 response.usage          # Usage(input_tokens, output_tokens, cache_write_tokens, cache_read_tokens)
 response.cost           # exact provider cost when reported, otherwise estimated USD
 response.provider_cost  # exact provider-reported USD, or None
-response.stop_reason    # the provider's own value: "end_turn" (Anthropic), "stop" (OpenAI), etc.
+response.stop_reason    # the provider's own value: "end_turn" (Anthropic), "completed" (OpenAI, Meta), "stop" (OpenAI-compatible servers), etc.
 response.model          # actual model used
 response.citations      # tuple of Citation (web search results)
 response.attempts       # tuple of Attempt (retry/fallback history)
@@ -256,9 +256,9 @@ item arrives, since the rest of its lifetime follows the caller's consumption.
 
 ## Token counting
 
-Provider-accurate counts from the provider's token-counting endpoint (Anthropic, Gemini, and Meta;
-the OpenAI and xAI adapters raise `NotImplementedError`, and on Gemini a system prompt raises
-`RequestError` and tools are not counted):
+Provider-accurate counts from the provider's token-counting endpoint (Anthropic, Gemini, OpenAI,
+and Meta; the xAI adapter and OpenAI-compatible servers raise `NotImplementedError`, and on Gemini
+a system prompt raises `RequestError` and tools are not counted):
 
 ```python
 token_count = await llm.count_tokens(messages, system="...", tools=tools)
@@ -387,23 +387,28 @@ current generation.
 |---|---|---|---|
 | Anthropic: Claude 5 family, Mythos Preview, Opus 4.8, 4.7, 4.6, Sonnet 4.6 | adaptive thinking, summarized | `low` to `max` (no `xhigh` on Mythos Preview and the 4.6 models), applies alone | ignored, with a warning |
 | Anthropic: Opus, Sonnet, Haiku 4.5 and older | a budget of 10,000 tokens | a budget (2,048, 5,000 or 10,000), turns thinking on | at least 1,024; turns thinking on |
-| OpenAI | sends `reasoning_effort` (`high` unless an effort is given); `RequestError` on a model that does not reason | only with `thinking=True`, checked per model | ignored, with a warning |
+| OpenAI (`api.openai.com`) | sends `reasoning.effort` (`high` unless an effort is given) and asks for reasoning summaries (none at `none`); `RequestError` on a model that does not reason | checked per model, applies alone (`"none"` stops a model that reasons by default) | ignored, with a warning |
+| OpenAI-compatible servers (`base_url=` on another host) | sends `reasoning_effort` (`high` unless an effort is given); the server's reasoning deltas become thinking | only with `thinking=True`, any effort the SDK names | ignored, with a warning |
 | Gemini 3 | thought summaries, and level `high` when no effort is given | the model's thinking levels, applies alone | ignored, with a warning |
 | Gemini 2.5 | thought summaries, and a budget of 10,000 when no effort is given | a budget (2,048, 5,000 or 10,000) | within the model's documented range |
 | xAI | nothing more; `RequestError` on a model that does not reason | `reasoning_effort` where the model documents one, applies alone | ignored, with a warning |
 | Meta (Muse Spark) | reasoning summaries | `minimal` to `xhigh`, and `max` on standard `muse-spark-1.3`; applies alone | ignored, with a warning |
 
-From GPT-5.4 on, OpenAI's Chat Completions takes tool calls only at the `"none"` effort: with
-tools, `thinking=True` raises `RequestError` unless `thinking_effort="none"` (reasoning with tools
-needs the Responses API). GPT-6 Sol and Luna reason at `medium` when no effort is sent, so a tool
-call that asks for no thinking is sent at `"none"`; GPT-6 Astra and GPT-6.1 Sol take no `"none"`
-and call no tools here.
+On OpenAI's own host, tool calls go at any effort. Without `thinking` or `thinking_effort` no
+effort is sent and the model runs at its default: GPT-5, GPT-5.5, GPT-5.6, `o3`, the pro models
+and the GPT-6 models reason at `medium` (GPT-5 pro and GPT-5.5 pro at `high`) even then, while
+GPT-5.1, 5.2, 5.3 Codex and 5.4 run at `"none"`. `thinking_effort` applies on its own: pass
+`thinking_effort="none"` to stop a model that reasons by default from reasoning, where the model
+takes `"none"`; GPT-6 Astra, GPT-6.1 Sol and the pro models take no `"none"` and always reason. A model that reasons
+gets no `temperature` other than 1 (the `LLM` always sends one, so it is dropped), and a GPT-6
+model that reasons gets no sampling parameter or logprobs at all.
 
 On the Anthropic models that take a budget, the budget is added to `max_tokens`, so the answer
 keeps its room; elsewhere reasoning tokens count toward `max_tokens`, so keep that budget
-generous. Meta's raw reasoning stays encrypted: append `response.to_message()` to the
-conversation and the next request replays it, so a tool loop keeps its chain of thought (the
-Anthropic and Gemini adapters replay their providers' thinking signatures the same way). See
+generous. OpenAI's and Meta's raw reasoning stays encrypted: append `response.to_message()` to
+the conversation and the next request replays it to the same model family, so a tool loop keeps
+its chain of thought (the Anthropic and Gemini adapters replay their providers' thinking
+signatures the same way). See
 [Model Compatibility](model-compatibility.md) for each provider's models and limits.
 
 ---

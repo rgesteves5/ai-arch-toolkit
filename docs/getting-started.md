@@ -153,6 +153,8 @@ it by accident:
 llm = LLM("llama-3.3-70b", base_url="https://api.together.xyz/v1", api_key=together_key)
 ```
 
+These servers get Chat Completions, with none of OpenAI's model rules; OpenAI's
+own host (no `base_url`, or `api.openai.com`) goes through the Responses API.
 Reasoning deltas from these servers (`reasoning_content` / `reasoning`) surface
 as real-time `thinking` events in `stream_events()` (each event is a fragment —
 `event.partial` is `True`) and as complete `Response.thinking` blocks.

@@ -44,8 +44,8 @@ Stateless, async-first foundation. All new code should build on this.
 
 ### Providers
 
-- **`BaseProvider`** ABC → `AnthropicProvider`, `OpenAIProvider`, `XAIProvider`, `GeminiProvider`, `MetaProvider`
-- Factory: `create_provider()` routes by model prefix (`claude-` → Anthropic, `gpt-`/`chat-`/`o1-`/`o3-`/`o4-` and the bare `o1`/`o3`/`o4` → OpenAI, `grok-` → xAI, `gemini-` → Gemini, `muse-spark-` → Meta); an unknown model with `base_url=` falls back to the OpenAI-compatible adapter (Ollama, LM Studio, vLLM)
+- **`BaseProvider`** ABC → `AnthropicProvider`, `OpenAIProvider`, `OpenAICompatibleProvider`, `XAIProvider`, `GeminiProvider`, `MetaProvider`; `OpenAIProvider` and `MetaProvider` are two profiles over a shared Responses API core (`_responses.py`)
+- Factory: `create_provider()` routes by model prefix (`claude-` → Anthropic, `gpt-`/`chat-`/`o1-`/`o3-`/`o4-` and the bare `o1`/`o3`/`o4` → OpenAI, `grok-` → xAI, `gemini-` → Gemini, `muse-spark-` → Meta); an unknown model with `base_url=` falls back to the OpenAI-compatible adapter (Ollama, LM Studio, vLLM). Within OpenAI the host decides the API: OpenAI's own host (no `base_url`, or `api.openai.com`) goes through the Responses API, any other `base_url` through Chat Completions, with no OpenAI model rule
 
 ```python
 from ai_arch_toolkit import LLM
@@ -250,7 +250,7 @@ src/ai_arch_toolkit/
 │   ├── _policy.py       # Policy (retry, timeout, confidence, cost)
 │   ├── _trace.py        # Trace, StepTrace, PolicyDecision
 │   ├── _step_engine.py  # execute_step() — policy-enforced execution
-│   ├── _providers/      # BaseProvider → Anthropic, OpenAI, xAI, Gemini, Meta
+│   ├── _providers/      # BaseProvider → Anthropic, OpenAI, OpenAI-compatible, xAI, Gemini, Meta
 │   ├── _tools/          # @tool decorator, ToolGroup, schema inference
 │   ├── _metering/       # The neutral meter: MeterScope, RunConfig, admission
 │   ├── graph/           # General-purpose graph layer
