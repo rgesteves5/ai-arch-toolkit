@@ -1,7 +1,7 @@
 # O03 · OpenAI pela Responses no host oficial; Chat Completions só para servidores compatíveis
 
-- **Dono:** por atribuir · **Estado:** todo · **Depende de:** O01 (resultados das verificações 2
-  a 7), O02
+- **Dono:** por atribuir · **Estado:** todo · **Depende de:** O02 (a O01 está feita: os factos
+  estão no "O que isto fixa" da ficha dela)
 - **Origem:** D43 · **Decisões:** D43 · **Regras:** `R00-rules.md`
 
 ## Problema
@@ -22,20 +22,22 @@
 - Nenhuma escolha de endpoint na API pública: o `create_provider` escolhe pelo host. Os nomes das
   classes são internos.
 
-## Desenho (confirma-o na nota de desenho; os factos vêm da O01)
+## Desenho (confirma-o na nota de desenho; os factos vêm da O01, medidos a 2026-10-02)
 
 - **Pedido:**
-  - `store: false`, e o raciocínio cifrado da maneira que a O01 mostrar (por omissão ou com
-    `include`);
+  - `store: false`, sem `include`: o raciocínio vem cifrado por omissão (O01);
   - `reasoning.effort` pelas regras de cada modelo, e `reasoning.summary` com `thinking=True`;
   - `max_output_tokens`, e `text.format` para `output_schema` e `json_mode`;
   - logprobs com `top_logprobs` e o `include` deles;
-  - `strict: false` explícito nas function tools, para manter o comportamento de hoje.
+  - `strict: false` explícito nas function tools: sem ele, a OpenAI reescreve o schema em modo
+    strict e torna obrigatórios os parâmetros opcionais (O01).
 - **Regras por modelo:** a tabela de perfis passa às regras da Responses. Deixa de haver "tools só
-  a `none`". O sampling dos GPT-6 vai só a `none`, e o Astra e o 6.1 Sol continuam sem `none`.
-  Cada regra leva o URL da documentação.
+  a `none`". O sampling dos GPT-6 vai só a `none`, como na Chat Completions, e o Astra e o 6.1 Sol
+  continuam sem `none`. O `max` volta para os GPT-6: a Responses aceita-o e a Chat Completions não
+  (O01). Cada regra leva o URL da documentação, ou a prova ao vivo.
 - **Parâmetros sem lugar na Responses:** `stop`, `seed`, `frequency_penalty` e `presence_penalty`
-  levantam `RequestError` no host oficial (D43). O `response_format` cru fica por fixar (abaixo).
+  levantam `RequestError` no host oficial (D43). Ao vivo, os dois primeiros dão 400 e os outros
+  dois 500 ao fim de ~90 s (O01). O `response_format` cru fica por fixar (abaixo).
 - **Batch:** endpoint `/v1/responses` (o SDK aceita-o). Os resultados lêem-se pelo endpoint de
   cada batch, para os batches submetidos antes continuarem a ler-se.
 - **Contagem de tokens:** `responses.input_tokens.count`, como a Meta. O OpenAI hoje não conta

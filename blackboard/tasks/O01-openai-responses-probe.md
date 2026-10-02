@@ -1,10 +1,10 @@
 # O01 · Sonda ao vivo: a Responses do OpenAI contra a Chat Completions
 
-- **Dono:** por atribuir (o script) · dono do repositório (a execução) · **Estado:** todo ·
+- **Dono:** Claude (o script e a execução: o dono pediu-o em 2026-10-02) · **Estado:** done ·
   **Depende de:** nada
 - **Origem:** D43; LOG de 2026-09-28 (os custos relatados da porta) · **Decisões:** D43 ·
-  **Regras:** `R00-rules.md`. A proibição de chamadas a fornecedores mantém-se para o agente: o
-  script chama a OpenAI, mas só o dono o corre.
+  **Regras:** `R00-rules.md`, com uma excepção dada pelo dono em 2026-10-02: o Claude corre o
+  script, que faz chamadas pagas à OpenAI com um tecto de custo.
 
 ## Problema
 
@@ -48,16 +48,82 @@ A D43 assenta em factos que só se vêem ao vivo, e alguns dos números conhecid
 ## Ficheiros
 
 - `scripts/probe_openai_responses.py` (novo)
-- `tests/test_probe_openai_responses.py` (novo; só a lógica sem rede, com os sockets fechados)
-- `scripts/model_probe_notes.md` (os resultados, pelo dono)
+- `tests/test_probe_openai_responses.py` (novo; só a lógica sem rede)
+- `scripts/model_probe_notes.md` (os resultados)
 
 ## Critério
 
-- O dono corre o script e regista os números aqui e em `scripts/model_probe_notes.md`.
+- O script corre com a autorização do dono, e os números ficam aqui e em
+  `scripts/model_probe_notes.md`.
 - A O03 só começa com as verificações 2 a 7 respondidas: são elas que fixam o pedido.
 - A latência decide se a D43 avança como está. Se a Responses for claramente mais lenta, decide o
   dono, com os números à frente.
 
 ## Registo do dono
 
-- Estado: todo.
+- Estado: done (2026-10-02). Corrida final `openai-responses-20261002T022338Z`, em
+  `scripts/output/model-probes/` (ignorado pelo git), com 6 repetições. Custou $0.03, mais
+  quatro pedidos avulsos de `max`, de custo desprezável.
+- Ficheiros: `scripts/probe_openai_responses.py` (novo), `tests/test_probe_openai_responses.py`
+  (novo, 8 testes sem rede), `scripts/model_probe_notes.md` (as notas em inglês).
+- Duas corridas exploratórias corrigiram o script antes da final:
+  - um modelo que vê qual tool chamar não devolve item de raciocínio, por isso a pergunta das
+    verificações 3 e 4 obriga-o a pensar primeiro;
+  - a mensagem do utilizador não tem `type`.
+
+### Resultados
+
+1. **Latência: a Responses não fica atrás.** Valores p50.
+   - Luna a `none`: 1,11 s contra 1,35 s; primeiro token em stream 0,50 s contra 0,65 s.
+   - 6.1 Sol a `low`: 2,49 s contra 2,36 s; primeiro token 1,10 s contra 1,27 s.
+   - Loop de tools da Luna a `none`: 1,02 s e 0,93 s por volta, contra 0,91 s e 0,87 s.
+   - A cache rendeu o mesmo nos dois endpoints (2527 de 3049 tokens em média).
+   - Os 2 a 3× do relato de terceiros não se viram, nesta janela de minutos e com N=6.
+   - A Responses contou menos tokens de entrada para a mesma tool: 69 contra 151.
+2. **Raciocínio sem estado.** Com `store: false`, o `encrypted_content` vem por omissão. O
+   `include` legado ainda é aceite.
+3. **Itens sem par e reenvio por id.** A OpenAI aceita o que a Meta recusa:
+   - o raciocínio só por id, sem `encrypted_content`;
+   - o raciocínio seguido de uma mensagem do utilizador, em vez da sua call;
+   - a volta reconstruída sem raciocínio (o caminho de reconstrução funciona).
+4. **Outra família.** O raciocínio da Luna reenviado ao 6.1 Sol e ao `gpt-5.5` é aceite; o
+   servidor ignora-o, ou usa-o, sem erro.
+5. **`strict` omitido.** A OpenAI reescreve o schema em modo strict: devolve `strict: true`,
+   todas as propriedades obrigatórias e `additionalProperties: false`. Um parâmetro opcional
+   passa a obrigatório sem aviso. Com `strict: false`, o schema fica como foi enviado.
+6. **Parâmetros que a Responses não tem.**
+   - `stop` e `seed` dão 400 `unknown_parameter`.
+   - `frequency_penalty` e `presence_penalty` dão 500 ao fim de cerca de 90 s, em três corridas
+     de três. Com o retry do `LLM`, a espera repetir-se-ia.
+7. **Sampling.** As regras são as da Chat Completions:
+   - a Luna só aceita `temperature` e `top_p` a `none`;
+   - o 6.1 Sol recusa `temperature` nos dois endpoints;
+   - os logprobs a `none` vêm com `top_logprobs` e `include: ["message.output_text.logprobs"]`.
+8. **Capacidades.**
+   - Tools com raciocínio funcionam na Responses: no 6.1 Sol a `low`, e na Luna no loop.
+   - Os resumos com `summary: "auto"` chegam (Luna).
+   - A Chat Completions recusa tools com raciocínio no 6.1 Sol (ao effort por omissão e a
+     `none`) e na Luna a `low`.
+   - O `max` é recusado pela Chat Completions em todos os GPT-6, e aceite pela Responses no
+     6.1 Sol.
+   - As mensagens trazem `phase: "final_answer"`, e as function calls não trazem outros campos.
+
+### O que isto fixa
+
+- **A D43 avança:** a latência medida não é pior.
+- **O03, pedido:**
+  - sem `include`;
+  - `strict: false` explícito, porque sem ele as tools mudam de semântica;
+  - `RequestError` antes de enviar para as quatro kwargs;
+  - a tabela de sampling de hoje mantém-se;
+  - logprobs com `top_logprobs` e o seu `include`;
+  - o perfil da Responses aceita `max` nos GPT-6;
+  - o reenvio mantém o `phase`.
+- **O02:** a guarda de fornecedor e família continua certa. Na OpenAI evita carga inútil, não
+  erros. O risco é a Meta receber raciocínio da OpenAI: já recusou com 400 um item de raciocínio
+  que não conseguia resolver (M01).
+  O reenvio deve usar `by_alias=True`: o SDK tem campos com alias, como o `async`, que a OpenAI
+  ainda não manda.
+- **Corrigido fora do plano:** o adaptador mandava `max` aos GPT-6 pela Chat Completions, que
+  responde 400. O teste falhou antes da correcção, e os quatro modelos foram verificados ao vivo.
+  Fica no `CHANGELOG` (Fixed), no `AGENTS.md` e no `docs/model-compatibility.md`.

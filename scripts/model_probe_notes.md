@@ -78,3 +78,36 @@ Keep entries factual: model ID, scenario, observed error, and the local action t
 - As a precaution, the sanitizer also redacts the Meta key format (`LLM|<digits>|...`) in
   probe reports.
 
+
+## 2026-10-02
+
+- Front O probe, `scripts/probe_openai_responses.py` (report `openai-responses-20261002T022338Z`,
+  $0.03): the Responses API against Chat Completions on `gpt-6-luna` and `gpt-6.1-sol`, 6
+  repeats per scenario.
+- Latency, p50: no penalty for Responses.
+  - Luna at `none`: 1.11 s against 1.35 s on Chat Completions; first streamed token 0.50 s
+    against 0.65 s.
+  - `gpt-6.1-sol` at `low`: 2.49 s against 2.36 s; first streamed token 1.10 s against 1.27 s.
+  - A two-turn tool loop on Luna at `none`: 1.02 s and 0.93 s per turn, against 0.91 s and
+    0.87 s.
+  - The same cached tokens on a repeated 3,000-token prefix (2,527 on average, on both).
+- Responses counted fewer input tokens for the same tool: 69 against 151 on the loop's first turn.
+- With `store: false`, reasoning items carry `encrypted_content` without `include`; the legacy
+  `include: ["reasoning.encrypted_content"]` is still accepted.
+- OpenAI accepts replays that Meta refuses: a reasoning item by id without its encrypted content,
+  a reasoning item followed by a user message instead of its call, and Luna's reasoning replayed
+  to `gpt-6.1-sol` and to `gpt-5.5`.
+- A function tool without `strict` is rewritten into strict mode: the response echoes
+  `strict: true`, with every property required and `additionalProperties: false`. With
+  `strict: false` the schema stays as sent.
+- `stop` and `seed` get a 400 `unknown_parameter`; `frequency_penalty` and `presence_penalty` get
+  a 500 after about 90 s, three runs out of three.
+- Sampling follows the Chat Completions rules: Luna takes `temperature` and `top_p` only at
+  `none`, and `gpt-6.1-sol` refuses `temperature` on both endpoints. Logprobs at `none` come with
+  `top_logprobs` plus `include: ["message.output_text.logprobs"]`.
+- Chat Completions refuses the `max` effort for every GPT-6 model ("Supported values are: ...
+  'high', and 'xhigh'"; Astra, Sol and Luna checked one request each), while Responses takes it
+  for `gpt-6.1-sol`. The adapter now raises `RequestError` for `max` on the four.
+- Chat Completions refuses tools with reasoning on `gpt-6.1-sol` (at its default effort and at
+  `none`) and on Luna at `low`: "use /v1/responses or set reasoning_effort to 'none'".
+- Responses messages carry `phase: "final_answer"`; function_call items carry no other fields.

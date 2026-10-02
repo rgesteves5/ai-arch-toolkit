@@ -2,7 +2,8 @@
 
 ## Frente activa: OpenAI pela Responses API
 
-- **Estado:** aberta em 2026-10-01, a pedido do dono. Fichas O01 a O04 escritas; nenhuma começou.
+- **Estado:** aberta em 2026-10-01, a pedido do dono. A O01 está feita (2026-10-02): a latência
+  da Responses não fica atrás, e o pedido da O03 ficou fixado. A O02 pode começar.
 - **Decisão:** D43. O host oficial passa à Responses, a Chat Completions fica para os servidores
   compatíveis, e a API pública não ganha escolha de endpoint.
 - **Origem:** desde o GPT-5.4 a Chat Completions só aceita tools com effort `none`. Dos três
@@ -20,16 +21,16 @@
     da O03.
   - A frente T não toca em adaptadores.
 - **Como correr:**
-  - A O01 escreve-a um agente, mas corre-a o dono, porque são chamadas pagas.
+  - A O01 escreveu-a e correu-a o Claude, com autorização do dono para as chamadas pagas.
   - A O02 pode começar já, num agente com contexto limpo.
-  - A O03 espera pelos resultados da O01 e pela O02.
+  - A O03 espera pela O02.
   - Os agentes não fazem commits nem chamadas a fornecedores; o dono revê e commita.
 
 | ID | Tarefa | Dono | Estado | Depende de |
 |---|---|---|---|---|
-| O01 | Sonda ao vivo: a Responses do OpenAI contra a Chat Completions (latência, reenvio, `strict`) | — (script); dono (execução) | todo | nada |
+| O01 | Sonda ao vivo: a Responses do OpenAI contra a Chat Completions (latência, reenvio, `strict`) | Claude (script e execução, a pedido do dono) | done | nada |
 | O02 | Núcleo Responses partilhado, extraído do `_meta.py`; reenvio só ao mesmo fornecedor e família | — | todo | nada |
-| O03 | OpenAI pela Responses no host oficial; Chat Completions só para servidores compatíveis | — | todo | O01, O02 |
+| O03 | OpenAI pela Responses no host oficial; Chat Completions só para servidores compatíveis | — | todo | O02 |
 | O04 | Documentação, quebras visíveis e verificação ao vivo final | — (docs); dono (ao vivo) | todo | O03 |
 
 ### Quebras visíveis
@@ -282,9 +283,10 @@ que ficou aberto está em "Por fazer".
 - **xAI:** repor créditos na conta e depois correr `uv run pytest -m live_api -k xai` (custo por
   pedido) e um probe com uma tool cujo parâmetro seja `Any` (schema sem tipo) e com `system=` +
   `system()` ao mesmo tempo — únicas mudanças desta frente que o xAI ainda não confirmou.
-- **Modelos novos ao vivo:** os probes do GPT-6 Astra e do GPT-6.1 Sol (todos menos tools, que
-  eles recusam na Chat Completions) nunca correram, e o Grok 4.7 e o Opus 5.5 ainda não correram ao
-  vivo (`docs/model-compatibility.md`). Para os dois da OpenAI:
+- **Modelos novos ao vivo:** os probes do inventário do GPT-6 Astra e do GPT-6.1 Sol (todos menos
+  tools, que eles recusam na Chat Completions) nunca correram, e o Grok 4.7 e o Opus 5.5 ainda não
+  correram ao vivo (`docs/model-compatibility.md`). A sonda da O01 já confirmou as regras do 6.1 Sol
+  e o `max` recusado nos quatro GPT-6. Para os dois da OpenAI:
   `uv run python scripts/probe_models.py --suite full --model gpt-6-astra --model gpt-6.1-sol`.
 - **Frente C, decisões:** fixar as da vaga 1 (C02, C06, C07, C08) antes de atribuir donos; a C07 e
   a C08 só começam depois da T01 e da T03.

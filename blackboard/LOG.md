@@ -543,3 +543,24 @@ R01 publicada em `main` (`b3dae3f`); a R02 começa com a leitura obrigatória da
 - Commitado e publicado em `main` a pedido do dono: `e18fcb5` (o `gpt-6.1-sol`) e o registo da
   frente O.
 - Próximo: a O02 pode começar; a O01 precisa do script e de o dono o correr.
+
+## 2026-10-02 · O01: a sonda da Responses (Claude, a pedido do dono)
+
+- O dono aceitou a licença do Xcode, que bloqueava o `git`, e pediu que o Claude escrevesse e
+  corresse a sonda. As chamadas pagas à OpenAI ficaram autorizadas, com tecto.
+- `scripts/probe_openai_responses.py` com 8 testes sem rede. Duas corridas exploratórias
+  corrigiram o script, e a final é a `openai-responses-20261002T022338Z`. Custo total: $0.03.
+- A latência da Responses não fica atrás: os p50 são iguais ou melhores, e a cache rende o mesmo.
+  A porta da D43 passa.
+- Os factos que fixam o pedido da O03 estão na ficha da O01:
+  - o raciocínio vem cifrado sem `include`;
+  - sem `strict`, a OpenAI reescreve o schema em modo strict;
+  - `frequency_penalty` e `presence_penalty` dão 500 ao fim de ~90 s;
+  - as regras de sampling são as da Chat Completions;
+  - a OpenAI tolera reenvios que a Meta recusa.
+- Encontrado e corrigido: a Chat Completions recusa o `max` em todos os GPT-6, embora as páginas
+  o listem. Verificado ao vivo nos quatro, com o teste a falhar antes; ficou no `CHANGELOG`
+  (Fixed), no `AGENTS.md` e nos docs.
+- Commitado e publicado em `main` a pedido do dono: `7d72003` (a correcção do `max`) e o commit da
+  sonda, com as notas e o blackboard.
+- Próximo: a O02, num agente com contexto limpo.
