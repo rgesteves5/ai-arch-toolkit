@@ -521,3 +521,19 @@ Só acrescentar. Uma decisão revista ganha uma nova entrada que diz qual substi
      alguém pedir.
 - **Consequência:** a O03 fica sem escolhas abertas; a config tipada das server tools continua na
   C05.
+
+## D45 · No OpenAI, o `thinking_effort` aplica-se sozinho (frente O)
+
+- **Contexto:** o achado de 2026-09-18 ("o OpenAI ignora o `thinking_effort` sem `thinking=True`,
+  sem aviso") esperava decisão do dono. Com a Responses ficou claro que é um erro: os GPT-5, 5.5,
+  5.6, o3 e GPT-6 raciocinam a `medium` sem esforço enviado (medido a 2026-10-02), e quem passava
+  `thinking_effort="none"` para os desligar ficava a raciocinar sem saber. Os outros quatro
+  fornecedores já aplicam o esforço sozinho (D13, D25). O dono pediu, a 2026-10-02, que os bugs
+  encontrados pelo caminho fossem corrigidos.
+- **Decisão:** no host oficial, o `thinking_effort` vai como `reasoning.effort` com ou sem
+  `thinking`, verificado contra os esforços do modelo; um modelo que não raciocina levanta
+  `RequestError`. O `thinking=True` acrescenta o resumo (`summary: "auto"`), com o esforço dado
+  ou `high`. Os servidores compatíveis não mudam.
+- **Consequência:** muda o fio de quem passava um esforço sem `thinking` (fica no `CHANGELOG`,
+  Fixed). Verificado ao vivo: `thinking_effort="none"` sozinho baixa a saída do `gpt-5.5` de 35
+  para 5 tokens.

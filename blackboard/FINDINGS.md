@@ -956,3 +956,22 @@ o batch à tarifa normal, as imagens que o xAI larga, o `thinking_effort` que o 
 29 dos 47 exemplos não têm `from __future__ import annotations`; o `24` lista o `csv_read` como
 seguro e escreve "All tools available" com 19 nomes; a docstring do `32` promete passos com `when`
 que o código não usa; a do `36` fala de chaves da Anthropic e do xAI que o script não usa.
+
+## 2026-10-02 · Frente O (Claude): achados fechados
+
+- "OpenAI: `thinking_effort` sem `thinking=True` perde-se em silêncio" → resolvido pela D45: o
+  esforço aplica-se sozinho no host oficial.
+- "Os resultados de batch são preçados à tarifa normal" → resolvido: `_estimate_response_cost` e o
+  `BaseProvider._answer` recebem `batch`, e os caminhos de batch do OpenAI (Responses e Chat
+  Completions), dos servidores compatíveis e da Anthropic preçam à tarifa de batch. Testes que
+  falharam antes com o dobro do custo.
+- Encontrados e corrigidos na O04, sem entrada anterior:
+  - a tabela de regras do OpenAI supunha que um modelo da geração actual não raciocina sem
+    esforço enviado; o gpt-5, os 5.5, os 5.6, o o3 e os GPT-6 raciocinam e recusavam a
+    `temperature` que o `LLM` manda sempre (400). Os esforços e o esforço por omissão de cada
+    modelo passaram a vir de medições ao vivo;
+  - o teste ao vivo do 4xx usava `max_tokens=10_000_000`, que a Responses aceita; passou a
+    `top_logprobs=50`.
+- Fica por resolver, fora do âmbito: `research/agent-strategies/02-react.md` (linhas 13 e 144) e
+  `00-index.md` (linha 65) dizem que o OpenAI não reenvia o raciocínio; a R00 não deixa tocar em
+  `research/`.

@@ -368,10 +368,9 @@ pricing entries of their own but were not probed.
   adapter sends the expected schema.
 - The prepared live checks (`tests/integration/test_provider_hardening_live.py`) of the
   per-model thinking rules above have run live only for OpenAI (2026-10-02).
-- On OpenAI's host, a batch on `/v1/responses` passed OpenAI's validation live on 2026-10-02 (the
-  requests are well formed), but its results have not been read live yet. An assistant turn
-  rebuilt from its fields (its `_raw` dropped, edited, or from another provider) was accepted live
-  the same day. OpenAI's reasoning guide says reasoning summaries may require a verified
-  organization; what `thinking=True` gets without one has not been seen.
+- OpenAI's reasoning guide says reasoning summaries may require a verified organization; what
+  `thinking=True` gets without one has not been seen. (A batch on `/v1/responses`, read back at
+  the batch rates, and an assistant turn rebuilt from its fields both passed live on
+  2026-10-02.)
 - The results above are only as current as the last probe run: SDK upgrades, provider API
   changes, and inventory changes call for a new full run.

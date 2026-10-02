@@ -564,3 +564,21 @@ R01 publicada em `main` (`b3dae3f`); a R02 começa com a leitura obrigatória da
 - Commitado e publicado em `main` a pedido do dono: `7d72003` (a correcção do `max`) e o commit da
   sonda, com as notas e o blackboard.
 - Próximo: a O02, num agente com contexto limpo.
+
+## 2026-10-02 · Frente O concluída (Claude, a pedido do dono)
+
+- O dono pediu só a frente O, até ao fim, com os bugs encontrados corrigidos pelo caminho.
+- O02 (`afdf4a6`): o núcleo da Responses API sai do `_meta.py` para o `_responses.py`. O reenvio
+  passa a ser só para o mesmo fornecedor e família, e os itens vão com os nomes do fio.
+- D44 e O03 (`d97273d`): o host oficial da OpenAI vai pela Responses, e os outros hosts pela
+  Chat Completions (`_openai_compatible.py`), com o mesmo pedido de antes.
+- O04:
+  - a verificação ao vivo achou a tabela de regras errada (`temperature` recusada pelos modelos
+    que raciocinam sem esforço enviado);
+  - esforços medidos modelo a modelo, `thinking_effort` sozinho (D45) e batch à tarifa de batch
+    (`17e0938`);
+  - docs (`2e73faa`).
+- Ao vivo: 77 de 77 probes em 13 modelos OpenAI, os testes `live_api -k openai` (6 de 6, três
+  vezes), um turno reconstruído e um batch em `/v1/responses` lido à tarifa de batch.
+- Gate: 6086 passed, 42 skipped; ruff, formatação e pyright limpos.
+- Por publicar: os commits desde `c1cfdfb` estão só no `main` local, à espera da revisão do dono.
