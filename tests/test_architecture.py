@@ -222,6 +222,29 @@ def test_sdk_exception_detector_flags_catches_and_checks_outside_the_mapper() ->
     assert not sdk_errors_outside_the_mapper(mapper)
 
 
+def responses_api_calls(source: str) -> list[int]:
+    """Lines that reach the ``openai`` SDK's Responses API (``client.responses…``)."""
+    return [
+        node.lineno
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Attribute) and node.attr == "responses"
+    ]
+
+
+def test_the_responses_api_is_reached_only_by_its_core() -> None:
+    offenders = {
+        path.name
+        for path in (CORE / "_providers").glob("_*.py")
+        if path.name != "_responses.py" and responses_api_calls(path.read_text())
+    }
+    assert offenders == set()
+
+
+def test_the_responses_api_detector_sees_a_call() -> None:
+    assert responses_api_calls("stream = await self._client.responses.create(**params)\n") == [1]
+    assert responses_api_calls("from openai.types.responses import Response\n") == []
+
+
 _NETWORK_MODULES = ("urllib.request", "urllib.error", "http.client", "socket", "ssl")
 _HTTP_DOOR = ROOT / "src/ai_arch_toolkit/toolkit/tools/_http.py"
 

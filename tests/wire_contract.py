@@ -238,9 +238,9 @@ def _meta_item(item: Any) -> Any:
 
 
 def _meta(params: Mapping[str, Any]) -> list[str]:
-    """The Responses request with the three deviations the Meta adapter lists (at the top of
-    ``_meta.py``, each with its live proof) filled in, so the rest is checked strictly. Only a
-    missing field is filled: a wrong value in it is still caught."""
+    """The Responses request with the three deviations the Meta adapter makes (listed at the top
+    of ``_responses.py``, each with its live proof) filled in, so the rest is checked strictly.
+    Only a missing field is filled: a wrong value in it is still caught."""
     from openai.types.responses.response_create_params import ResponseCreateParamsNonStreaming
 
     payload = dict(params)

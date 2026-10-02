@@ -300,7 +300,8 @@ class TestXai:
 
 
 def _adapters() -> set[str]:
-    """Every adapter class defined in ``core/_providers``."""
+    """Every adapter class defined in ``core/_providers`` (an abstract base, such as the Responses
+    core's, is not one)."""
     found: set[str] = set()
     for module in pkgutil.iter_modules(_providers.__path__):
         loaded = importlib.import_module(f"{_providers.__name__}.{module.name}")
@@ -308,7 +309,7 @@ def _adapters() -> set[str]:
             name
             for name, cls in inspect.getmembers(loaded, inspect.isclass)
             if issubclass(cls, BaseProvider)
-            and cls is not BaseProvider
+            and not inspect.isabstract(cls)
             and cls.__module__ == loaded.__name__
         )
     return found

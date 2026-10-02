@@ -351,6 +351,54 @@ class TestInputItems:
         assert [item["type"] for item in items] == ["message", "function_call"]
 
 
+class TestReplayGuard:
+    """A turn's ``_raw`` goes back only to the provider and the model family it came from (D43)."""
+
+    def test_a_turn_from_another_provider_is_rebuilt_without_its_reasoning(self):
+        # An OpenAI response is the same SDK type; Meta answers 400 to a reasoning item it
+        # cannot resolve (M01), so OpenAI's encrypted reasoning must never reach it.
+        turn = _tool_turn()
+        turn.model = "gpt-6-luna"
+        message = _parse_sdk_response(turn, MODEL).to_message()
+
+        items = _input_items([USER, message])
+
+        assert [item.get("type", "user") for item in items] == ["user", "message", "function_call"]
+        assert items[1] == {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "I'll check the weather in Lisbon."}],
+            "phase": "commentary",
+        }
+
+    def test_a_turn_from_another_muse_spark_model_is_replayed(self):
+        # Meta serves one family, Muse Spark: a fallback between its models keeps the reasoning.
+        turn = _tool_turn()
+        turn.model = "muse-spark-1.2"
+        message = _parse_sdk_response(turn, MODEL).to_message()
+
+        items = _input_items([USER, message])
+
+        assert [item.get("type", "user") for item in items] == [
+            "user",
+            "reasoning",
+            "message",
+            "function_call",
+        ]
+
+    def test_replayed_items_carry_the_wire_names(self):
+        # The SDK names the "async" field async_; the request takes it as "async".
+        call = {**_function_call("call_1", "get_weather", {"city": "Lisbon"}), "async": False}
+        turn = _sdk_response(_reasoning(), _message("Checking.", phase="commentary"), call)
+        message = _parse_sdk_response(turn, MODEL).to_message()
+
+        replayed = _request(messages=[USER, message])["input"][3]
+
+        assert replayed["type"] == "function_call"
+        assert replayed["async"] is False
+        assert "async_" not in replayed
+
+
 # ---------------------------------------------------------------------------
 # Request building
 # ---------------------------------------------------------------------------

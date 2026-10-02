@@ -3,7 +3,8 @@
 ## Frente activa: OpenAI pela Responses API
 
 - **Estado:** aberta em 2026-10-01, a pedido do dono. A O01 está feita (2026-10-02): a latência
-  da Responses não fica atrás, e o pedido da O03 ficou fixado. A O02 pode começar.
+  da Responses não fica atrás, e o pedido da O03 ficou fixado. A O02 está feita (2026-10-02):
+  núcleo em `_responses.py`, Meta sobre ele. A O03 pode começar.
 - **Decisão:** D43. O host oficial passa à Responses, a Chat Completions fica para os servidores
   compatíveis, e a API pública não ganha escolha de endpoint.
 - **Origem:** desde o GPT-5.4 a Chat Completions só aceita tools com effort `none`. Dos três
@@ -29,7 +30,7 @@
 | ID | Tarefa | Dono | Estado | Depende de |
 |---|---|---|---|---|
 | O01 | Sonda ao vivo: a Responses do OpenAI contra a Chat Completions (latência, reenvio, `strict`) | Claude (script e execução, a pedido do dono) | done | nada |
-| O02 | Núcleo Responses partilhado, extraído do `_meta.py`; reenvio só ao mesmo fornecedor e família | — | todo | nada |
+| O02 | Núcleo Responses partilhado, extraído do `_meta.py`; reenvio só ao mesmo fornecedor e família | Claude (agente) | done | nada |
 | O03 | OpenAI pela Responses no host oficial; Chat Completions só para servidores compatíveis | — | todo | O02 |
 | O04 | Documentação, quebras visíveis e verificação ao vivo final | — (docs); dono (ao vivo) | todo | O03 |
 

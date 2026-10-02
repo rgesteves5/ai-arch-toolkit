@@ -478,6 +478,10 @@ flows, manifests) needs these changes; each one is detailed below.
   - `select` or `serialize_as` on an inline template (they were ignored).
 
 ### Fixed
+- **Meta: a replayed turn keeps the API's field names, and only Muse Spark turns are replayed.**
+  Replayed output items go out under their wire names (`async`, not the SDK's `async_`), and an
+  assistant turn whose `_raw` came from another provider or model family is rebuilt from its
+  fields, without the reasoning, instead of being replayed.
 - **OpenAI: `thinking_effort="max"` on a GPT-6 model raises `RequestError`.** The model pages of
   GPT-6 Astra, Sol, Luna and 6.1 Sol list a `max` effort, but Chat Completions refuses it for
   each of them with a 400 ("Supported values are: ... 'high', and 'xhigh'", live on 2026-10-02):
