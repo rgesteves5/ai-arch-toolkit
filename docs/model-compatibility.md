@@ -59,9 +59,11 @@ holds the cheap owner-run checks of those rules (`pytest -m live_api -k <provide
 
 `gpt-6-astra` is registered with standard, cached, batch, long-context, and fast
 pricing. The Chat Completions adapter translates `max_tokens`, removes unsupported
-sampling/logprob parameters, and accepts reasoning efforts `low`, `medium`, `high`,
-`xhigh`, and `max`. Its probes (every scenario but tools) are in the inventory but have
-**not been run live** for this model.
+sampling/logprob parameters, and accepts reasoning efforts `low`, `medium`, `high`, and
+`xhigh`. The model page also lists `max`, but Chat Completions refuses it ("Supported values
+are: 'low', 'medium', 'high', and 'xhigh'", live on 2026-10-02); only the Responses API takes
+it. Its probes (every scenario but tools) are in the inventory but have **not been run live**
+for this model.
 
 Tool calling requires Responses and is rejected with an explanatory error by this
 Chat Completions adapter. Astra therefore cannot run tool-using agents here.
@@ -73,18 +75,20 @@ and [model pricing](https://developers.openai.com/api/docs/models/gpt-6-astra).
 `gpt-6.1-sol` is registered with standard, cached, batch, long-context (above 272K input
 tokens), and fast pricing: GPT-6 Sol's rates, with cached input at 5% of input instead of 10%.
 Unlike `gpt-6-sol`, it takes no `none` (nor `minimal`) effort: it reasons at `medium` unless
-sent `low`, `high`, `xhigh`, or `max`. So the adapter treats it like Astra: sampling and logprob
-parameters are dropped, and tool calls raise `RequestError`, since OpenAI documents that Chat
-Completions takes its requests without tools. Its probes (every scenario but tools) are in the
-inventory but have **not been run live**. See the
-[model page](https://developers.openai.com/api/docs/models/gpt-6.1-sol).
+sent `low`, `high`, or `xhigh` (its page lists `max` too, which Chat Completions refuses, as for
+every GPT-6 model). So the adapter treats it like Astra: sampling and logprob parameters are
+dropped, and tool calls raise `RequestError`, since Chat Completions takes its requests without
+tools. The front O probe confirmed these rules live on 2026-10-02 (plain requests at `low` pass;
+`temperature`, tools, `none`, and `max` are refused); the inventory's probes have **not been
+run**. See the [model page](https://developers.openai.com/api/docs/models/gpt-6.1-sol).
 
 ### GPT-6 Sol and Luna (added 2026-09-25)
 
 The GPT-6 family is Astra, Sol, and Luna; Terra is a GPT-5.6 tier (`gpt-5.6-terra`). `gpt-6-sol`
 and `gpt-6-luna` are registered with standard, cached, batch, long-context (above 272K input
-tokens), and fast pricing. They take efforts `none` to `max` (no `minimal`) and reason at
-`medium` when no effort is sent. Chat Completions takes their tool calls and sampling parameters
+tokens), and fast pricing. They take efforts `none` to `xhigh` (no `minimal`; Chat
+Completions refuses the `max` their pages list, live on 2026-10-02) and reason at `medium` when
+no effort is sent. Chat Completions takes their tool calls and sampling parameters
 (`temperature`, `top_p`, logprobs) only at `none`, so the adapter:
 
 - sends a tool call that asks for no thinking at `reasoning_effort="none"`, which keeps the

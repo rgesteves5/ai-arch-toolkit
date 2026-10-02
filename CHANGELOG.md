@@ -478,6 +478,10 @@ flows, manifests) needs these changes; each one is detailed below.
   - `select` or `serialize_as` on an inline template (they were ignored).
 
 ### Fixed
+- **OpenAI: `thinking_effort="max"` on a GPT-6 model raises `RequestError`.** The model pages of
+  GPT-6 Astra, Sol, Luna and 6.1 Sol list a `max` effort, but Chat Completions refuses it for
+  each of them with a 400 ("Supported values are: ... 'high', and 'xhigh'", live on 2026-10-02):
+  only the Responses API takes it. The adapter sent it.
 - **The documentation matches the code again.** Every page was checked against the source, and
   what had drifted now says what the code does. Among the corrections:
   - budgets: call caps are hard, while token and cost caps are soft under the default

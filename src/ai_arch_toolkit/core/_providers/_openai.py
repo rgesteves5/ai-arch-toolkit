@@ -133,10 +133,13 @@ _CURRENT = _Profile()  # GPT-5.4 and later
 _EARLIER = _Profile(tools_while_reasoning=True)  # the reasoning models before GPT-5.4
 _LEGACY = _Profile(thinking="refused")
 _COMPATIBLE = _Profile(thinking="passthrough", tools_while_reasoning=True)
+# The GPT-6 model pages list a "max" effort, but Chat Completions refuses it for each of them:
+# "Supported values are: ... 'high', and 'xhigh'" (live probe O01, 2026-10-02); the Responses API
+# takes it.
 # No "none" (nor "minimal") effort, so Astra always reasons: no sampling, and tool calls only
 # through the Responses API (https://developers.openai.com/api/docs/models/gpt-6-astra).
 _ASTRA = _Profile(
-    efforts=frozenset({"low", "medium", "high", "xhigh", "max"}), sampling_while_reasoning=False
+    efforts=frozenset({"low", "medium", "high", "xhigh"}), sampling_while_reasoning=False
 )
 # GPT-6.1 Sol takes no "none" (nor "minimal") either and reasons at "medium" by default; Chat
 # Completions takes its requests without tools
@@ -147,7 +150,7 @@ _SOL_6_1 = _Profile(
 # Sol and Luna take "none" and reason at "medium" when the request sends no effort
 # (https://developers.openai.com/api/docs/models/gpt-6-sol and .../gpt-6-luna).
 _SOL_LUNA = _Profile(
-    efforts=frozenset({"none", "low", "medium", "high", "xhigh", "max"}),
+    efforts=frozenset({"none", "low", "medium", "high", "xhigh"}),
     sampling_while_reasoning=False,
     default_effort="medium",
 )

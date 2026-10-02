@@ -869,7 +869,7 @@ class TestAlwaysReasoning:
             logprobs=True,
             top_logprobs=5,
             thinking=thinking,
-            thinking_effort="max",
+            thinking_effort="xhigh",
         )
         params = client.chat.completions.create.call_args.kwargs
         assert params["model"] == model
@@ -877,16 +877,16 @@ class TestAlwaysReasoning:
         assert (
             not {"max_tokens", "temperature", "top_p", "logprobs", "top_logprobs"} & params.keys()
         )
-        assert params.get("reasoning_effort") == ("max" if thinking else None)
+        assert params.get("reasoning_effort") == ("xhigh" if thinking else None)
 
-    @pytest.mark.parametrize("effort", ["low", "medium", "high", "xhigh", "max"])
+    @pytest.mark.parametrize("effort", ["low", "medium", "high", "xhigh"])
     def test_every_documented_effort_is_sent(self, model, effort):
         params = prepare(
             OpenAIProvider(model, "test-key"), HI, thinking=True, thinking_effort=effort
         )
         assert params.params["reasoning_effort"] == effort
 
-    @pytest.mark.parametrize("effort", ["none", "minimal", "ultra"])
+    @pytest.mark.parametrize("effort", ["none", "minimal", "max", "ultra"])
     def test_invalid_reasoning_effort(self, model, effort):
         provider = OpenAIProvider(model, "test-key")
         with pytest.raises(RequestError, match="thinking_effort"):
@@ -919,15 +919,18 @@ class TestSolAndLuna:
         assert not {"temperature", "top_p", "logprobs", "top_logprobs"} & params.keys()
         assert params["max_completion_tokens"] == 64
 
-    @pytest.mark.parametrize("effort", ["none", "low", "medium", "high", "xhigh", "max"])
+    @pytest.mark.parametrize("effort", ["none", "low", "medium", "high", "xhigh"])
     def test_every_documented_effort_is_sent(self, model, effort):
         assert self._params(model, thinking=True, thinking_effort=effort)["reasoning_effort"] == (
             effort
         )
 
-    def test_minimal_is_not_one_of_their_efforts(self, model):
+    @pytest.mark.parametrize("effort", ["minimal", "max"])
+    def test_minimal_and_max_are_not_among_their_efforts(self, model, effort):
+        # "max" is on the model pages, but Chat Completions refuses it for every GPT-6 model:
+        # "Supported values are: 'none', 'low', 'medium', 'high', and 'xhigh'" (live, 2026-10-02).
         with pytest.raises(RequestError, match="thinking_effort"):
-            self._params(model, thinking=True, thinking_effort="minimal")
+            self._params(model, thinking=True, thinking_effort=effort)
 
     def test_at_none_they_sample(self, model):
         params = self._params(model, thinking=True, thinking_effort="none", **SAMPLING)
@@ -943,7 +946,7 @@ class TestSolAndLuna:
         assert params["tool_choice"] == "auto"
         assert params["temperature"] == 0.0  # at "none" the sampling stays
 
-    @pytest.mark.parametrize("effort", [None, "low", "max"])
+    @pytest.mark.parametrize("effort", [None, "low", "xhigh"])
     def test_tool_calls_while_reasoning_need_the_responses_api(self, model, effort):
         with pytest.raises(RequestError, match="Responses API"):
             self._params(model, tools=[LOOKUP], thinking=True, thinking_effort=effort)
