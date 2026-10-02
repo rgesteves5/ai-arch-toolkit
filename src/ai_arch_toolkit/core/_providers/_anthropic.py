@@ -764,7 +764,7 @@ class AnthropicProvider(LoopAwareClientCache, BaseProvider[Prepared[Params], Mes
             async for entry in await self._messages().batches.results(batch_id):
                 result = entry.result
                 if result.type == "succeeded":
-                    answer = self._answer(result.message, Prepared(cast("Params", {})))
+                    answer = self._answer(result.message, Prepared(cast("Params", {})), batch=True)
                     results.append(
                         BatchResult(custom_id=entry.custom_id, response=answer.response)
                     )

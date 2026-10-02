@@ -301,14 +301,15 @@ class PricingRegistry:
 pricing = PricingRegistry()
 
 
-def _estimate_response_cost(model: str, usage: Any) -> float | None:
-    """Estimate response cost from a ``Usage``-like object."""
+def _estimate_response_cost(model: str, usage: Any, *, is_batch: bool = False) -> float | None:
+    """Estimate response cost from a ``Usage``-like object; a batch result at the batch rates."""
     return pricing.estimate_cost(
         model,
         input_tokens=getattr(usage, "input_tokens", 0),
         output_tokens=getattr(usage, "output_tokens", 0),
         cache_write_tokens=getattr(usage, "cache_write_tokens", 0),
         cache_read_tokens=getattr(usage, "cache_read_tokens", 0),
+        is_batch=is_batch,
     )
 
 

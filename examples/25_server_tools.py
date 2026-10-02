@@ -4,8 +4,9 @@ Server tools are executed by the LLM provider's infrastructure, not
 locally. They enable capabilities like web search and code interpretation
 without needing external API keys.
 
-Anthropic and Gemini run web search and code execution, and Meta runs web
-search; the OpenAI (Chat Completions) and xAI adapters raise RequestError.
+Anthropic and Gemini run web search and code execution, and Meta and OpenAI
+(its own host, through the Responses API) run web search; xAI and
+OpenAI-compatible servers raise RequestError.
 """
 
 from ai_arch_toolkit import LLM

@@ -270,7 +270,9 @@ class BaseProvider[P, F](ABC):
         finally:
             _dispatch.reset(token)
 
-    def _answer(self, final: F, prepared: P) -> Answer:
+    def _answer(self, final: F, prepared: P, *, batch: bool = False) -> Answer:
+        """The ``Response`` for ``final``, with its usage and cost; ``batch`` prices a batch
+        result at the batch rates."""
         try:
             response = self.assemble(final, prepared)
             usage = self.usage(final)
@@ -278,7 +280,7 @@ class BaseProvider[P, F](ABC):
             raise ResponseError(f"could not read the provider's response: {exc!r}") from exc
         cost = response.provider_cost
         if cost is None and usage is not None:
-            cost = _estimate_response_cost(self._model, usage)
+            cost = _estimate_response_cost(self._model, usage, is_batch=batch)
         response = dataclasses.replace(response, usage=usage or Usage(), cost=cost)
         return Answer(response, usage_reported=usage is not None)
 

@@ -61,12 +61,9 @@ flows, manifests) needs these changes; each one is detailed below.
   `LLM.count_tokens()` counts with `POST /v1/responses/input_tokens`.
 - GPT-6.1 Sol (`gpt-6.1-sol`), from OpenAI's model page on 2026-10-01: prices (GPT-6 Sol's
   rates, with cached input at 5% of input; batch, long-context and fast rates included), request
-  rules and a probe inventory entry, not yet run live. Unlike GPT-6 Sol it takes no `"none"` (nor
-  `"minimal"`) effort and reasons at `medium` by default, so it follows Astra's rules: sampling
-  parameters are dropped, and tool calls raise `RequestError`, since Chat Completions takes its
-  requests only without tools. Before, it got the current generation's rules, which assume a
-  `"none"` effort: sampling parameters and tool calls went out unchanged, and
-  `thinking_effort="none"` was accepted.
+  rules and a probe inventory entry; every probe passed live on 2026-10-02. Unlike GPT-6 Sol it
+  takes no `"none"` (nor `"minimal"`) effort and always reasons, at `medium` by default, so it
+  follows Astra's rules: no sampling parameters.
 - `Range`, inclusive bounds for a numeric tool parameter: `Annotated[int, Range(1, 25)]` puts
   `minimum`/`maximum` in the schema the model reads, and the executor refuses a value outside them
   with a `validation_error` that names the range. One bound is enough, and a `Range` on a type with
@@ -78,12 +75,9 @@ flows, manifests) needs these changes; each one is detailed below.
   4.7 (`grok-4.7`), from the providers' pages on 2026-09-25: prices (with the cache, batch,
   long-context and fast rates each provider publishes), per-model request rules, and probe
   inventory entries. Sol and Luna passed every live probe on 2026-09-25; Opus 5.5 and Grok 4.7
-  are not yet run live. Opus 5.5 refuses a forced `tool_choice`. Sol and Luna
-  reason at `medium` unless sent `"none"`, the only effort at which Chat Completions takes their
-  tool calls and sampling parameters: a tool call that asks for no thinking is sent at
-  `reasoning_effort="none"`, tools with `thinking=True` at another effort raise `RequestError`,
-  and sampling parameters are dropped while they reason. There is no GPT-6 Terra: Terra is the
-  GPT-5.6 tier `gpt-5.6-terra`.
+  are not yet run live. Opus 5.5 refuses a forced `tool_choice`. Sol and Luna reason at
+  `medium` unless sent `"none"`, and take sampling parameters only at `"none"`. There is no
+  GPT-6 Terra: Terra is the GPT-5.6 tier `gpt-5.6-terra`.
 - `UnpricedModelError`, and prices for `gpt-4o-2024-05-13` and `gpt-3.5-turbo-1106` (snapshots
   with a tariff of their own), `gpt-5.5-cyber`, and `gpt-5.1` (at `gpt-5`'s rates), from
   OpenAI's pricing page on 2026-09-18.
@@ -218,11 +212,6 @@ flows, manifests) needs these changes; each one is detailed below.
   half of the kept text, and ends with `[chars 0-200000 of 5000000 | cut at the output limit; ask
   for less]` instead of `[Output truncated: kept 200000 of 5000000 characters.]`;
   `metadata["truncated"]["kept"]` is the length actually kept.
-- OpenAI, GPT-5.4 and later: tools with `thinking=True` at an effort other than `"none"` raise
-  `RequestError` before sending, since Chat Completions takes their tool calls only at `"none"`
-  (https://developers.openai.com/api/docs/guides/migrate-to-responses). The request used to reach
-  OpenAI and fail there. The earlier reasoning models (`gpt-5` to `gpt-5.3`, the o-series) still
-  take tools at any effort.
 - **Breaking: prices match a model id exactly.** A model id is priced by its own entry or as a
   dated snapshot of one (`claude-haiku-4-5-20251001`, `gpt-4o-2024-08-06`, `grok-4-0709`,
   `-latest`). A variant no longer inherits the entry its name starts with: `o3-pro`,
@@ -503,14 +492,23 @@ flows, manifests) needs these changes; each one is detailed below.
   - `select` or `serialize_as` on an inline template (they were ignored).
 
 ### Fixed
+- **Batch results are priced at the batch rates.** OpenAI (both endpoints, and OpenAI-compatible
+  servers) and Anthropic batch results got `Response.cost` at the standard rates, twice the batch
+  ones listed in the price table.
+- **OpenAI: each model's efforts and default effort come from live measurements.** A model that
+  reasons when no effort is sent (GPT-5, GPT-5 mini and nano, o3, GPT-5.5, GPT-5.6, GPT-6, and a
+  model not listed) no longer gets the `temperature` the `LLM` always sends, which it refused with a
+  400; GPT-5.1, 5.2 and 5.4, which run at `none` by default, keep it. Each model takes only the
+  efforts it accepted live on 2026-10-02 (GPT-5 takes `minimal` but not `none`, GPT-5.5 no `max`,
+  o3 only `low` to `high`, the pro models `medium` to `xhigh`).
+- **OpenAI: `thinking_effort` applies without `thinking=True`.** It was dropped without a word, so
+  `thinking_effort="none"` left a model that reasons by default reasoning at `medium`. As on the
+  other providers, the effort now applies on its own (checked against the model), and
+  `thinking=True` adds the reasoning summary.
 - **Meta: a replayed turn keeps the API's field names, and only Muse Spark turns are replayed.**
   Replayed output items go out under their wire names (`async`, not the SDK's `async_`), and an
   assistant turn whose `_raw` came from another provider or model family is rebuilt from its
   fields, without the reasoning, instead of being replayed.
-- **OpenAI: `thinking_effort="max"` on a GPT-6 model raises `RequestError`.** The model pages of
-  GPT-6 Astra, Sol, Luna and 6.1 Sol list a `max` effort, but Chat Completions refuses it for
-  each of them with a 400 ("Supported values are: ... 'high', and 'xhigh'", live on 2026-10-02):
-  only the Responses API takes it. The adapter sent it.
 - **The documentation matches the code again.** Every page was checked against the source, and
   what had drifted now says what the code does. Among the corrections:
   - budgets: call caps are hard, while token and cost caps are soft under the default

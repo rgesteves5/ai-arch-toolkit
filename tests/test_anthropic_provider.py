@@ -1355,6 +1355,28 @@ class TestErrorsR02:
         with pytest.raises(RateLimitError):
             await provider.batch_submit([{"custom_id": "a", "messages": HI}])
 
+    async def test_batch_results_are_priced_at_the_batch_rates(self):
+        # Message Batches cost half the standard rates (batch_input/batch_output in the table);
+        # results were priced at the standard ones.
+        message = _real_message(usage=sdk_types.Usage(input_tokens=1000, output_tokens=200))
+        entry = SimpleNamespace(
+            custom_id="a", result=SimpleNamespace(type="succeeded", message=message)
+        )
+
+        async def results(batch_id: str):
+            async def entries():
+                yield entry
+
+            return entries()
+
+        client = MagicMock()
+        client.messages.batches.results = results
+        provider = AnthropicProvider("claude-opus-5", "k")
+        provider._client = client
+        [result] = await provider.batch_results("batch-1")
+        assert result.response is not None
+        assert result.response.cost == pytest.approx((1000 * 2.50 + 200 * 12.50) / 1_000_000)
+
     def test_the_client_marks_the_dispatch(self):
         with patch("ai_arch_toolkit.core._providers._anthropic.anthropic") as sdk:
             AnthropicProvider("claude-opus-5", "test-key")

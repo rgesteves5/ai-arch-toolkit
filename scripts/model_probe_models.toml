@@ -11,23 +11,20 @@
 # OpenAI
 # ---------------------------------------------------------------------------
 
-# Astra tool calling requires Responses; this adapter uses Chat Completions.
+# OpenAI's own host goes through the Responses API (D43): every model calls tools at any effort.
 [[models]]
 id = "gpt-6-astra"
 provider = "openai"
-scenarios = ["plain", "structured", "json_mode", "stream", "thinking"]
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
 kwargs = { max_tokens = 4096, thinking_effort = "low" }
 
-# GPT-6.1 Sol takes no "none" either, so its tool calling also requires Responses.
 [[models]]
 id = "gpt-6.1-sol"
 provider = "openai"
-scenarios = ["plain", "structured", "json_mode", "stream", "thinking"]
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
 kwargs = { max_tokens = 4096, thinking_effort = "low" }
 
-# GPT-6 Sol and Luna reason at "medium" unless sent "none"; Chat Completions takes their tool
-# calls only at "none", which the adapter sends when a tool call asks for no thinking.
-# Every scenario passed live on 2026-09-25.
+# GPT-6 Sol and Luna reason at "medium" unless sent "none".
 [[models]]
 id = "gpt-6-sol"
 provider = "openai"

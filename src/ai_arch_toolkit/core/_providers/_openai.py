@@ -108,19 +108,31 @@ class _Model:
         return "none" not in self.efforts if effort is None else effort != "none"
 
 
-_CURRENT = _Model()  # GPT-5 to GPT-5.6, o3, and a model not listed (a new one)
+# Each model's efforts, and the effort a request without one runs at, were measured live on the
+# Responses API on 2026-10-02 (O04): one request per effort and model, and the effort the response
+# echoes. The pages list more than some models take (the GPT-5.5 refuses "max"), and a model that
+# reasons by default refuses a temperature other than its default.
+_REASONING = frozenset({"low", "medium", "high", "xhigh", "max"})
+# A model not listed (a new one) gets the current generation's rules: every effort, and it reasons
+# at "medium" when the request sends none, as GPT-5.5, GPT-5.6 and GPT-6 do.
+_CURRENT = _Model(default_effort="medium")
 # The families before the reasoning generation: https://developers.openai.com/api/docs/models/gpt-4o
 _LEGACY = _Model(efforts=frozenset())
-# The GPT-6 models take "max", which their pages list ("reasoning.effort supports low, medium,
-# high, xhigh, and max", https://developers.openai.com/api/docs/models/gpt-6-astra) and the
-# Responses API takes (live on gpt-6.1-sol, O01 check 8; Chat Completions refused it).
-_REASONING = frozenset({"low", "medium", "high", "xhigh", "max"})
-# No "none" (nor "minimal"), so Astra always reasons
-# (https://developers.openai.com/api/docs/models/gpt-6-astra).
-_ASTRA = _Model(efforts=_REASONING, sampling_while_reasoning=False)
-# GPT-6.1 Sol takes no "none" (nor "minimal") either and reasons at "medium" by default
-# (https://developers.openai.com/api/docs/models/gpt-6.1-sol).
-_SOL_6_1 = _Model(efforts=_REASONING, default_effort="medium", sampling_while_reasoning=False)
+_GPT_5 = _Model(efforts=frozenset({"minimal", "low", "medium", "high"}), default_effort="medium")
+_GPT_5_1 = _Model(efforts=frozenset({"none", "low", "medium", "high"}), default_effort="none")
+_GPT_5_2 = _Model(efforts=_GPT_5_1.efforts | {"xhigh"}, default_effort="none")
+_GPT_5_5 = _Model(efforts=_GPT_5_2.efforts, default_effort="medium")
+_GPT_5_6 = _Model(efforts=_REASONING | {"none"}, default_effort="medium")
+_O3 = _Model(efforts=frozenset({"low", "medium", "high"}), default_effort="medium")
+# The pro models always reason, from "medium" up (GPT-5 pro only at "high").
+_PRO = _Model(efforts=frozenset({"medium", "high", "xhigh"}), default_effort="medium")
+_GPT_5_5_PRO = _Model(efforts=_PRO.efforts, default_effort="high")
+_GPT_5_PRO = _Model(efforts=frozenset({"high"}), default_effort="high")
+# No "none" (nor "minimal"), so Astra and GPT-6.1 Sol always reason
+# (https://developers.openai.com/api/docs/models/gpt-6-astra, .../gpt-6.1-sol); "max" is on their
+# pages, and the Responses API takes it (Chat Completions refused it, O01 check 8).
+_ASTRA = _Model(efforts=_REASONING, default_effort="medium", sampling_while_reasoning=False)
+_SOL_6_1 = _ASTRA
 # Sol and Luna take "none" and reason at "medium" when the request sends no effort
 # (https://developers.openai.com/api/docs/models/gpt-6-sol and .../gpt-6-luna).
 _SOL_LUNA = _Model(
@@ -133,6 +145,16 @@ _MODELS: dict[str, _Model] = {
     "gpt-6-astra": _ASTRA,
     "gpt-6.1-sol": _SOL_6_1,
     **dict.fromkeys(("gpt-6-sol", "gpt-6-luna"), _SOL_LUNA),
+    **dict.fromkeys(("gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"), _GPT_5_6),
+    "gpt-5.5": _GPT_5_5,
+    **dict.fromkeys(("gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.2"), _GPT_5_2),
+    "gpt-5.3-codex": _GPT_5_2,
+    **dict.fromkeys(("gpt-5.4-pro", "gpt-5.2-pro"), _PRO),
+    "gpt-5.5-pro": _GPT_5_5_PRO,
+    "gpt-5-pro": _GPT_5_PRO,
+    "gpt-5.1": _GPT_5_1,
+    **dict.fromkeys(("gpt-5", "gpt-5-mini", "gpt-5-nano"), _GPT_5),
+    "o3": _O3,
     **dict.fromkeys(("gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini"), _LEGACY),
 }
 
@@ -261,16 +283,19 @@ class OpenAIProvider(ResponsesProvider):
         return Prepared(params, output_schema=options.output_schema)
 
     def _reasoning(self, options: Options, model: _Model) -> Reasoning:
-        """With ``thinking``: the effort (the one given, else ``"high"``) among the model's, and
-        a summary of the reasoning, the source of the thinking blocks
-        (https://developers.openai.com/api/docs/guides/reasoning). Without it the model reasons
-        at its own default."""
+        """The effort and the summary a request asks for.
+
+        ``thinking_effort`` applies on its own, as on the other providers: ``"none"`` stops a
+        model that reasons by default. ``thinking=True`` adds a summary of the reasoning, the
+        source of the thinking blocks (https://developers.openai.com/api/docs/guides/reasoning),
+        at the effort given, else ``"high"``. With neither the model reasons at its own default.
+        """
         if options.thinking_budget:
             warnings.warn(
                 "thinking_budget is not supported by OpenAI (it takes thinking_effort), ignoring",
                 stacklevel=5,
             )
-        if not options.thinking:
+        if not options.thinking and options.thinking_effort is None:
             return {}
         if not model.efforts:
             raise RequestError(f"{self._model} does not reason: thinking is not available")
@@ -280,7 +305,7 @@ class OpenAIProvider(ResponsesProvider):
                 f"{self._model} takes thinking_effort in {sorted(model.efforts)}, not {effort!r}"
             )
         reasoning: Reasoning = {"effort": cast("ReasoningEffort", effort)}
-        if effort != "none":
+        if options.thinking and effort != "none":
             reasoning["summary"] = "auto"
         return reasoning
 
@@ -329,4 +354,4 @@ class OpenAIProvider(ResponsesProvider):
         """A Responses body from a batch's output, assembled as a call's, usage and cost
         included."""
         unrequested: Prepared[Params] = Prepared({})
-        return self._answer(SDKResponse.model_construct(**body), unrequested).response
+        return self._answer(SDKResponse.model_construct(**body), unrequested, batch=True).response

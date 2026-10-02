@@ -95,8 +95,8 @@ _TIMEOUTS = (httpx2.TimeoutException, openai.APITimeoutError)
 # Each is built as a plain dict and cast once, where it is built:
 # 1. an assistant turn rebuilt from its text and calls: the message item has no id or status, and
 #    its text no annotations (ResponseOutputMessageParam and ResponseOutputTextParam require them).
-#    Meta: the probes replayed turns with and without ids. OpenAI: not yet proven live (O01
-#    replayed its turns whole; the rebuilt shape is on O04's live check);
+#    Meta: the probes replayed turns with and without ids. OpenAI: a rebuilt turn (text before
+#    its call, no _raw) was accepted live on gpt-5-nano and gpt-6-luna (O04, 2026-10-02);
 # 2. a function tool without strict, for a profile whose function_strict is None
 #    (FunctionToolParam requires the key). Meta only: every live tool loop;
 # 3. an input image without detail (ResponseInputImageParam requires it). Meta: the image probe.

@@ -68,7 +68,9 @@ OPENAI = Live(
     model="gpt-5-nano",
     max_tokens=1024,
     thinking={"thinking": True, "thinking_effort": "low"},
-    oversized={"max_tokens": 10_000_000},
+    # The Responses API takes max_output_tokens=10_000_000, which Chat Completions refused; it
+    # refuses top_logprobs above 20 (live, 2026-10-02).
+    oversized={"top_logprobs": 50},
 )
 # grok-4.3: the cheapest Grok whose reasoning effort can be set, down to none
 # (https://docs.x.ai/developers/models/grok-4.3); a temperature outside 0-2 is refused.
@@ -126,7 +128,9 @@ async def _parallel_calls_replay(live: Live, *, streamed: bool) -> None:
         assert {call.name for call in first.tool_calls} == {"add", "multiply"}, first
         results = await run_tools(first, group)
         history = [{"role": "user", "content": PROMPT}, first.to_message(), *results]
-        final = await llm.complete(history, tools=group)
+        # The answer, not more calls: a small model sometimes calls the tools again (gpt-5-nano,
+        # one run in five on 2026-10-02, with the replay verified correct).
+        final = await llm.complete(history, tools=group, tool_choice="none")
     assert "5" in final.text and "20" in final.text, final.text
 
 

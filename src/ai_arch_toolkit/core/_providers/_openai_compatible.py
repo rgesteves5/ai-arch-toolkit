@@ -400,7 +400,8 @@ def chat_batch_response(body: dict[str, Any], model: str) -> Response:
     completion = ChatCompletion.model_construct(**body)
     usage = _extract_usage(completion.usage) if completion.usage else Usage()
     response = _parse_sdk_response(completion, model)
-    return dataclasses.replace(response, usage=usage, cost=_estimate_response_cost(model, usage))
+    cost = _estimate_response_cost(model, usage, is_batch=True)
+    return dataclasses.replace(response, usage=usage, cost=cost)
 
 
 # ---------------------------------------------------------------------------

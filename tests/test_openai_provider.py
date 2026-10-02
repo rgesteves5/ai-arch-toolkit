@@ -24,6 +24,7 @@ from pydantic import BaseModel
 
 from ai_arch_toolkit import LLM, RetryConfig, ToolGroup, run_tools, tool
 from ai_arch_toolkit.core._exceptions import APIError, RateLimitError, RequestError, ResponseError
+from ai_arch_toolkit.core._pricing import pricing
 from ai_arch_toolkit.core._providers._base import on_request
 from ai_arch_toolkit.core._providers._meta import MetaProvider
 from ai_arch_toolkit.core._providers._openai import OpenAIProvider
@@ -312,8 +313,24 @@ class TestReasoning:
     def test_thinking_defaults_the_effort_to_high(self):
         assert _params("gpt-5.4-mini", thinking=True)["reasoning"]["effort"] == "high"
 
-    def test_without_thinking_no_effort_is_sent(self):
-        assert "reasoning" not in _params("gpt-5.4-mini", thinking_effort="low")
+    def test_without_thinking_or_an_effort_no_reasoning_is_sent(self):
+        assert "reasoning" not in _params("gpt-5.4-mini")
+
+    def test_an_effort_applies_without_thinking_and_asks_for_no_summary(self):
+        # As on the other providers: thinking_effort alone sets how hard the model thinks, and
+        # thinking=True asks for the summary. It used to be dropped without a word.
+        assert _params("gpt-5.4-mini", thinking_effort="low")["reasoning"] == {"effort": "low"}
+
+    def test_none_alone_stops_a_model_that_reasons_by_default(self):
+        params = _params("gpt-6-luna", thinking_effort="none", temperature=0.0)
+        assert params["reasoning"] == {"effort": "none"}
+        assert params["temperature"] == 0.0  # at "none" the sampling stays
+
+    def test_an_effort_alone_is_checked_against_the_model(self):
+        with pytest.raises(RequestError, match="thinking_effort"):
+            _params("gpt-6-astra", thinking_effort="none")
+        with pytest.raises(RequestError, match="does not reason"):
+            _params("gpt-4.1", thinking_effort="low")
 
     def test_at_none_there_is_no_summary_and_the_temperature_stays(self):
         params = _params("gpt-5.4-mini", thinking=True, thinking_effort="none", temperature=0.0)
@@ -357,6 +374,61 @@ class TestReasoning:
         assert [tool["name"] for tool in params["tools"]] == ["lookup"]
 
 
+# Each model's efforts and the effort a request without one runs at, live on the Responses API on
+# 2026-10-02 (O04): one request per effort and model, and the effort the response echoes.
+MEASURED_EFFORTS = {
+    "gpt-5": ({"minimal", "low", "medium", "high"}, "medium"),
+    "gpt-5-mini": ({"minimal", "low", "medium", "high"}, "medium"),
+    "gpt-5-nano": ({"minimal", "low", "medium", "high"}, "medium"),
+    "gpt-5.1": ({"none", "low", "medium", "high"}, "none"),
+    "gpt-5.2": ({"none", "low", "medium", "high", "xhigh"}, "none"),
+    "gpt-5.4": ({"none", "low", "medium", "high", "xhigh"}, "none"),
+    "gpt-5.4-mini": ({"none", "low", "medium", "high", "xhigh"}, "none"),
+    "gpt-5.4-nano": ({"none", "low", "medium", "high", "xhigh"}, "none"),
+    "gpt-5.5": ({"none", "low", "medium", "high", "xhigh"}, "medium"),
+    "gpt-5.6-sol": ({"none", "low", "medium", "high", "xhigh", "max"}, "medium"),
+    "gpt-5.6-terra": ({"none", "low", "medium", "high", "xhigh", "max"}, "medium"),
+    "gpt-5.6-luna": ({"none", "low", "medium", "high", "xhigh", "max"}, "medium"),
+    "o3": ({"low", "medium", "high"}, "medium"),
+    "gpt-6-astra": ({"low", "medium", "high", "xhigh", "max"}, "medium"),
+    "gpt-6.1-sol": ({"low", "medium", "high", "xhigh", "max"}, "medium"),
+    "gpt-6-sol": ({"none", "low", "medium", "high", "xhigh", "max"}, "medium"),
+    "gpt-6-luna": ({"none", "low", "medium", "high", "xhigh", "max"}, "medium"),
+    "gpt-5.6": ({"none", "low", "medium", "high", "xhigh", "max"}, "medium"),
+    "gpt-5.3-codex": ({"none", "low", "medium", "high", "xhigh"}, "none"),
+    "gpt-5-pro": ({"high"}, "high"),
+    "gpt-5.2-pro": ({"medium", "high", "xhigh"}, "medium"),
+    "gpt-5.4-pro": ({"medium", "high", "xhigh"}, "medium"),
+    "gpt-5.5-pro": ({"medium", "high", "xhigh"}, "high"),
+}
+ALL_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+
+
+class TestMeasuredEfforts:
+    @pytest.mark.parametrize("model", sorted(MEASURED_EFFORTS))
+    @pytest.mark.parametrize("effort", ALL_EFFORTS)
+    def test_each_model_takes_the_efforts_it_took_live(self, model, effort):
+        efforts, _ = MEASURED_EFFORTS[model]
+        if effort in efforts:
+            assert _params(model, thinking=True, thinking_effort=effort)["reasoning"][
+                "effort"
+            ] == (effort)
+        else:
+            with pytest.raises(RequestError, match="thinking_effort"):
+                _params(model, thinking=True, thinking_effort=effort)
+
+    @pytest.mark.parametrize("model", sorted(MEASURED_EFFORTS))
+    def test_a_temperature_goes_only_to_a_model_that_does_not_reason_by_default(self, model):
+        # Live, a model that reasons when no effort is sent refused temperature=0.0 ("Unsupported
+        # parameter: 'temperature' is not supported with this model"); the LLM always sends one.
+        _, default = MEASURED_EFFORTS[model]
+        params = _params(model, temperature=0.0)
+        assert ("temperature" in params) is (default == "none")
+
+    def test_a_new_model_reasons_by_default_like_the_current_generation(self):
+        assert "temperature" not in _params("gpt-7", temperature=0.0)
+
+
 @pytest.mark.parametrize("model", ["gpt-6-astra", "gpt-6.1-sol"])
 class TestAlwaysReasoning:
     """GPT-6 Astra and GPT-6.1 Sol take no "none" (nor "minimal") effort, so they always reason
@@ -374,8 +446,8 @@ class TestAlwaysReasoning:
         )
         assert params["max_output_tokens"] == 4096
         assert not {"temperature", "top_p", "top_logprobs", "include"} & params.keys()
-        assert params.get("reasoning") == (
-            {"effort": "xhigh", "summary": "auto"} if thinking else None
+        assert params["reasoning"] == (
+            {"effort": "xhigh", "summary": "auto"} if thinking else {"effort": "xhigh"}
         )
 
     @pytest.mark.parametrize("effort", ["low", "medium", "high", "xhigh", "max"])
@@ -396,7 +468,7 @@ class TestAlwaysReasoning:
         # They took no tools through Chat Completions; through the Responses API they do.
         params = _params(model, tools=[LOOKUP], thinking=thinking, thinking_effort="low")
         assert [tool["name"] for tool in params["tools"]] == ["lookup"]
-        assert params.get("reasoning", {}).get("effort") == ("low" if thinking else None)
+        assert params["reasoning"]["effort"] == "low"
 
 
 @pytest.mark.parametrize("model", ["gpt-6-sol", "gpt-6-luna"])
@@ -728,7 +800,10 @@ class TestBatch:
         assert result.response is not None
         assert result.response.text == "Hello!"
         assert result.response.usage == Usage(input_tokens=69, output_tokens=20)
-        assert result.response.cost is not None and result.response.cost > 0
+        # Priced at the batch rates, half the standard ones.
+        assert result.response.cost == pytest.approx(
+            pricing.estimate_cost("gpt-6-luna", 69, 20, is_batch=True)
+        )
         # The SDK's response: the turn replays its reasoning like a call's.
         assert isinstance(result.response.raw, SDKResponse)
 
@@ -754,6 +829,9 @@ class TestBatch:
         assert ok.response is not None
         assert (ok.response.text, ok.response.stop_reason) == ("Hi there", "stop")
         assert ok.response.usage == Usage(input_tokens=10, output_tokens=5)
+        assert ok.response.cost == pytest.approx(
+            pricing.estimate_cost("gpt-4o", 10, 5, is_batch=True)
+        )
         assert failed.error is not None and "rate_limit_exceeded" in failed.error
 
 
