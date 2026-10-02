@@ -972,6 +972,6 @@ que o código não usa; a do `36` fala de chaves da Anthropic e do xAI que o scr
     modelo passaram a vir de medições ao vivo;
   - o teste ao vivo do 4xx usava `max_tokens=10_000_000`, que a Responses aceita; passou a
     `top_logprobs=50`.
-- Fica por resolver, fora do âmbito: `research/agent-strategies/02-react.md` (linhas 13 e 144) e
-  `00-index.md` (linha 65) dizem que o OpenAI não reenvia o raciocínio; a R00 não deixa tocar em
-  `research/`.
+- `research/agent-strategies/02-react.md` (linhas 13 e 144) e `00-index.md` (linha 65) diziam que
+  o OpenAI não reenvia o raciocínio → corrigidos com autorização do dono (2026-10-02), que levantou
+  para isto a regra da R00 sobre `research/`.

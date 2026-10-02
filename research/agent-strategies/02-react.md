@@ -10,7 +10,7 @@
 - **What it costs:** sequential calls and a growing context — 9,795 tokens per HotpotQA question vs 482 for CoT (gpt-3.5, 2023) [7]; agents "succeed quickly and fail slowly" (failed SWE-agent runs averaged 21 steps and $2.52 vs a median 12 steps and $1.21 for successes) [5].
 - **Known failure modes, still present in 2025 studies:** loops (>90% of turn-limit failures repeated near-identical responses) [6], premature stopping (~85% of runs stopped before 8 required searches) [8], hallucinated tool arguments [3][21], context rot [30][31][32], low repeated-trial reliability (pass^8 < 25% in τ-bench retail) [3].
 - **What matters most now:** native function calling over text parsing [3][14]; a few well-designed tools (SWE-agent's interface 18.0% vs plain shell 11.0%) [5]; passing the model's reasoning back between tool calls [18][19][26]; context management [30].
-- **In this toolkit:** native tool calling, parallel calls, a final-turn hint; thinking is replayed for Anthropic/Gemini/Meta but not for OpenAI (Chat Completions) — see [In ai-arch-toolkit](#12-in-ai-arch-toolkit).
+- **In this toolkit:** native tool calling, parallel calls, a final-turn hint; thinking is replayed for Anthropic, Gemini, Meta and OpenAI (on OpenAI's own host, through the Responses API; OpenAI-compatible servers on Chat Completions have nothing to replay) — see [In ai-arch-toolkit](#12-in-ai-arch-toolkit).
 
 ## 1. Origin
 
@@ -141,7 +141,7 @@ Flow: [`_react.py`](../../src/ai_arch_toolkit/toolkit/agents/flows/_react.py), b
 | Parallel calls | `parallel_tool_calls` (default on): several calls from one turn run concurrently |
 | Final turn | `final_answer_hint` (default on) asks for a text answer without tools on the last turn; `strip_tools_on_final` removes the tools entirely; `show_turn_counter` optional |
 | Tool errors | exceptions become retryable `ToolResult` failures returned to the model; a budget denial is terminal; every call goes through the governed executor (approval gates, metering, output caps, deadlines) |
-| Reasoning replay | each turn appends `response.to_message()`, which keeps the provider's raw content under `_raw`: the Anthropic adapter replays thinking blocks and signatures as received, Gemini keeps thought signatures, Meta replays encrypted reasoning. The OpenAI adapter uses Chat Completions only, so there are no reasoning items to replay — OpenAI's reported gain from passing reasoning back comes from the Responses API [19] |
+| Reasoning replay | each turn appends `response.to_message()`, which keeps the provider's raw content under `_raw`: the Anthropic adapter replays thinking blocks and signatures as received, Gemini keeps thought signatures, Meta and OpenAI replay encrypted reasoning items through the Responses API (stateless, `store: false`; only to the same provider and model family). OpenAI's own host goes through the Responses API since 2026-10-02, the surface its reported gain from passing reasoning back comes from [19]; an OpenAI-compatible server (another `base_url`) stays on Chat Completions, with no reasoning items to replay |
 | Structured output | `output_schema` supported |
 | Knobs | `parallel_tool_calls`, `final_answer_hint`, `strip_tools_on_final`, `show_turn_counter` |
 

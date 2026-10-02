@@ -62,7 +62,7 @@ The research describes the papers' methods; several of our flows diverge in ways
 | Strategy | Divergences that matter | Defects confirmed by simulation | Router readiness |
 |---|---|---|---|
 | `completion` | — | — | ready |
-| `react` | no loop detection, no context compaction; no reasoning replay on OpenAI (Chat Completions only) | — | ready |
+| `react` | no loop detection, no context compaction; no reasoning replay on OpenAI-compatible servers (Chat Completions) | — | ready |
 | `plan_execute` | replans only on exceptions and with no feedback (same prompt as the first plan); executors never see the original task or the plan; a replan reruns every step | — | usable for decomposable deliverables; replanning is ineffective |
 | `rewoo` | arguments go to the tool's first parameter only; unmatched plan lines dropped silently; no extraction worker | `#E1` substitution corrupts `#E10` | usable with single-argument tools and <10 evidence steps |
 | `llm_compiler` | every DAG node is a full ReAct sub-agent (the paper's call/cost savings do not carry over); wave scheduling; replans get no feedback; a last-round `REPLAN` is returned as the answer | `$1` substitution corrupts `$10` | usable for fan-out; costlier than the paper |
