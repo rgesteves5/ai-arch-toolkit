@@ -3,7 +3,7 @@
 ``tests/wire_contract.py`` checks each request an adapter's ``prepare`` builds against its SDK's
 own request contract, and the autouse ``wire_log`` fixture (``tests/conftest.py``) runs it on
 every request the suite builds. These tests prove both ends: the net catches what it is for, and
-lets through what the five adapters build for a full request.
+lets through what the six adapters build for a full request.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ from ai_arch_toolkit.core._providers._base import BaseProvider
 from ai_arch_toolkit.core._providers._gemini import GeminiProvider
 from ai_arch_toolkit.core._providers._meta import MetaProvider
 from ai_arch_toolkit.core._providers._openai import OpenAIProvider
+from ai_arch_toolkit.core._providers._openai_compatible import OpenAICompatibleProvider
 from ai_arch_toolkit.core._providers._xai import XAIProvider
 from ai_arch_toolkit.core._response import OutputSchema
 from tests.provider_calls import prepare
@@ -73,22 +74,57 @@ def _only(found: list[str], *fragments: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# OpenAI: CompletionCreateParamsNonStreaming
+# OpenAI's own host: ResponseCreateParamsNonStreaming, with the core's deviations 1 and 3 (its
+# function tools carry strict, so deviation 2 is never filled for it)
 # ---------------------------------------------------------------------------
 
-OPENAI_OK = {"model": "gpt-5-nano", "messages": [{"role": "user", "content": "hi"}]}
+OPENAI_OK = {"model": "gpt-5-nano", "store": False, "input": "hi"}
 
 
 class TestOpenAI:
-    def test_a_full_request_conforms(self) -> None:
-        params = _full(OpenAIProvider("gpt-5.4", "k"), thinking_effort="low")
+    @pytest.mark.parametrize(
+        ("model", "kwargs"),
+        [
+            ("gpt-5.4", {"thinking": True, "thinking_effort": "low"}),
+            ("gpt-6-luna", {"thinking": True, "thinking_effort": "none", "logprobs": True}),
+            ("gpt-4o", {"temperature": 0.2, "top_logprobs": 2, "logprobs": True}),
+        ],
+    )
+    def test_a_full_request_conforms(self, model: str, kwargs: dict[str, Any]) -> None:
+        params = _full(OpenAIProvider(model, "k"), **kwargs)
 
         assert violations("OpenAIProvider", params) == []
 
-    def test_a_compatible_server_request_conforms(self) -> None:
-        provider = OpenAIProvider("llama3", "k", base_url="http://127.0.0.1:11434/v1")
+    @pytest.mark.parametrize(
+        ("change", "planted"),
+        [
+            ({"max_tokens": 5}, "max_tokens | Extra inputs are not permitted"),
+            ({"stop": ["\n"]}, "stop | Extra inputs are not permitted"),
+            ({"reasoning": {"effort": "extreme"}}, "reasoning.effort |"),
+            ({"include": ["reasoning.everything"]}, "include.0 |"),
+            # The net fills strict only for Meta: an OpenAI tool without it is caught.
+            (
+                {"tools": [{"type": "function", "name": "f", "parameters": {}}]},
+                "strict | Field required",
+            ),
+        ],
+    )
+    def test_a_known_bad_request_is_caught(self, change: dict[str, Any], planted: str) -> None:
+        _only(violations("OpenAIProvider", {**OPENAI_OK, **change}), planted)
 
-        assert violations("OpenAIProvider", _full(provider)) == []
+
+# ---------------------------------------------------------------------------
+# OpenAI-compatible servers: CompletionCreateParamsNonStreaming
+# ---------------------------------------------------------------------------
+
+CHAT_OK = {"model": "gpt-5-nano", "messages": [{"role": "user", "content": "hi"}]}
+
+
+class TestOpenAICompatible:
+    def test_a_full_request_conforms(self) -> None:
+        provider = OpenAICompatibleProvider("llama3", "k", base_url="http://127.0.0.1:11434/v1")
+
+        assert violations("OpenAICompatibleProvider", _full(provider, thinking=True)) == []
 
     @pytest.mark.parametrize(
         ("change", "planted"),
@@ -107,7 +143,7 @@ class TestOpenAI:
         ],
     )
     def test_a_known_bad_request_is_caught(self, change: dict[str, Any], planted: str) -> None:
-        _only(violations("OpenAIProvider", {**OPENAI_OK, **change}), planted)
+        _only(violations("OpenAICompatibleProvider", {**CHAT_OK, **change}), planted)
 
 
 # ---------------------------------------------------------------------------

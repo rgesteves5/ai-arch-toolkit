@@ -9,7 +9,7 @@ import pytest
 from ai_arch_toolkit.core._exceptions import ResponseError
 from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._providers._anthropic import AnthropicProvider
-from ai_arch_toolkit.core._providers._openai import OpenAIProvider
+from ai_arch_toolkit.core._providers._openai_compatible import OpenAICompatibleProvider
 from ai_arch_toolkit.core._response import Response, ThinkingBlock, ToolCall, Usage
 from tests.fake_provider import FakeProvider, Reply
 from tests.provider_calls import stream as _stream
@@ -210,14 +210,15 @@ class TestAnthropicStreamThinking:
 
 
 # ---------------------------------------------------------------------------
-# OpenAI
+# OpenAI Chat Completions (OpenAI-compatible servers; OpenAI's own host streams the Responses API,
+# tests/test_openai_provider.py)
 # ---------------------------------------------------------------------------
 
 
-def _openai(chunks: list, model: str = "gpt-4o") -> OpenAIProvider:
+def _openai(chunks: list, model: str = "gpt-4o") -> OpenAICompatibleProvider:
     mock_client = AsyncMock()
     mock_client.chat.completions.create.return_value = OpenAIStream(chunks)
-    provider = OpenAIProvider(model, "test-key")
+    provider = OpenAICompatibleProvider(model, "test-key", base_url="http://localhost:8000/v1")
     provider._client = mock_client
     return provider
 

@@ -5,7 +5,8 @@ type ``Any`` forwarded as given, casts, unions pyright accepts too widely, and t
 only make at run time. It runs on every request the suite prepares (the autouse ``wire_log``
 fixture in ``tests/conftest.py``); ``tests/test_wire_contract.py`` holds its canaries.
 
-- ``openai`` and ``anthropic`` (Stainless): the request ``TypedDict`` compiled into a strict
+- ``openai`` (the Responses API for OpenAI's host and Meta, Chat Completions for the compatible
+  servers) and ``anthropic`` (Stainless): the request ``TypedDict`` compiled into a strict
   validator. Extra keys are forbidden, scalars are not coerced (the SDK sends them as they are),
   iterables are validated at once, an SDK model is accepted only as an instance, and a union with
   a literal ``type``/``role`` is validated against the one member that tag names, for one precise
@@ -34,10 +35,18 @@ from ai_arch_toolkit.core._providers._anthropic import AnthropicProvider
 from ai_arch_toolkit.core._providers._gemini import GeminiProvider
 from ai_arch_toolkit.core._providers._meta import MetaProvider
 from ai_arch_toolkit.core._providers._openai import OpenAIProvider
+from ai_arch_toolkit.core._providers._openai_compatible import OpenAICompatibleProvider
 from ai_arch_toolkit.core._providers._xai import XAIProvider
 
 # The adapters whose ``prepare`` the ``wire_log`` fixture checks.
-ADAPTERS = (OpenAIProvider, XAIProvider, GeminiProvider, MetaProvider, AnthropicProvider)
+ADAPTERS = (
+    OpenAIProvider,
+    OpenAICompatibleProvider,
+    XAIProvider,
+    GeminiProvider,
+    MetaProvider,
+    AnthropicProvider,
+)
 
 _UNTAGGED = "<untagged dict>"
 _DISCRIMINATOR_KEYS = ("type", "role")
@@ -196,7 +205,7 @@ def _check(tp: Any, payload: Mapping[str, Any], prefix: str = "") -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def _openai(params: Mapping[str, Any]) -> list[str]:
+def _chat_completions(params: Mapping[str, Any]) -> list[str]:
     from openai.types.chat.completion_create_params import CompletionCreateParamsNonStreaming
 
     return _check(CompletionCreateParamsNonStreaming, params)
@@ -225,7 +234,7 @@ def _is(value: Any, kind: str) -> bool:
     return isinstance(value, dict) and value.get("type") == kind
 
 
-def _meta_item(item: Any) -> Any:
+def _responses_item(item: Any) -> Any:
     if not isinstance(item, dict) or not isinstance(item.get("content"), list):
         return item
     if item.get("role") == "assistant" and item.get("type") == "message":  # deviation 1
@@ -237,21 +246,30 @@ def _meta_item(item: Any) -> Any:
     return {**item, "content": content}  # deviation 3
 
 
-def _meta(params: Mapping[str, Any]) -> list[str]:
-    """The Responses request with the three deviations the Meta adapter makes (listed at the top
-    of ``_responses.py``, each with its live proof) filled in, so the rest is checked strictly.
-    Only a missing field is filled: a wrong value in it is still caught."""
+def _responses(params: Mapping[str, Any], *, strict_left_out: bool) -> list[str]:
+    """The Responses request with the deviations the Responses core makes (listed at the top of
+    ``_responses.py``, each with its proof) filled in, so the rest is checked strictly. Only a
+    missing field is filled: a wrong value in it is still caught. Deviation 2, a function tool
+    without ``strict``, is filled only for the provider whose profile leaves it out."""
     from openai.types.responses.response_create_params import ResponseCreateParamsNonStreaming
 
     payload = dict(params)
     if isinstance(payload.get("input"), list):
-        payload["input"] = [_meta_item(item) for item in payload["input"]]
-    if isinstance(payload.get("tools"), list):  # deviation 2
+        payload["input"] = [_responses_item(item) for item in payload["input"]]
+    if strict_left_out and isinstance(payload.get("tools"), list):  # deviation 2
         payload["tools"] = [
             {"strict": None, **tool} if _is(tool, "function") else tool
             for tool in payload["tools"]
         ]
     return _check(ResponseCreateParamsNonStreaming, payload)
+
+
+def _meta(params: Mapping[str, Any]) -> list[str]:
+    return _responses(params, strict_left_out=True)
+
+
+def _openai(params: Mapping[str, Any]) -> list[str]:
+    return _responses(params, strict_left_out=False)
 
 
 @functools.cache
@@ -307,6 +325,7 @@ def _xai(params: Any) -> list[str]:
 
 VALIDATORS: dict[str, Callable[[Any], list[str]]] = {
     "OpenAIProvider": _openai,
+    "OpenAICompatibleProvider": _chat_completions,
     "XAIProvider": _xai,
     "GeminiProvider": _gemini,
     "MetaProvider": _meta,

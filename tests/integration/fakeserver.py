@@ -9,7 +9,7 @@ import struct
 from dataclasses import dataclass, field
 from typing import Literal
 
-type Behaviour = Literal["status", "hang", "close", "reset", "sse", "raw"]
+type Behaviour = Literal["status", "hang", "close", "reset", "sse", "raw", "script"]
 type Ending = Literal["finish", "drop", "reset", "hang"]
 
 
@@ -19,6 +19,14 @@ class Stats:
 
     requests: int = 0
     bodies: list[bytes] = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
+class Reply:
+    """One answer of a ``script``: a JSON body with a 200, or server-sent events that finish."""
+
+    body: dict[str, object] | None = None
+    events: list[bytes] | None = None
 
 
 def sse(data: object, event: str | None = None) -> bytes:
@@ -80,6 +88,25 @@ async def _stream(
     # "drop": close with a FIN and no terminating chunk
 
 
+async def _answer(
+    writer: asyncio.StreamWriter, status: int, payload: bytes, headers: dict[str, str] | None
+) -> None:
+    extra = "".join(f"{k}: {v}\r\n" for k, v in (headers or {}).items())
+    head = (
+        f"HTTP/1.1 {status} X\r\ncontent-type: application/json\r\n{extra}"
+        f"content-length: {len(payload)}\r\n\r\n"
+    )
+    writer.write(head.encode() + payload)
+    await writer.drain()
+
+
+async def _reply(writer: asyncio.StreamWriter, reply: Reply, seconds: float) -> None:
+    if reply.events is not None:
+        await _stream(writer, reply.events, "finish", seconds)
+    else:
+        await _answer(writer, 200, json.dumps(reply.body or {}).encode(), None)
+
+
 async def start(
     behaviour: Behaviour,
     *,
@@ -90,13 +117,15 @@ async def start(
     events: list[bytes] | None = None,
     ending: Ending = "finish",
     seconds: float = 30.0,
+    replies: list[Reply] | None = None,
 ) -> tuple[asyncio.Server, int, Stats]:
     """Serve one behaviour on an ephemeral port.
 
     ``status`` answers with ``status`` and ``body`` as JSON (``raw``: with ``raw`` bytes);
     ``hang`` reads the request and sends nothing for ``seconds``; ``close`` closes without an
     answer; ``reset`` aborts with a TCP RST; ``sse`` streams ``events`` and then ends as
-    ``ending`` says.
+    ``ending`` says; ``script`` answers the n-th request with ``replies[n]``, for a conversation
+    of several turns.
     """
     stats = Stats()
 
@@ -110,15 +139,11 @@ async def start(
                 _reset(writer)
             elif behaviour == "sse":
                 await _stream(writer, events or [], ending, seconds)
+            elif behaviour == "script":
+                await _reply(writer, (replies or [])[stats.requests - 1], seconds)
             elif behaviour in ("status", "raw"):
                 payload = raw if behaviour == "raw" else json.dumps(body or {}).encode()
-                extra = "".join(f"{k}: {v}\r\n" for k, v in (headers or {}).items())
-                head = (
-                    f"HTTP/1.1 {status} X\r\ncontent-type: application/json\r\n{extra}"
-                    f"content-length: {len(payload)}\r\n\r\n"
-                )
-                writer.write(head.encode() + payload)
-                await writer.drain()
+                await _answer(writer, status, payload, headers)
         except (asyncio.IncompleteReadError, ConnectionError):
             pass
         finally:

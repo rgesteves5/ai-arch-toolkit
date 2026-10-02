@@ -245,6 +245,34 @@ def test_the_responses_api_detector_sees_a_call() -> None:
     assert responses_api_calls("from openai.types.responses import Response\n") == []
 
 
+def chat_completions_calls(source: str) -> list[int]:
+    """Lines that reach the ``openai`` SDK's Chat Completions (``client.chat.completions…``)."""
+    return [
+        node.lineno
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Attribute)
+        and node.attr == "completions"
+        and isinstance(node.value, ast.Attribute)
+        and node.value.attr == "chat"
+    ]
+
+
+def test_chat_completions_is_reached_only_by_the_compatible_adapter() -> None:
+    """OpenAI's own host speaks the Responses API; Chat Completions is the compatible servers'
+    (D43), so the OpenAI rules for it can live in one place only."""
+    offenders = {
+        path.name
+        for path in (CORE / "_providers").glob("_*.py")
+        if path.name != "_openai_compatible.py" and chat_completions_calls(path.read_text())
+    }
+    assert offenders == set()
+
+
+def test_the_chat_completions_detector_sees_a_call() -> None:
+    assert chat_completions_calls("await self._client.chat.completions.create(**p)\n") == [1]
+    assert chat_completions_calls("from openai.types.chat import ChatCompletion\n") == []
+
+
 _NETWORK_MODULES = ("urllib.request", "urllib.error", "http.client", "socket", "ssl")
 _HTTP_DOOR = ROOT / "src/ai_arch_toolkit/toolkit/tools/_http.py"
 

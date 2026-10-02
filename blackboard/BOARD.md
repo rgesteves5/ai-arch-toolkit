@@ -4,7 +4,8 @@
 
 - **Estado:** aberta em 2026-10-01, a pedido do dono. A O01 está feita (2026-10-02): a latência
   da Responses não fica atrás, e o pedido da O03 ficou fixado. A O02 está feita (2026-10-02):
-  núcleo em `_responses.py`, Meta sobre ele. A O03 pode começar.
+  núcleo em `_responses.py`, Meta sobre ele. A O03 também (2026-10-02): o host oficial vai pela
+  Responses e os servidores compatíveis pela Chat Completions. Falta a O04.
 - **Decisão:** D43. O host oficial passa à Responses, a Chat Completions fica para os servidores
   compatíveis, e a API pública não ganha escolha de endpoint.
 - **Origem:** desde o GPT-5.4 a Chat Completions só aceita tools com effort `none`. Dos três
@@ -31,7 +32,7 @@
 |---|---|---|---|---|
 | O01 | Sonda ao vivo: a Responses do OpenAI contra a Chat Completions (latência, reenvio, `strict`) | Claude (script e execução, a pedido do dono) | done | nada |
 | O02 | Núcleo Responses partilhado, extraído do `_meta.py`; reenvio só ao mesmo fornecedor e família | Claude (agente) | done | nada |
-| O03 | OpenAI pela Responses no host oficial; Chat Completions só para servidores compatíveis | — | todo | O02 |
+| O03 | OpenAI pela Responses no host oficial; Chat Completions só para servidores compatíveis | Claude (agente) | done | O02 |
 | O04 | Documentação, quebras visíveis e verificação ao vivo final | — (docs); dono (ao vivo) | todo | O03 |
 
 ### Quebras visíveis
@@ -115,8 +116,8 @@
   declarações dos manifestos mudaram o terreno de C02, C05, C07 e C08).
 - **Estado:** aberta em 2026-09-15. As nove fichas estão escritas; nenhuma tarefa começou.
 - **Antes de codificar:** o dono fixa as "Decisões a fixar" de cada ficha. Cada decisão tomada entra
-  em `DECISIONS.md` a partir de D44 (as D15 a D42 foram para as frentes R e T, e a D43 para a frente
-  O), com o número dado pelo coordenador.
+  em `DECISIONS.md` a partir de D45 (as D15 a D42 foram para as frentes R e T, e a D43 e a D44
+  para a frente O), com o número dado pelo coordenador.
 - **Origem:** o que `docs/internal/agentes-app-toolkit-review.md` pediu ao toolkit (L1, L3–L7, L9, L13
   e o ponto D) e que `docs/internal/toolkit-fix-plan.md` §4 (itens 3 e 10) deixou de fora por ser
   âmbito, não contrato partido.

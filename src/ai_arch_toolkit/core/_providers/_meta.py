@@ -19,7 +19,7 @@ from typing import Any, cast
 from ai_arch_toolkit.core._exceptions import RequestError
 from ai_arch_toolkit.core._middleware import Request
 from ai_arch_toolkit.core._model_id import lookup
-from ai_arch_toolkit.core._providers._base import Options, Prepared, on_request, parse_options
+from ai_arch_toolkit.core._providers._base import Options, Prepared, parse_options
 from ai_arch_toolkit.core._providers._imports import require_sdk
 from ai_arch_toolkit.core._response import Response
 
@@ -35,6 +35,7 @@ with require_sdk("meta"):
         ResponsesProfile,
         ResponsesProvider,
         _parse_sdk_response,
+        http_client,
         input_items,
         request_params,
     )
@@ -97,6 +98,7 @@ _PROFILE = ResponsesProfile(
     takes_tool_choice=False,
     # Meta constrains decoding either way; strict: true refuses plain Pydantic schemas (D13).
     function_strict=None,
+    output_strict=False,
     hosted_tools={"web_search": {"type": "web_search"}},
     codes=_CODE_STATUS,
 )
@@ -109,11 +111,6 @@ def _input_items(messages: list[dict[str, Any]]) -> list[ResponseInputItemParam]
     produced it, whichever model the request names.
     """
     return input_items(messages, _PROFILE, _MUSE_SPARK)
-
-
-def _http() -> Any:
-    """The SDK's HTTP client, with the hook that marks a request as handed to the transport."""
-    return openai.DefaultAsyncHttpxClient(event_hooks={"request": [on_request]})
 
 
 class MetaProvider(ResponsesProvider):
@@ -138,7 +135,7 @@ class MetaProvider(ResponsesProvider):
             client_kwargs["timeout"] = timeout
 
         def _new_client() -> openai.AsyncOpenAI:
-            client = openai.AsyncOpenAI(**client_kwargs, http_client=_http())
+            client = openai.AsyncOpenAI(**client_kwargs, http_client=http_client())
             # The SDK reads OPENAI_ORG_ID / OPENAI_PROJECT_ID from the environment and sends them
             # as headers; they identify an OpenAI account and must not reach Meta.
             client.organization = None

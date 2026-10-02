@@ -90,7 +90,9 @@ class TestLoopAwareClientCache:
 class TestProvidersAreLoopAware:
     def test_all_adapters_install_a_factory(self) -> None:
         from ai_arch_toolkit.core._providers._gemini import GeminiProvider
+        from ai_arch_toolkit.core._providers._meta import MetaProvider
         from ai_arch_toolkit.core._providers._openai import OpenAIProvider
+        from ai_arch_toolkit.core._providers._openai_compatible import OpenAICompatibleProvider
         from ai_arch_toolkit.core._providers._xai import XAIProvider
 
         # Patch the SDK modules: real clients open pools (and the xAI gRPC
@@ -98,11 +100,25 @@ class TestProvidersAreLoopAware:
         with (
             patch("ai_arch_toolkit.core._providers._anthropic.anthropic"),
             patch("ai_arch_toolkit.core._providers._openai.openai"),
+            patch("ai_arch_toolkit.core._providers._openai_compatible.openai"),
+            patch("ai_arch_toolkit.core._providers._meta.openai"),
             patch("ai_arch_toolkit.core._providers._gemini.genai"),
             patch("ai_arch_toolkit.core._providers._xai.xai_sdk"),
         ):
-            for cls in (AnthropicProvider, OpenAIProvider, GeminiProvider, XAIProvider):
-                provider = cls("some-model", "test-key")
+            providers = [
+                *(
+                    cls("some-model", "test-key")
+                    for cls in (
+                        AnthropicProvider,
+                        OpenAIProvider,
+                        MetaProvider,
+                        GeminiProvider,
+                        XAIProvider,
+                    )
+                ),
+                OpenAICompatibleProvider("some-model", "k", base_url="http://localhost:1/v1"),
+            ]
+            for provider in providers:
                 assert isinstance(provider, LoopAwareClientCache)
                 assert provider._client_factory is not None
 

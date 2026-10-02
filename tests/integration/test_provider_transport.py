@@ -14,6 +14,7 @@ import grpc
 import pytest
 from google import genai
 
+from ai_arch_toolkit.core import tool_result
 from ai_arch_toolkit.core._exceptions import (
     APIError,
     Delivery,
@@ -28,6 +29,7 @@ from ai_arch_toolkit.core._providers._anthropic import AnthropicProvider
 from ai_arch_toolkit.core._providers._gemini import GeminiProvider, _http_options
 from ai_arch_toolkit.core._providers._meta import MetaProvider
 from ai_arch_toolkit.core._providers._openai import OpenAIProvider
+from ai_arch_toolkit.core._providers._openai_compatible import OpenAICompatibleProvider
 from tests.integration import fakegrpc, fakeserver
 from tests.provider_calls import complete, stream
 
@@ -73,8 +75,9 @@ OPENAI_EVENTS = [
 ]
 
 
-def _openai(port: int, timeout: float = 2.0) -> OpenAIProvider:
-    return OpenAIProvider(
+def _openai(port: int, timeout: float = 2.0) -> OpenAICompatibleProvider:
+    """An OpenAI-compatible server on another host: Chat Completions (D43)."""
+    return OpenAICompatibleProvider(
         "gpt-4o", "local-test", base_url=f"http://127.0.0.1:{port}/v1", timeout=timeout
     )
 
@@ -165,7 +168,7 @@ async def test_openai_a_refused_connection_was_never_sent() -> None:
     await provider.close()
 
 
-@pytest.mark.wire_contract(tolerate=[r"^OpenAIProvider: stop\."])  # the set, on purpose
+@pytest.mark.wire_contract(tolerate=[r"^OpenAICompatibleProvider: stop\."])  # the set
 async def test_openai_a_request_the_sdk_cannot_serialize_was_never_sent() -> None:
     # The SDK serializes the body before handing it to the transport: a set is not JSON.
     server, port, stats = await fakeserver.start("status", body=OPENAI_OK)
@@ -556,6 +559,214 @@ async def test_meta_success_through_the_real_sdk() -> None:
     assert response.usage.input_tokens == 30
     sent = json.loads(stats.bodies[0])
     assert (sent["store"], sent["reasoning"]) == (False, {"effort": "low"})
+
+
+# ---------------------------------------------------------------------------
+# OpenAI's own host: the real openai SDK's Responses API (D43), against the loopback HTTP server.
+# The adapter is built by hand with a loopback base_url; create_provider would send that host to
+# the OpenAI-compatible adapter.
+# ---------------------------------------------------------------------------
+
+RESPONSES_OK = {**META_OK, "model": "gpt-6-luna"}
+RESPONSES_FAILED = {
+    **RESPONSES_OK,
+    "status": "failed",
+    "output": [],
+    "error": {"code": "server_error", "message": "busy"},
+}
+RESPONSES_DONE = _meta_event("response.completed", response=RESPONSES_OK)
+
+
+def _openai_responses(
+    port: int, timeout: float = 2.0, model: str = "gpt-6-luna"
+) -> OpenAIProvider:
+    return OpenAIProvider(
+        model, "local-test", base_url=f"http://127.0.0.1:{port}/v1", timeout=timeout
+    )
+
+
+# A case: how the server behaves, and what complete() and a stream must raise. The failures
+# inside a response carry OpenAI's codes: server_error is a 500 in its table.
+OPENAI_RESPONSES_CASES: dict[str, tuple[dict[str, Any], Outcome, Outcome]] = {
+    "429": (
+        {"behaviour": "status", "status": 429, "body": OPENAI_ERROR},
+        UNBILLED_429,
+        UNBILLED_429,
+    ),
+    "500": ({"behaviour": "status", "status": 500, "body": OPENAI_ERROR}, API_ERROR, API_ERROR),
+    "closed without an answer": ({"behaviour": "close"}, TRANSPORT, TRANSPORT),
+    "silent": ({"behaviour": "hang", "seconds": 1.0}, TIMEOUT, TIMEOUT),
+    "response.failed inside the stream": (
+        {
+            "behaviour": "sse",
+            "events": [*META_DELTAS, _meta_event("response.failed", response=RESPONSES_FAILED)],
+        },
+        Outcome(None),
+        API_ERROR,
+    ),
+    "error payload inside the stream": (
+        {
+            "behaviour": "sse",
+            "events": [
+                *META_DELTAS,
+                fakeserver.sse({"error": {"code": "server_error", "message": "x"}}),
+            ],
+        },
+        Outcome(None),
+        API_ERROR,
+    ),
+    "cut mid-stream": (
+        {"behaviour": "sse", "events": META_DELTAS, "ending": "drop"},
+        Outcome(None),
+        TRANSPORT,
+    ),
+    "success": (
+        {"behaviour": "sse", "events": [*META_DELTAS, RESPONSES_DONE]},
+        Outcome(None),
+        Outcome(None),
+    ),
+}
+
+
+@pytest.mark.parametrize("case", OPENAI_RESPONSES_CASES)
+async def test_openai_responses_failures_are_typed_with_their_delivery(case: str) -> None:
+    behaviour, on_complete, on_stream = OPENAI_RESPONSES_CASES[case]
+    kwargs = dict(behaviour)
+    server, port, _ = await fakeserver.start(kwargs.pop("behaviour"), **kwargs)
+    async with server:
+        provider = _openai_responses(port, timeout=0.3 if case == "silent" else 2.0)
+        if behaviour["behaviour"] != "sse":
+            assert await _outcome(complete(provider, HI)) == on_complete
+        assert await _outcome(stream(provider, HI)) == on_stream
+        await provider.close()
+
+
+async def test_openai_responses_a_failed_response_keeps_the_usage_it_reported() -> None:
+    server, port, _ = await fakeserver.start("status", body=RESPONSES_FAILED)
+    async with server:
+        provider = _openai_responses(port)
+        with pytest.raises(APIError) as failed:
+            await complete(provider, HI)
+        await provider.close()
+    assert (failed.value.status_code, failed.value.delivery) == (500, "indeterminate")
+    assert failed.value.usage is not None and failed.value.usage.output_tokens == 12
+
+
+async def test_openai_responses_a_refused_connection_was_never_sent() -> None:
+    provider = _openai_responses(fakeserver.closed_port())
+    assert await _outcome(complete(provider, HI)) == Outcome(TransportError, "not_sent")
+    await provider.close()
+
+
+@pytest.mark.wire_contract(tolerate=[r"^OpenAIProvider: top_logprobs \| "])  # the set
+async def test_openai_responses_a_request_the_sdk_cannot_serialize_was_never_sent() -> None:
+    server, port, stats = await fakeserver.start("status", body=RESPONSES_OK)
+    async with server:
+        provider = _openai_responses(port, model="gpt-4o")
+        outcome = await _outcome(complete(provider, HI, top_logprobs={"not", "json"}))
+        await provider.close()
+    assert outcome == Outcome(RequestError, "not_sent")
+    assert stats.requests == 0
+
+
+WEATHER_TOOL = {
+    "name": "get_weather",
+    "description": "Return the current weather for a city.",
+    "input_schema": {
+        "type": "object",
+        "properties": {"city": {"type": "string"}, "unit": {"type": "string"}},
+        "required": ["city"],
+    },
+}
+REASONED_CALL = {
+    **RESPONSES_OK,
+    "id": "resp_turn",
+    "output": [
+        {
+            "id": "rs_1",
+            "type": "reasoning",
+            "summary": [{"type": "summary_text", "text": "Look the weather up."}],
+            "encrypted_content": "enc-rs_1",
+        },
+        {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "phase": "commentary",
+            "content": [{"type": "output_text", "text": "Checking.", "annotations": []}],
+        },
+        {
+            "id": "fc_1",
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "get_weather",
+            "arguments": '{"city": "Lisbon"}',
+            "status": "completed",
+        },
+    ],
+}
+REASONED_EVENTS = [
+    _meta_event(
+        "response.reasoning_summary_text.delta",
+        item_id="rs_1",
+        output_index=0,
+        summary_index=0,
+        delta="Look the weather up.",
+    ),
+    _meta_event(
+        "response.output_text.delta",
+        item_id="msg_1",
+        output_index=1,
+        content_index=0,
+        delta="Checking.",
+        logprobs=[],
+    ),
+    _meta_event("response.completed", response=REASONED_CALL),
+]
+
+
+@pytest.mark.parametrize("streamed", [False, True])
+async def test_openai_a_tool_loop_replays_its_encrypted_reasoning(streamed: bool) -> None:
+    first = (
+        fakeserver.Reply(events=REASONED_EVENTS) if streamed else fakeserver.Reply(REASONED_CALL)
+    )
+    server, port, stats = await fakeserver.start(
+        "script", replies=[first, fakeserver.Reply(RESPONSES_OK)]
+    )
+    question = {"role": "user", "content": "Weather in Lisbon?"}
+    options = {"tools": [WEATHER_TOOL], "thinking": True, "thinking_effort": "low"}
+    async with server:
+        provider = _openai_responses(port)
+        if streamed:
+            _, turn = await stream(provider, [question], **options)
+        else:
+            turn = await complete(provider, [question], **options)
+        result = tool_result("Sunny, 24C", tool_use_id="call_1", name="get_weather")
+        final = await complete(provider, [question, turn.to_message(), result], **options)
+        await provider.close()
+
+    assert [block.text for block in turn.thinking] == ["Look the weather up."]
+    assert final.text == "ok"
+    sent = [json.loads(body) for body in stats.bodies]
+    assert sent[0]["store"] is False and "include" not in sent[0]
+    assert sent[0]["reasoning"] == {"effort": "low", "summary": "auto"}
+    assert sent[0]["tools"][0]["strict"] is False
+    replayed = sent[1]["input"]
+    assert [item.get("type", "message") for item in replayed] == [
+        "message",
+        "reasoning",
+        "message",
+        "function_call",
+        "function_call_output",
+    ]
+    assert replayed[1]["encrypted_content"] == "enc-rs_1"
+    assert replayed[2]["phase"] == "commentary"
+    assert replayed[4] == {
+        "type": "function_call_output",
+        "call_id": "call_1",
+        "output": "Sunny, 24C",
+    }
 
 
 # ---------------------------------------------------------------------------

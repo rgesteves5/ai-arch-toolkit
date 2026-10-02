@@ -21,6 +21,7 @@ from ai_arch_toolkit.core._providers._anthropic import AnthropicProvider
 from ai_arch_toolkit.core._providers._gemini import GeminiProvider
 from ai_arch_toolkit.core._providers._meta import MetaProvider
 from ai_arch_toolkit.core._providers._openai import OpenAIProvider
+from ai_arch_toolkit.core._providers._openai_compatible import OpenAICompatibleProvider
 from tests.integration import fakegrpc
 from tests.provider_calls import complete, stream
 from tests.sdk_streams import OpenAIStream, openai_chunk, openai_usage_chunk
@@ -49,14 +50,15 @@ def _same(completed: Response, streamed: Response) -> None:
     assert streamed_replay == replay  # what the history sends back
 
 
-def _openai(completion: ChatCompletion, chunks: list[Any]) -> OpenAIProvider:
+def _openai(completion: ChatCompletion, chunks: list[Any]) -> OpenAICompatibleProvider:
+    """An OpenAI-compatible server: Chat Completions and the SDK's chunk accumulator."""
     client = AsyncMock()
 
     async def create(**kwargs: Any) -> Any:
         return OpenAIStream(chunks) if kwargs.get("stream") else completion
 
     client.chat.completions.create = create
-    provider = OpenAIProvider("gpt-4o", "test-key")
+    provider = OpenAICompatibleProvider("gpt-4o", "k", base_url="http://localhost:8000/v1")
     provider._client = client
     return provider
 
@@ -256,12 +258,12 @@ async def test_gemini_structured_output() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _meta_response(*output: dict[str, Any]) -> MetaResponse:
+def _meta_response(*output: dict[str, Any], model: str = "muse-spark-1.3") -> MetaResponse:
     return MetaResponse.construct(
         id="resp_1",
         object="response",
         created_at=0.0,
-        model="muse-spark-1.3",
+        model=model,
         status="completed",
         output=list(output),
         parallel_tool_calls=True,
@@ -289,7 +291,12 @@ def _meta_message(text: str, item_id: str, phase: str | None = None) -> dict[str
     }
 
 
-def _meta(final: MetaResponse, events: list[dict[str, Any]]) -> MetaProvider:
+def _meta(
+    final: MetaResponse,
+    events: list[dict[str, Any]],
+    provider: MetaProvider | OpenAIProvider | None = None,
+) -> MetaProvider | OpenAIProvider:
+    """A provider on the Responses API (Meta's, unless another is given) over scripted events."""
     from tests.sdk_streams import OpenAIStream
 
     async def create(**kwargs: Any) -> Any:
@@ -300,12 +307,12 @@ def _meta(final: MetaResponse, events: list[dict[str, Any]]) -> MetaProvider:
 
     client = MagicMock()
     client.responses.create = create
-    provider = MetaProvider("muse-spark-1.3", "test-key")
-    provider._client = client
-    return provider
+    chosen = provider or MetaProvider("muse-spark-1.3", "test-key")
+    chosen._client = client
+    return chosen
 
 
-async def test_meta_reasoning_commentary_and_parallel_calls() -> None:
+def _reasoned_parallel_turn(model: str) -> tuple[MetaResponse, list[dict[str, Any]]]:
     final = _meta_response(
         {
             "id": "rs_1",
@@ -328,6 +335,7 @@ async def test_meta_reasoning_commentary_and_parallel_calls() -> None:
             "name": "get_time",
             "arguments": '{"tz": "UTC"}',
         },
+        model=model,
     )
     events = [
         {"type": "response.reasoning_summary_text.delta", "item_id": "rs_1", "delta": "Two "},
@@ -335,10 +343,22 @@ async def test_meta_reasoning_commentary_and_parallel_calls() -> None:
         {"type": "response.output_text.delta", "item_id": "m1", "delta": "Checking "},
         {"type": "response.output_text.delta", "item_id": "m1", "delta": "both."},
     ]
-    provider = _meta(final, events)
+    return final, events
+
+
+async def test_meta_reasoning_commentary_and_parallel_calls() -> None:
+    provider = _meta(*_reasoned_parallel_turn("muse-spark-1.3"))
     completed = await complete(provider, HI)
     assert [call.id for call in completed.tool_calls] == ["call_1", "call_2"]
     _same(completed, (await stream(provider, HI))[1])
+
+
+async def test_openai_responses_reasoning_commentary_and_parallel_calls() -> None:
+    final, events = _reasoned_parallel_turn("gpt-6-luna")
+    provider = _meta(final, events, OpenAIProvider("gpt-6-luna", "test-key"))
+    completed = await complete(provider, HI, thinking=True)
+    assert [call.id for call in completed.tool_calls] == ["call_1", "call_2"]
+    _same(completed, (await stream(provider, HI, thinking=True))[1])
 
 
 async def test_meta_structured_output() -> None:

@@ -1,6 +1,6 @@
 """The Responses API core: what the providers on the ``openai`` SDK's Responses surface share.
 
-Meta drives its Model API through this surface (D11), and OpenAI's own host moves to it (D43). A
+Meta drives its Model API through this surface (D11), and so does OpenAI's own host (D43). A
 provider brings a :class:`ResponsesProfile`, the data that differs between them, and composes its
 ``prepare``, ``assemble`` and ``count_tokens`` from the functions here; :class:`ResponsesProvider`
 does the I/O, reads the usage and types the errors.
@@ -37,9 +37,11 @@ from ai_arch_toolkit.core._providers._base import (
     Options,
     Prepared,
     _parse_retry_after,
+    on_request,
     parse_structured,
     parse_tool_args,
     refused_or_unread,
+    strict_schema,
     system_content_text,
     transport_error,
 )
@@ -80,6 +82,7 @@ with require_sdk("openai"):  # the meta extra installs the same package
         ResponseCreateParamsStreaming,
         ToolChoice,
     )
+    from openai.types.responses.response_output_text import Logprob
 
 type Params = ResponseCreateParamsNonStreaming
 
@@ -87,15 +90,18 @@ type Params = ResponseCreateParamsNonStreaming
 _NOT_SENT = (httpx2.ConnectError, httpx2.ConnectTimeout, httpx2.PoolTimeout)
 _TIMEOUTS = (httpx2.TimeoutException, openai.APITimeoutError)
 
-# Where the request leaves the openai SDK's types, and the live proof that Meta takes it (M01,
-# blackboard/tasks/M01-meta-provider.md, probes of 2026-09-13). Each is built as a plain dict and
-# cast once, where it is built:
+# Where the request leaves the openai SDK's types, and the proof that each provider takes it:
+# Meta's live probes (M01, blackboard/tasks/M01-meta-provider.md, 2026-09-13), OpenAI's documents.
+# Each is built as a plain dict and cast once, where it is built:
 # 1. an assistant turn rebuilt from its text and calls: the message item has no id or status, and
-#    its text no annotations (ResponseOutputMessageParam and ResponseOutputTextParam require them);
-#    the probes replayed turns with and without ids;
+#    its text no annotations (ResponseOutputMessageParam and ResponseOutputTextParam require them).
+#    Meta: the probes replayed turns with and without ids. OpenAI: not yet proven live (O01
+#    replayed its turns whole; the rebuilt shape is on O04's live check);
 # 2. a function tool without strict, for a profile whose function_strict is None
-#    (FunctionToolParam requires the key): every live tool loop;
-# 3. an input image without detail (ResponseInputImageParam requires it): the image probe.
+#    (FunctionToolParam requires the key). Meta only: every live tool loop;
+# 3. an input image without detail (ResponseInputImageParam requires it). Meta: the image probe.
+#    OpenAI: "If you omit the parameter, it defaults to auto in both the Responses API and the
+#    Chat Completions API" (https://developers.openai.com/api/docs/guides/images-vision).
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -115,6 +121,9 @@ class ResponsesProfile:
             tools, and a forced choice is refused.
         function_strict: The ``strict`` flag every function tool carries; ``None`` leaves the
             key out (deviation 2).
+        output_strict: The provider honours ``OutputSchema.strict``: a strict schema is sent
+            strict, in OpenAI's strict subset (``strict_schema``). Without it every schema is sent
+            non-strict.
         hosted_tools: The server tools the provider runs, by the toolkit's server-tool type, each
             with the Responses tool it is sent as. A server tool's config is refused (C05).
         codes: The HTTP status of each error code a failure inside a response or a stream
@@ -126,6 +135,7 @@ class ResponsesProfile:
     include: tuple[ResponseIncludable, ...]
     takes_tool_choice: bool
     function_strict: bool | None
+    output_strict: bool
     hosted_tools: Mapping[str, ToolParam]
     codes: Mapping[str, int]
 
@@ -361,16 +371,23 @@ def _tools(
         params["tool_choice"] = _tool_choice(options.tool_choice)
 
 
-def _text_format(options: Options) -> ResponseTextConfigParam | None:
-    if options.output_schema is not None:
-        # Sent non-strict: strict adds a server check of OpenAI's strict subset, which a plain
-        # Pydantic schema fails; Meta constrains decoding to the schema either way (D13).
+def _text_format(options: Options, profile: ResponsesProfile) -> ResponseTextConfigParam | None:
+    """The structured output's ``text.format``
+    (https://developers.openai.com/api/docs/guides/structured-outputs).
+
+    Strict adds a server check of OpenAI's strict subset, which a plain Pydantic schema fails
+    unless it is normalized to it; a profile that does not honour ``OutputSchema.strict`` sends
+    every schema non-strict (Meta constrains decoding to the schema either way, D13).
+    """
+    schema = options.output_schema
+    if schema is not None:
+        strict = profile.output_strict and schema.strict
         return {
             "format": {
                 "type": "json_schema",
-                "name": options.output_schema.name,
-                "schema": options.output_schema.schema,
-                "strict": False,
+                "name": schema.name,
+                "schema": strict_schema(schema.schema) if strict else schema.schema,
+                "strict": strict,
             }
         }
     if options.json_mode:
@@ -389,13 +406,16 @@ def request_params(
 ) -> Params:
     """The request every Responses provider sends for ``items``.
 
-    Stateless, with the caller's SDK parameters (``max_tokens`` is ``max_output_tokens`` here),
-    the instructions, the tools and the text format. The model's own rules (reasoning, sampling)
-    are the adapter's to add.
+    Stateless, with the caller's SDK parameters, the instructions, the tools and the text format.
+    The output limit is ``max_output_tokens`` here: ``max_tokens``, or Chat Completions'
+    ``max_completion_tokens``, which wins when both are given. The model's own rules (reasoning,
+    sampling) are the adapter's to add.
     """
     forwarded = dict(options.params)
-    if "max_tokens" in forwarded:
-        forwarded["max_output_tokens"] = forwarded.pop("max_tokens")
+    limit = forwarded.pop("max_completion_tokens", None) or forwarded.pop("max_tokens", None)
+    forwarded.pop("max_tokens", None)
+    if limit is not None:
+        forwarded["max_output_tokens"] = limit
     # Stateless: no conversation is stored; the reasoning comes back encrypted for replay.
     params: Params = {"model": model, "input": items, "store": False}
     if profile.include:
@@ -404,7 +424,7 @@ def request_params(
     if system:
         params["instructions"] = system
     _tools(params, tools, options, profile)
-    if text := _text_format(options):
+    if text := _text_format(options, profile):
         params["text"] = text
     return params
 
@@ -467,6 +487,20 @@ def _citations(output: list[ResponseOutputItem]) -> list[Citation]:
     ]
 
 
+def _logprobs(output: list[ResponseOutputItem]) -> tuple[Logprob, ...] | None:
+    """The tokens' log probabilities of the output text, in order, when the request asked for
+    them (``include: ["message.output_text.logprobs"]``); ``None`` otherwise."""
+    found = tuple(
+        logprob
+        for item in output
+        if item.type == "message"
+        for part in item.content
+        if part.type == "output_text"
+        for logprob in part.logprobs or ()
+    )
+    return found or None
+
+
 def _parse_sdk_response(
     response: SDKResponse,
     model: str,
@@ -499,6 +533,7 @@ def _parse_sdk_response(
         model=response.model or model,
         raw=response,
         response_id=response.id or "",
+        logprobs=_logprobs(output),
         citations=tuple(_citations(output)),
     )
 
@@ -548,6 +583,11 @@ class _TextJoiner:
 # ---------------------------------------------------------------------------
 # Provider
 # ---------------------------------------------------------------------------
+
+
+def http_client() -> httpx2.AsyncClient:
+    """The SDK's HTTP client, with the hook that marks a request as handed to the transport."""
+    return openai.DefaultAsyncHttpxClient(event_hooks={"request": [on_request]})
 
 
 class ResponsesProvider(LoopAwareClientCache, BaseProvider[Prepared[Params], SDKResponse]):

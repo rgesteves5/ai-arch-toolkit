@@ -131,6 +131,20 @@ def _resolve_key(
     raise ValueError(f"No API key provided. Pass api_key= or set {_format_env_var_names(names)}.")
 
 
+def _openai_by_host(
+    model: str, api_key: str, *, base_url: str | None, timeout: float | None
+) -> BaseProvider:
+    """OpenAI's own host speaks the Responses API (D43); any other host is an OpenAI-compatible
+    server, on Chat Completions."""
+    if base_url is None or urlsplit(base_url).hostname == _OWN_HOSTS["openai"]:
+        from ai_arch_toolkit.core._providers._openai import OpenAIProvider
+
+        return OpenAIProvider(model, api_key, base_url=base_url, timeout=timeout)
+    from ai_arch_toolkit.core._providers._openai_compatible import OpenAICompatibleProvider
+
+    return OpenAICompatibleProvider(model, api_key, base_url=base_url, timeout=timeout)
+
+
 def resolve_provider_name(
     model: str,
     *,
@@ -177,7 +191,10 @@ def create_provider(
     prefix is matched (``claude-`` → Anthropic, ``gpt-``/``chat-``/``o1-`` →
     OpenAI, ``grok-`` → xAI, ``gemini-`` → Gemini, ``muse-spark-`` → Meta);
     otherwise an unknown model with ``base_url`` set falls back to the
-    OpenAI-compatible adapter (Ollama, LM Studio, vLLM). The API key is required
+    OpenAI-compatible adapter (Ollama, LM Studio, vLLM). Within ``openai``, the
+    host decides the API: OpenAI's own (no ``base_url``, or ``api.openai.com``)
+    is served through the Responses API, any other through Chat Completions,
+    with no OpenAI model rule. The API key is required
     unless ``base_url`` points at a loopback host (localhost), where local servers
     ignore it. A key from the environment only goes to the provider's own API
     host; a remote ``base_url`` elsewhere needs ``api_key=``.
@@ -209,20 +226,10 @@ def create_provider(
         )
 
     if name == "openai":
-        from ai_arch_toolkit.core._providers._openai import OpenAIProvider
-
-        return OpenAIProvider(
-            model,
-            _resolve_key(
-                "OPENAI_API_KEY",
-                api_key,
-                local=local,
-                base_url=base_url,
-                own_host=_OWN_HOSTS[name],
-            ),
-            base_url=base_url,
-            timeout=timeout,
+        key = _resolve_key(
+            "OPENAI_API_KEY", api_key, local=local, base_url=base_url, own_host=_OWN_HOSTS[name]
         )
+        return _openai_by_host(model, key, base_url=base_url, timeout=timeout)
 
     if name == "xai":
         from ai_arch_toolkit.core._providers._xai import XAIProvider

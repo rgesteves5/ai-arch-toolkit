@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import dataclasses
 import json
 import logging
@@ -450,3 +451,75 @@ def parse_tool_args(raw_args: str | dict[str, Any]) -> dict[str, Any]:
         return json.loads(raw_args)
     except (json.JSONDecodeError, TypeError):
         return {"_raw": raw_args}
+
+
+def strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of ``schema`` in OpenAI's strict subset, as the SDK's ``parse()`` helpers do.
+
+    Strict mode rejects an object without ``additionalProperties: false`` or with properties
+    missing from ``required``, which is what ``model_json_schema()`` produces for any model with
+    a default. Every object is closed and lists all its properties as required (a field with a
+    default is then always sent, and validates), ``default: null`` is dropped (the field stays
+    nullable), and a ``$ref`` with sibling keys is inlined. Both OpenAI adapters send it: Chat
+    Completions in ``response_format``, the Responses API in ``text.format``.
+    """
+    root = copy.deepcopy(schema)
+    return _strict_node(root, root, frozenset())
+
+
+def _strict_node(
+    node: dict[str, Any], root: dict[str, Any], inlining: frozenset[str]
+) -> dict[str, Any]:
+    for key in ("$defs", "definitions"):
+        _strict_values(node.get(key), root, inlining)
+    if node.get("type") == "object":
+        node.setdefault("additionalProperties", False)
+    properties = node.get("properties")
+    if isinstance(properties, dict):
+        node["required"] = list(properties)
+        _strict_values(properties, root, inlining)
+    items = node.get("items")
+    if isinstance(items, dict):
+        node["items"] = _strict_node(items, root, inlining)
+    for key in ("anyOf", "allOf"):
+        variants = node.get(key)
+        if isinstance(variants, list):
+            node[key] = [_strict_variant(v, root, inlining) for v in variants]
+    all_of = node.get("allOf")
+    if isinstance(all_of, list) and len(all_of) == 1 and isinstance(all_of[0], dict):
+        node.update(node.pop("allOf")[0])
+    if "default" in node and node["default"] is None:
+        node.pop("default")
+    return _inline_ref(node, root, inlining)
+
+
+def _strict_values(mapping: object, root: dict[str, Any], inlining: frozenset[str]) -> None:
+    """Make each schema among the values of ``mapping`` (properties, definitions) strict."""
+    if isinstance(mapping, dict):
+        for name, value in mapping.items():
+            mapping[name] = _strict_variant(value, root, inlining)
+
+
+def _strict_variant(value: object, root: dict[str, Any], inlining: frozenset[str]) -> object:
+    return _strict_node(value, root, inlining) if isinstance(value, dict) else value
+
+
+def _inline_ref(
+    node: dict[str, Any], root: dict[str, Any], inlining: frozenset[str]
+) -> dict[str, Any]:
+    """``node`` with its ``$ref`` inlined when the reference has sibling keys.
+
+    A ref already being inlined is a cycle (a model that holds itself): it stays a reference.
+    """
+    ref = node.get("$ref")
+    if not isinstance(ref, str) or len(node) == 1 or not ref.startswith("#/") or ref in inlining:
+        return node
+    resolved: Any = root
+    for part in ref[2:].split("/"):
+        resolved = resolved.get(part) if isinstance(resolved, dict) else None
+    if not isinstance(resolved, dict):
+        return node
+    # A copy, so the definition never ends up containing itself; the node's keys win.
+    inlined = {**copy.deepcopy(resolved), **node}
+    inlined.pop("$ref")
+    return _strict_node(inlined, root, inlining | {ref})

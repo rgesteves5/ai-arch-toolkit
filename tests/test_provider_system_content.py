@@ -8,8 +8,9 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from ai_arch_toolkit.core._content import cache, document, image, system, user
-from ai_arch_toolkit.core._providers import _anthropic, _gemini, _openai, _xai
-from tests.provider_calls import complete
+from ai_arch_toolkit.core._providers import _anthropic, _gemini, _openai_compatible, _xai
+from ai_arch_toolkit.core._providers._openai import OpenAIProvider
+from tests.provider_calls import complete, prepare
 
 SYSTEM_WITH_PARTS = {"role": "system", "content": ["Be terse.", cache("POLICY")]}
 SYSTEM_WITH_IMAGE = {"role": "system", "content": ["Look:", image("https://example.com/a.png")]}
@@ -17,9 +18,11 @@ USER_WITH_CACHE = user(["Answer briefly.", cache("LONG CONTEXT"), "What is a dec
 CACHED_POLICY = {"type": "text", "text": "POLICY", "cache_control": {"type": "ephemeral"}}
 
 
-class TestOpenAI:
+class TestOpenAICompatible:
     def test_system_parts_are_sent_as_text(self) -> None:
-        wire = _openai._messages_to_sdk([SYSTEM_WITH_PARTS, user("hi")], system="Rules.")
+        wire = _openai_compatible._messages_to_sdk(
+            [SYSTEM_WITH_PARTS, user("hi")], system="Rules."
+        )
 
         assert wire[:2] == [
             {"role": "system", "content": "Rules."},
@@ -27,14 +30,30 @@ class TestOpenAI:
         ]
 
     def test_cache_parts_in_user_content_are_sent_as_their_text(self) -> None:
-        wire = _openai._messages_to_sdk([USER_WITH_CACHE])
+        wire = _openai_compatible._messages_to_sdk([USER_WITH_CACHE])
 
         texts = [block["text"] for block in wire[0]["content"]]
         assert texts == ["Answer briefly.", "LONG CONTEXT", "What is a decorator?"]
 
     def test_an_image_in_a_system_message_is_rejected(self) -> None:
         with pytest.raises(TypeError, match="user message"):
-            _openai._messages_to_sdk([SYSTEM_WITH_IMAGE])
+            _openai_compatible._messages_to_sdk([SYSTEM_WITH_IMAGE])
+
+
+class TestOpenAIResponses:
+    def test_system_parts_are_sent_as_text_and_the_system_argument_as_instructions(self) -> None:
+        params = prepare(
+            OpenAIProvider("gpt-6-luna", "k"), [SYSTEM_WITH_PARTS, user("hi")], system="Rules."
+        ).params
+
+        assert params["instructions"] == "Rules."
+        assert params["input"][0] == {"role": "system", "content": "Be terse.\n\nPOLICY"}
+
+    def test_cache_parts_in_user_content_are_sent_as_their_text(self) -> None:
+        params = prepare(OpenAIProvider("gpt-6-luna", "k"), [USER_WITH_CACHE]).params
+
+        texts = [block["text"] for block in params["input"][0]["content"]]
+        assert texts == ["Answer briefly.", "LONG CONTEXT", "What is a decorator?"]
 
 
 class TestGemini:

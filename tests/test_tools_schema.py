@@ -13,7 +13,14 @@ import pytest
 from google.genai import types as genai_types
 from pydantic import BaseModel, Field
 
-from ai_arch_toolkit.core._providers import _anthropic, _gemini, _openai, _xai
+from ai_arch_toolkit.core._providers import (
+    _anthropic,
+    _gemini,
+    _openai,
+    _openai_compatible,
+    _responses,
+    _xai,
+)
 from ai_arch_toolkit.core._tools import prepare_tools
 from ai_arch_toolkit.core._tools._decorator import tool
 from ai_arch_toolkit.core._tools._schema import (
@@ -26,6 +33,11 @@ from ai_arch_toolkit.core._tools._schema import (
 from tests.provider_calls import prepare
 
 INT_OR_STR = [{"type": "integer"}, {"type": "string"}]
+
+
+def _responses_tool(definition: dict[str, Any]) -> dict[str, Any]:
+    """The function tool OpenAI's own host gets through the Responses API."""
+    return dict(_responses._function_tool(definition, _openai._PROFILE))
 
 
 class _Address(BaseModel):
@@ -416,9 +428,9 @@ class TestInferSchema:
         }
 
         assert _anthropic._tool_to_sdk(definition)["input_schema"]["properties"]["value"] == {}
-        assert (
-            _openai._tool_to_sdk(definition)["function"]["parameters"]["properties"]["value"] == {}
-        )
+        chat = _openai_compatible._tool_to_sdk(definition)["function"]["parameters"]
+        assert chat["properties"]["value"] == {}
+        assert _responses_tool(definition)["parameters"]["properties"]["value"] == {}
         declaration = _gemini._tool_to_sdk(definition)
         assert declaration.parameters is not None
         assert declaration.parameters.properties is not None
@@ -597,9 +609,11 @@ class TestAnyOfReachesProviderAdapters:
         assert sdk_tool["input_schema"]["properties"]["tags"] == TAGS_PROPERTY
 
     def test_openai_sends_any_of(self):
-        sdk_tool = _openai._tool_to_sdk(_lookup_definition())
-        assert sdk_tool["function"]["parameters"]["properties"]["query"] == QUERY_PROPERTY
-        assert sdk_tool["function"]["parameters"]["properties"]["tags"] == TAGS_PROPERTY
+        chat = _openai_compatible._tool_to_sdk(_lookup_definition())["function"]["parameters"]
+        responses = _responses_tool(_lookup_definition())["parameters"]
+        for parameters in (chat, responses):
+            assert parameters["properties"]["query"] == QUERY_PROPERTY
+            assert parameters["properties"]["tags"] == TAGS_PROPERTY
 
     def test_xai_sends_any_of(self):
         sdk_tool = _xai._tool_to_sdk(_lookup_definition())
@@ -718,9 +732,10 @@ class TestRange:
         assert definitions is not None
         definition = definitions[0]
         anthropic = _anthropic._tool_to_sdk(definition)["input_schema"]["properties"]["n"]
-        openai = _openai._tool_to_sdk(definition)["function"]["parameters"]["properties"]["n"]
+        chat = _openai_compatible._tool_to_sdk(definition)["function"]["parameters"]
+        responses = _responses_tool(definition)["parameters"]
         xai = json.loads(_xai._tool_to_sdk(definition).function.parameters)["properties"]["n"]
-        for prop in (anthropic, openai, xai):
+        for prop in (anthropic, chat["properties"]["n"], responses["properties"]["n"], xai):
             assert (prop["minimum"], prop["maximum"]) == (1, 25)
         gemini = _gemini._tool_to_sdk(definition).parameters
         assert gemini is not None and gemini.properties is not None

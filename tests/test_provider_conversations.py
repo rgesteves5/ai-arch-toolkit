@@ -21,6 +21,7 @@ from ai_arch_toolkit.core._providers._anthropic import AnthropicProvider
 from ai_arch_toolkit.core._providers._gemini import GeminiProvider
 from ai_arch_toolkit.core._providers._meta import MetaProvider
 from ai_arch_toolkit.core._providers._openai import OpenAIProvider
+from ai_arch_toolkit.core._providers._openai_compatible import OpenAICompatibleProvider
 from ai_arch_toolkit.core._providers._xai import XAIProvider
 from tests.integration import fakegrpc
 from tests.provider_calls import prepare
@@ -57,13 +58,15 @@ HISTORIES: dict[str, list[dict[str, Any]]] = {
 
 
 # ---------------------------------------------------------------------------
-# OpenAI Chat Completions: the assistant message carries every call of the turn; each result is
-# its own `tool` message with the call's id, in call order. Reasoning is not replayed.
+# OpenAI-compatible servers (Chat Completions): the assistant message carries every call of the
+# turn; each result is its own `tool` message with the call's id, in call order. Reasoning is not
+# replayed.
 # ---------------------------------------------------------------------------
 
 
 def _openai_wire(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return list(prepare(OpenAIProvider("gpt-5.4", "test-key"), history).params["messages"])
+    provider = OpenAICompatibleProvider("qwen3", "k", base_url="http://localhost:11434/v1")
+    return list(prepare(provider, history).params["messages"])
 
 
 @pytest.mark.parametrize("name", HISTORIES)
@@ -233,6 +236,35 @@ def test_meta_keeps_a_turn_whole_and_its_results_in_call_order(name: str) -> Non
 
 def test_meta_text_that_leads_into_calls_is_commentary() -> None:
     wire = _meta_wire(HISTORIES["text with calls"])
+    message = next(item for item in wire if item.get("type") == "message")
+    assert message["phase"] == "commentary"
+    assert message["content"] == [{"type": "output_text", "text": "Checking both."}]
+
+
+# ---------------------------------------------------------------------------
+# OpenAI's own host (Responses API, D43): the same items as Meta's, through the same core. A turn
+# without a response kept in _raw (the histories here) is rebuilt without reasoning.
+# ---------------------------------------------------------------------------
+
+
+def _openai_responses_wire(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return list(prepare(OpenAIProvider("gpt-6-luna", "test-key"), history).params["input"])
+
+
+@pytest.mark.parametrize("name", HISTORIES)
+def test_openai_responses_keeps_a_turn_whole_and_its_results_in_call_order(name: str) -> None:
+    wire = _openai_responses_wire(HISTORIES[name])
+    calls = [call for message in HISTORIES[name][1:2] for call in message["tool_calls"]]
+    sent = [item for item in wire if item.get("type") == "function_call"]
+    assert [(c["call_id"], c["name"]) for c in sent] == [(c["id"], c["name"]) for c in calls]
+    results = [item for item in wire if item.get("type") == "function_call_output"]
+    assert [r["call_id"] for r in results] == [c["id"] for c in calls]
+    assert wire.index(sent[-1]) < wire.index(results[0])  # the turn, then its results
+    assert not [item for item in wire if item.get("type") == "reasoning"]
+
+
+def test_openai_responses_text_that_leads_into_calls_is_commentary() -> None:
+    wire = _openai_responses_wire(HISTORIES["text with calls"])
     message = next(item for item in wire if item.get("type") == "message")
     assert message["phase"] == "commentary"
     assert message["content"] == [{"type": "output_text", "text": "Checking both."}]

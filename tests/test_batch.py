@@ -205,9 +205,10 @@ class TestOpenAIBatchSubmit:
         call_kwargs = provider._client.files.create.call_args
         assert call_kwargs.kwargs["purpose"] == "batch"
 
+        # The official host's batches go to the Responses API, like its calls (D43).
         provider._client.batches.create.assert_awaited_once_with(
             input_file_id="file-abc123",
-            endpoint="/v1/chat/completions",
+            endpoint="/v1/responses",
             completion_window="24h",
         )
         assert result == "batch-xyz789"
@@ -233,19 +234,19 @@ class TestOpenAIBatchSubmit:
         assert len(lines) == 2
         assert lines[0]["custom_id"] == "req-1"
         assert lines[0]["method"] == "POST"
-        assert lines[0]["url"] == "/v1/chat/completions"
+        assert lines[0]["url"] == "/v1/responses"
         assert lines[0]["body"]["model"] == "gpt-4o"
-        # The body comes from the same prepare() as complete(): the official host takes
-        # max_completion_tokens (max_tokens is deprecated and refused by o-series models).
-        assert lines[0]["body"]["max_completion_tokens"] == 100
+        # The body comes from the same prepare() as complete(): the Responses API's output limit
+        # is max_output_tokens.
+        assert lines[0]["body"]["max_output_tokens"] == 100
         assert "max_tokens" not in lines[0]["body"]
 
         # Second request uses default max_tokens (4096)
         assert lines[1]["custom_id"] == "req-2"
-        assert lines[1]["body"]["max_completion_tokens"] == 4096
+        assert lines[1]["body"]["max_output_tokens"] == 4096
 
     async def test_request_system_does_not_drop_message_system(self):
-        """The request's system leads; system() messages stay where they are."""
+        """The request's system is the instructions; system() messages stay where they are."""
         provider = _make_openai_provider()
         provider._client.files.create.return_value = MagicMock(id="file-abc")
         provider._client.batches.create.return_value = MagicMock(id="batch-1")
@@ -265,8 +266,8 @@ class TestOpenAIBatchSubmit:
 
         file_arg = provider._client.files.create.call_args.kwargs["file"]
         body = json.loads(file_arg.read().decode())["body"]
-        assert body["messages"] == [
-            {"role": "system", "content": "B"},
+        assert body["instructions"] == "B"
+        assert body["input"] == [
             {"role": "system", "content": "A"},
             {"role": "user", "content": "x"},
         ]
@@ -393,8 +394,11 @@ class TestOpenAIBatchStatus:
 
 
 # ---------------------------------------------------------------------------
-# OpenAI provider — batch_results
+# OpenAI provider — batch_results (of batches submitted to Chat Completions before the official
+# host moved to the Responses API: each batch is read by its own endpoint)
 # ---------------------------------------------------------------------------
+
+CHAT_COMPLETIONS = "/v1/chat/completions"
 
 
 class TestOpenAIBatchResults:
@@ -403,6 +407,7 @@ class TestOpenAIBatchResults:
         provider = _make_openai_provider()
 
         batch_obj = MagicMock()
+        batch_obj.endpoint = CHAT_COMPLETIONS
         batch_obj.output_file_id = "file-output-1"
         provider._client.batches.retrieve.return_value = batch_obj
 
@@ -431,6 +436,7 @@ class TestOpenAIBatchResults:
         provider = _make_openai_provider()
 
         batch_obj = MagicMock()
+        batch_obj.endpoint = CHAT_COMPLETIONS
         batch_obj.output_file_id = "file-output-2"
         provider._client.batches.retrieve.return_value = batch_obj
 
@@ -469,6 +475,7 @@ class TestOpenAIBatchResults:
         provider = _make_openai_provider()
 
         batch_obj = MagicMock()
+        batch_obj.endpoint = CHAT_COMPLETIONS
         batch_obj.output_file_id = "file-out"
         provider._client.batches.retrieve.return_value = batch_obj
 

@@ -505,3 +505,19 @@ Só acrescentar. Uma decisão revista ganha uma nova entrada que diz qual substi
     linha do OpenAI no `AGENTS.md`.
   - Nada sai antes da sonda da O01. Se a latência medida for claramente pior, decide o dono, com os
     números à frente.
+
+## D44 · As três escolhas da O03 (frente O)
+
+- **Contexto:** a ficha O03 deixava três escolhas ao dono. Em 2026-10-02 o dono pediu a frente O
+  implementada até ao fim e deixou as outras frentes paradas; o coordenador fixou-as por
+  delegação, com as propostas da ficha.
+- **Decisão:**
+  1. No host oficial, um `response_format` cru levanta `RequestError`: a maneira é o
+     `output_schema` ou o `json_mode`.
+  2. Na Responses, o OpenAI leva a `web_search()` sem config, pelo mesmo mapa da Meta
+     (`hosted_tools`). Uma config, ou outra server tool, continua a levantar. A proposta era
+     deixar tudo para a C05, mas a C05 não corre agora.
+  3. Os servidores compatíveis ficam na Chat Completions, mesmo os que já falam Responses, até
+     alguém pedir.
+- **Consequência:** a O03 fica sem escolhas abertas; a config tipada das server tools continua na
+  C05.

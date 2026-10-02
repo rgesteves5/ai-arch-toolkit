@@ -54,6 +54,11 @@ flows, manifests) needs these changes; each one is detailed below.
   - `select` or `serialize_as` on an inline template.
 
 ### Added
+- **OpenAI: reasoning summaries, replayed reasoning, hosted web search and token counting.**
+  `thinking=True` returns reasoning summaries as thinking blocks. A tool loop replays each turn's
+  encrypted reasoning from `Response.to_message()` without server-side state (`store: false`),
+  only to the same model family. `web_search()` without config runs as a hosted tool, and
+  `LLM.count_tokens()` counts with `POST /v1/responses/input_tokens`.
 - GPT-6.1 Sol (`gpt-6.1-sol`), from OpenAI's model page on 2026-10-01: prices (GPT-6 Sol's
   rates, with cached input at 5% of input; batch, long-context and fast rates included), request
   rules and a probe inventory entry, not yet run live. Unlike GPT-6 Sol it takes no `"none"` (nor
@@ -189,6 +194,26 @@ flows, manifests) needs these changes; each one is detailed below.
   [docs/agents.md](docs/agents.md#file-backed-agent-manifests).
 
 ### Changed
+- **Breaking: OpenAI's own host goes through the Responses API.** Without `base_url`, or with a
+  `base_url` on `api.openai.com`, the OpenAI adapter drives the Responses API instead of Chat
+  Completions; any other host is an OpenAI-compatible server and keeps Chat Completions, with no
+  OpenAI model rule, and gets the same request as before. The public API is unchanged: the host
+  decides. On OpenAI's host:
+  - `stop`, `seed`, `frequency_penalty`, `presence_penalty` and a raw `response_format` raise
+    `RequestError` before sending (the Responses API has no place for them; live, the two
+    penalties got a 500 after about 90 s). Structured output is `output_schema=` or `json_mode=`.
+  - Tool calls work at any reasoning effort: `thinking=True` with tools no longer raises from
+    GPT-5.4 on, GPT-6 Astra and GPT-6.1 Sol call tools, and the GPT-6 models take `max` again.
+  - GPT-6 Sol and Luna tool calls without `thinking=True` are no longer forced to the `none`
+    effort: they run at the model's default (`medium`), like a request without tools, so their
+    sampling parameters are dropped.
+  - `Response.logprobs` holds the Responses API's token logprobs of the output text (a tuple of
+    the SDK's `Logprob`), no longer Chat Completions' `ChoiceLogprobs`.
+  - Function tools are sent with `strict: false`, so their optional parameters stay optional (left
+    out, the Responses API rewrites the schema into strict mode).
+  - Batches are submitted to `/v1/responses`. Results are read by each batch's endpoint, so a
+    batch submitted to Chat Completions before still reads. A batch result's `raw` is the SDK's
+    response object, no longer the parsed JSON (OpenAI-compatible servers too).
 - A tool result longer than `max_output_chars` is cut on a line break when one lies in the second
   half of the kept text, and ends with `[chars 0-200000 of 5000000 | cut at the output limit; ask
   for less]` instead of `[Output truncated: kept 200000 of 5000000 characters.]`;

@@ -208,8 +208,10 @@ class TestRoundtrip:
         assert wire[2]["content"][0]["tool_use_id"] == "tc_1"
 
     def test_to_message_through_openai_wire(self):
-        """Response → to_message → OpenAI _messages_to_sdk → correct format."""
-        from ai_arch_toolkit.core._providers._openai import _messages_to_sdk as openai_wire
+        """Response → to_message → Chat Completions _messages_to_sdk → correct format."""
+        from ai_arch_toolkit.core._providers._openai_compatible import (
+            _messages_to_sdk as openai_wire,
+        )
 
         r = Response(
             text="Let me check.",

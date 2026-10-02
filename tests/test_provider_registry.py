@@ -171,10 +171,34 @@ class TestCreateProvider:
 
     def test_openai_route(self):
         with patch("ai_arch_toolkit.core._providers._openai.OpenAIProvider") as cls:
+            create_provider("gpt-4.1-mini", api_key="test-key", timeout=20.0)
+            cls.assert_called_once_with("gpt-4.1-mini", "test-key", base_url=None, timeout=20.0)
+
+    def test_openai_compatible_route(self):
+        with patch(
+            "ai_arch_toolkit.core._providers._openai_compatible.OpenAICompatibleProvider"
+        ) as cls:
             create_provider("gpt-4.1-mini", api_key="test-key", base_url="https://x", timeout=20.0)
             cls.assert_called_once_with(
                 "gpt-4.1-mini", "test-key", base_url="https://x", timeout=20.0
             )
+
+    @pytest.mark.parametrize(
+        ("base_url", "adapter"),
+        [
+            (None, "OpenAIProvider"),
+            ("https://api.openai.com/v1", "OpenAIProvider"),
+            ("https://x", "OpenAICompatibleProvider"),
+            ("http://localhost:11434/v1", "OpenAICompatibleProvider"),
+            ("https://api.openai.com.evil.example/v1", "OpenAICompatibleProvider"),
+        ],
+    )
+    def test_the_host_chooses_the_openai_api(self, base_url, adapter):
+        # OpenAI's own host speaks the Responses API, any other Chat Completions (D43); the
+        # public name stays "openai".
+        provider = create_provider("gpt-6-luna", api_key="test-key", base_url=base_url)
+        assert type(provider).__name__ == adapter
+        assert resolve_provider_name("gpt-6-luna", base_url=base_url) == "openai"
 
     def test_xai_route(self, monkeypatch):
         monkeypatch.setenv("XAI_API_KEY", "test-key")
@@ -267,7 +291,9 @@ class TestCreateProvider:
 
     def test_explicit_provider_overrides_detection(self, monkeypatch):
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-        with patch("ai_arch_toolkit.core._providers._openai.OpenAIProvider") as cls:
+        with patch(
+            "ai_arch_toolkit.core._providers._openai_compatible.OpenAICompatibleProvider"
+        ) as cls:
             create_provider(
                 "gemma4:e4b",
                 provider="openai",
@@ -284,7 +310,9 @@ class TestCreateProvider:
 
     def test_unknown_model_with_localhost_infers_openai(self, monkeypatch):
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-        with patch("ai_arch_toolkit.core._providers._openai.OpenAIProvider") as cls:
+        with patch(
+            "ai_arch_toolkit.core._providers._openai_compatible.OpenAICompatibleProvider"
+        ) as cls:
             create_provider("gemma4:e4b", base_url="http://localhost:11434/v1")
             cls.assert_called_once_with(
                 "gemma4:e4b", "not-needed", base_url="http://localhost:11434/v1", timeout=None
@@ -292,7 +320,9 @@ class TestCreateProvider:
 
     def test_localhost_known_prefix_uses_placeholder(self, monkeypatch):
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-        with patch("ai_arch_toolkit.core._providers._openai.OpenAIProvider") as cls:
+        with patch(
+            "ai_arch_toolkit.core._providers._openai_compatible.OpenAICompatibleProvider"
+        ) as cls:
             create_provider("gpt-4o", base_url="http://127.0.0.1:8000/v1")
             cls.assert_called_once_with(
                 "gpt-4o", "not-needed", base_url="http://127.0.0.1:8000/v1", timeout=None
@@ -301,7 +331,9 @@ class TestCreateProvider:
     def test_localhost_ignores_env_key(self, monkeypatch):
         # A real cloud key in the environment is never sent to a local server.
         monkeypatch.setenv("OPENAI_API_KEY", "sk-real")
-        with patch("ai_arch_toolkit.core._providers._openai.OpenAIProvider") as cls:
+        with patch(
+            "ai_arch_toolkit.core._providers._openai_compatible.OpenAICompatibleProvider"
+        ) as cls:
             create_provider("gemma4:e4b", base_url="http://localhost:11434/v1")
             cls.assert_called_once_with(
                 "gemma4:e4b", "not-needed", base_url="http://localhost:11434/v1", timeout=None
@@ -333,7 +365,9 @@ class TestCreateProvider:
         with pytest.raises(ValueError, match="OPENAI_API_KEY"):
             create_provider("llama-3.3-70b", base_url=base_url)
 
-        with patch("ai_arch_toolkit.core._providers._openai.OpenAIProvider") as cls:
+        with patch(
+            "ai_arch_toolkit.core._providers._openai_compatible.OpenAICompatibleProvider"
+        ) as cls:
             create_provider("llama-3.3-70b", base_url=base_url, api_key="together-key")
             cls.assert_called_once_with(
                 "llama-3.3-70b", "together-key", base_url=base_url, timeout=None

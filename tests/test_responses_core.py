@@ -26,7 +26,7 @@ from ai_arch_toolkit.core._providers._responses import (
     input_items,
     request_params,
 )
-from ai_arch_toolkit.core._response import Response, Usage
+from ai_arch_toolkit.core._response import OutputSchema, Response, Usage
 from tests.provider_calls import complete, prepare
 from tests.wire_contract import violations
 
@@ -43,6 +43,7 @@ PROFILE = ResponsesProfile(
     include=(),
     takes_tool_choice=True,
     function_strict=False,
+    output_strict=True,
     hosted_tools={
         "web_search": {"type": "web_search"},
         "code_execution": {"type": "code_interpreter", "container": {"type": "auto"}},
@@ -258,3 +259,77 @@ class TestFailures:
         if error is ResponseError:
             assert f"Acme reported a failure ({code})" in str(caught.value)
             assert caught.value.usage == Usage(input_tokens=100, output_tokens=40)
+
+
+class TestOutputLimitAndFormat:
+    @staticmethod
+    def _params(**kwargs: Any) -> Params:
+        forwarded = frozenset({"max_tokens", "max_completion_tokens"})
+        options = parse_options(kwargs, forwarded, "Acme")
+        return request_params(PROFILE, MODEL, [], system=None, tools=None, options=options)
+
+    def test_max_tokens_is_the_output_limit(self):
+        assert self._params(max_tokens=64)["max_output_tokens"] == 64
+
+    def test_chat_completions_max_completion_tokens_wins(self):
+        params = self._params(max_tokens=64, max_completion_tokens=128)
+        assert params["max_output_tokens"] == 128
+        assert not {"max_tokens", "max_completion_tokens"} & params.keys()
+
+    def test_a_profile_that_honours_strict_sends_the_strict_subset(self):
+        schema = OutputSchema(
+            name="Person",
+            schema={"type": "object", "properties": {"nickname": {"type": "string"}}},
+        )
+
+        text_format = self._params(output_schema=schema)["text"]["format"]
+
+        assert text_format["strict"] is True
+        assert text_format["schema"] == {
+            "type": "object",
+            "properties": {"nickname": {"type": "string"}},
+            "required": ["nickname"],
+            "additionalProperties": False,
+        }
+        assert schema.schema == {"type": "object", "properties": {"nickname": {"type": "string"}}}
+
+    def test_a_non_strict_schema_goes_as_written(self):
+        schema = OutputSchema(name="X", schema={"type": "object"}, strict=False)
+        assert self._params(output_schema=schema)["text"]["format"]["strict"] is False
+
+
+class TestLogprobs:
+    def test_the_output_texts_logprobs_are_the_responses(self):
+        response = SDKResponse.model_construct(
+            id="resp_1",
+            model=MODEL,
+            status="completed",
+            output=[
+                {
+                    "id": "msg_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "ok",
+                            "annotations": [],
+                            "logprobs": [
+                                {
+                                    "token": "ok",
+                                    "bytes": [111, 107],
+                                    "logprob": -0.2,
+                                    "top_logprobs": [],
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        )
+
+        parsed = _parse_sdk_response(response, MODEL)
+
+        assert [(p.token, p.logprob) for p in parsed.logprobs] == [("ok", -0.2)]
+        assert _parse_sdk_response(_turn(MODEL), MODEL).logprobs is None
