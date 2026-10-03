@@ -1,5 +1,20 @@
 # Quadro
 
+## Frente activa: as lacunas que o ai-network contorna
+
+- **Estado:** aberta em 2026-10-03, a pedido do dono, pela ordem do briefing do ai-network
+  (`ai-network/board/toolkit-brief.md`, D-54 dele). A A01, o grupo 1 (a segurança), está feita
+  a 2026-10-03, por commitar; o próximo é o grupo 2, o custo (G-20, G-29).
+- **Origem:** o briefing de 29/09, onde a app lista o que contorna no toolkit. Cada lacuna diz o
+  que falta, a evidência e quando fica feita. A G-36 (imagens) já fechou na frente I.
+- **Decisões:** D48 (nenhum endereço lido do ambiente).
+- **Fora do âmbito:** o ai-network. Não se edita daqui; o dono leva-lhe a nota de cada grupo
+  fechado.
+
+| ID | Tarefa | Dono | Estado | Depende de |
+|---|---|---|---|---|
+| A01 | Segurança: nenhum endereço do ambiente (G-16) e as chaves `xai-`, `gsk_` e `AIza` no `Redactor` (G-19) | Claude | done | nada |
+
 ## Frente activa: geração de imagens
 
 - **Estado:** aberta em 2026-10-03, a pedido do dono. **Frente I concluída** a 2026-10-03: as cinco
@@ -113,8 +128,8 @@
   declarações dos manifestos mudaram o terreno de C02, C05, C07 e C08).
 - **Estado:** aberta em 2026-09-15. As nove fichas estão escritas; nenhuma tarefa começou.
 - **Antes de codificar:** o dono fixa as "Decisões a fixar" de cada ficha. Cada decisão tomada entra
-  em `DECISIONS.md` a partir de D48 (as D15 a D42 foram para as frentes R e T, as D43 a D45
-  para a frente O e as D46 e D47 para a frente I), com o número dado pelo coordenador.
+  em `DECISIONS.md` a partir de D49 (as D15 a D42 foram para as frentes R e T, as D43 a D45
+  para a frente O, as D46 e D47 para a frente I e a D48 para a frente A), com o número dado pelo coordenador.
 - **Origem:** o que `docs/internal/agentes-app-toolkit-review.md` pediu ao toolkit (L1, L3–L7, L9, L13
   e o ponto D) e que `docs/internal/toolkit-fix-plan.md` §4 (itens 3 e 10) deixou de fora por ser
   âmbito, não contrato partido.

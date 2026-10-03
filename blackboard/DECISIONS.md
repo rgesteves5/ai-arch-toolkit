@@ -638,3 +638,36 @@ Só acrescentar. Uma decisão revista ganha uma nova entrada que diz qual substi
   - `**kwargs` por fornecedor: cada app escreveria quatro dialectos.
 - **Consequência:** `background`, `mask`, `moderation` e os outros parâmetros de um só fornecedor
   ficam de fora até alguém os pedir.
+
+## D48 · Nenhum endereço lido do ambiente (frente A, G-16)
+
+- **Contexto:**
+  - Sem `base_url`, os adaptadores da OpenAI e da Anthropic não passavam endereço nenhum ao SDK,
+    e o SDK lia-o do ambiente: o `openai` lê `OPENAI_BASE_URL` (`openai/_client.py`) e o
+    `anthropic` lê `ANTHROPIC_BASE_URL` (`anthropic/_client.py`).
+  - O `google-genai` lê `GOOGLE_GEMINI_BASE_URL`. Com `GOOGLE_GENAI_USE_VERTEXAI` muda para o
+    Vertex, e então lê `GOOGLE_VERTEX_BASE_URL` (`google/genai/_base_url.py`, `_api_client.py`).
+  - O `OpenAIModerator` também deixava o SDK escolher.
+  - O registo trata `base_url=None` como o servidor do fornecedor e manda-lhe a chave do ambiente.
+    Uma variável esquecida mandava essa chave para onde ela apontasse, contra a regra do
+    `AGENTS.md`: "environment keys are never sent there". No OpenAI aplicava ainda as regras do
+    host oficial a outro host.
+  - O ai-network contorna-o passando sempre o endereço oficial (G-16, no briefing dele de 29/09).
+- **Decisão:**
+  - O toolkit não lê endereço nenhum do ambiente. Os endereços oficiais vivem numa casa só
+    (`OWN_BASE_URLS` em `core/_providers/__init__.py`, de onde sai o `_OWN_HOSTS`).
+  - Sem `base_url`, cada adaptador passa o seu ao SDK explicitamente: OpenAI, Anthropic, Gemini,
+    Meta e o `OpenAIModerator`.
+  - O Gemini fica na Gemini Developer API (`vertexai=False`), que é a API das regras do adaptador.
+  - O xAI não muda: o `xai-sdk` usa um host fixo e não lê variáveis.
+  - Pela mesma razão, o adaptador para servidores compatíveis tira os cabeçalhos da conta OpenAI
+    (`OPENAI_ORG_ID`, `OPENAI_PROJECT_ID`) que o SDK lê do ambiente, como a Meta já fazia.
+- **Alternativas rejeitadas:**
+  - Seguir a variável do ambiente como se fosse um `base_url` dado, com a guarda das chaves.
+    Assim, quem a usa para um gateway passaria a precisar de `api_key=` na mesma, e o toolkit
+    ficaria com duas maneiras de dizer o endereço.
+  - Levantar um erro quando a variável existe: castigaria quem a tem por outra razão, por exemplo
+    para outra ferramenta na mesma máquina.
+- **Consequência:**
+  - Quem usava `OPENAI_BASE_URL` ou `ANTHROPIC_BASE_URL` para um gateway passa a dar `base_url=`
+    (com `api_key=`, se não for loopback). Fica no `CHANGELOG`, com a migração.

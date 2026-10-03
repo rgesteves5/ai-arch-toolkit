@@ -624,3 +624,17 @@ R01 publicada em `main` (`b3dae3f`); a R02 começa com a leitura obrigatória da
 - Commitado e publicado em `main` a pedido do dono: `07c16c7` (a sonda), `f8d25a7` (o código e
   os testes, cuja árvore passa o gate sozinha), `23c4ed7` (os docs) e `9edbe66` (o blackboard).
 - Por fazer: o Gemini e o xAI ao vivo, depois da faturação e dos créditos.
+
+## 2026-10-03 · Frente A aberta, A01 feita (Claude, a pedido do dono)
+
+- O dono pediu a próxima lacuna do toolkit para o ai-network. Pela ordem do briefing dele (D-54),
+  é o grupo 1, a segurança: G-16 e G-19, as duas confirmadas abertas no `104af8f`.
+- D48: o toolkit não lê endereço nenhum do ambiente. Os endereços oficiais estão em
+  `OWN_BASE_URLS`, e o Gemini fica na Developer API.
+- A01:
+  - os quatro adaptadores e o `OpenAIModerator` passam o endereço oficial ao SDK;
+  - o adaptador compatível deixa de mandar os cabeçalhos da conta OpenAI a outros hosts;
+  - o `Redactor` apaga `xai-…`, `gsk_…` e `AIza…`.
+- Dois testes que afirmavam o bug foram corrigidos (listados na ficha).
+- Gate: 6232 passed, 42 skipped.
+- Próximo: o grupo 2 do briefing, o custo (G-20, G-29).
