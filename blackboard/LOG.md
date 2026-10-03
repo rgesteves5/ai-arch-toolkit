@@ -621,4 +621,6 @@ R01 publicada em `main` (`b3dae3f`); a R02 começa com a leitura obrigatória da
   imagem no turno. Bug corrigido: `partial_images` sem stream dá 400.
 - I05: os docs, o `AGENTS.md`, o exemplo 48 e o `CHANGELOG`.
 - Gate: 6217 passed, 42 skipped. Ao vivo, cerca de $0.45.
-- Por fazer: os commits (o dono); o Gemini e o xAI ao vivo, depois da faturação e dos créditos.
+- Commitado e publicado em `main` a pedido do dono: `07c16c7` (a sonda), `f8d25a7` (o código e
+  os testes, cuja árvore passa o gate sozinha), `23c4ed7` (os docs) e `9edbe66` (o blackboard).
+- Por fazer: o Gemini e o xAI ao vivo, depois da faturação e dos créditos.

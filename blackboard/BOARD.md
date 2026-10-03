@@ -3,7 +3,9 @@
 ## Frente activa: geração de imagens
 
 - **Estado:** aberta em 2026-10-03, a pedido do dono. **Frente I concluída** a 2026-10-03: as cinco
-  fichas estão feitas, por commitar.
+  fichas estão feitas, commitadas e publicadas em `main` a pedido do dono (`07c16c7` sonda,
+  `f8d25a7` código, `23c4ed7` docs, `9edbe66` blackboard; a árvore do código passa o gate
+  sozinha).
   - Gate: 6217 passed, 42 skipped.
   - Ao vivo: OpenAI e Meta (cerca de $0.45 no total). O Gemini e o xAI esperam pela faturação e
     pelos créditos ("Por fazer").
