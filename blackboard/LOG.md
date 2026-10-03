@@ -582,3 +582,43 @@ R01 publicada em `main` (`b3dae3f`); a R02 começa com a leitura obrigatória da
   vezes), um turno reconstruído e um batch em `/v1/responses` lido à tarifa de batch.
 - Gate: 6086 passed, 42 skipped; ruff, formatação e pyright limpos.
 - Por publicar: os commits desde `c1cfdfb` estão só no `main` local, à espera da revisão do dono.
+
+## 2026-10-03 · Frente I aberta: geração de imagens (Claude, a pedido do dono)
+
+- O dono quer remover as limitações que impedem o ai-network de usar o toolkit, a começar pelas
+  imagens geradas (a G-36 do ai-network; a E06-09 espera por isto).
+- Investigação:
+  - o código: o `LLM` não chama modelos de imagem, o Gemini deita fora as `inline_data`, e o
+    núcleo da Responses ignora os `image_generation_call`;
+  - os SDKs instalados já trazem tudo: `images.generate`/`edit`, `image_config`, `image.sample`;
+  - a documentação oficial dos cinco fornecedores, com as fontes na D46.
+- D46 e D47: o dono aceitou as recomendações.
+  - O `LLM.generate_image()` devolve a `Response` com `images` e corre pelo mesmo `Execution` do
+    `complete`.
+  - Os parâmetros portáveis são `aspect_ratio` + `resolution`, mais `quality`, `n`, `images` e
+    `output_format`, validados por modelo.
+  - Uma só frente: primeiro a sonda e o `generate_image`, depois as imagens no turno.
+- Fichas I01 a I05.
+- No `BOARD.md`:
+  - a frente O passou a "anterior" (publicada, `be64062`);
+  - as decisões da frente C começam agora na D48;
+  - a linha "Modelos novos ao vivo" foi actualizada com a corrida de 2026-10-02.
+- Próximo: a I01 (paga, menos de $1), quando o dono a autorizar. A I02 pode começar já.
+
+## 2026-10-03 · Frente I concluída (Claude, a pedido do dono)
+
+- O dono autorizou as chamadas pagas e pediu a I01 a I05 por ordem, com os bugs corrigidos pelo
+  caminho.
+- I01: a sonda (`scripts/probe_images.py`) fixou o `usage` da Images API, o `tool_usage.image_gen`
+  da tool, a edição sem estado (o item dá 404; uma `input_image` funciona) e os tamanhos. O
+  Gemini e o xAI ficaram sem resposta: faturação e créditos.
+- I02: `LLM.generate_image()`, `Response.images`, os contadores e as tarifas de imagem, e a
+  reserva por imagem. Bug corrigido: o tamanho de um pedido com imagens contava os bytes como texto.
+- I03: os quatro adaptadores, com a Images API partilhada pelo OpenAI e pela Meta
+  (`_openai_images.py`). Bugs corrigidos: o `data:` URL no Gemini; a edição da Meta (`image[]`);
+  o custo zero do `muse-image` num `complete`.
+- I04: a `image_generation(model=...)`, o evento `image`, o reenvio por fornecedor e o custo da
+  imagem no turno. Bug corrigido: `partial_images` sem stream dá 400.
+- I05: os docs, o `AGENTS.md`, o exemplo 48 e o `CHANGELOG`.
+- Gate: 6217 passed, 42 skipped. Ao vivo, cerca de $0.45.
+- Por fazer: os commits (o dono); o Gemini e o xAI ao vivo, depois da faturação e dos créditos.

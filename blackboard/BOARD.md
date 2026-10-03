@@ -1,51 +1,43 @@
 # Quadro
 
-## Frente activa: OpenAI pela Responses API
+## Frente activa: geração de imagens
 
-- **Estado:** aberta em 2026-10-01, a pedido do dono. A O01 está feita (2026-10-02): a latência
-  da Responses não fica atrás, e o pedido da O03 ficou fixado. A O02 está feita (2026-10-02):
-  núcleo em `_responses.py`, Meta sobre ele. A O03 também (2026-10-02): o host oficial vai pela
-  Responses e os servidores compatíveis pela Chat Completions. A O04 fechou a frente
-  (2026-10-02): docs, verificação ao vivo (77 de 77 em 13 modelos OpenAI, batch e turno
-  reconstruído) e as correcções que ela encontrou (D45). **Frente O concluída**, commitada
-  localmente, por publicar.
-- **Decisão:** D43. O host oficial passa à Responses, a Chat Completions fica para os servidores
-  compatíveis, e a API pública não ganha escolha de endpoint.
-- **Origem:** desde o GPT-5.4 a Chat Completions só aceita tools com effort `none`. Dos três
-  modelos de topo do catálogo da OpenAI (`gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna`), nenhum corre
-  aqui um agente com tools a raciocinar. O LOG de 2026-09-28 tinha deixado a porta fora de âmbito,
-  pelos custos relatados; a O01 mede-os.
-- **Já feito na abertura:** o `gpt-6.1-sol` registado (perfil como o do Astra, preços e inventário
-  de probes), commitado e publicado em `main` a pedido do dono (`e18fcb5`). Gate: 5763 passed, 42
-  skipped.
-- **Base:** `main` @ `e18fcb5`.
+- **Estado:** aberta em 2026-10-03, a pedido do dono. **Frente I concluída** a 2026-10-03: as cinco
+  fichas estão feitas, por commitar.
+  - Gate: 6217 passed, 42 skipped.
+  - Ao vivo: OpenAI e Meta (cerca de $0.45 no total). O Gemini e o xAI esperam pela faturação e
+    pelos créditos ("Por fazer").
+- **Decisões:** D46 (a forma: `LLM.generate_image()` e `Response.images`) e D47 (os parâmetros
+  portáveis). O dono aceitou as recomendações a 2026-10-03.
+- **Origem:** o ai-network precisa de gerar imagens (a G-36 dele; a E06-09 espera por isto).
+  - Hoje o toolkit não tem chamada para modelos de imagem.
+  - As imagens de uma resposta perdem-se: o Gemini deita fora as partes `inline_data`, e o
+    núcleo da Responses ignora os `image_generation_call`.
+- **Base:** `main` @ `be64062`; gate 6086 passed, 42 skipped.
 - **Com as outras frentes:**
-  - A C01, a C05 e a C06 mexem nos mesmos adaptadores: a O02 e a O03 aplicam-se em série com elas.
-  - Na C05, a decisão 6 (server tools do OpenAI) ganha a Responses como caminho: é a opção (c).
-  - A C06 descreve o que funciona através do adaptador: o "Astra sem tools" deixa de valer depois
-    da O03.
+  - A C05 (server tools): a `image_generation()` da I04 é a primeira server tool com config
+    tipada, e a C05 generaliza a partir dela.
+  - A C06 (catálogo): os modelos de imagem entram nos factos quando a C06 correr.
+  - A C01 (`Agent.stream()`): os eventos `image` passam pelo `on_event` dela.
   - A frente T não toca em adaptadores.
 - **Como correr:**
-  - A O01 escreveu-a e correu-a o Claude, com autorização do dono para as chamadas pagas.
-  - A O02 pode começar já, num agente com contexto limpo.
-  - A O03 espera pela O02.
+  - A I01 escreve-a e corre-a o Claude, depois de o dono autorizar as chamadas pagas (menos de
+    $1).
+  - A I02 pode começar já, em paralelo, num agente com contexto limpo.
+  - A I03 espera pela I01 e pela I02, a I04 pela I03, e a I05 fecha a frente.
   - Os agentes não fazem commits nem chamadas a fornecedores; o dono revê e commita.
 
 | ID | Tarefa | Dono | Estado | Depende de |
 |---|---|---|---|---|
-| O01 | Sonda ao vivo: a Responses do OpenAI contra a Chat Completions (latência, reenvio, `strict`) | Claude (script e execução, a pedido do dono) | done | nada |
-| O02 | Núcleo Responses partilhado, extraído do `_meta.py`; reenvio só ao mesmo fornecedor e família | Claude (agente) | done | nada |
-| O03 | OpenAI pela Responses no host oficial; Chat Completions só para servidores compatíveis | Claude (agente) | done | O02 |
-| O04 | Documentação, quebras visíveis e verificação ao vivo final | Claude (agente nos docs; coordenador ao vivo) | done | O03 |
+| I01 | Sonda ao vivo: as APIs de imagem (custo no `usage`, edição sem estado, assinaturas do Gemini, tamanhos) | Claude (script e execução, com autorização do dono) | done | nada |
+| I02 | Tipos, preços e o charge site: `GeneratedImage`, `Response.images`, `LLM.generate_image()`, tokens e tarifas de imagem | Claude | done | nada |
+| I03 | Adaptadores: gerar e editar no OpenAI (Images API), no Gemini, no xAI e na Meta; preços e regras por modelo | Claude | done | I01, I02 |
+| I04 | Imagens no turno: a server tool `image_generation()` do OpenAI, o evento `image` no stream, o reenvio | Claude | done | I01, I03 |
+| I05 | Documentação, exemplo e verificação ao vivo final | Claude | done | I03, I04 |
 
 ### Quebras visíveis
 
-- **O03:**
-  - No host oficial, `stop`, `seed`, `frequency_penalty` e `presence_penalty` levantam
-    `RequestError`.
-  - `thinking=True` com tools deixa de levantar do GPT-5.4 em diante, e o Astra e o 6.1 Sol passam
-    a chamar tools.
-  - O OpenAI passa a dar resumos do raciocínio e um `_raw` reenviável.
+- **I04:** o `StreamEvent.kind` ganha `"image"`. O resto é aditivo.
 
 ## Frente activa: contrato das tools
 
@@ -119,15 +111,15 @@
   declarações dos manifestos mudaram o terreno de C02, C05, C07 e C08).
 - **Estado:** aberta em 2026-09-15. As nove fichas estão escritas; nenhuma tarefa começou.
 - **Antes de codificar:** o dono fixa as "Decisões a fixar" de cada ficha. Cada decisão tomada entra
-  em `DECISIONS.md` a partir de D46 (as D15 a D42 foram para as frentes R e T, e as D43 a D45
-  para a frente O), com o número dado pelo coordenador.
+  em `DECISIONS.md` a partir de D48 (as D15 a D42 foram para as frentes R e T, as D43 a D45
+  para a frente O e as D46 e D47 para a frente I), com o número dado pelo coordenador.
 - **Origem:** o que `docs/internal/agentes-app-toolkit-review.md` pediu ao toolkit (L1, L3–L7, L9, L13
   e o ponto D) e que `docs/internal/toolkit-fix-plan.md` §4 (itens 3 e 10) deixou de fora por ser
   âmbito, não contrato partido.
 - **Base:** `main` @ `7ebf7ef`; baseline 3045 passed, 22 skipped. **Coordenador:** sessão principal.
 - **Fora da frente:** `agent_as_tool` (a delegação é uma tool da app); scheduler, cofre, descoberta
   local, router `Auto` e escolha de arquitectura (app: L2, L8, L12); sandbox de código (L10).
-- **Exemplos novos:** levam o próximo número livre (hoje 48), atribuído pelo coordenador ao aplicar.
+- **Exemplos novos:** levam o próximo número livre (hoje 49), atribuído pelo coordenador ao aplicar.
 
 | ID | Tarefa | Dono | Estado | Depende de |
 |---|---|---|---|---|
@@ -182,6 +174,53 @@ Vinte entradas em `FINDINGS.md` (2026-09-15): catorze reproduzidas pelo coordena
 cinco confirmadas no código e na documentação oficial. Onze não tinham tarefa, por serem correcções
 e não capacidades: o plano de robustez agrupou-as nas suas seis causas, que a frente R corrigiu. O
 que ficou aberto está em "Por fazer".
+
+## Frente anterior: OpenAI pela Responses API
+
+- **Estado:** aberta em 2026-10-01, a pedido do dono. A O01 está feita (2026-10-02): a latência
+  da Responses não fica atrás, e o pedido da O03 ficou fixado. A O02 está feita (2026-10-02):
+  núcleo em `_responses.py`, Meta sobre ele. A O03 também (2026-10-02): o host oficial vai pela
+  Responses e os servidores compatíveis pela Chat Completions. A O04 fechou a frente
+  (2026-10-02): docs, verificação ao vivo (77 de 77 em 13 modelos OpenAI, batch e turno
+  reconstruído) e as correcções que ela encontrou (D45). **Frente O concluída** e publicada
+  em `main` (`be64062`).
+- **Decisão:** D43. O host oficial passa à Responses, a Chat Completions fica para os servidores
+  compatíveis, e a API pública não ganha escolha de endpoint.
+- **Origem:** desde o GPT-5.4 a Chat Completions só aceita tools com effort `none`. Dos três
+  modelos de topo do catálogo da OpenAI (`gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna`), nenhum corre
+  aqui um agente com tools a raciocinar. O LOG de 2026-09-28 tinha deixado a porta fora de âmbito,
+  pelos custos relatados; a O01 mede-os.
+- **Já feito na abertura:** o `gpt-6.1-sol` registado (perfil como o do Astra, preços e inventário
+  de probes), commitado e publicado em `main` a pedido do dono (`e18fcb5`). Gate: 5763 passed, 42
+  skipped.
+- **Base:** `main` @ `e18fcb5`.
+- **Com as outras frentes:**
+  - A C01, a C05 e a C06 mexem nos mesmos adaptadores: a O02 e a O03 aplicam-se em série com elas.
+  - Na C05, a decisão 6 (server tools do OpenAI) ganha a Responses como caminho: é a opção (c).
+  - A C06 descreve o que funciona através do adaptador: o "Astra sem tools" deixa de valer depois
+    da O03.
+  - A frente T não toca em adaptadores.
+- **Como correr:**
+  - A O01 escreveu-a e correu-a o Claude, com autorização do dono para as chamadas pagas.
+  - A O02 pode começar já, num agente com contexto limpo.
+  - A O03 espera pela O02.
+  - Os agentes não fazem commits nem chamadas a fornecedores; o dono revê e commita.
+
+| ID | Tarefa | Dono | Estado | Depende de |
+|---|---|---|---|---|
+| O01 | Sonda ao vivo: a Responses do OpenAI contra a Chat Completions (latência, reenvio, `strict`) | Claude (script e execução, a pedido do dono) | done | nada |
+| O02 | Núcleo Responses partilhado, extraído do `_meta.py`; reenvio só ao mesmo fornecedor e família | Claude (agente) | done | nada |
+| O03 | OpenAI pela Responses no host oficial; Chat Completions só para servidores compatíveis | Claude (agente) | done | O02 |
+| O04 | Documentação, quebras visíveis e verificação ao vivo final | Claude (agente nos docs; coordenador ao vivo) | done | O03 |
+
+### Quebras visíveis
+
+- **O03:**
+  - No host oficial, `stop`, `seed`, `frequency_penalty` e `presence_penalty` levantam
+    `RequestError`.
+  - `thinking=True` com tools deixa de levantar do GPT-5.4 em diante, e o Astra e o 6.1 Sol passam
+    a chamar tools.
+  - O OpenAI passa a dar resumos do raciocínio e um `_raw` reenviável.
 
 ## Frente anterior: robustez (três fases)
 
@@ -288,11 +327,12 @@ que ficou aberto está em "Por fazer".
 - **xAI:** repor créditos na conta e depois correr `uv run pytest -m live_api -k xai` (custo por
   pedido) e um probe com uma tool cujo parâmetro seja `Any` (schema sem tipo) e com `system=` +
   `system()` ao mesmo tempo — únicas mudanças desta frente que o xAI ainda não confirmou.
-- **Modelos novos ao vivo:** os probes do inventário do GPT-6 Astra e do GPT-6.1 Sol (todos menos
-  tools, que eles recusam na Chat Completions) nunca correram, e o Grok 4.7 e o Opus 5.5 ainda não
-  correram ao vivo (`docs/model-compatibility.md`). A sonda da O01 já confirmou as regras do 6.1 Sol
-  e o `max` recusado nos quatro GPT-6. Para os dois da OpenAI:
-  `uv run python scripts/probe_models.py --suite full --model gpt-6-astra --model gpt-6.1-sol`.
+- **Imagens no Gemini e no xAI, ao vivo:** activar a faturação no projecto da chave Gemini (no free
+  tier, os modelos de imagem têm quota 0) e repor os créditos xAI. Depois:
+  `uv run python scripts/probe_images.py --provider gemini --provider xai --max-cost 1`.
+- **Modelos novos ao vivo:** o Grok 4.7 e o Opus 5.5 ainda não correram ao vivo
+  (`docs/model-compatibility.md`). Os 13 modelos OpenAI do inventário, com o Astra e o 6.1 Sol,
+  correram a 2026-10-02 (77 de 77, O04).
 - **Frente C, decisões:** fixar as da vaga 1 (C02, C06, C07, C08) antes de atribuir donos; a C07 e
   a C08 só começam depois da T01 e da T03.
 - **Decidir, achados de 2026-09-18 sem tarefa (`FINDINGS.md`):** o `LLM("grok-…")` criado depois de

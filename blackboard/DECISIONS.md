@@ -537,3 +537,104 @@ Só acrescentar. Uma decisão revista ganha uma nova entrada que diz qual substi
 - **Consequência:** muda o fio de quem passava um esforço sem `thinking` (fica no `CHANGELOG`,
   Fixed). Verificado ao vivo: `thinking_effort="none"` sozinho baixa a saída do `gpt-5.5` de 35
   para 5 tokens.
+
+## D46 · Gerar imagens: `LLM.generate_image()` e `Response.images` (frente I)
+
+- **Contexto:**
+  - O ai-network pede ao toolkit que um modelo de imagem devolva a imagem em bytes, com o mime, e
+    com o custo no meter (a G-36 dele; a E06-09 espera por isto).
+  - Hoje:
+    - o `LLM` não tem chamada para modelos de imagem;
+    - o Gemini deita fora as partes `inline_data` (`_gemini.py`, `_parse_sdk_response`);
+    - o núcleo da Responses ignora os itens `image_generation_call`;
+    - a `Response` não tem onde guardar uma imagem.
+  - Os fornecedores geram imagens de maneiras diferentes (documentação oficial lida a 2026-10-02):
+    - **OpenAI:**
+      - Images API: `/v1/images/generations` e `/edits`, com `gpt-image-2.5-sunburst`/`-flare`,
+        `gpt-image-2`, `1.5`, `1` e `1-mini`. Devolve sempre base64 e um `usage` em tokens de
+        imagem (https://developers.openai.com/api/docs/guides/image-generation,
+        https://developers.openai.com/api/reference/resources/images).
+      - A ferramenta `image_generation` da Responses, que o modelo chama a meio do turno
+        (https://developers.openai.com/api/docs/guides/tools-image-generation).
+    - **Gemini:**
+      - `generate_content` num modelo de imagem (`gemini-3.1-flash-image`,
+        `-flash-lite-image`, `gemini-3-pro-image`), com as imagens em partes `inline_data`.
+      - Os modelos de imagem não chamam funções, e os de texto não geram imagens.
+      - O Imagen foi desligado a 2026-08-17, e o `gemini-2.5-flash-image` a 2026-10-02
+        (https://ai.google.dev/gemini-api/docs/generate-content/image-generation,
+        https://ai.google.dev/gemini-api/docs/deprecations).
+    - **xAI:** o `image.sample` do `xai-sdk` (`grok-imagine-image-2.0`), com o custo exacto na
+      resposta, e uma server tool no turno
+      (https://docs.x.ai/developers/model-capabilities/images/generation,
+      https://docs.x.ai/developers/tools/image-generation).
+    - **Meta:** o modelo `muse-image-1.0`, pela Responses API, a $0.01 por imagem. O Muse Spark
+      só dá texto (https://dev.meta.ai/docs/image-generation).
+    - **Anthropic:** o Claude não gera imagens
+      (https://platform.claude.com/docs/en/build-with-claude/vision).
+- **Decisão** (o dono aceitou as recomendações a 2026-10-03):
+  - `LLM.generate_image()`, com `_sync`, para os modelos de imagem. O modelo do `LLM` é o modelo
+    de imagem: `LLM("gpt-image-2.5-flare")`.
+  - Devolve a `Response` de sempre, com um campo novo `images: tuple[GeneratedImage, ...]`
+    (`data: bytes`, `media_type`, `revised_prompt`).
+  - Corre pelo mesmo `Execution` do `complete`. O charge site é o mesmo, e o meter, os retries,
+    os fallbacks, o middleware e os attempts ficam como estão.
+  - Cada adaptador traduz o pedido no `prepare` e escolhe o endpoint no `send`:
+    - o OpenAI pela Images API, ou pelo `edit` quando há `images=`;
+    - o Gemini por `generate_content` com `response_modalities`;
+    - o xAI por `image.sample`;
+    - a Meta pela Responses, no `muse-image`.
+  - A Anthropic e os servidores compatíveis recusam antes de qualquer charge, como no
+    `count_tokens`.
+  - O custo:
+    - o `Usage` ganha contadores de tokens de imagem, disjuntos como os outros;
+    - o `ModelPricing` ganha tarifas de imagem;
+    - onde o fornecedor dá o custo (xAI), vale o `provider_cost`;
+    - onde o preço é por imagem (Meta), há uma tarifa por imagem.
+  - A seguir, as imagens também numa resposta normal:
+    - o `Response.images` preenchido no `complete` e no `stream` (o Gemini, e os
+      `image_generation_call` no núcleo da Responses);
+    - uma server tool `image_generation()` para o OpenAI;
+    - um `StreamEvent` `image` para as imagens parciais.
+  - Uma só frente. Primeiro a sonda e o `generate_image` nos quatro fornecedores, que desbloqueia
+    o ai-network; depois as imagens no turno.
+- **Alternativas rejeitadas:**
+  - Uma `ImageResponse` à parte: duplicava o caminho do meter, dos retries e dos attempts.
+  - Só as imagens no turno: o Gemini e a Meta não geram imagens num turno de agente, e a E06-09
+    quer uma capacidade que a app chama.
+  - O Imagen: está desligado.
+- **Consequência:**
+  - O `AGENTS.md` passa a dizer que há charges também no `generate_image`, no mesmo sítio.
+  - O `StreamEvent.kind` ganha `"image"` (I04): quem faz `match` exaustivo sobre ele vê um caso
+    novo.
+  - O resto é aditivo.
+
+## D47 · Os parâmetros portáveis do `generate_image` (frente I)
+
+- **Contexto:**
+  - Cada fornecedor mede o tamanho à sua maneira:
+    - o OpenAI com `size` em `WxH` (arbitrário, em múltiplos de 16, no gpt-image-2 e no 2.5; três
+      tamanhos fixos nos anteriores);
+    - o Gemini com `aspect_ratio` + `image_size` (`512`, `1K`, `2K`, `4K`);
+    - o xAI com `aspect_ratio` + `resolution` (`1k`, `2k`);
+    - a Meta com `size`, que só fixa a proporção.
+  - A qualidade só existe no OpenAI (`low` a `max`) e no xAI (`low`, `medium`). As fontes estão na
+    D46.
+- **Decisão** (o dono aceitou as recomendações a 2026-10-03):
+  - A assinatura:
+    `generate_image(prompt, *, images=(), n=1, aspect_ratio=None, resolution=None, quality=None, output_format=None)`.
+  - `images` são `ImagePart` (os de `image()`), para editar.
+  - Os valores:
+    - `aspect_ratio` escreve-se `"16:9"`;
+    - `resolution` é `"512"`, `"1K"`, `"2K"` ou `"4K"`;
+    - no OpenAI, os dois juntos dão o `size` em `WxH`;
+    - `quality` leva os valores do fornecedor;
+    - `output_format` é `png`, `jpeg` ou `webp`.
+  - Cada modelo valida no `prepare`, pela sua tabela de regras (resolvida pelo `_model_id.py`), e
+    levanta `RequestError` para o que não aceita. Por exemplo: uma proporção que o modelo não tem,
+    `quality` no Gemini, `n > 1` onde não existe, ou mais imagens de entrada do que o limite.
+  - Não há passagem crua de parâmetros do fornecedor (como no `response_format` cru, D44).
+- **Alternativas rejeitadas:**
+  - O `size` do OpenAI como vocabulário comum: não diz nada ao Gemini nem ao xAI.
+  - `**kwargs` por fornecedor: cada app escreveria quatro dialectos.
+- **Consequência:** `background`, `mask`, `moderation` e os outros parâmetros de um só fornecedor
+  ficam de fora até alguém os pedir.
