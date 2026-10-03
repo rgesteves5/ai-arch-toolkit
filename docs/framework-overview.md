@@ -38,7 +38,7 @@ Stateless, async-first foundation. All new code should build on this.
 
 ### LLM Facade
 
-- **`LLM`** (`_llm.py`) — user-facing facade. Async: `complete()`, `stream()`, `stream_events()`. Sync wrappers: `complete_sync()`, `stream_sync()`, `stream_events_sync()`.
+- **`LLM`** (`_llm.py`) — user-facing facade. Async: `complete()`, `stream()`, `stream_events()`, and `generate_image()` for image models ([Image Generation](images.md)). Sync wrappers: `complete_sync()`, `stream_sync()`, `stream_events_sync()`, `generate_image_sync()`.
 - Accepts a string or a list of messages whose content is `Content` (str or multimodal parts). Stream methods support fallback + middleware.
 - Model prefix routes to the correct provider automatically.
 

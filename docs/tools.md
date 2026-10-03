@@ -166,6 +166,8 @@ response = llm.complete_sync(
 
 `code_execution(**config)` and `web_search(**config)` return a `ServerTool`. The Anthropic and Gemini adapters send both, and the OpenAI adapter (on OpenAI's own host, through the Responses API) and the Meta adapter send `web_search`; the xAI adapter and OpenAI-compatible servers (Chat Completions takes function tools only) raise `RequestError` for any server tool. A config (`web_search(max_uses=3)`, for example) raises `RequestError` on every provider. See [Model Compatibility](model-compatibility.md) for each provider.
 
+`image_generation(model=..., quality=..., aspect_ratio=..., resolution=..., output_format=..., partial_images=...)` lets an OpenAI model draw in the middle of its turn, with the image model it names; it is the one server tool with a typed config, checked against that image model's rules. Only the OpenAI adapter on OpenAI's own host sends it. See [Image Generation](images.md).
+
 ---
 
 ## Pre-built tools catalog

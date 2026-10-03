@@ -14,6 +14,18 @@ When the provider reports the call's cost itself (xAI does), `response.cost` is 
 `None` when the model has no price, or when the provider reported no usage (an
 OpenAI-compatible server that sends no usage chunk, for example): an unknown cost is never zero.
 
+Image models are priced too. Their image tokens take `image_input` and `image_output` (USD per
+1M, with `batch_image_input` and `batch_image_output`; each falls back to the text rate when left
+out), and a model billed per image takes `per_image` (and `batch_per_image`), in USD per image:
+
+```python
+pricing.register("my-image-model", ModelPricing(input=5.0, image_output=30.0))
+pricing.register("my-flat-image-model", ModelPricing(per_image=0.02))
+```
+
+An OpenAI turn that drew with the hosted `image_generation()` tool costs the turn plus the image
+at its image model's rates ([Image Generation](images.md)).
+
 ## Pricing registry
 
 ```python

@@ -83,6 +83,7 @@ structured output / middleware variants of ReAct and per-phase configuration (47
 | 26 | [`26_self_discovery_agent.py`](26_self_discovery_agent.py) | Self-Discovery: select reasoning modules → adapt → solve | Anthropic |
 | 27 | [`27_llm_compiler_agent.py`](27_llm_compiler_agent.py) | LLMCompiler: plan DAG → parallel execute → join | Anthropic |
 | 47 | [`47_per_phase_agents.py`](47_per_phase_agents.py) | Per-phase models/prompts via `deps`+`knobs`, and declaratively via a manifest | Anthropic |
+| 48 | [`48_generate_image.py`](48_generate_image.py) | `generate_image()` to draw and edit, and the hosted `image_generation()` tool in a turn | OpenAI |
 
 > **Generate-Review flow** (`generate_review_flow`) is the ninth built-in agent
 > architecture. It has no numbered example — see

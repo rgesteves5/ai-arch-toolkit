@@ -191,7 +191,8 @@ plain text, Markdown, XML, or JSON. Validate them locally with
 | Documents (PDF, etc.) | ✅        | ✅     | ✅     | —   | ✅   |
 | Prompt caching        | ✅        | ✅ automatic | ✅ automatic | ✅ automatic | ✅ automatic |
 | Extended thinking     | ✅ adaptive or budget | ✅ effort + summaries | ✅ level or budget | ✅ effort | ✅ effort + summaries |
-| Server-hosted tools   | ✅ code+web | ✅ web | ✅ code+web | —   | ✅ web |
+| Server-hosted tools   | ✅ code+web | ✅ web + image | ✅ code+web | —   | ✅ web |
+| Image generation      | —           | ✅ gpt-image + in-turn | ✅ image models | ✅ grok-imagine | ✅ muse-image |
 | Batch API             | ✅        | ✅     | —      | —   | —    |
 
 ## Agent architectures

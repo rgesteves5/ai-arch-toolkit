@@ -72,6 +72,11 @@ async for event in llm.stream_events(messages, tools=tools):
         case "text": print(event.text, end="")
         case "thinking": print(f"[thinking] {event.thinking.text}")
         case "tool_call": print(f"[tool] {event.tool_call.name}")
+        case "image": save(event.image)  # a drawn image; event.partial for a preview
+
+# Image generation, with an image model (see Image Generation)
+response = await LLM("gpt-image-2.5-flare").generate_image("A red lighthouse", aspect_ratio="16:9")
+response.images  # → tuple of GeneratedImage(data, media_type, revised_prompt)
 
 # Sync versions
 response = llm.complete_sync("Hello")
@@ -97,8 +102,9 @@ Every LLM call returns a `Response`:
 response.text           # answer text
 response.tool_calls     # tuple of ToolCall(id, name, input)
 response.thinking       # tuple of ThinkingBlock (extended thinking)
+response.images         # tuple of GeneratedImage(data, media_type, revised_prompt): drawn images
 response.parsed         # structured output (if output_schema used)
-response.usage          # Usage(input_tokens, output_tokens, cache_write_tokens, cache_read_tokens)
+response.usage          # Usage(input_tokens, output_tokens, cache_write_tokens, cache_read_tokens, image_*)
 response.cost           # exact provider cost when reported, otherwise estimated USD
 response.provider_cost  # exact provider-reported USD, or None
 response.stop_reason    # the provider's own value: "end_turn" (Anthropic), "completed" (OpenAI, Meta), "stop" (OpenAI-compatible servers), etc.
@@ -109,10 +115,13 @@ response.has_tool_calls # bool shorthand
 response.to_message()   # convert to assistant message dict
 ```
 
-The four `Usage` counters are disjoint. `input_tokens` contains non-cached input only;
+The `Usage` counters are disjoint. `input_tokens` contains non-cached input only;
 add `cache_read_tokens` and `cache_write_tokens` to obtain total input. This keeps cache
 reads/writes from being charged again at the regular input rate. `output_tokens` includes
-billable reasoning/thinking tokens when a provider reports them separately.
+billable reasoning/thinking tokens when a provider reports them separately. An image model's
+image tokens are counted apart, in `image_input_tokens` and `image_output_tokens`, and
+`image_count` counts the images of a provider that bills per image ([Image Generation](images.md)).
+`Usage` objects add up with `+`.
 
 ---
 

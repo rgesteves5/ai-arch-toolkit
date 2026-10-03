@@ -15,6 +15,7 @@ nav:
   - Concurrency & Throttling: concurrency.md
   - LLM Facade: llm.md
   - Content & Messages: content.md
+  - Image Generation: images.md
   - Prompts & Context:
       - Context Model: context-model.md
       - Prompts: prompts.md

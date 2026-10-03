@@ -31,6 +31,7 @@ All examples live in the `examples/` directory. Each is a self-contained script.
 | 26 | `26_self_discovery_agent.py` | `self_discovery_flow` — select reasoning modules, adapt, operationalize, solve |
 | 27 | `27_llm_compiler_agent.py` | `llm_compiler_flow` — plan a DAG of tasks, execute in parallel, join results |
 | 47 | `47_per_phase_agents.py` | `Agent` running `plan_execute` with a cheaper planner LLM (`deps`) and a custom planner prompt (`knobs`), then the same declared in an agent manifest (`strategy.phases`) and built with `agent_from_manifest` |
+| 48 | `48_generate_image.py` | An image model drawing (`generate_image()` with portable options) and editing an image, then a chat model drawing inside its turn with the hosted `image_generation()` tool |
 
 ## Multimodal
 

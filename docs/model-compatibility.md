@@ -360,6 +360,23 @@ streamed answer, structured output with JSON mode, `count_tokens`).
 `muse-spark-1.2`, `muse-spark-1.1`, and the contributor tiers share the adapter and have
 pricing entries of their own but were not probed.
 
+## Image Models
+
+`LLM.generate_image()` and the hosted `image_generation()` tool ([Image Generation](images.md)).
+Live checks of 2026-10-03 (front I; `scripts/probe_images.py` and the I03/I04 checks in
+`blackboard/tasks/`), every image at the cheapest quality:
+
+| Provider | Model | Result |
+|---|---|---|
+| OpenAI | `gpt-image-2.5-flare` | ✅ generation (16:9 → 1360x768, 110 image tokens, $0.0034), edit (1,032 image input tokens), `n=2`, WebP, arbitrary sizes; `usage` reported |
+| OpenAI | `gpt-image-2.5-sunburst`, `gpt-image-2` | ✅ generation; `usage` reported (196 image tokens at low 1024x1024) |
+| OpenAI | `gpt-image-1.5` | ⚠️ three sizes only: 1536x864 answered 400 (the adapter refuses other ratios) |
+| OpenAI | `gpt-image-1-mini` | ✅ generation, 3:2 → 1536x1024 |
+| OpenAI | `gpt-5-nano` + `image_generation()` | ✅ an image in the turn, priced from `tool_usage.image_gen` at `gpt-image-2.5-flare`'s rates; the next turn edits it statelessly (the image goes back as an input image); streamed, the finished image as an event |
+| Meta | `muse-image-1.0` | ✅ generation ($0.01), edit (one image), `complete` with the image, the next turn by reference; `size` sets only the ratio |
+| Gemini | `gemini-3.1-flash-image`, `-flash-lite-image`, `gemini-3-pro-image` | not run: the project's key is on the free tier, where the image models have no quota (429, `limit: 0`) |
+| xAI | `grok-imagine-image-2.0`, `grok-imagine-image` | not run: the account has no credits |
+
 ## Current Gaps
 
 - `gemini-3.1-flash-live-preview` needs the Gemini Live API, which no adapter drives, so it is
@@ -372,5 +389,8 @@ pricing entries of their own but were not probed.
   `thinking=True` gets without one has not been seen. (A batch on `/v1/responses`, read back at
   the batch rates, and an assistant turn rebuilt from its fields both passed live on
   2026-10-02.)
+- Image generation on Gemini and xAI is built from their documentation and SDK types, and proven
+  against the real SDKs on loopback only: the live run waits for a paid Gemini project and xAI
+  credits. Partial images in a stream are not guaranteed: one live run got one, another none.
 - The results above are only as current as the last probe run: SDK upgrades, provider API
   changes, and inventory changes call for a new full run.

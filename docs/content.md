@@ -46,6 +46,10 @@ messages = [{"role": "system", "content": [cache(long_instructions)]}, user("Hi"
 A `cache()` part only changes the request on Anthropic. The other providers receive its text as
 ordinary text, so the same messages work everywhere.
 
+An image source can also be a `data:` URL. Images a model generates come back as
+`GeneratedImage`s in `Response.images` ([Image Generation](images.md)); to send one back, wrap
+its bytes: `image(generated.data, media_type=generated.media_type)`.
+
 Helper signatures:
 
 ```python

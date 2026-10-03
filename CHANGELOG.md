@@ -54,6 +54,38 @@ flows, manifests) needs these changes; each one is detailed below.
   - `select` or `serialize_as` on an inline template.
 
 ### Added
+- **Image generation: `LLM.generate_image()` and `generate_image_sync()`** (D46, D47). An image
+  model draws from a prompt, or edits by a prompt and `images=[image(...)]`. The images come back
+  in the new `Response.images` as `GeneratedImage(data, media_type, revised_prompt)`. The call runs
+  on the `complete` path: middleware, retries, fallbacks, attempts and the meter.
+  - The options are portable: `n`, `aspect_ratio` (`"16:9"`), `resolution` (`"512"`/`"1K"`/`"2K"`/
+    `"4K"`), `quality` and `output_format`. Each model raises `RequestError` for what it does not
+    take.
+  - Models:
+    - OpenAI's GPT Image models through the Images API (`gpt-image-2.5-sunburst`/`-flare`,
+      `gpt-image-2`, `gpt-image-1.5`, `chatgpt-image-latest`, `gpt-image-1`, `gpt-image-1-mini`);
+    - Gemini's image models (`gemini-3.1-flash-image`, `-flash-lite-image`,
+      `gemini-3-pro-image`);
+    - xAI's `grok-imagine-image-2.0`, `grok-imagine-image` and `-quality`;
+    - Meta's `muse-image-1.0`, newly routed with the `muse-image-` prefix
+      (`chatgpt-image-` is routed to OpenAI).
+  - Prices: image models are in the default price table. `ModelPricing` gains `image_input`,
+    `image_output`, their `batch_` variants, `per_image` and `batch_per_image`.
+  - New types and fields:
+    - `Usage` gains `image_input_tokens`, `image_output_tokens` and `image_count`, and adds up with
+      `+`;
+    - `ImageRequest` (also `Request.image`, for middleware) and the `ImageResolution`/`ImageFormat`
+      aliases are exported;
+    - a strict budget reserves each image asked for.
+  - See `docs/images.md` and `examples/48_generate_image.py`.
+- **OpenAI: `image_generation(model=...)`, a hosted tool for drawing inside a turn.**
+  - The image comes back in `Response.images`. `Response.cost` and the meter include it, priced at
+    the image model's rates from OpenAI's `tool_usage`.
+  - The next turn edits it statelessly: `to_message()` sends it back as an input image.
+  - Streamed, images arrive as `StreamEvent(kind="image")`, with `partial=True` for previews
+    (OpenAI's partial images, Gemini's interim thought images).
+- **Gemini and Meta image models answer `complete()` with their images**: Gemini's `inline_data`
+  parts and Meta's `image_generation_call` items, which were dropped.
 - **OpenAI: reasoning summaries, replayed reasoning, hosted web search and token counting.**
   `thinking=True` returns reasoning summaries as thinking blocks. A tool loop replays each turn's
   encrypted reasoning from `Response.to_message()` without server-side state (`store: false`),
@@ -188,6 +220,10 @@ flows, manifests) needs these changes; each one is detailed below.
   [docs/agents.md](docs/agents.md#file-backed-agent-manifests).
 
 ### Changed
+- `StreamEvent.kind` can be `"image"`, with the new `StreamEvent.image`; a `match` over the kinds
+  sees a new case.
+- An OpenAI GPT Image model refuses `complete()`, and a chat model refuses `generate_image()`,
+  with `RequestError`; xAI's `grok-imagine-image` models refuse `complete()` too.
 - **Breaking: OpenAI's own host goes through the Responses API.** Without `base_url`, or with a
   `base_url` on `api.openai.com`, the OpenAI adapter drives the Responses API instead of Chat
   Completions; any other host is an OpenAI-compatible server and keeps Chat Completions, with no
@@ -492,6 +528,12 @@ flows, manifests) needs these changes; each one is detailed below.
   - `select` or `serialize_as` on an inline template (they were ignored).
 
 ### Fixed
+- **A request with images no longer reserves its bytes as text under a strict budget.** The
+  request size counted an image part's bytes (or base64) as characters and the part itself as no
+  media: a 1 MB image reserved about 735,000 input tokens. Images and documents now count as
+  media parts, at the estimator's per-part allowance.
+- Gemini: an image given as a `data:` URL went as a `file_uri`, which Gemini cannot fetch; it goes
+  inline now.
 - **Batch results are priced at the batch rates.** OpenAI (both endpoints, and OpenAI-compatible
   servers) and Anthropic batch results got `Response.cost` at the standard rates, twice the batch
   ones listed in the price table.
