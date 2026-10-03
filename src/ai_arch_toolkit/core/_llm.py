@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Sequence
 from typing import Any, ClassVar, Literal, cast
 
 from ai_arch_toolkit.core._attempts import Arguments, Execution
-from ai_arch_toolkit.core._content import user
+from ai_arch_toolkit.core._content import ImagePart, user
 from ai_arch_toolkit.core._exceptions import ProviderError, RequestError
+from ai_arch_toolkit.core._images import ImageFormat, ImageRequest, ImageResolution
 from ai_arch_toolkit.core._metering._admission import NotMeteredOperationError
 from ai_arch_toolkit.core._metering._scope import current_meter
 from ai_arch_toolkit.core._middleware import Request
@@ -225,7 +226,18 @@ class LLM:
         tools: list[dict[str, Any]] | None,
         arguments: Arguments,
     ) -> Request:
-        """Validate common options before reserving a physical attempt."""
+        """Validate common options before reserving a physical attempt.
+
+        An image generation takes none of the call options or of this LLM's defaults.
+        """
+        if arguments.image is not None:
+            return Request(
+                messages=messages,
+                system=system,
+                tools=tools,
+                model=self._model,
+                image=arguments.image,
+            )
         return Request(
             messages=messages,
             system=system,
@@ -464,6 +476,71 @@ class LLM:
     ) -> int:
         """Synchronous version of ``count_tokens()``."""
         return _run_sync(self.count_tokens(messages, system=system, tools=tools))
+
+    async def generate_image(
+        self,
+        prompt: str,
+        *,
+        images: Sequence[ImagePart] = (),
+        n: int = 1,
+        aspect_ratio: str | None = None,
+        resolution: ImageResolution | None = None,
+        quality: str | None = None,
+        output_format: ImageFormat | None = None,
+    ) -> Response:
+        """Generate images with this LLM's image model, or edit ``images`` by the prompt.
+
+        The images come back in ``Response.images``; the call is metered, retried, sent through
+        middleware and fallbacks like :meth:`complete`. The options are portable (D47): each
+        model raises ``RequestError`` for what it does not take.
+
+        Args:
+            prompt: What to draw, or how to change ``images``.
+            images: Images to edit or to draw from (``image(...)`` parts).
+            n: How many images to generate.
+            aspect_ratio: Width to height, as ``"16:9"``.
+            resolution: ``"512"``, ``"1K"``, ``"2K"`` or ``"4K"``.
+            quality: The provider's quality level, such as ``"low"`` or ``"high"``.
+            output_format: ``"png"``, ``"jpeg"`` or ``"webp"``.
+        """
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise RequestError("prompt must be a non-empty string")
+        if isinstance(images, ImagePart) or not all(isinstance(i, ImagePart) for i in images):
+            raise RequestError("images must be a sequence of image(...) parts")
+        options = ImageRequest(
+            n=n,
+            aspect_ratio=aspect_ratio,
+            resolution=resolution,
+            quality=quality,
+            output_format=output_format,
+        )
+        arguments = Arguments({}, {}, options)
+        request = self._prepare_call([user([prompt, *images])], None, None, arguments)
+        return await Execution(self, request, arguments, "complete").complete()
+
+    def generate_image_sync(
+        self,
+        prompt: str,
+        *,
+        images: Sequence[ImagePart] = (),
+        n: int = 1,
+        aspect_ratio: str | None = None,
+        resolution: ImageResolution | None = None,
+        quality: str | None = None,
+        output_format: ImageFormat | None = None,
+    ) -> Response:
+        """Synchronous version of ``generate_image()``."""
+        return _run_sync(
+            self.generate_image(
+                prompt,
+                images=images,
+                n=n,
+                aspect_ratio=aspect_ratio,
+                resolution=resolution,
+                quality=quality,
+                output_format=output_format,
+            )
+        )
 
     def complete_sync(
         self,

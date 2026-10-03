@@ -1,7 +1,8 @@
 # Default pricing table — USD per 1M tokens
 # Last updated: 2026-08-29 (verified against each provider's official catalog);
 # Meta Muse Spark added 2026-09-13; Claude Opus 5.5, GPT-6 Sol and Luna, and Grok 4.7 added
-# 2026-09-25; GPT-6.1 Sol added 2026-10-01.
+# 2026-09-25; GPT-6.1 Sol added 2026-10-01; image models (GPT Image, Gemini image, Grok
+# Imagine, Muse Image) added 2026-10-03.
 # Override with: pricing.load("your_file.toml") or pricing.register(...)
 # Keys are exact model ids. A dated snapshot (-20251001, -2024-08-06, @20251101, -0709, -001,
 # -latest) takes the price of the id it snapshots, unless it has an entry of its own. `aliases`
@@ -644,6 +645,56 @@ batch_input = 1.0
 batch_output = 4.0
 batch_cache_read = 0.10
 
+# ── GPT Image (Images API; image tokens at their own rates) ──
+# Verified 2026-10-02: https://developers.openai.com/api/docs/pricing. Batch is half. Cached input
+# applies only through the Responses API. No text output rate is published for gpt-image-2 and the
+# 2.5 models (their answers carry no text tokens, I01): the image rate stands in for it.
+["gpt-image-2.5-sunburst"]
+input = 5.0
+output = 30.0
+cache_read = 1.25
+image_input = 8.0
+image_output = 30.0
+batch_input = 2.5
+batch_output = 15.0
+batch_image_input = 4.0
+batch_image_output = 15.0
+aliases = ["gpt-image-2.5-flare", "gpt-image-2"]
+
+["gpt-image-1.5"]
+input = 5.0
+output = 10.0
+cache_read = 1.25
+image_input = 8.0
+image_output = 32.0
+batch_input = 2.5
+batch_output = 5.0
+batch_image_input = 4.0
+batch_image_output = 16.0
+aliases = ["chatgpt-image-latest"]
+
+[gpt-image-1]
+input = 5.0
+output = 40.0
+cache_read = 1.25
+image_input = 10.0
+image_output = 40.0
+batch_input = 2.5
+batch_output = 20.0
+batch_image_input = 5.0
+batch_image_output = 20.0
+
+[gpt-image-1-mini]
+input = 2.0
+output = 8.0
+cache_read = 0.2
+image_input = 2.5
+image_output = 8.0
+batch_input = 1.0
+batch_output = 4.0
+batch_image_input = 1.25
+batch_image_output = 4.0
+
 # ═══════════════════════════════════════════════════════════════════
 # Google Gemini
 # Source: https://ai.google.dev/gemini-api/docs/pricing
@@ -783,6 +834,33 @@ batch_input = 0.05
 batch_output = 0.20
 batch_cache_read = 0.005
 
+# ── Image models (image output tokens at their own rate) ──
+# Verified 2026-10-02: https://ai.google.dev/gemini-api/docs/pricing (paid tier only; the free tier
+# has no quota for them, I01). Batch is half. A 1K image is 1,120 tokens on 3.1 Flash Image.
+["gemini-3.1-flash-image"]
+input = 0.50
+output = 3.0
+image_output = 60.0
+batch_input = 0.25
+batch_output = 1.5
+batch_image_output = 30.0
+
+["gemini-3.1-flash-lite-image"]
+input = 0.25
+output = 1.50
+image_output = 30.0
+batch_input = 0.125
+batch_output = 0.75
+batch_image_output = 15.0
+
+["gemini-3-pro-image"]
+input = 2.0
+output = 12.0
+image_output = 120.0
+batch_input = 1.0
+batch_output = 6.0
+batch_image_output = 60.0
+
 # ═══════════════════════════════════════════════════════════════════
 # xAI Grok
 # Source: https://docs.x.ai/developers/models
@@ -895,6 +973,18 @@ long_context_input = 2.0
 long_context_output = 4.0
 long_context_cache_read = 0.40
 
+# ── Grok Imagine (per image; the API also reports each request's cost, which wins) ──
+# Verified 2026-10-02: https://docs.x.ai/developers/pricing. No batch discount on images.
+# grok-imagine-image-quality retires on 2026-11-02.
+["grok-imagine-image-2.0"]
+per_image = 0.04
+
+[grok-imagine-image]
+per_image = 0.02
+
+[grok-imagine-image-quality]
+per_image = 0.05
+
 # ═══════════════════════════════════════════════════════════════════
 # Meta Muse Spark (Meta Model API)
 # Source: https://dev.meta.ai/docs/pricing-rate-limits
@@ -930,3 +1020,9 @@ cache_read = 0.002
 input = 0.10
 output = 0.20
 cache_read = 0.002
+
+# ── Muse Image (per image) ──
+# Verified 2026-10-02: https://dev.meta.ai/docs/pricing-rate-limits ($0.01 per image). Its usage
+# comes in tokens that are not the bill (I01), so they are priced at zero.
+["muse-image-1.0"]
+per_image = 0.01

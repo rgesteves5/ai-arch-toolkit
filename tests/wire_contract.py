@@ -15,7 +15,10 @@ fixture in ``tests/conftest.py``); ``tests/test_wire_contract.py`` holds its can
   not validated) and through the SDK's offline conversion for the Developer API, which refuses the
   fields only Vertex takes; the SDK's lenient enums warn, and a warning counts as an error.
 - ``xai-sdk``: the SDK's ``Chat``, whose proto takes and serializes an enum value it does not
-  define, so the net walks the proto for those.
+  define, so the net walks the proto for those; an image generation's arguments go through the
+  SDK's own request builder first.
+- Image generations (``prepare_image``) are checked too: the Images API's request ``TypedDict``
+  for OpenAI and Meta, the same ``generate_content`` request for Gemini.
 """
 
 from __future__ import annotations
@@ -264,11 +267,46 @@ def _responses(params: Mapping[str, Any], *, strict_left_out: bool) -> list[str]
     return _check(ResponseCreateParamsNonStreaming, payload)
 
 
+def _images(params: Mapping[str, Any]) -> list[str]:
+    """An Images API request (``_openai_images.py``): an edit when it carries input images.
+
+    An edit's files are ``FileTypes``, which hold an ``IO`` no validator compiles: they are
+    checked as the ``(name, bytes, media type)`` tuples the adapter sends (one, or a list), and the
+    rest of the
+    edit against the fields it shares with a generation (the adapter sends no edit-only field).
+    """
+    from openai.types.image_generate_params import ImageGenerateParamsNonStreaming
+
+    payload = dict(params)
+    found: list[str] = []
+    if "image" in payload:
+        files = payload.pop("image")
+        files = [files] if isinstance(files, tuple) else files
+        if not isinstance(files, list) or not all(
+            isinstance(f, tuple)
+            and len(f) == 3
+            and isinstance(f[0], str)
+            and isinstance(f[1], bytes)
+            and isinstance(f[2], str)
+            for f in files
+        ):
+            found.append("image | not a list of (name, bytes, media type) files")
+    return found + _check(ImageGenerateParamsNonStreaming, payload)
+
+
+def _is_images(params: Mapping[str, Any]) -> bool:
+    return "prompt" in params and "input" not in params
+
+
 def _meta(params: Mapping[str, Any]) -> list[str]:
+    if _is_images(params):
+        return _images(params)
     return _responses(params, strict_left_out=True)
 
 
 def _openai(params: Mapping[str, Any]) -> list[str]:
+    if _is_images(params):
+        return _images(params)
     return _responses(params, strict_left_out=False)
 
 
@@ -315,9 +353,22 @@ def _undefined_enums(message: ProtoMessage, path: str = "") -> list[str]:
     return found
 
 
+def _xai_image(params: Mapping[str, Any]) -> list[str]:
+    """An ``image.sample`` request, built offline by the SDK's own request builder."""
+    from xai_sdk.image import _make_generate_request
+
+    try:
+        request = _make_generate_request(**params)
+    except (ValueError, TypeError) as exc:
+        return [f"image request | {type(exc).__name__}: {exc}"]
+    return _undefined_enums(request)
+
+
 def _xai(params: Any) -> list[str]:
     from xai_sdk.chat import BaseChat
 
+    if isinstance(params, Mapping) and "prompt" in params:
+        return _xai_image(params)
     if not isinstance(params, BaseChat):
         return [f"request | {type(params).__name__} is not an xai_sdk Chat"]
     return _undefined_enums(params.proto)

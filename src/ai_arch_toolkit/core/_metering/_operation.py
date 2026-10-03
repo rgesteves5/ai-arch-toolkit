@@ -33,6 +33,7 @@ class OperationRequest:
     model: str | None = None
     provider: str | None = None
     declared_max_output_tokens: int | None = None
+    declared_images: int = 0  # the images an image generation asks for (0 for any other call)
     content_size_hint: int | None = None
     non_text_parts: int = 0
     has_server_tools: bool = False

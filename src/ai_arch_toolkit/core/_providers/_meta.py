@@ -8,7 +8,8 @@ model's reasoning across tool turns (Chat Completions redacts it).
 What belongs to the Responses API (input items and the replay of ``_raw``, tools, assembly,
 streams, failures) lives in ``_responses.py``. This module holds what is Meta's: the host and the
 client, the efforts, the error codes, ``tool_choice`` only ``auto``, function tools without
-``strict``, and the hosted ``web_search``.
+``strict``, the hosted ``web_search``, and Muse Image's rules on the Images API
+(``_openai_images.py``).
 """
 
 from __future__ import annotations
@@ -21,20 +22,18 @@ from ai_arch_toolkit.core._middleware import Request
 from ai_arch_toolkit.core._model_id import lookup
 from ai_arch_toolkit.core._providers._base import Options, Prepared, parse_options
 from ai_arch_toolkit.core._providers._imports import require_sdk
-from ai_arch_toolkit.core._response import Response
 
 with require_sdk("meta"):
     import openai
-    from openai.types.responses import Response as SDKResponse
     from openai.types.responses import ResponseInputItemParam
     from openai.types.shared.reasoning_effort import ReasoningEffort
     from openai.types.shared_params import Reasoning
 
+    from ai_arch_toolkit.core._providers._openai_images import ImageModel, ImagesCall, images_call
     from ai_arch_toolkit.core._providers._responses import (
         Params,
         ResponsesProfile,
         ResponsesProvider,
-        _parse_sdk_response,
         http_client,
         input_items,
         request_params,
@@ -86,12 +85,20 @@ _CODE_STATUS: dict[str, int] = {
     "gateway_timeout": 504,
 }
 
-# Meta serves one family of models, Muse Spark: only muse-spark- ids are routed here (D14).
+# Meta serves one family of reasoning models, Muse Spark (D14), and an image model (D46).
 _MUSE_SPARK = "muse-spark"
+
+# Muse Image on the Images API (https://dev.meta.ai/docs/image-generation): up to 10 images, no
+# quality, and a size that sets only the aspect ratio (live: 1024x1024 gives 1600x1600, 1024x1792
+# gives 1152x2016; I01 check 7). One input image per edit: Meta wants several as image[0],
+# image[1]…, and the SDK names them image[] (live, I03). An unlisted muse-image- id takes the same
+# rules.
+_MUSE_IMAGE = ImageModel(size="ratio", max_images=10, max_inputs=1)
+_IMAGE_FAMILIES = {"muse-image-": _MUSE_IMAGE}
 
 _PROFILE = ResponsesProfile(
     provider="Meta",
-    families={"muse-spark-": _MUSE_SPARK},
+    families={"muse-spark-": _MUSE_SPARK, "muse-image-": "muse-image"},
     # Stateless requests get the encrypted reasoning back only when they ask for it (D12).
     include=("reasoning.encrypted_content",),
     # Only "auto" exists: "none" is sent as no tools, a forced choice is refused (D13).
@@ -104,13 +111,16 @@ _PROFILE = ResponsesProfile(
 )
 
 
-def _input_items(messages: list[dict[str, Any]]) -> list[ResponseInputItemParam]:
-    """Responses input items for a Meta request.
+def _input_items(
+    messages: list[dict[str, Any]], model: str = "muse-spark"
+) -> list[ResponseInputItemParam]:
+    """Responses input items for a Meta request of ``model``.
 
-    Meta serves one family, Muse Spark, so a turn's reasoning goes back when a Muse Spark model
-    produced it, whichever model the request names.
+    A turn goes back whole when a model of the request's family produced it: any Muse Spark for
+    a Muse Spark request (one family, whichever model it names), Muse Image for Muse Image, its
+    drawn images by reference (I01 check 7).
     """
-    return input_items(messages, _PROFILE, _MUSE_SPARK)
+    return input_items(messages, _PROFILE, _PROFILE.family(model))
 
 
 class MetaProvider(ResponsesProvider):
@@ -148,9 +158,16 @@ class MetaProvider(ResponsesProvider):
     # The contract (the I/O, the usage and the errors are the Responses core's)
     # ------------------------------------------------------------------
 
+    def _image_rules(self) -> ImageModel | None:
+        found = lookup(self._model, {}, _IMAGE_FAMILIES)
+        return found.value if found is not None else None
+
     def prepare(self, request: Request) -> Prepared[Params]:
+        if self._image_rules() is not None and request.tools:
+            # "image_generation is the only tool the model accepts" (image-generation guide).
+            raise RequestError(f"{self._model} draws images and takes no tools")
         options = parse_options(request.kwargs, _FORWARDED, "Meta")
-        items = _input_items(request.messages)
+        items = _input_items(request.messages, self._model)
         reasoning = self._reasoning(options)
         params = request_params(
             self._profile,
@@ -163,6 +180,15 @@ class MetaProvider(ResponsesProvider):
         if reasoning:
             params["reasoning"] = reasoning
         return Prepared(params, output_schema=options.output_schema)
+
+    def prepare_image(self, request: Request) -> ImagesCall:
+        """An image generation on Meta's Images API: an edit when it has input images."""
+        rules = self._image_rules()
+        if rules is None:
+            raise RequestError(
+                f"{self._model} is not an image model; generate_image takes muse-image-1.0"
+            )
+        return images_call(self._model, request, rules)
 
     def _reasoning(self, options: Options) -> Reasoning:
         """Muse Spark always reasons (D13): the effort applies on its own, and thinking asks for
@@ -190,9 +216,6 @@ class MetaProvider(ResponsesProvider):
             reasoning["summary"] = "auto"
         return reasoning
 
-    def assemble(self, final: SDKResponse, prepared: Prepared[Params]) -> Response:
-        return _parse_sdk_response(final, self._model, output_schema=prepared.output_schema)
-
     async def count_tokens(
         self,
         messages: list[dict[str, Any]],
@@ -201,4 +224,4 @@ class MetaProvider(ResponsesProvider):
         tools: list[dict[str, Any]] | None = None,
     ) -> int:
         """Count input tokens with Meta's ``POST /v1/responses/input_tokens``."""
-        return await self._count_input_tokens(_input_items(messages), system, tools)
+        return await self._count_input_tokens(_input_items(messages, self._model), system, tools)

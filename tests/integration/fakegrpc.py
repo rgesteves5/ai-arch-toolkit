@@ -1,4 +1,4 @@
-"""A loopback gRPC server that speaks xAI's Chat service, for the real ``xai-sdk`` in tests."""
+"""A loopback gRPC server that speaks xAI's Chat and Image services, for the real ``xai-sdk``."""
 
 from __future__ import annotations
 
@@ -9,7 +9,14 @@ from dataclasses import dataclass, field
 
 import grpc
 import xai_sdk
-from xai_sdk.proto import chat_pb2, chat_pb2_grpc, sample_pb2, usage_pb2
+from xai_sdk.proto import (
+    chat_pb2,
+    chat_pb2_grpc,
+    image_pb2,
+    image_pb2_grpc,
+    sample_pb2,
+    usage_pb2,
+)
 
 from ai_arch_toolkit.core._providers._xai import _CHANNEL_OPTIONS, XAIProvider
 
@@ -94,6 +101,8 @@ class Script:
     abort_after: int = 0
     hang: float = 0.0
     requests: list[chat_pb2.GetCompletionsRequest] = field(default_factory=list)
+    images: image_pb2.ImageResponse = field(default_factory=image_pb2.ImageResponse)
+    image_requests: list[image_pb2.GenerateImageRequest] = field(default_factory=list)
 
 
 class _Chat(chat_pb2_grpc.ChatServicer):
@@ -130,6 +139,19 @@ class _Chat(chat_pb2_grpc.ChatServicer):
             await context.abort(self.script.code, "scripted failure")
 
 
+class _Image(image_pb2_grpc.ImageServicer):
+    def __init__(self, script: Script) -> None:
+        self.script = script
+
+    async def GenerateImage(
+        self, request: image_pb2.GenerateImageRequest, context: grpc.aio.ServicerContext
+    ) -> image_pb2.ImageResponse:
+        self.script.image_requests.append(request)
+        if self.script.code is not None:
+            await context.abort(self.script.code, "scripted failure")
+        return self.script.images
+
+
 @asynccontextmanager
 async def serving(script: Script | None = None) -> AsyncIterator[tuple[Script, int]]:
     """Serve ``script`` on an ephemeral loopback port (plaintext)."""
@@ -137,6 +159,7 @@ async def serving(script: Script | None = None) -> AsyncIterator[tuple[Script, i
     server = grpc.aio.server()
     chat = _Chat(script, server)
     chat_pb2_grpc.add_ChatServicer_to_server(chat, server)
+    image_pb2_grpc.add_ImageServicer_to_server(_Image(script), server)
     port = server.add_insecure_port("127.0.0.1:0")
     await server.start()
     try:

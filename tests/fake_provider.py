@@ -64,7 +64,9 @@ def _reply(item: Script) -> Reply:
 class FakeProvider(BaseProvider[Request, Reply]):
     """Answers from a script — one item per call, the last one repeating — and records calls.
 
-    ``refuse`` lists ``RequestError``s that the next preparations raise, in order.
+    ``refuse`` lists ``RequestError``s that the next preparations raise, in order. With
+    ``images=True`` it also takes image generations, answered from the same script; without, it
+    refuses them as an adapter without image models does.
     """
 
     def __init__(
@@ -72,8 +74,10 @@ class FakeProvider(BaseProvider[Request, Reply]):
         *script: Script,
         model: str = MODEL,
         refuse: Sequence[RequestError] = (),
+        images: bool = False,
     ) -> None:
         self._model = model
+        self.generates_images = images
         self.script = [_reply(item) for item in script] or [Reply()]
         self.refusals = list(refuse)
         self.requests: list[Request] = []
@@ -97,6 +101,11 @@ class FakeProvider(BaseProvider[Request, Reply]):
         if self.refusals:
             raise self.refusals.pop(0)
         return request
+
+    def prepare_image(self, request: Request) -> Request:
+        if not self.generates_images:
+            return super().prepare_image(request)
+        return self.prepare(request)
 
     async def _begin(self, request: Request) -> Reply:
         reply = self.script[min(len(self.requests), len(self.script) - 1)]
@@ -154,10 +163,12 @@ class FakeProvider(BaseProvider[Request, Reply]):
 def fake_llm(
     *script: Script,
     model: str = MODEL,
+    images: bool = False,
     **llm_kwargs: Any,
 ) -> tuple[LLM, FakeProvider]:
-    """A real ``LLM`` whose provider answers from ``script``."""
+    """A real ``LLM`` whose provider answers from ``script`` (image generations too with
+    ``images=True``)."""
     llm = LLM(model, api_key="test", **llm_kwargs)
-    provider = FakeProvider(*script, model=model)
+    provider = FakeProvider(*script, model=model, images=images)
     llm._provider = provider
     return llm, provider

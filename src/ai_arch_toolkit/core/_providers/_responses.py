@@ -15,11 +15,13 @@ conversation state. They go back only to the provider and the model family that 
 
 from __future__ import annotations
 
+import base64
 import copy
+import dataclasses
 import json
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from ai_arch_toolkit.core._content import CachePart, DocumentPart, ImagePart, _encode_b64, _is_url
 from ai_arch_toolkit.core._exceptions import (
@@ -37,6 +39,7 @@ from ai_arch_toolkit.core._providers._base import (
     Options,
     Prepared,
     _parse_retry_after,
+    image_media_type,
     on_request,
     parse_structured,
     parse_tool_args,
@@ -48,6 +51,7 @@ from ai_arch_toolkit.core._providers._base import (
 from ai_arch_toolkit.core._providers._imports import require_sdk
 from ai_arch_toolkit.core._response import (
     Citation,
+    GeneratedImage,
     OutputSchema,
     Response,
     StreamEvent,
@@ -61,6 +65,7 @@ with require_sdk("openai"):  # the meta extra installs the same package
     import httpx2  # the openai SDK's transport
     import openai
     from openai.resources.responses import AsyncResponses
+    from openai.types import ImagesResponse
     from openai.types.responses import (
         FunctionToolParam,
         ResponseFunctionToolCallParam,
@@ -71,6 +76,7 @@ with require_sdk("openai"):  # the meta extra installs the same package
         ResponseInputMessageContentListParam,
         ResponseOutputItem,
         ResponseOutputMessageParam,
+        ResponseStreamEvent,
         ResponseTextConfigParam,
         ResponseUsage,
         ToolParam,
@@ -83,6 +89,13 @@ with require_sdk("openai"):  # the meta extra installs the same package
         ToolChoice,
     )
     from openai.types.responses.response_output_text import Logprob
+
+    from ai_arch_toolkit.core._providers._openai_images import (
+        ImagesCall,
+        images_response,
+        images_usage,
+        send_images,
+    )
 
 type Params = ResponseCreateParamsNonStreaming
 
@@ -128,6 +141,12 @@ class ResponsesProfile:
             with the Responses tool it is sent as. A server tool's config is refused (C05).
         codes: The HTTP status of each error code a failure inside a response or a stream
             carries; a code not listed gets none.
+        image_tool: Builds the hosted ``image_generation`` tool from its config, checked against
+            the image model's rules; ``None`` when the provider runs none (D46).
+        image_replay: How a turn's ``image_generation_call`` goes back statelessly: by
+            ``"reference"`` (its id, ``result: null``, as Meta documents) or as an ``"input"``
+            image in a user message after the turn (OpenAI answers a replayed call with a 404
+            under ``store: false``; I01 check 3).
     """
 
     provider: str
@@ -138,6 +157,8 @@ class ResponsesProfile:
     output_strict: bool
     hosted_tools: Mapping[str, ToolParam]
     codes: Mapping[str, int]
+    image_tool: Callable[[Mapping[str, Any]], ToolParam] | None = None
+    image_replay: Literal["reference", "input"] = "reference"
 
     def family(self, model: str) -> str:
         """The family whose reasoning ``model`` can reuse: its family in this profile, else its
@@ -236,21 +257,51 @@ def _replayable_output(
     ]
     if raw_calls != msg_calls:
         return None
-    items = [
-        # The wire names: the SDK's async_ field is the request's "async".
-        cast(
-            "ResponseInputItemParam",
-            item.model_dump(mode="json", exclude_none=True, by_alias=True),
-        )
-        for item in output
+    items: list[ResponseInputItemParam] = []
+    drawn: list[str] = []
+    for item in output:
         # Without its encrypted content a reasoning item is only a reference, which a stateless
         # request cannot resolve (Meta answers 400 "reasoning item was not found").
-        if item.type != "reasoning" or item.encrypted_content
-    ]
+        if item.type == "reasoning" and not item.encrypted_content:
+            continue
+        if item.type == "image_generation_call":
+            if profile.image_replay == "input":
+                drawn.extend([item.result] if item.result else [])
+                continue
+            items.append(_image_reference(item.id, item.status))
+            continue
+        # The wire names: the SDK's async_ field is the request's "async".
+        wire = item.model_dump(mode="json", exclude_none=True, by_alias=True)
+        items.append(cast("ResponseInputItemParam", wire))
     # A reasoning item must be followed by a message or function call before the next input.
     while items and items[-1].get("type") == "reasoning":
         items.pop()
+    if drawn:
+        # After the turn; before it when the turn calls a function, whose output must follow it.
+        calls = any(item.get("type") == "function_call" for item in items)
+        items = [_drawn_images(drawn), *items] if calls else [*items, _drawn_images(drawn)]
     return items
+
+
+def _image_reference(item_id: str, status: str) -> ResponseInputItemParam:
+    """A drawn image's call, by reference: Meta resolves it statelessly (I01 check 7)."""
+    call = {"type": "image_generation_call", "id": item_id, "status": status, "result": None}
+    return cast("ResponseInputItemParam", call)
+
+
+def _drawn_images(images: list[str]) -> ResponseInputItemParam:
+    """The images a turn drew, sent back as input images after it (I01 check 3)."""
+    content: ResponseInputMessageContentListParam = [
+        cast(
+            "ResponseInputImageParam",
+            {
+                "type": "input_image",
+                "image_url": f"data:{image_media_type(base64.b64decode(data))};base64,{data}",
+            },
+        )
+        for data in images
+    ]
+    return {"role": "user", "content": content}
 
 
 def _function_call(call: dict[str, Any]) -> ResponseFunctionToolCallParam:
@@ -329,8 +380,13 @@ def _function_tool(tool: dict[str, Any], profile: ResponsesProfile) -> FunctionT
 
 
 def _hosted_tool(tool: dict[str, Any], profile: ResponsesProfile) -> ToolParam:
-    """The Responses tool for a server tool the provider runs; its config belongs to C05."""
+    """The Responses tool for a server tool the provider runs; its config belongs to C05, but the
+    image generation's, which the profile builds (D46)."""
     kind = tool["type"]
+    if kind == "image_generation" and profile.image_tool is not None:
+        return profile.image_tool(
+            {k: v for k, v in tool.items() if k not in ("type", "_server_tool")}
+        )
     hosted = profile.hosted_tools.get(kind)
     if hosted is None:
         raise RequestError(f"server tool {kind!r}: not run by {profile.provider}")
@@ -501,6 +557,25 @@ def _logprobs(output: list[ResponseOutputItem]) -> tuple[Logprob, ...] | None:
     return found or None
 
 
+def _generated_images(output: list[ResponseOutputItem]) -> list[GeneratedImage]:
+    """The images of the ``image_generation_call`` items that carry one (OpenAI's hosted tool,
+    Meta's image model)."""
+    images: list[GeneratedImage] = []
+    for item in output:
+        if item.type != "image_generation_call" or not item.result:
+            continue
+        data = base64.b64decode(item.result)
+        declared = f"image/{item.output_format}" if item.output_format else None
+        images.append(
+            GeneratedImage(
+                data=data,
+                media_type=image_media_type(data, declared),
+                revised_prompt=item.revised_prompt or "",
+            )
+        )
+    return images
+
+
 def _parse_sdk_response(
     response: SDKResponse,
     model: str,
@@ -528,6 +603,7 @@ def _parse_sdk_response(
             if item.type == "function_call"
         ),
         thinking=tuple(_thinking_blocks(output)),
+        images=tuple(_generated_images(output)),
         parsed=parsed,
         stop_reason=_stop_reason(response),
         model=response.model or model,
@@ -585,17 +661,65 @@ class _TextJoiner:
 # ---------------------------------------------------------------------------
 
 
+def _streamed(event: ResponseStreamEvent, joiner: _TextJoiner) -> list[StreamEvent]:
+    """The toolkit's events for one Responses stream event: text, reasoning summaries, drawn
+    images (the previews ``partial``); none for the others."""
+    if event.type == "response.output_text.delta" or event.type == "response.refusal.delta":
+        return joiner.events(event.item_id, event.delta)
+    if event.type == "response.reasoning_summary_text.delta":
+        return [
+            StreamEvent(kind="thinking", thinking=ThinkingBlock(text=event.delta), partial=True)
+        ]
+    if event.type == "response.image_generation_call.partial_image":
+        return [_image_event(event.partial_image_b64, partial=True)]
+    if (
+        event.type == "response.output_item.done"
+        and event.item.type == "image_generation_call"
+        and event.item.result
+    ):
+        return [_image_event(event.item.result, partial=False)]
+    return []
+
+
+def _unstreamed(params: Params) -> Params:
+    """The request without the image tool's previews, which only a stream takes ("Partial images
+    are only supported with streaming", a 400; live, I04)."""
+    tools = params.get("tools")
+    if not tools or not any(t.get("partial_images") is not None for t in tools):
+        return params
+    return {
+        **params,
+        "tools": [
+            cast("ToolParam", {k: v for k, v in tool.items() if k != "partial_images"})
+            if tool.get("type") == "image_generation"
+            else tool
+            for tool in tools
+        ],
+    }
+
+
+def _image_event(encoded: str, *, partial: bool) -> StreamEvent:
+    data = base64.b64decode(encoded)
+    image = GeneratedImage(data=data, media_type=image_media_type(data))
+    return StreamEvent(kind="image", image=image, partial=partial)
+
+
 def http_client() -> httpx2.AsyncClient:
     """The SDK's HTTP client, with the hook that marks a request as handed to the transport."""
     return openai.DefaultAsyncHttpxClient(event_hooks={"request": [on_request]})
 
 
-class ResponsesProvider(LoopAwareClientCache, BaseProvider[Prepared[Params], SDKResponse]):
+type Call = Prepared[Params] | ImagesCall
+type Final = SDKResponse | ImagesResponse
+
+
+class ResponsesProvider(LoopAwareClientCache, BaseProvider[Call, Final]):
     """A provider on the Responses API: the I/O, the usage and the errors, by its profile.
 
-    A subclass builds the SDK client and composes ``prepare``, ``assemble`` and ``count_tokens``
-    from :func:`input_items`, :func:`request_params`, :func:`_parse_sdk_response` and
-    :meth:`_count_input_tokens`; the request's model family and its model's rules are its own.
+    A subclass builds the SDK client and composes ``prepare`` and ``count_tokens`` from
+    :func:`input_items`, :func:`request_params` and :meth:`_count_input_tokens`; the request's
+    model family and its model's rules are its own. An image generation goes to the Images API
+    (``_openai_images.py``), from the subclass's ``prepare_image``.
     """
 
     def __init__(
@@ -614,45 +738,55 @@ class ResponsesProvider(LoopAwareClientCache, BaseProvider[Prepared[Params], SDK
     def _responses(self) -> AsyncResponses:
         return self._client.responses
 
-    async def send(self, prepared: Prepared[Params]) -> SDKResponse:
-        response = await self._responses().create(**prepared.params)
+    async def send(self, prepared: Call) -> Final:
+        if isinstance(prepared, ImagesCall):
+            return await send_images(self._client.images, prepared)
+        response = await self._responses().create(**_unstreamed(prepared.params))
         if response.status == "failed":
             raise _failure(self._profile, response)
         return response
 
-    async def open_stream(
-        self, prepared: Prepared[Params]
-    ) -> AsyncIterator[StreamEvent | Done[SDKResponse]]:
+    async def open_stream(self, prepared: Call) -> AsyncIterator[StreamEvent | Done[Final]]:
         """Text streams with a blank line between message items; reasoning summaries stream as
         ``partial`` thinking. The terminal event carries the whole response — the source of the
         reasoning replayed on the next turn."""
+        if isinstance(prepared, ImagesCall):
+            raise RequestError("an image generation is not streamed: use generate_image()")
         joiner = _TextJoiner()
         final: SDKResponse | None = None
         streaming: ResponseCreateParamsStreaming = {**prepared.params, "stream": True}
         stream = await self._responses().create(**streaming)
         async with stream:
             async for event in stream:
-                if (
-                    event.type == "response.output_text.delta"
-                    or event.type == "response.refusal.delta"
-                ):
-                    for text_event in joiner.events(event.item_id, event.delta):
-                        yield text_event
-                elif event.type == "response.reasoning_summary_text.delta":
-                    yield StreamEvent(
-                        kind="thinking", thinking=ThinkingBlock(text=event.delta), partial=True
-                    )
-                elif event.type == "response.completed" or event.type == "response.incomplete":
+                if event.type == "response.completed" or event.type == "response.incomplete":
                     final = event.response
                 elif event.type == "response.failed":
                     raise _failure(self._profile, event.response)
                 elif event.type == "error":
                     raise _reported(self._profile, event.code, event.message or "stream error")
+                else:
+                    for streamed in _streamed(event, joiner):
+                        yield streamed
         if final is not None:
             yield Done(final)
 
-    def usage(self, final: SDKResponse) -> Usage | None:
-        return _extract_usage(final.usage) if final.usage is not None else None
+    def assemble(self, final: Final, prepared: Call) -> Response:
+        if isinstance(final, ImagesResponse):
+            return images_response(final, self._model)
+        schema = prepared.output_schema if isinstance(prepared, Prepared) else None
+        return _parse_sdk_response(final, self._model, output_schema=schema)
+
+    def usage(self, final: Final) -> Usage | None:
+        if isinstance(final, ImagesResponse):
+            return images_usage(final)
+        if final.usage is None:
+            return None
+        # The images it drew, for a provider that bills per image: Meta's Responses usage holds
+        # tokens that are not the bill (live, I03).
+        images = sum(
+            1 for item in final.output if item.type == "image_generation_call" and item.result
+        )
+        return dataclasses.replace(_extract_usage(final.usage), image_count=images)
 
     def map_error(self, exc: Exception, *, sent: bool) -> ProviderError | None:
         """The one place that knows the SDK's errors.

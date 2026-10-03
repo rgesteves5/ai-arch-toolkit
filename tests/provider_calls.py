@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from ai_arch_toolkit.core._content import ImagePart, user
+from ai_arch_toolkit.core._images import ImageRequest
 from ai_arch_toolkit.core._middleware import Request
 from ai_arch_toolkit.core._providers._base import Answer, BaseProvider, Prepared
 from ai_arch_toolkit.core._response import OutputSchema, Response, StreamEvent
@@ -51,3 +53,31 @@ def assembled(
 ) -> Response:
     """The response the base builds from an SDK final object: assembly, usage and cost."""
     return provider._answer(final, Prepared({}, output_schema=output_schema)).response
+
+
+def image_request(
+    provider: BaseProvider[Any, Any], prompt: str, *images: ImagePart, **options: Any
+) -> Request:
+    """The request ``LLM.generate_image`` builds for this model."""
+    return Request(
+        messages=[user([prompt, *images])],
+        system=None,
+        tools=None,
+        model=provider._model,
+        image=ImageRequest(**options),
+    )
+
+
+def prepare_image(
+    provider: BaseProvider[Any, Any], prompt: str, *images: ImagePart, **options: Any
+) -> Any:
+    """What the adapter would send for this image generation."""
+    return provider.prepare_image(image_request(provider, prompt, *images, **options))
+
+
+async def generate_image(
+    provider: BaseProvider[Any, Any], prompt: str, *images: ImagePart, **options: Any
+) -> Response:
+    """The assembled response of one image generation."""
+    prepared = prepare_image(provider, prompt, *images, **options)
+    return (await provider.complete(prepared)).response

@@ -68,8 +68,10 @@ def pytest_configure(config: pytest.Config) -> None:
     )
 
 
-def _checked(adapter: type[Any], log: WireLog) -> Callable[[Any, Request], Prepared[Any]]:
-    prepare = adapter.prepare
+def _checked(
+    adapter: type[Any], log: WireLog, method: str = "prepare"
+) -> Callable[[Any, Request], Prepared[Any]]:
+    prepare = getattr(adapter, method)
     name = adapter.__name__
 
     def checked(self: Any, request: Request) -> Prepared[Any]:
@@ -88,6 +90,8 @@ def wire_log(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) ->
     log = WireLog()
     for adapter in ADAPTERS:
         monkeypatch.setattr(adapter, "prepare", _checked(adapter, log))
+        # Image generations too (D46); an adapter without image models refuses before.
+        monkeypatch.setattr(adapter, "prepare_image", _checked(adapter, log, "prepare_image"))
     yield log
     marker = request.node.get_closest_marker("wire_contract")
     if found := log.unexpected(marker.kwargs["tolerate"] if marker else ()):

@@ -987,3 +987,70 @@ def test_gemini_38_has_its_own_promotional_price(batch, expected):
     )
     assert cost == pytest.approx(expected)
     assert "gemini-3.8-flash" in pricing.list_models()
+
+
+class TestImagePricing:
+    """Image tokens and images, priced apart from text (I02)."""
+
+    @staticmethod
+    def registry(**rates: float) -> PricingRegistry:
+        registry = PricingRegistry()
+        registry.register("img", ModelPricing(**rates))
+        return registry
+
+    def test_image_tokens_take_the_image_rates(self) -> None:
+        registry = self.registry(input=5.0, output=10.0, image_input=8.0, image_output=30.0)
+        cost = registry.estimate_cost(
+            "img",
+            input_tokens=21,
+            output_tokens=4,
+            image_input_tokens=1024,
+            image_output_tokens=196,
+        )
+        assert cost == pytest.approx((21 * 5 + 4 * 10 + 1024 * 8 + 196 * 30) / 1e6)
+
+    def test_an_image_rate_left_out_falls_back_to_the_text_rate(self) -> None:
+        registry = self.registry(input=0.5, output=3.0)
+        cost = registry.estimate_cost("img", image_input_tokens=1000, image_output_tokens=1000)
+        assert cost == pytest.approx((1000 * 0.5 + 1000 * 3.0) / 1e6)
+
+    def test_batch_takes_the_batch_image_rates_or_the_standard_image_rates(self) -> None:
+        registry = self.registry(
+            input=5.0,
+            output=10.0,
+            image_output=30.0,
+            batch_input=2.5,
+            batch_output=5.0,
+            batch_image_output=15.0,
+        )
+        assert registry.estimate_cost(
+            "img", image_output_tokens=1_000_000, is_batch=True
+        ) == pytest.approx(15.0)
+        partial = self.registry(
+            input=5.0, output=10.0, image_input=8.0, batch_input=2.5, batch_output=5.0
+        )
+        assert partial.estimate_cost(
+            "img", image_input_tokens=1_000_000, is_batch=True
+        ) == pytest.approx(8.0)
+
+    def test_per_image_charges_each_image(self) -> None:
+        registry = self.registry(per_image=0.01, batch_input=0.0, batch_per_image=0.005)
+        assert registry.estimate_cost("img", image_count=3) == pytest.approx(0.03)
+        assert registry.estimate_cost("img", image_count=3, is_batch=True) == pytest.approx(0.015)
+
+    def test_the_module_wrapper_passes_the_image_counters(self) -> None:
+        pricing.register("img-wrapper", ModelPricing(image_output=30.0, per_image=0.01))
+        try:
+            cost = estimate_cost("img-wrapper", image_output_tokens=1_000_000, image_count=1)
+            assert cost == pytest.approx(30.01)
+        finally:
+            pricing.unregister("img-wrapper")
+
+    def test_image_rates_load_from_toml(self, tmp_path: Path) -> None:
+        table = tmp_path / "prices.toml"
+        table.write_text("[img]\ninput = 5.0\nimage_output = 30.0\nper_image = 0.02\n")
+        registry = PricingRegistry()
+        registry.load(table)
+        price = registry.get("img")
+        assert price is not None
+        assert (price.image_output, price.per_image) == (30.0, 0.02)

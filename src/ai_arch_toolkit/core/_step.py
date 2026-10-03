@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -39,12 +40,7 @@ class Result:
         return {
             "value": self.value,
             "artifacts": dict(self.artifacts),
-            "usage": {
-                "input_tokens": self.usage.input_tokens,
-                "output_tokens": self.usage.output_tokens,
-                "cache_write_tokens": self.usage.cache_write_tokens,
-                "cache_read_tokens": self.usage.cache_read_tokens,
-            },
+            "usage": dataclasses.asdict(self.usage),
             "cost": self.cost,
             "confidence": self.confidence,
             "error": self.error,

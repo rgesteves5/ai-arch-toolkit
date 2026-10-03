@@ -27,12 +27,33 @@ class Usage:
     ``input_tokens`` contains non-cached input only. Cache reads and writes are recorded
     separately, so total input is the sum of all three input counters. ``output_tokens`` includes
     billable reasoning/thinking tokens where the provider reports them separately.
+
+    An image model bills image tokens at their own rates: ``image_input_tokens`` and
+    ``image_output_tokens`` hold them, apart from the text counters. ``image_count`` counts the
+    images of a provider that bills per image instead.
     """
 
     input_tokens: int = 0
     output_tokens: int = 0
     cache_write_tokens: int = 0
     cache_read_tokens: int = 0
+    image_input_tokens: int = 0
+    image_output_tokens: int = 0
+    image_count: int = 0
+
+    def __add__(self, other: Usage) -> Usage:
+        """The counters of both, added one by one."""
+        if not isinstance(other, Usage):
+            return NotImplemented
+        return Usage(
+            input_tokens=self.input_tokens + other.input_tokens,
+            output_tokens=self.output_tokens + other.output_tokens,
+            cache_write_tokens=self.cache_write_tokens + other.cache_write_tokens,
+            cache_read_tokens=self.cache_read_tokens + other.cache_read_tokens,
+            image_input_tokens=self.image_input_tokens + other.image_input_tokens,
+            image_output_tokens=self.image_output_tokens + other.image_output_tokens,
+            image_count=self.image_count + other.image_count,
+        )
 
 
 def _uncached_input_tokens(total_input: int | None, cache_read: int | None) -> int:
@@ -60,6 +81,24 @@ class ThinkingBlock:
     """A thinking/reasoning block from the model."""
 
     text: str
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class GeneratedImage:
+    """An image the model generated.
+
+    Attributes:
+        data: The image file's bytes.
+        media_type: Its MIME type (``"image/png"``, ``"image/jpeg"``, ``"image/webp"``).
+        revised_prompt: The prompt the provider rewrote and drew from, when it reports one.
+    """
+
+    data: bytes
+    media_type: str
+    revised_prompt: str = ""
+
+    def __repr__(self) -> str:
+        return f"GeneratedImage({self.media_type}, {len(self.data)} bytes)"
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,6 +156,7 @@ class Response:
     text: str = ""
     tool_calls: tuple[ToolCall, ...] = ()
     thinking: tuple[ThinkingBlock, ...] = ()
+    images: tuple[GeneratedImage, ...] = ()
     parsed: Any = None  # populated only when output_schema was requested
     usage: Usage = field(default_factory=Usage)
     cost: float | None = None
@@ -133,8 +173,15 @@ class Response:
 
     @property
     def tokens(self) -> int:
-        """Non-cached input plus output tokens; cache counters remain separate."""
-        return self.usage.input_tokens + self.usage.output_tokens
+        """Non-cached input plus output tokens, image tokens included; cache counters remain
+        separate."""
+        usage = self.usage
+        return (
+            usage.input_tokens
+            + usage.output_tokens
+            + usage.image_input_tokens
+            + usage.image_output_tokens
+        )
 
     @property
     def input_tokens(self) -> int:
@@ -175,13 +222,15 @@ class Response:
         return self.text
 
     def __repr__(self) -> str:
+        parts = [f"text={self.text!r}"]
         if self.tool_calls:
-            tools = ", ".join(tc.name for tc in self.tool_calls)
-            return f"Response(text={self.text!r}, tool_calls=[{tools}])"
-        return f"Response(text={self.text!r})"
+            parts.append(f"tool_calls=[{', '.join(tc.name for tc in self.tool_calls)}]")
+        if self.images:
+            parts.append(f"images={len(self.images)}")
+        return f"Response({', '.join(parts)})"
 
     def __bool__(self) -> bool:
-        return bool(self.text) or bool(self.tool_calls)
+        return bool(self.text) or bool(self.tool_calls) or bool(self.images)
 
 
 # ---------------------------------------------------------------------------
@@ -343,7 +392,7 @@ class SyncStreamResponse:
 
 @dataclass(frozen=True, slots=True)
 class StreamEvent:
-    """Structured streaming event (text chunk, thinking block, or tool call).
+    """Structured streaming event (text chunk, thinking block, tool call, or image).
 
     ``partial`` marks an incremental fragment rather than a finished unit.
     Providers that stream reasoning token-by-token (OpenAI-compatible servers)
@@ -351,13 +400,18 @@ class StreamEvent:
     partial thinking events for the full trace. Providers that emit complete
     thinking blocks (Anthropic) leave it ``False``. The finalized
     ``Response.thinking`` always holds complete blocks regardless.
+
+    An ``image`` event carries a generated image: ``partial=True`` for a preview the provider
+    sends while it draws (OpenAI's partial images, Gemini's interim thought images), ``False``
+    for a finished one. The finalized ``Response.images`` holds the finished images only.
     """
 
-    kind: Literal["text", "thinking", "tool_call"]
+    kind: Literal["text", "thinking", "tool_call", "image"]
     text: str = ""
     thinking: ThinkingBlock | None = None
     tool_call: ToolCall | None = None
     partial: bool = False
+    image: GeneratedImage | None = None
 
 
 class RichStreamResponse:

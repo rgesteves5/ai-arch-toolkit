@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import base64
+import dataclasses
 import json
 import logging
 import math
 import warnings
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
-from typing import Any, Required, TypedDict, cast
+from typing import Any, Literal, Required, TypedDict, cast, get_args
 
 from ai_arch_toolkit.core._content import CachePart, DocumentPart, ImagePart
 from ai_arch_toolkit.core._exceptions import (
@@ -17,16 +19,20 @@ from ai_arch_toolkit.core._exceptions import (
     ProviderTimeout,
     RateLimitError,
     RequestError,
+    ResponseError,
     TransportError,
 )
+from ai_arch_toolkit.core._images import ImageRequest
 from ai_arch_toolkit.core._middleware import Request
-from ai_arch_toolkit.core._model_id import lookup
+from ai_arch_toolkit.core._model_id import family, lookup
 from ai_arch_toolkit.core._providers._base import (
     BaseProvider,
     Done,
     LoopAwareClientCache,
     Options,
     Prepared,
+    image_media_type,
+    image_prompt,
     mark_dispatched,
     merge_system_prompts,
     parse_options,
@@ -37,6 +43,7 @@ from ai_arch_toolkit.core._providers._base import (
 )
 from ai_arch_toolkit.core._providers._imports import require_sdk
 from ai_arch_toolkit.core._response import (
+    GeneratedImage,
     OutputSchema,
     Response,
     StreamEvent,
@@ -52,8 +59,10 @@ with require_sdk("xai"):
     from xai_sdk import chat as xai_chat
     from xai_sdk.aio.chat import Chat
     from xai_sdk.aio.chat import Client as ChatClient
+    from xai_sdk.aio.image import ImageResponse
     from xai_sdk.proto import chat_pb2, usage_pb2
     from xai_sdk.types.chat import AgentCount, ReasoningEffort, ToolMode
+    from xai_sdk.types.image import ImageAspectRatio, ImageQuality, ImageResolution
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +154,9 @@ _MULTI_AGENT = _Profile(multi_agent=True)
 # (https://docs.x.ai/developers/models/grok-4.3 and the others); the ids retired on 2026-05-15
 # are served by grok-4.3, the reasoning ones at low effort and the others at none, and
 # grok-code-fast-1 by grok-build-0.1 (https://docs.x.ai/developers/migration/may-15-retirement).
+# xAI's image models (grok-imagine-image, -2.0, -quality): image generation, not chat.
+_IMAGE_FAMILIES = {"grok-imagine-image": True}
+
 _PROFILES: dict[str, _Profile] = {
     "grok-4.3": _GROK_4_3,
     "grok-4.20-multi-agent": _MULTI_AGENT,
@@ -261,6 +273,118 @@ def _build_response_format(output_schema: OutputSchema) -> chat_pb2.ResponseForm
 # ---------------------------------------------------------------------------
 
 
+# Image generation (https://docs.x.ai/developers/model-capabilities/images/generation): the
+# aspect ratios and qualities the SDK converts, "1k" and "2k", up to 10 images, and up to 5 input
+# images for an edit (https://docs.x.ai/developers/model-capabilities/images/multi-image-editing).
+_IMAGE_RATIOS = frozenset(get_args(ImageAspectRatio))
+_IMAGE_QUALITIES = frozenset(get_args(ImageQuality))
+_IMAGE_RESOLUTIONS: dict[str, ImageResolution] = {"1K": "1k", "2K": "2k"}
+_MAX_IMAGES = 10
+_MAX_INPUT_IMAGES = 5
+
+
+class _Sample(TypedDict, total=False):
+    """The ``image.sample`` arguments, in the SDK's own types."""
+
+    prompt: Required[str]
+    model: Required[str]
+    image_format: Required[Literal["base64"]]
+    image_url: str
+    image_urls: list[str]
+    aspect_ratio: ImageAspectRatio
+    resolution: ImageResolution
+    quality: ImageQuality
+
+
+@dataclass(frozen=True, slots=True)
+class _ImageCall:
+    """An image generation: ``image.sample``, or ``sample_batch`` for more than one image."""
+
+    params: _Sample
+    n: int
+
+
+@dataclass(frozen=True, slots=True)
+class _Images:
+    """The images of one image generation (a batch's share one answer)."""
+
+    generated: tuple[ImageResponse, ...]
+
+
+type _Call = Prepared[Chat] | _ImageCall
+type _Final = xai_chat.Response | _Images
+
+
+def _image_url(part: ImagePart) -> str:
+    """An input image as the SDK takes it: a URL, or base64 in a data URL."""
+    source = part.source
+    if isinstance(source, bytes):
+        source = base64.b64encode(source).decode("ascii")
+    if source.startswith(("https://", "http://", "data:")):
+        return source
+    return f"data:{part.media_type};base64,{source}"
+
+
+def _sample(model: str, request: Request) -> _ImageCall:
+    """The ``image.sample`` arguments for an image generation, checked against xAI's rules."""
+    options = request.image
+    assert options is not None  # prepare_image is only called for image generations
+    prompt, inputs = image_prompt(request)
+    if not 1 <= options.n <= _MAX_IMAGES:
+        raise RequestError(f"{model} returns at most {_MAX_IMAGES} images, not {options.n}")
+    if len(inputs) > _MAX_INPUT_IMAGES:
+        raise RequestError(f"{model} edits at most {_MAX_INPUT_IMAGES} input images")
+    if options.output_format is not None:
+        raise RequestError(f"{model} takes no output_format")
+    params: _Sample = {"prompt": prompt, "model": model, "image_format": "base64"}
+    _shape(params, model, options)
+    if len(inputs) == 1:
+        params["image_url"] = _image_url(inputs[0])
+    elif inputs:
+        params["image_urls"] = [_image_url(part) for part in inputs]
+    return _ImageCall(params, options.n)
+
+
+def _shape(params: _Sample, model: str, options: ImageRequest) -> None:
+    """The aspect ratio, resolution and quality, in the values the SDK converts."""
+    if options.aspect_ratio is not None:
+        if options.aspect_ratio not in _IMAGE_RATIOS:
+            raise RequestError(
+                f"{model} takes aspect_ratio in {sorted(_IMAGE_RATIOS)}, not "
+                f"{options.aspect_ratio!r}"
+            )
+        params["aspect_ratio"] = cast("ImageAspectRatio", options.aspect_ratio)
+    if options.resolution is not None:
+        if options.resolution not in _IMAGE_RESOLUTIONS:
+            raise RequestError(
+                f"{model} takes resolution '1K' or '2K', not {options.resolution!r}"
+            )
+        params["resolution"] = _IMAGE_RESOLUTIONS[options.resolution]
+    if options.quality is not None:
+        if options.quality not in _IMAGE_QUALITIES:
+            raise RequestError(
+                f"{model} takes quality in {sorted(_IMAGE_QUALITIES)}, not {options.quality!r}"
+            )
+        params["quality"] = cast("ImageQuality", options.quality)
+
+
+def _images_response(final: _Images, model: str) -> Response:
+    images = []
+    for response in final.generated:
+        if not response.respect_moderation:
+            raise ResponseError("xAI withheld an image that did not respect its moderation rules")
+        data = base64.b64decode(response.base64.split(",", 1)[-1])
+        images.append(GeneratedImage(data=data, media_type=image_media_type(data)))
+    first = final.generated[0] if final.generated else None
+    return Response(
+        images=tuple(images),
+        model=first.model if first is not None and first.model else model,
+        raw=final,
+        stop_reason="completed",
+        provider_cost=_valid_cost(first.cost_usd) if first is not None else None,
+    )
+
+
 def _extract_usage(usage: usage_pb2.SamplingUsage) -> Usage:
     """The toolkit's usage; the gRPC API counts the answer and the reasoning apart, and both are
     billed as output."""
@@ -274,7 +398,10 @@ def _extract_usage(usage: usage_pb2.SamplingUsage) -> Usage:
 
 def _provider_cost(response: xai_chat.Response) -> float | None:
     """The cost xAI reports for the request, when it reports a valid one."""
-    cost = response.cost_usd
+    return _valid_cost(response.cost_usd)
+
+
+def _valid_cost(cost: float | None) -> float | None:
     if cost is not None and (cost < 0 or not math.isfinite(cost)):
         logger.warning("Ignoring invalid xAI provider-reported cost: %r", cost)
         return None
@@ -327,7 +454,7 @@ def _chunk_events(chunk: xai_chat.Chunk) -> list[StreamEvent]:
 # ---------------------------------------------------------------------------
 
 
-class XAIProvider(LoopAwareClientCache, BaseProvider[Prepared[Chat], xai_chat.Response]):
+class XAIProvider(LoopAwareClientCache, BaseProvider[_Call, _Final]):
     """xAI provider via the official ``xai-sdk`` (gRPC)."""
 
     def __init__(
@@ -356,6 +483,8 @@ class XAIProvider(LoopAwareClientCache, BaseProvider[Prepared[Chat], xai_chat.Re
     # ------------------------------------------------------------------
 
     def prepare(self, request: Request) -> Prepared[Chat]:
+        if family(self._model, _IMAGE_FAMILIES):
+            raise RequestError(f"{self._model} is an image model: call generate_image()")
         options = parse_options(request.kwargs, _FORWARDED, "xAI")
         profile = self._profile()
         messages, message_system = _messages_to_sdk(request.messages)
@@ -382,6 +511,15 @@ class XAIProvider(LoopAwareClientCache, BaseProvider[Prepared[Chat], xai_chat.Re
                 format_type=chat_pb2.FormatType.FORMAT_TYPE_JSON_OBJECT
             )
         return Prepared(self._create(params), output_schema=options.output_schema)
+
+    def prepare_image(self, request: Request) -> _ImageCall:
+        """An image generation with ``image.sample``; the input images edit."""
+        if not family(self._model, _IMAGE_FAMILIES):
+            raise RequestError(
+                f"{self._model} is not an image model; generate_image takes one such as "
+                "grok-imagine-image-2.0"
+            )
+        return _sample(self._model, request)
 
     def _reasoning(self, params: _Create, options: Options, profile: _Profile) -> None:
         """``thinking_effort`` applies on its own, since these models reason unasked (as the
@@ -446,13 +584,22 @@ class XAIProvider(LoopAwareClientCache, BaseProvider[Prepared[Chat], xai_chat.Re
         except (TypeError, ValueError) as refused:  # the SDK's own validation
             raise RequestError(f"the xAI SDK refused the request: {refused}") from refused
 
-    async def send(self, prepared: Prepared[Chat]) -> xai_chat.Response:
+    async def send(self, prepared: _Call) -> _Final:
         mark_dispatched()  # every local step ran in prepare
+        if isinstance(prepared, _ImageCall):
+            return await self._sample_images(prepared)
         return await prepared.params.sample()
 
-    async def open_stream(
-        self, prepared: Prepared[Chat]
-    ) -> AsyncIterator[StreamEvent | Done[xai_chat.Response]]:
+    async def _sample_images(self, call: _ImageCall) -> _Images:
+        images = self._client.image
+        if call.n == 1:
+            return _Images((await images.sample(**call.params),))
+        found: Sequence[ImageResponse] = await images.sample_batch(n=call.n, **call.params)
+        return _Images(tuple(found))
+
+    async def open_stream(self, prepared: _Call) -> AsyncIterator[StreamEvent | Done[_Final]]:
+        if isinstance(prepared, _ImageCall):
+            raise RequestError("an image generation is not streamed: use generate_image()")
         mark_dispatched()
         # The SDK pairs every chunk with the response accumulated so far.
         final: xai_chat.Response | None = None
@@ -463,10 +610,20 @@ class XAIProvider(LoopAwareClientCache, BaseProvider[Prepared[Chat], xai_chat.Re
         if final is not None:
             yield Done(final)
 
-    def assemble(self, final: xai_chat.Response, prepared: Prepared[Chat]) -> Response:
-        return _parse_sdk_response(final, self._model, output_schema=prepared.output_schema)
+    def assemble(self, final: _Final, prepared: _Call) -> Response:
+        if isinstance(final, _Images):
+            return _images_response(final, self._model)
+        schema = prepared.output_schema if isinstance(prepared, Prepared) else None
+        return _parse_sdk_response(final, self._model, output_schema=schema)
 
-    def usage(self, final: xai_chat.Response) -> Usage | None:
+    def usage(self, final: _Final) -> Usage | None:
+        if isinstance(final, _Images):
+            # A batch's images share one answer and its usage.
+            count = len(final.generated)
+            first = final.generated[0] if count else None
+            if first is None or not first.usage.ListFields():
+                return Usage(image_count=count)
+            return dataclasses.replace(_extract_usage(first.usage), image_count=count)
         # The stream accumulator copies every chunk's usage, so a stream without one ends with an
         # empty usage: only a usage with a field set was reported.
         return _extract_usage(final.usage) if final.usage.ListFields() else None

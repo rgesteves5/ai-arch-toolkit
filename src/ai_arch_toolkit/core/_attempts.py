@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
 from ai_arch_toolkit.core._concurrency import inference_slot
+from ai_arch_toolkit.core._content import DocumentPart, ImagePart
 from ai_arch_toolkit.core._exceptions import (
     APIError,
     Delivery,
@@ -19,6 +20,7 @@ from ai_arch_toolkit.core._exceptions import (
     RequestError,
     UnpricedModelError,
 )
+from ai_arch_toolkit.core._images import ImageRequest
 from ai_arch_toolkit.core._metering._admission import AdmissionDenied, RequestSizing
 from ai_arch_toolkit.core._metering._cost import Cost
 from ai_arch_toolkit.core._metering._money import Money
@@ -59,12 +61,18 @@ def _same_value(left: object, right: object) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class Arguments:
-    """Explicit call arguments; fallback defaults belong to the candidate LLM."""
+    """Explicit call arguments; fallback defaults belong to the candidate LLM.
+
+    ``image`` is set on an image generation, which takes no other option.
+    """
 
     options: dict[str, Any]
     extra: dict[str, Any]
+    image: ImageRequest | None = None
 
     def rewritten(self, before: Request, after: Request) -> Arguments:
+        if after.image is not None:
+            return Arguments({}, {}, after.image)
         options, extra = dict(self.options), dict(self.extra)
         for key in before.kwargs.keys() - after.kwargs.keys():
             if key in options:
@@ -81,22 +89,35 @@ class Arguments:
         return Arguments(options, extra)
 
 
+def _is_media(part: object) -> bool:
+    """Whether a content part is an image or a document rather than text."""
+    if isinstance(part, ImagePart | DocumentPart):
+        return True
+    return isinstance(part, dict) and part.get("type") not in (None, "text")
+
+
 def _request_size(request: Request) -> tuple[int, int]:
-    """Conservative serialized character count and non-text part count."""
-    chars = len(request.system or "") + len(str(request.messages))
+    """Conservative serialized character count, without media sources, and media part count.
+
+    An image or a document is counted as a part (the estimator reserves a per-part allowance),
+    never by the length of its bytes or base64 text.
+    """
+    chars = len(request.system or "")
+    non_text = 0
+    for message in request.messages:
+        content = message.get("content")
+        if isinstance(content, list):
+            media = [part for part in content if _is_media(part)]
+            non_text += len(media)
+            text = [part for part in content if not _is_media(part)]
+            chars += len(str({**message, "content": text}))
+        else:
+            chars += len(str(message))
     if request.tools:
         chars += len(str(request.tools))
     schema = request.kwargs.get("output_schema")
     if schema is not None:
         chars += len(str(schema))
-    non_text = 0
-    for message in request.messages:
-        content = message.get("content")
-        if isinstance(content, list):
-            non_text += sum(
-                isinstance(part, dict) and part.get("type") not in (None, "text")
-                for part in content
-            )
     return chars, non_text
 
 
@@ -126,6 +147,7 @@ def request_facts(
         model=owner._model,
         provider=owner._provider_name,
         declared_max_output_tokens=request.kwargs.get("max_tokens"),
+        declared_images=request.image.n if request.image is not None else 0,
         content_size_hint=chars,
         non_text_parts=non_text,
         has_server_tools=bool(request.tools) and any(t.get("_server_tool") for t in request.tools),
@@ -176,6 +198,13 @@ def _priced(scope: MeterScope, request: OperationRequest, usage: Usage) -> Cost:
     return cost
 
 
+def prepare(provider: BaseProvider[Any, Any], request: Request) -> object:
+    """The sole preparation boundary: an image generation or a completion."""
+    if request.image is not None:
+        return provider.prepare_image(request)
+    return provider.prepare(request)
+
+
 def dispatch(
     provider: BaseProvider[Any, Any], prepared: object, path: Path
 ) -> AsyncIterator[StreamEvent | Answer]:
@@ -190,7 +219,8 @@ def dispatch(
 
 
 def _partial(events: Sequence[StreamEvent], model: str, text: str) -> Response:
-    """What an unfinished stream gave: the consumed text, and the thinking and tool calls seen.
+    """What an unfinished stream gave: the consumed text, and the thinking, tool calls and
+    finished images seen.
 
     Consecutive ``partial`` thinking fragments form one block. Usage and cost stay unknown.
     """
@@ -207,6 +237,9 @@ def _partial(events: Sequence[StreamEvent], model: str, text: str) -> Response:
         text=text,
         thinking=tuple(ThinkingBlock(text=block) for block in thinking),
         tool_calls=tuple(event.tool_call for event in events if event.tool_call is not None),
+        images=tuple(
+            event.image for event in events if event.image is not None and not event.partial
+        ),
         model=model,
     )
 
@@ -388,7 +421,7 @@ class _Chain:
         self.request = await _run_abefore(self.owner._middleware, self.request)
         # A rewritten request is prepared again; a refusal releases a stream's reservation.
         if self.prepared is None or self.owner._middleware:
-            self.prepared = self.owner._provider.prepare(self.request)
+            self.prepared = prepare(self.owner._provider, self.request)
         if pending is not None:
             pending.refresh(self.request, self.prepared)
         try:
@@ -449,7 +482,7 @@ class Execution:
         self.active: _PhysicalAttempt | None = None
         self.delivered = False
         self.closed = False
-        prepared = owner._provider.prepare(request)  # a refused request never opens an operation
+        prepared = prepare(owner._provider, request)  # a refused request opens no operation
         self.chain = _Chain(self, owner, request, arguments, prepared)
         self.pending = self._admit(owner, request, prepared, 0) if path != "complete" else None
 

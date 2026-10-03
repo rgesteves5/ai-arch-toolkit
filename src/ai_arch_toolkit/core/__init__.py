@@ -31,6 +31,7 @@ from ai_arch_toolkit.core._exceptions import (
     TransportError,
     UnpricedModelError,
 )
+from ai_arch_toolkit.core._images import ImageFormat, ImageRequest, ImageResolution
 from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._metering import (
     AdmissionController,
@@ -67,6 +68,7 @@ from ai_arch_toolkit.core._redaction import (
 from ai_arch_toolkit.core._response import (
     Attempt,
     Citation,
+    GeneratedImage,
     OutputSchema,
     Response,
     RichStreamResponse,
@@ -77,7 +79,12 @@ from ai_arch_toolkit.core._response import (
     Usage,
 )
 from ai_arch_toolkit.core._retry import RetryConfig
-from ai_arch_toolkit.core._server_tools import ServerTool, code_execution, web_search
+from ai_arch_toolkit.core._server_tools import (
+    ServerTool,
+    code_execution,
+    image_generation,
+    web_search,
+)
 from ai_arch_toolkit.core._state import MergeConflictError, MergeStrategy, State, StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step, StepFn
 from ai_arch_toolkit.core._step_engine import execute_step
@@ -171,13 +178,17 @@ __all__ = [
     "GateDryRun",
     "GateModify",
     "GateResult",
+    "GeneratedImage",
     "GovernanceOutcome",
     "Graph",
     "GraphAlgorithmsProto",
     "GraphBackendProto",
     "GraphEdge",
     "GraphNode",
+    "ImageFormat",
     "ImagePart",
+    "ImageRequest",
+    "ImageResolution",
     "MergeConflictError",
     "MergeStrategy",
     "MeterScope",
@@ -259,6 +270,7 @@ __all__ = [
     "execute_step",
     "execute_tool",
     "image",
+    "image_generation",
     "infer_schema",
     "inference_limit",
     "prepare_tools",

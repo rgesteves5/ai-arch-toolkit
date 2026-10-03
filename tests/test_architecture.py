@@ -106,9 +106,17 @@ def test_provider_dispatch_and_attempt_start_have_one_home() -> None:
     assert len(provider_calls(dispatch, io)) == 2  # complete, and one stream for both views
     assert provider_calls(attempts, io) == provider_calls(dispatch, io)
     assert not provider_calls(facade, io)
-    # Preparation happens before admission, in the pipeline only.
-    assert provider_calls(attempts, ("prepare",))
-    assert not provider_calls(facade, ("prepare",))
+    # Preparation happens before admission, in the pipeline only, in one function that picks an
+    # image generation or a completion.
+    preparing = ("prepare", "prepare_image")
+    prepare = next(
+        node
+        for node in attempts.body
+        if isinstance(node, ast.FunctionDef) and node.name == "prepare"
+    )
+    assert len(provider_calls(prepare, preparing)) == 2
+    assert provider_calls(attempts, preparing) == provider_calls(prepare, preparing)
+    assert not provider_calls(facade, preparing)
     starts = [
         node
         for node in ast.walk(attempts)

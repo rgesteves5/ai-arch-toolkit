@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -88,12 +89,7 @@ class StepTrace:
             "duration": self.duration,
             "cost": self.cost,
             "confidence": self.confidence,
-            "usage": {
-                "input_tokens": self.usage.input_tokens,
-                "output_tokens": self.usage.output_tokens,
-                "cache_write_tokens": self.usage.cache_write_tokens,
-                "cache_read_tokens": self.usage.cache_read_tokens,
-            },
+            "usage": dataclasses.asdict(self.usage),
             "attempts": self.attempts,
             "policy_decisions": list(self.policy_decisions),
             "error": error,
@@ -177,13 +173,7 @@ class Trace:
 
     @property
     def total_usage(self) -> Usage:
-        all_steps = list(self._iter_all(self.steps))
-        return Usage(
-            input_tokens=sum(st.usage.input_tokens for st in all_steps),
-            output_tokens=sum(st.usage.output_tokens for st in all_steps),
-            cache_write_tokens=sum(st.usage.cache_write_tokens for st in all_steps),
-            cache_read_tokens=sum(st.usage.cache_read_tokens for st in all_steps),
-        )
+        return sum((st.usage for st in self._iter_all(self.steps)), Usage())
 
     # --- Serialization ---
 

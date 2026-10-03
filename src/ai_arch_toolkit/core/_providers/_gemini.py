@@ -11,7 +11,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any, TypedDict, cast
 
-from ai_arch_toolkit.core._content import CachePart, DocumentPart, ImagePart, _is_url
+from ai_arch_toolkit.core._content import CachePart, DocumentPart, ImagePart
 from ai_arch_toolkit.core._exceptions import APIError, ProviderError, RateLimitError, RequestError
 from ai_arch_toolkit.core._middleware import Request
 from ai_arch_toolkit.core._model_id import lookup
@@ -24,6 +24,8 @@ from ai_arch_toolkit.core._providers._base import (
     Options,
     Prepared,
     _parse_retry_after,
+    image_media_type,
+    image_prompt,
     merge_system_prompts,
     on_request,
     parse_options,
@@ -35,6 +37,7 @@ from ai_arch_toolkit.core._providers._base import (
 from ai_arch_toolkit.core._providers._imports import require_sdk
 from ai_arch_toolkit.core._response import (
     Citation,
+    GeneratedImage,
     OutputSchema,
     Response,
     StreamEvent,
@@ -132,9 +135,35 @@ _PROFILES: dict[str, _Profile] = {
 }
 
 
+# The image models ("Nano Banana"), on generate_content with image output
+# (https://ai.google.dev/gemini-api/docs/generate-content/image-generation): aspect ratios and
+# image sizes per model; 512 and the extreme ratios on 3.1 Flash only, 1K only on Flash Lite. They
+# take no function calling (https://ai.google.dev/gemini-api/docs/models). The Imagen models and
+# gemini-2.5-flash-image are shut down (https://ai.google.dev/gemini-api/docs/deprecations). A
+# closed list: an image model's id has no family prefix of its own.
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _ImageProfile:
+    ratios: frozenset[str]
+    sizes: frozenset[str]
+
+
+_RATIOS = frozenset({"1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"})
+_IMAGE_MODELS: dict[str, _ImageProfile] = {
+    "gemini-3.1-flash-image": _ImageProfile(
+        ratios=_RATIOS | {"1:4", "4:1", "1:8", "8:1"}, sizes=frozenset({"512", "1K", "2K", "4K"})
+    ),
+    "gemini-3.1-flash-lite-image": _ImageProfile(ratios=_RATIOS, sizes=frozenset({"1K"})),
+    "gemini-3-pro-image": _ImageProfile(ratios=_RATIOS, sizes=frozenset({"1K", "2K", "4K"})),
+}
+
+
 # ---------------------------------------------------------------------------
 # Request
 # ---------------------------------------------------------------------------
+
+
+def _is_web_url(source: str) -> bool:
+    return source.startswith(("https://", "http://"))
 
 
 def _content_parts_to_gemini(content: Any) -> list[types.Part]:
@@ -147,12 +176,16 @@ def _content_parts_to_gemini(content: Any) -> list[types.Part]:
 
 
 def _part(part: Any) -> types.Part:
-    if isinstance(part, ImagePart) and isinstance(part.source, str) and _is_url(part.source):
-        return types.Part(
-            file_data=types.FileData(file_uri=part.source, mime_type=part.media_type)
-        )
-    if isinstance(part, ImagePart | DocumentPart):
-        data = part.source if isinstance(part.source, bytes) else base64.b64decode(part.source)
+    source = part.source if isinstance(part, ImagePart | DocumentPart) else None
+    if isinstance(part, ImagePart) and isinstance(source, str) and _is_web_url(source):
+        return types.Part(file_data=types.FileData(file_uri=source, mime_type=part.media_type))
+    if isinstance(part, ImagePart | DocumentPart) and source is not None:
+        if isinstance(source, bytes):
+            data = source
+        else:  # base64 text, or a data: URL (inline bytes, never a file_uri)
+            data = base64.b64decode(
+                source.split(",", 1)[1] if source.startswith("data:") else source
+            )
         return types.Part(inline_data=types.Blob(data=data, mime_type=part.media_type))
     if isinstance(part, CachePart):
         return types.Part(text=part.content)
@@ -293,13 +326,23 @@ def _tool_config(choice: str) -> types.ToolConfig:
 
 
 def _extract_usage(usage: types.GenerateContentResponseUsageMetadata) -> Usage:
-    """The toolkit's usage: tool-use prompt tokens are input, thoughts are output."""
+    """The toolkit's usage: tool-use prompt tokens are input, thoughts are output, and the
+    candidates' image tokens are image output, billed at the image rate
+    (https://ai.google.dev/gemini-api/docs/pricing)."""
     cache_read = usage.cached_content_token_count or 0
+    image = sum(
+        detail.token_count or 0
+        for detail in usage.candidates_tokens_details or []
+        if detail.modality == types.MediaModality.IMAGE
+    )
     return Usage(
         input_tokens=_uncached_input_tokens(usage.prompt_token_count or 0, cache_read)
         + (usage.tool_use_prompt_token_count or 0),
-        output_tokens=(usage.candidates_token_count or 0) + (usage.thoughts_token_count or 0),
+        output_tokens=(usage.candidates_token_count or 0)
+        - image
+        + (usage.thoughts_token_count or 0),
         cache_read_tokens=cache_read,
+        image_output_tokens=image,
     )
 
 
@@ -328,6 +371,15 @@ def _parse_sdk_response(
     text = text.strip()
     return Response(
         text=text,
+        images=tuple(
+            # The interim "thought images" of a Gemini 3 image model are not the answer.
+            GeneratedImage(
+                data=part.inline_data.data,
+                media_type=image_media_type(part.inline_data.data, part.inline_data.mime_type),
+            )
+            for part in parts
+            if part.inline_data is not None and part.inline_data.data and not part.thought
+        ),
         tool_calls=tuple(
             ToolCall(
                 id=part.function_call.id or uuid.uuid4().hex[:24],
@@ -350,12 +402,19 @@ def _parse_sdk_response(
 
 
 def _chunk_events(chunk: types.GenerateContentResponse) -> list[StreamEvent]:
-    """The text and thought fragments of one streamed chunk."""
+    """The text and thought fragments of one streamed chunk, and its images: an image model's
+    interim thought images as previews (``partial``), its final image whole."""
     candidates = chunk.candidates or []
     content = candidates[0].content if candidates else None
     events: list[StreamEvent] = []
     for part in (content.parts if content else None) or []:
-        if part.thought and part.text:
+        if part.inline_data is not None and part.inline_data.data:
+            data = part.inline_data.data
+            image = GeneratedImage(
+                data=data, media_type=image_media_type(data, part.inline_data.mime_type)
+            )
+            events.append(StreamEvent(kind="image", image=image, partial=bool(part.thought)))
+        elif part.thought and part.text:
             events.append(
                 StreamEvent(kind="thinking", thinking=ThinkingBlock(text=part.text), partial=True)
             )
@@ -472,7 +531,13 @@ class GeminiProvider(
     # The contract
     # ------------------------------------------------------------------
 
+    def _image_profile(self) -> _ImageProfile | None:
+        found = lookup(self._model, _IMAGE_MODELS)
+        return found.value if found is not None else None
+
     def prepare(self, request: Request) -> Prepared[_Generate]:
+        if request.tools and self._image_profile() is not None:
+            raise RequestError(f"{self._model} draws images and takes no tools")
         options = parse_options(request.kwargs, _FORWARDED, "Gemini")
         msg_system, contents = _messages_to_sdk(request.messages)
         forwarded = dict(options.params)
@@ -498,6 +563,45 @@ class GeminiProvider(
             raise RequestError(f"the Gemini SDK refused the request: {refused}") from refused
         params: _Generate = {"model": self._model, "contents": contents, "config": config}
         return Prepared(params, output_schema=options.output_schema)
+
+    def prepare_image(self, request: Request) -> Prepared[_Generate]:
+        """An image generation: ``generate_content`` asking for image output only, the input
+        images in the prompt's message."""
+        profile = self._image_profile()
+        if profile is None:
+            raise RequestError(
+                f"{self._model} is not an image model; generate_image takes one such as "
+                "gemini-3.1-flash-image"
+            )
+        options = request.image
+        assert options is not None  # prepare_image is only called for image generations
+        image_prompt(request)  # the same refusals as every adapter's
+        if options.n != 1:
+            raise RequestError(f"{self._model} returns one image per request, not {options.n}")
+        if options.quality is not None:
+            raise RequestError(f"{self._model} takes no quality")
+        if options.output_format is not None:
+            # image_config.output_mime_type is Vertex AI's: google-genai refuses it on the
+            # Gemini API (I01 check 4).
+            raise RequestError(f"{self._model} on the Gemini API takes no output_format")
+        if options.aspect_ratio is not None and options.aspect_ratio not in profile.ratios:
+            raise RequestError(
+                f"{self._model} takes aspect_ratio in {sorted(profile.ratios)}, "
+                f"not {options.aspect_ratio!r}"
+            )
+        if options.resolution is not None and options.resolution not in profile.sizes:
+            raise RequestError(
+                f"{self._model} takes resolution in {sorted(profile.sizes)}, "
+                f"not {options.resolution!r}"
+            )
+        _, contents = _messages_to_sdk(request.messages)
+        config = types.GenerateContentConfig(
+            response_modalities=["IMAGE"],
+            image_config=types.ImageConfig(
+                aspect_ratio=options.aspect_ratio, image_size=options.resolution
+            ),
+        )
+        return Prepared({"model": self._model, "contents": contents, "config": config})
 
     def _thinking(self, options: Options) -> types.ThinkingConfig | None:
         """``thinking_effort`` applies on its own (these models think unasked, as in D13/D25);

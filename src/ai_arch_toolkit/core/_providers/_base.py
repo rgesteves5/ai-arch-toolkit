@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import contextlib
 import copy
 import dataclasses
@@ -16,7 +18,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field, fields
 from typing import Any, cast
 
-from ai_arch_toolkit.core._content import CachePart
+from ai_arch_toolkit.core._content import CachePart, ImagePart
 from ai_arch_toolkit.core._exceptions import (
     Delivery,
     ProviderError,
@@ -185,7 +187,9 @@ class BaseProvider[P, F](ABC):
     """A provider adapter in three phases (costura B).
 
     An adapter supplies six small pieces: :meth:`prepare` builds the SDK request — synchronous and
-    pure, raising ``RequestError`` for what the model or the adapter cannot take; :meth:`send` and
+    pure, raising ``RequestError`` for what the model or the adapter cannot take (an image
+    generation is prepared by :meth:`prepare_image`, which only image-capable adapters override,
+    and travels the same way); :meth:`send` and
     :meth:`open_stream` do all the I/O; :meth:`assemble` turns the SDK's final object into a
     ``Response`` and :meth:`usage` reads its usage; :meth:`map_error` is the one place that knows
     the SDK's exceptions. The algorithm lives here, once: :meth:`complete` and :meth:`stream` run
@@ -198,6 +202,18 @@ class BaseProvider[P, F](ABC):
     @abstractmethod
     def prepare(self, request: Request) -> P:
         """The SDK request for ``request``; synchronous, pure, and raising ``RequestError``."""
+
+    def prepare_image(self, request: Request) -> P:
+        """The SDK request for an image generation (``request.image`` is set).
+
+        Pure like :meth:`prepare`. An adapter whose provider generates images overrides it, and
+        its :meth:`send` and :meth:`assemble` take the result; this default refuses before any
+        charge.
+        """
+        raise RequestError(
+            f"{self._model}: {type(self).__name__} does not generate images; use an image model "
+            "such as gpt-image-2.5-flare, gemini-3.1-flash-image or grok-imagine-image-2.0"
+        )
 
     @abstractmethod
     async def send(self, prepared: P) -> F:
@@ -443,6 +459,76 @@ def _system_part_text(part: Any) -> str:
         "send images and documents in a user message"
     )
     raise TypeError(msg)
+
+
+def image_prompt(request: Request) -> tuple[str, list[ImagePart]]:
+    """The prompt and the input images of an image generation (``request.image`` is set).
+
+    ``LLM.generate_image`` sends one user message of text and ``image()`` parts and no options;
+    what a middleware adds beyond that is refused rather than dropped.
+    """
+    if request.kwargs:
+        raise RequestError(
+            f"an image generation takes no call options, got {sorted(request.kwargs)}"
+        )
+    if request.system or request.tools:
+        raise RequestError("an image generation takes no system prompt and no tools")
+    texts: list[str] = []
+    images: list[ImagePart] = []
+    for message in request.messages:
+        if message.get("role") != "user":
+            raise RequestError("an image generation takes user messages only")
+        content = message.get("content")
+        for part in [content] if isinstance(content, str) else content or []:
+            if isinstance(part, str):
+                texts.append(part)
+            elif isinstance(part, ImagePart):
+                images.append(part)
+            else:
+                raise RequestError(
+                    "an image generation takes text and image(...) parts, not "
+                    f"{type(part).__name__}"
+                )
+    prompt = "\n\n".join(text for text in texts if text.strip())
+    if not prompt:
+        raise RequestError("an image generation needs a prompt")
+    return prompt, images
+
+
+def image_bytes(part: ImagePart) -> bytes:
+    """The bytes of an input image given as bytes, base64 text or a ``data:`` URL.
+
+    Raises:
+        RequestError: The image is a web URL (the provider takes the file itself) or its text is
+            not base64.
+    """
+    source = part.source
+    if isinstance(source, bytes):
+        return source
+    if source.startswith(("https://", "http://")):
+        raise RequestError("this provider uploads the image file: pass its bytes, not a URL")
+    encoded = source.split(",", 1)[1] if source.startswith("data:") else source
+    try:
+        return base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise RequestError("an image source string must be base64 or a data: URL") from exc
+
+
+_SIGNATURES = (
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"GIF8", "image/gif"),
+)
+
+
+def image_media_type(data: bytes, declared: str | None = None) -> str:
+    """The MIME type of image bytes by their signature, else the provider's ``declared`` one."""
+    for signature, media_type in _SIGNATURES:
+        if data.startswith(signature):
+            return media_type
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return declared or "application/octet-stream"
 
 
 def parse_tool_args(raw_args: str | dict[str, Any]) -> dict[str, Any]:

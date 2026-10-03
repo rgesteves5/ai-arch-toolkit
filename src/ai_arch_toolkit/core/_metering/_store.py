@@ -128,8 +128,9 @@ def _release_holds(c: _Counters, op: _LiveOp) -> None:
 
 def _settle(c: _Counters, op: _LiveOp, usage: Usage, cost: Cost) -> None:
     _release_holds(c, op)
-    c.c_input += usage.input_tokens
-    c.c_output += usage.output_tokens
+    # Image tokens are tokens: they count against the same input and output caps.
+    c.c_input += usage.input_tokens + usage.image_input_tokens
+    c.c_output += usage.output_tokens + usage.image_output_tokens
     c.c_cache_read += usage.cache_read_tokens
     c.c_cache_write += usage.cache_write_tokens
     if cost.kind == "known":
@@ -177,6 +178,9 @@ def _payload_key(usage: Usage, cost: Cost) -> tuple[object, ...]:
         usage.output_tokens,
         usage.cache_read_tokens,
         usage.cache_write_tokens,
+        usage.image_input_tokens,
+        usage.image_output_tokens,
+        usage.image_count,
         cost.kind,
         cost.amount.pico if cost.amount is not None else None,
         cost.reason,

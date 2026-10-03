@@ -6,6 +6,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
+from ai_arch_toolkit.core._images import ImageRequest
 from ai_arch_toolkit.core._response import Response
 
 logger = logging.getLogger(__name__)
@@ -13,13 +14,18 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Request:
-    """Snapshot of an LLM request, passed to middleware hooks."""
+    """Snapshot of an LLM request, passed to middleware hooks.
+
+    ``image`` is set on an image generation (``LLM.generate_image``): the prompt and the input
+    images are then the one user message, and ``kwargs`` stays empty.
+    """
 
     messages: list[dict[str, Any]]
     system: str | None
     tools: list[dict[str, Any]] | None
     model: str
     kwargs: dict[str, Any] = field(default_factory=dict)
+    image: ImageRequest | None = None
 
 
 @runtime_checkable

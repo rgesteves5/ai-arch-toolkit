@@ -31,12 +31,8 @@ from ai_arch_toolkit.core._exceptions import (
     TransportError,
 )
 from ai_arch_toolkit.core._providers._base import on_request
-from ai_arch_toolkit.core._providers._meta import (
-    DEFAULT_BASE_URL,
-    MetaProvider,
-    _input_items,
-    _parse_sdk_response,
-)
+from ai_arch_toolkit.core._providers._meta import DEFAULT_BASE_URL, MetaProvider, _input_items
+from ai_arch_toolkit.core._providers._responses import _parse_sdk_response
 from ai_arch_toolkit.core._response import OutputSchema, ThinkingBlock, ToolCall, Usage
 from ai_arch_toolkit.core._server_tools import code_execution, web_search
 from tests.provider_calls import assembled, complete, prepare, stream

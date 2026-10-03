@@ -20,6 +20,10 @@ __all__ = ["Estimator", "HeuristicEstimator"]
 
 _CHARS_PER_TOKEN = 4  # rough English-text ratio; deliberately conservative
 _NON_TEXT_TOKEN_ALLOWANCE = 4000  # worst-case tokens to reserve per image/document part
+# Worst-case image output tokens per generated image. A 4K image is 2,520 tokens on Gemini 3.1
+# Flash Image, a high-quality 1536x1024 one 6,240 on gpt-image-1; the largest GPT Image sizes
+# and qualities have no published count, hence the margin.
+_IMAGE_OUTPUT_TOKEN_ALLOWANCE = 16_000
 
 
 class Estimator(Protocol):
@@ -31,6 +35,9 @@ class Estimator(Protocol):
 @dataclass(frozen=True, slots=True)
 class HeuristicEstimator:
     """Worst-case reservation from ``content_size_hint`` + ``declared_max_output_tokens``.
+
+    An image generation also reserves, for each declared image, an allowance of image output
+    tokens and the model's per-image price.
 
     Returns ``None`` when the model is unpriced — the signal for a strict controller to fail
     closed (deny) rather than admit an uncosted call. Tools reserve their Pricer cost.
@@ -46,8 +53,14 @@ class HeuristicEstimator:
         input_tokens = math.ceil((request.content_size_hint or 0) / _CHARS_PER_TOKEN)
         input_tokens += request.non_text_parts * _NON_TEXT_TOKEN_ALLOWANCE
         output_tokens = request.declared_max_output_tokens or 0
-        usage = Usage(input_tokens=input_tokens, output_tokens=output_tokens)
-        return self._priced(request, usage, input_tokens, output_tokens)
+        image_tokens = request.declared_images * _IMAGE_OUTPUT_TOKEN_ALLOWANCE
+        usage = Usage(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            image_output_tokens=image_tokens,
+            image_count=request.declared_images,
+        )
+        return self._priced(request, usage, input_tokens, output_tokens + image_tokens)
 
     def _priced(
         self,

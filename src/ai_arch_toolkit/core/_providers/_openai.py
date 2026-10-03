@@ -12,27 +12,32 @@ What belongs to the Responses API (input items and the replay of ``_raw``, tools
 streams, failures) lives in ``_responses.py``. This module holds what is OpenAI's: the profile
 (model families, error codes, ``strict: false`` function tools, the hosted ``web_search``), each
 model's rules, the Chat Completions parameters the Responses API has no place for, token counting
-and the Batch API on ``/v1/responses``.
+the Batch API on ``/v1/responses``, and the GPT Image models' rules on the Images API
+(``_openai_images.py``).
 """
 
 from __future__ import annotations
 
+import dataclasses
 import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, cast, get_args
 
 from ai_arch_toolkit.core._exceptions import RequestError
+from ai_arch_toolkit.core._images import ImageRequest
 from ai_arch_toolkit.core._middleware import Request
 from ai_arch_toolkit.core._model_id import lookup
+from ai_arch_toolkit.core._pricing import _estimate_response_cost
 from ai_arch_toolkit.core._providers._base import Options, Prepared, parse_options
 from ai_arch_toolkit.core._providers._imports import require_sdk
-from ai_arch_toolkit.core._response import Response
+from ai_arch_toolkit.core._response import Response, Usage
 
 with require_sdk("openai"):
     import openai
     from openai.types.responses import Response as SDKResponse
     from openai.types.responses import ResponseIncludable, ResponseInputItemParam
+    from openai.types.responses.tool_param import ImageGeneration
     from openai.types.shared.reasoning_effort import ReasoningEffort
     from openai.types.shared_params import Reasoning
 
@@ -45,11 +50,19 @@ with require_sdk("openai"):
         chat_batch_response,
         submit_batch,
     )
+    from ai_arch_toolkit.core._providers._openai_images import (
+        ImageModel,
+        ImagesCall,
+        image_size,
+        images_call,
+    )
     from ai_arch_toolkit.core._providers._responses import (
+        Call,
+        Final,
         Params,
         ResponsesProfile,
         ResponsesProvider,
-        _parse_sdk_response,
+        _extract_usage,
         http_client,
         input_items,
         request_params,
@@ -177,11 +190,60 @@ _GENERATIONS = (
     "gpt-5",
 )
 
+# The GPT Image models, on the Images API (https://developers.openai.com/api/reference/resources/
+# images). gpt-image-2 and later take any size within limits, the earlier ones three fixed sizes
+# (live, I01 check 5); "xhigh" and "max" only the 2.5 models. A dated snapshot takes its model's
+# rules, and an unlisted gpt-image- id the newest ones.
+_GPT_IMAGE_QUALITIES = frozenset({"low", "medium", "high", "auto"})
+_GPT_IMAGE_2_5 = ImageModel(size="free", qualities=_GPT_IMAGE_QUALITIES | {"xhigh", "max"})
+_IMAGE_MODELS: dict[str, ImageModel] = {
+    **dict.fromkeys(("gpt-image-2.5-sunburst", "gpt-image-2.5-flare"), _GPT_IMAGE_2_5),
+    "gpt-image-2": ImageModel(size="free", qualities=_GPT_IMAGE_QUALITIES),
+    **dict.fromkeys(
+        ("gpt-image-1.5", "chatgpt-image-latest", "gpt-image-1", "gpt-image-1-mini"),
+        ImageModel(size="fixed", qualities=_GPT_IMAGE_QUALITIES),
+    ),
+}
+_IMAGE_FAMILIES = {"gpt-image-": _GPT_IMAGE_2_5}
+
 # The statuses of the codes a failure inside a response or a stream carries (ResponseError.code
 # in the SDK): the two the error guide names, "429 Rate limit reached" and "500 Server error"
 # (https://developers.openai.com/api/docs/guides/error-codes). The others (an invalid prompt or
 # image, a policy) are documented with no status, and stay a ResponseError.
 _CODE_STATUS: dict[str, int] = {"rate_limit_exceeded": 429, "server_error": 500}
+
+
+def _image_rules(model: str) -> ImageModel | None:
+    found = lookup(model, _IMAGE_MODELS, _IMAGE_FAMILIES)
+    return found.value if found is not None else None
+
+
+def _image_tool(config: Mapping[str, Any]) -> ImageGeneration:
+    """The hosted image generation tool for ``image_generation()``'s config, checked against its
+    image model's rules (https://developers.openai.com/api/docs/guides/tools-image-generation)."""
+    model = str(config.get("model", ""))
+    rules = _image_rules(model)
+    if rules is None:
+        raise RequestError(f"image_generation: {model!r} is not a GPT Image model")
+    options = ImageRequest(
+        aspect_ratio=config.get("aspect_ratio"),
+        resolution=config.get("resolution"),
+        quality=config.get("quality"),
+        output_format=config.get("output_format"),
+    )
+    if options.quality is not None and options.quality not in rules.qualities:
+        raise RequestError(f"image_generation: {model} takes quality in {sorted(rules.qualities)}")
+    tool: ImageGeneration = {"type": "image_generation", "model": model}
+    if (size := image_size(options, rules.size)) is not None:
+        tool["size"] = size
+    if options.quality is not None:
+        tool["quality"] = cast("Any", options.quality)
+    if options.output_format is not None:
+        tool["output_format"] = options.output_format
+    if (partial := config.get("partial_images")) is not None:
+        tool["partial_images"] = int(partial)
+    return tool
+
 
 _PROFILE = ResponsesProfile(
     provider="OpenAI",
@@ -196,7 +258,37 @@ _PROFILE = ResponsesProfile(
     output_strict=True,
     hosted_tools={"web_search": {"type": "web_search"}},  # D44; a config belongs to C05
     codes=_CODE_STATUS,
+    image_tool=_image_tool,
+    image_replay="input",
 )
+
+
+def _hosted_image(final: SDKResponse) -> tuple[str, Usage] | None:
+    """The image model and the usage of the hosted image tool, when the turn drew.
+
+    OpenAI reports the tool's tokens in a top-level ``tool_usage.image_gen``, with the Images
+    API's usage shape, apart from the turn's ``usage`` (live, I01 check 2); the SDK does not type
+    it. The image model is the one the request's tool named, echoed in ``tools``.
+    """
+    reported = (final.model_extra or {}).get("tool_usage")
+    image_gen = reported.get("image_gen") if isinstance(reported, dict) else None
+    if not isinstance(image_gen, dict) or not image_gen.get("output_tokens"):
+        return None
+    model = next(
+        (tool.model for tool in final.tools if tool.type == "image_generation" and tool.model),
+        None,
+    )
+    if model is None:
+        return None
+    inputs = image_gen.get("input_tokens_details") or {}
+    outputs = image_gen.get("output_tokens_details") or {}
+    usage = Usage(
+        input_tokens=int(inputs.get("text_tokens", image_gen.get("input_tokens", 0))),
+        image_input_tokens=int(inputs.get("image_tokens", 0)),
+        output_tokens=int(outputs.get("text_tokens", 0)),
+        image_output_tokens=int(outputs.get("image_tokens", image_gen.get("output_tokens", 0))),
+    )
+    return model, usage
 
 
 def _refuse_chat_completions_only(kwargs: Mapping[str, object]) -> None:
@@ -256,6 +348,9 @@ class OpenAIProvider(ResponsesProvider):
         found = lookup(self._model, _MODELS)
         return found.value if found is not None else _CURRENT
 
+    def _image_rules(self) -> ImageModel | None:
+        return _image_rules(self._model)
+
     def _input_items(self, messages: list[dict[str, Any]]) -> list[ResponseInputItemParam]:
         """Responses input items, replaying the reasoning of this model's family only."""
         return input_items(messages, self._profile, self._profile.family(self._model))
@@ -265,6 +360,8 @@ class OpenAIProvider(ResponsesProvider):
     # ------------------------------------------------------------------
 
     def prepare(self, request: Request) -> Prepared[Params]:
+        if self._image_rules() is not None:
+            raise RequestError(f"{self._model} is an image model: call generate_image()")
         _refuse_chat_completions_only(request.kwargs)
         options = parse_options(request.kwargs, _FORWARDED, "OpenAI")
         model = self._rules()
@@ -281,6 +378,40 @@ class OpenAIProvider(ResponsesProvider):
             params["reasoning"] = reasoning
         _sampling(params, options, model, reasoning.get("effort"))
         return Prepared(params, output_schema=options.output_schema)
+
+    def usage(self, final: Final) -> Usage | None:
+        """The turn's usage, the hosted tool's image tokens included (they count against the
+        token caps; their price is the image model's, in ``provider_cost``)."""
+        usage = super().usage(final)
+        drawn = _hosted_image(final) if isinstance(final, SDKResponse) else None
+        if usage is None or drawn is None:
+            return usage
+        return usage + dataclasses.replace(drawn[1], image_count=0)
+
+    def assemble(self, final: Final, prepared: Call) -> Response:
+        """The response; a turn that drew with the hosted tool gets its whole cost, the image
+        priced at its image model's rates, which the turn's own model cannot price."""
+        response = super().assemble(final, prepared)
+        if not isinstance(final, SDKResponse) or final.usage is None:
+            return response
+        drawn = _hosted_image(final)
+        if drawn is None:
+            return response
+        turn = _estimate_response_cost(self._model, _extract_usage(final.usage))
+        image = _estimate_response_cost(*drawn)
+        if turn is None or image is None:
+            return response
+        return dataclasses.replace(response, provider_cost=turn + image)
+
+    def prepare_image(self, request: Request) -> ImagesCall:
+        """An image generation on the Images API: an edit when it has input images."""
+        rules = self._image_rules()
+        if rules is None:
+            raise RequestError(
+                f"{self._model} is not an image model; generate_image takes one such as "
+                "gpt-image-2.5-flare"
+            )
+        return images_call(self._model, request, rules)
 
     def _reasoning(self, options: Options, model: _Model) -> Reasoning:
         """The effort and the summary a request asks for.
@@ -308,9 +439,6 @@ class OpenAIProvider(ResponsesProvider):
         if options.thinking and effort != "none":
             reasoning["summary"] = "auto"
         return reasoning
-
-    def assemble(self, final: SDKResponse, prepared: Prepared[Params]) -> Response:
-        return _parse_sdk_response(final, self._model, output_schema=prepared.output_schema)
 
     async def count_tokens(
         self,

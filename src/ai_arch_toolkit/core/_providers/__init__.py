@@ -21,6 +21,7 @@ _MODEL_PREFIXES: dict[str, str] = {
     "claude-": "anthropic",
     "gpt-": "openai",
     "chat-": "openai",
+    "chatgpt-image-": "openai",  # chatgpt-image-latest, a GPT Image model (D46)
     "o1-": "openai",
     "o3-": "openai",
     "o4-": "openai",
@@ -29,6 +30,7 @@ _MODEL_PREFIXES: dict[str, str] = {
     # Only the hosted Muse Spark family: self-hosted Muse Glimmer runs on local OpenAI-compatible
     # servers and must keep reaching the base_url fallback.
     "muse-spark-": "meta",
+    "muse-image-": "meta",  # Meta's image model, on its Images API (D46)
 }
 
 _MODEL_IDS: dict[str, str] = {

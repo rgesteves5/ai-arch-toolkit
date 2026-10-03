@@ -329,6 +329,25 @@ class TestXai:
     def test_a_request_that_is_not_the_sdks_chat_is_caught(self) -> None:
         _only(violations("XAIProvider", {"model": "grok-4.3"}), "not an xai_sdk Chat")
 
+    def test_an_image_ratio_the_sdk_does_not_convert_is_caught(self) -> None:
+        image = {"prompt": "a", "model": "grok-imagine-image", "aspect_ratio": "21:9"}
+        _only(violations("XAIProvider", image), "image request")
+
+
+class TestImages:
+    """An image generation on the Images API (OpenAI's host and Meta)."""
+
+    def test_a_generation_with_a_key_the_api_lacks_is_caught(self) -> None:
+        _only(violations("OpenAIProvider", {"model": "m", "prompt": "a", "style": 1}), "style")
+
+    def test_an_edit_whose_files_are_not_name_bytes_type_is_caught(self) -> None:
+        edit = {"model": "m", "prompt": "a", "image": ["https://example.com/a.png"]}
+        _only(violations("MetaProvider", edit), "image | not a list of")
+
+    def test_a_conforming_edit_passes(self) -> None:
+        edit = {"model": "m", "prompt": "a", "image": [("image-0", b"x", "image/png")]}
+        assert violations("OpenAIProvider", edit) == []
+
 
 # ---------------------------------------------------------------------------
 # The fixture

@@ -25,7 +25,11 @@ type PriceMatch = Literal["exact", "prefix"]
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ModelPricing:
-    """USD per 1M tokens."""
+    """USD per 1M tokens; ``per_image`` and ``batch_per_image`` in USD per image.
+
+    An image model's image tokens take ``image_input``/``image_output`` (each falls back to the
+    text rate when left out); a provider that bills per image instead sets ``per_image``.
+    """
 
     input: float = 0.0
     output: float = 0.0
@@ -55,6 +59,13 @@ class ModelPricing:
     fast_long_context_output: float | None = None
     fast_long_context_cache_write: float | None = None
     fast_long_context_cache_read: float | None = None
+    # Image models
+    image_input: float | None = None
+    image_output: float | None = None
+    batch_image_input: float | None = None
+    batch_image_output: float | None = None
+    per_image: float | None = None
+    batch_per_image: float | None = None
 
 
 _PRICE_FIELDS = frozenset(field.name for field in fields(ModelPricing))
@@ -153,11 +164,15 @@ class PricingRegistry:
         *,
         is_batch: bool = False,
         is_fast: bool = False,
+        image_input_tokens: int = 0,
+        image_output_tokens: int = 0,
+        image_count: int = 0,
     ) -> float | None:
         """Estimate cost in USD.
 
         Priority: ``is_fast`` > ``is_batch`` > standard. Long-context variants
         combine with the selected mode when the corresponding rates are configured.
+        Image tokens and images are priced apart (see :meth:`_image_cost`).
 
         Returns:
             Cost in USD, or ``None`` if no pricing data exists for the model.
@@ -165,6 +180,9 @@ class PricingRegistry:
         p = self.get(model)
         if p is None:
             return None
+        images = self._image_cost(
+            p, image_input_tokens, image_output_tokens, image_count, is_batch=is_batch
+        )
 
         per_m = 1_000_000
         total_input = input_tokens + cache_write_tokens + cache_read_tokens
@@ -232,7 +250,7 @@ class PricingRegistry:
         assert inp is not None
         assert out is not None
 
-        total = inp * input_tokens / per_m + out * output_tokens / per_m
+        total = inp * input_tokens / per_m + out * output_tokens / per_m + images
 
         if cache_write_tokens > 0 and cache_write is not None:
             total += cache_write * cache_write_tokens / per_m
@@ -240,6 +258,36 @@ class PricingRegistry:
             total += cache_read * cache_read_tokens / per_m
 
         return total
+
+    @staticmethod
+    def _image_cost(
+        p: ModelPricing,
+        input_tokens: int,
+        output_tokens: int,
+        count: int,
+        *,
+        is_batch: bool,
+    ) -> float:
+        """USD for an image model's image tokens and images, at the batch rates for a batch.
+
+        An image rate left out falls back to the text rate of the same mode; a ``per_image``
+        left out is zero.
+        """
+        per_m = 1_000_000
+        batch = is_batch and p.batch_input is not None
+        if batch:
+            inp = _first_rate(p.batch_image_input, p.image_input, p.batch_input, p.input)
+            out = _first_rate(p.batch_image_output, p.image_output, p.batch_output, p.output)
+            each = _first_rate(p.batch_per_image, p.per_image)
+        else:
+            inp = _first_rate(p.image_input, p.input)
+            out = _first_rate(p.image_output, p.output)
+            each = p.per_image
+        return (
+            (inp or 0.0) * input_tokens / per_m
+            + (out or 0.0) * output_tokens / per_m
+            + (each or 0.0) * count
+        )
 
     def price(self, request: OperationRequest, usage: Usage) -> Cost:
         """Turn an operation's facts + observed usage into a typed :class:`Cost`.
@@ -262,6 +310,9 @@ class PricingRegistry:
             output_tokens=usage.output_tokens,
             cache_write_tokens=usage.cache_write_tokens,
             cache_read_tokens=usage.cache_read_tokens,
+            image_input_tokens=usage.image_input_tokens,
+            image_output_tokens=usage.image_output_tokens,
+            image_count=usage.image_count,
         )
         if usd is None:
             return Cost.unknown(f"no pricing for model {model!r}")
@@ -310,6 +361,9 @@ def _estimate_response_cost(model: str, usage: Any, *, is_batch: bool = False) -
         cache_write_tokens=getattr(usage, "cache_write_tokens", 0),
         cache_read_tokens=getattr(usage, "cache_read_tokens", 0),
         is_batch=is_batch,
+        image_input_tokens=getattr(usage, "image_input_tokens", 0),
+        image_output_tokens=getattr(usage, "image_output_tokens", 0),
+        image_count=getattr(usage, "image_count", 0),
     )
 
 
@@ -322,6 +376,9 @@ def estimate_cost(
     *,
     is_batch: bool = False,
     is_fast: bool = False,
+    image_input_tokens: int = 0,
+    image_output_tokens: int = 0,
+    image_count: int = 0,
 ) -> float | None:
     """Convenience wrapper around the global pricing registry."""
     return pricing.estimate_cost(
@@ -332,4 +389,7 @@ def estimate_cost(
         cache_read_tokens,
         is_batch=is_batch,
         is_fast=is_fast,
+        image_input_tokens=image_input_tokens,
+        image_output_tokens=image_output_tokens,
+        image_count=image_count,
     )
