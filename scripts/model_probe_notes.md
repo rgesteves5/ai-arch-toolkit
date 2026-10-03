@@ -111,3 +111,52 @@ Keep entries factual: model ID, scenario, observed error, and the local action t
 - Chat Completions refuses tools with reasoning on `gpt-6.1-sol` (at its default effort and at
   `none`) and on Luna at `low`: "use /v1/responses or set reasoning_effort to 'none'".
 - Responses messages carry `phase: "final_answer"`; function_call items carry no other fields.
+
+## 2026-10-03
+
+- Front I probe, `scripts/probe_images.py` (reports `images-20261003T031041Z` and
+  `images-20261003T031426Z`; about $0.25 by the usage, worst cases charged $1.47 + $0.38). Every
+  image at `low` and 1024 px or the provider's default.
+- OpenAI Images API:
+  - `usage` comes back on `gpt-image-2.5-flare`, `gpt-image-2.5-sunburst`, `gpt-image-2` and
+    `gpt-image-1-mini`, with text and image tokens on both sides. The reference's "for
+    gpt-image-1 only" is out of date.
+  - A `low` 1024x1024 image is 196 output image tokens on the 2.5 models and on `gpt-image-2`,
+    and 272 on `gpt-image-1-mini`. A `low` 1536x864 is 120. With `n=2` the usage is the sum (391).
+  - An edit counts the input image as 1,024 image input tokens.
+  - `gpt-image-2.5-flare` takes an arbitrary size (1536x864 comes back as such), `n=2` and
+    `output_format="webp"`.
+  - `gpt-image-1.5` refuses 1536x864: "Supported sizes are 1024x1024, 1024x1536, 1536x1024, and
+    auto."
+  - Streamed with `partial_images=2`: one `image_generation.partial_image` event, then
+    `image_generation.completed` with the usage (273 output tokens against 196 unstreamed).
+- OpenAI Responses `image_generation` tool, on `gpt-5-nano` with `gpt-image-2.5-flare`:
+  - `Response.usage` holds only the mainline model's tokens.
+  - The image's tokens come in a top-level `tool_usage.image_gen`, with the Images API's usage
+    shape (21 text input, 196 image output). The SDK 3.19.2 does not type it; it lives in
+    `model_extra`.
+  - Output: `reasoning`, `image_generation_call` (with `revised_prompt`, `action`, `size`,
+    `quality`, `output_format`, `background`), `message`.
+  - Streamed with `partial_images=2`: one `response.image_generation_call.partial_image`.
+  - **A stateless edit cannot replay the `image_generation_call`.** With the `result` or with
+    `result: null`, the API answers 404: "Items are not persisted when `store` is set to false.
+    Try again with `store` set to true, or remove this item from your input." With the item left
+    out and the image sent back as an `input_image` in the next user message, the model edits it
+    (`action: "edit"`, 1,024 image input tokens in `tool_usage`).
+- Gemini: not answered. The key is on the free tier, where the image models have a quota of 0
+  (429, `generate_content_free_tier_requests, limit: 0`). Billing has to be enabled on the
+  project first. Seen without a request: google-genai 2.25.0 refuses
+  `image_config.output_mime_type` in Developer API mode ("only supported in Gemini Enterprise
+  Agent Platform mode").
+- xAI: not answered. The account has no credits (`PERMISSION_DENIED`, "used all available
+  credits").
+- Meta, `muse-image-1.0`:
+  - Responses output: `reasoning`, `message`, `image_generation_call` (a 359-character signed
+    id). WebP by default.
+  - The usage comes in tokens: about 10,000 input, of which about 8,000 are cached, and 600 to
+    950 output. The pricing page says a flat $0.01 per image.
+  - `size` sets only the aspect ratio. 1024x1024 gives 1600x1600, 1024x1792 gives 1152x2016, and
+    the default and 1536x1024 give 1920x1280. This holds on the tool and on
+    `/v1/images/generations`.
+  - A stateless second turn replaying the call with `result: null` works.
+  - `/v1/images/generations` returns `b64_json`, with the usage in tokens.
