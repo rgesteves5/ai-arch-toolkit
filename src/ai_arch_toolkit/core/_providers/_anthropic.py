@@ -19,6 +19,7 @@ from ai_arch_toolkit.core._exceptions import (
 )
 from ai_arch_toolkit.core._middleware import Request
 from ai_arch_toolkit.core._model_id import lookup
+from ai_arch_toolkit.core._providers import OWN_BASE_URLS
 from ai_arch_toolkit.core._providers._base import (
     DEFAULT_THINKING_BUDGET,
     THINKING_EFFORT_BUDGETS,
@@ -509,9 +510,12 @@ class AnthropicProvider(LoopAwareClientCache, BaseProvider[Prepared[Params], Mes
         self._model = model
         # Retry ownership belongs to LLM(RetryConfig(...)): hidden SDK retries
         # would be neither metered nor represented in Response.attempts.
-        client_kwargs: dict[str, Any] = {"api_key": api_key, "max_retries": 0}
-        if base_url:
-            client_kwargs["base_url"] = base_url
+        # The endpoint is always given: left out, the SDK reads ANTHROPIC_BASE_URL (D48).
+        client_kwargs: dict[str, Any] = {
+            "api_key": api_key,
+            "base_url": base_url or OWN_BASE_URLS["anthropic"],
+            "max_retries": 0,
+        }
         if timeout is not None:
             client_kwargs["timeout"] = timeout
         self._install_client(

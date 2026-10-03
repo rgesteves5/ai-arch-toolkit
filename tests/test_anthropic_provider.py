@@ -500,6 +500,8 @@ class TestAnthropicProviderComplete:
         provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
         mock_sdk.AsyncAnthropic.assert_called_once_with(
             api_key="test-key",
+            # Given explicitly: left out, the SDK would read ANTHROPIC_BASE_URL (D48).
+            base_url="https://api.anthropic.com",
             max_retries=0,
             http_client=mock_sdk.DefaultAsyncHttpxClient.return_value,
         )

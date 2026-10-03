@@ -15,6 +15,7 @@ from ai_arch_toolkit.core._content import CachePart, DocumentPart, ImagePart
 from ai_arch_toolkit.core._exceptions import APIError, ProviderError, RateLimitError, RequestError
 from ai_arch_toolkit.core._middleware import Request
 from ai_arch_toolkit.core._model_id import lookup
+from ai_arch_toolkit.core._providers import OWN_BASE_URLS
 from ai_arch_toolkit.core._providers._base import (
     DEFAULT_THINKING_BUDGET,
     THINKING_EFFORT_BUDGETS,
@@ -464,9 +465,11 @@ def _http_options(timeout: float | None) -> types.HttpOptions:
 
     Given a transport, the SDK sends through ``httpx`` instead of ``aiohttp``, whose path re-sends
     a request after a connection error outside any retry option; the event hook marks a request
-    as handed to the transport. The SDK builds and closes the client.
+    as handed to the transport. The SDK builds and closes the client. The endpoint is always
+    given: left out, the SDK reads ``GOOGLE_GEMINI_BASE_URL`` from the environment (D48).
     """
     return types.HttpOptions(
+        base_url=OWN_BASE_URLS["gemini"],
         retry_options=types.HttpRetryOptions(attempts=1),
         timeout=None if timeout is None else int(timeout * 1000),
         async_client_args={
@@ -495,7 +498,10 @@ class GeminiProvider(
     ) -> None:
         self._model = model
         self._install_client(
-            lambda: genai.Client(api_key=api_key, http_options=_http_options(timeout))
+            # The Gemini Developer API, whatever GOOGLE_GENAI_USE_VERTEXAI says (D48).
+            lambda: genai.Client(
+                api_key=api_key, vertexai=False, http_options=_http_options(timeout)
+            )
         )
 
     async def close(self) -> None:

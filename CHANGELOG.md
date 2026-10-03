@@ -528,6 +528,17 @@ flows, manifests) needs these changes; each one is detailed below.
   - `select` or `serialize_as` on an inline template (they were ignored).
 
 ### Fixed
+- **Security: no endpoint is read from the environment** (D48). Without `base_url`, the OpenAI,
+  Anthropic and Gemini SDKs read `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL` or
+  `GOOGLE_GEMINI_BASE_URL`, and the toolkit sent its environment key to whatever host that
+  variable named. Every adapter, and the `OpenAIModerator`, now passes its provider's own API to
+  the SDK. The Gemini adapter stays on the Gemini Developer API even when
+  `GOOGLE_GENAI_USE_VERTEXAI` is set. An OpenAI-compatible server no longer gets the
+  `OpenAI-Organization`/`OpenAI-Project` headers the SDK reads from `OPENAI_ORG_ID` and
+  `OPENAI_PROJECT_ID`. **Migration:** to reach a gateway or a proxy, pass `base_url=`, with
+  `api_key=` unless it is on loopback.
+- **Security: the `Redactor` masks xAI (`xai-…`), Groq (`gsk_…`) and Google (`AIza…`) keys**,
+  which went through whole: only `sk-…` keys were recognized.
 - **A request with images no longer reserves its bytes as text under a strict budget.** The
   request size counted an image part's bytes (or base64) as characters and the part itself as no
   media: a 1 MB image reserved about 735,000 input tokens. Images and documents now count as

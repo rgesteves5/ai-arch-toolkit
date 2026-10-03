@@ -112,6 +112,11 @@ def _redact_text(text: str, replacement: str) -> str:
         ),
         (re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]+"), f"Bearer {replacement}"),
         (re.compile(r"\bsk-[A-Za-z0-9_-]{10,}\b"), replacement),
+        # Provider keys by their prefix: xAI (xai-), Groq (gsk_) and Google (AIza and 35 more
+        # characters). The end is a lookahead: a Google key may end in "-", where \b never holds.
+        (re.compile(r"\bxai-[A-Za-z0-9]{20,}(?![A-Za-z0-9])"), replacement),
+        (re.compile(r"\bgsk_[A-Za-z0-9]{20,}(?![A-Za-z0-9])"), replacement),
+        (re.compile(r"\bAIza[0-9A-Za-z_-]{35}(?![0-9A-Za-z_-])"), replacement),
         (
             re.compile(r"\b(?:postgresql|postgres|mysql|mongodb|redis)://[^\s'\"<>]+"),
             replacement,

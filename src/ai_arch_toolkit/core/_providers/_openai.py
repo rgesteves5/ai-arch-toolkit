@@ -29,6 +29,7 @@ from ai_arch_toolkit.core._images import ImageRequest
 from ai_arch_toolkit.core._middleware import Request
 from ai_arch_toolkit.core._model_id import lookup
 from ai_arch_toolkit.core._pricing import _estimate_response_cost
+from ai_arch_toolkit.core._providers import OWN_BASE_URLS
 from ai_arch_toolkit.core._providers._base import Options, Prepared, parse_options
 from ai_arch_toolkit.core._providers._imports import require_sdk
 from ai_arch_toolkit.core._response import Response, Usage
@@ -333,9 +334,12 @@ class OpenAIProvider(ResponsesProvider):
     ) -> None:
         # Retry ownership belongs to LLM(RetryConfig(...)): hidden SDK retries
         # would be neither metered nor represented in Response.attempts.
-        client_kwargs: dict[str, Any] = {"api_key": api_key, "max_retries": 0}
-        if base_url:
-            client_kwargs["base_url"] = base_url
+        # The endpoint is always given: left out, the SDK reads OPENAI_BASE_URL (D48).
+        client_kwargs: dict[str, Any] = {
+            "api_key": api_key,
+            "base_url": base_url or OWN_BASE_URLS["openai"],
+            "max_retries": 0,
+        }
         if timeout is not None:
             client_kwargs["timeout"] = timeout
         super().__init__(

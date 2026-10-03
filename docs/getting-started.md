@@ -153,6 +153,12 @@ it by accident:
 llm = LLM("llama-3.3-70b", base_url="https://api.together.xyz/v1", api_key=together_key)
 ```
 
+No endpoint is read from the environment. Without `base_url`, each adapter sends to its
+provider's own API, whatever `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL` or
+`GOOGLE_GEMINI_BASE_URL` say, so an environment key never follows a variable to another host. The
+Gemini adapter stays on the Gemini Developer API even when `GOOGLE_GENAI_USE_VERTEXAI` is set. To
+reach a gateway, pass its `base_url=`, with `api_key=` unless it is on loopback.
+
 These servers get Chat Completions, with none of OpenAI's model rules; OpenAI's
 own host (no `base_url`, or `api.openai.com`) goes through the Responses API.
 Reasoning deltas from these servers (`reasoning_content` / `reasoning`) surface

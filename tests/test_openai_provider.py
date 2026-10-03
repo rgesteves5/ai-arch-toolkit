@@ -842,7 +842,8 @@ class TestClient:
 
         kwargs = client_cls.call_args.kwargs
         assert (kwargs["api_key"], kwargs["max_retries"]) == ("test-key", 0)
-        assert "base_url" not in kwargs  # the SDK's own: https://api.openai.com/v1
+        # Given explicitly: left out, the SDK would read OPENAI_BASE_URL (D48).
+        assert kwargs["base_url"] == "https://api.openai.com/v1"
         # The HTTP client marks the moment a request is handed to the transport.
         assert kwargs["http_client"].event_hooks["request"] == [on_request]
 

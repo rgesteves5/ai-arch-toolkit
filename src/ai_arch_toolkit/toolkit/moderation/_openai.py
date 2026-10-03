@@ -6,6 +6,7 @@ from typing import Any
 
 from ai_arch_toolkit.core._exceptions import APIError, RateLimitError
 from ai_arch_toolkit.core._moderation import ModerationResult
+from ai_arch_toolkit.core._providers import OWN_BASE_URLS
 from ai_arch_toolkit.core._providers._imports import require_sdk
 from ai_arch_toolkit.core._sync import _run_sync
 
@@ -36,7 +37,9 @@ class OpenAIModerator:
         api_key: str | None = None,
         model: str = "omni-moderation-latest",
     ) -> None:
-        self._client = openai.AsyncOpenAI(api_key=api_key)
+        # The endpoint is always given: left out, the SDK reads OPENAI_BASE_URL and would send
+        # the key there (D48).
+        self._client = openai.AsyncOpenAI(api_key=api_key, base_url=OWN_BASE_URLS["openai"])
         self._model = model
 
     async def moderate(self, text: str) -> ModerationResult:

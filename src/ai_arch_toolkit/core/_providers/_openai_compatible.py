@@ -432,7 +432,16 @@ class OpenAICompatibleProvider(
         }
         if timeout is not None:
             client_kwargs["timeout"] = timeout
-        self._install_client(lambda: openai.AsyncOpenAI(**client_kwargs, http_client=_http()))
+
+        def _new_client() -> openai.AsyncOpenAI:
+            client = openai.AsyncOpenAI(**client_kwargs, http_client=_http())
+            # The SDK reads OPENAI_ORG_ID / OPENAI_PROJECT_ID from the environment and sends them
+            # as headers; they identify an OpenAI account and must not reach another host (D48).
+            client.organization = None
+            client.project = None
+            return client
+
+        self._install_client(_new_client)
 
     async def close(self) -> None:
         await self._client.close()

@@ -30,8 +30,9 @@ from ai_arch_toolkit.core._exceptions import (
     ResponseError,
     TransportError,
 )
+from ai_arch_toolkit.core._providers import OWN_BASE_URLS
 from ai_arch_toolkit.core._providers._base import on_request
-from ai_arch_toolkit.core._providers._meta import DEFAULT_BASE_URL, MetaProvider, _input_items
+from ai_arch_toolkit.core._providers._meta import MetaProvider, _input_items
 from ai_arch_toolkit.core._providers._responses import _parse_sdk_response
 from ai_arch_toolkit.core._response import OutputSchema, ThinkingBlock, ToolCall, Usage
 from ai_arch_toolkit.core._server_tools import code_execution, web_search
@@ -39,6 +40,7 @@ from tests.provider_calls import assembled, complete, prepare, stream
 from tests.sdk_streams import OpenAIStream
 
 MODEL = "muse-spark-1.3"
+DEFAULT_BASE_URL = OWN_BASE_URLS["meta"]
 USER = {"role": "user", "content": "What is the weather in Lisbon?"}
 WEATHER_TOOL = {
     "name": "get_weather",

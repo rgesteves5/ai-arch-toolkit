@@ -48,12 +48,21 @@ _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
 # Local OpenAI-compatible servers (Ollama, LM Studio, vLLM) ignore Authorization.
 _PLACEHOLDER_KEY = "not-needed"
 
+# Each provider's own API: where a request goes when no base_url is given, passed to the SDK
+# explicitly. Left out, the SDKs read the endpoint from the environment (OPENAI_BASE_URL,
+# ANTHROPIC_BASE_URL, GOOGLE_GEMINI_BASE_URL) and would send the key there (D48). xAI's SDK
+# connects to its own fixed host.
+OWN_BASE_URLS: dict[str, str] = {
+    "anthropic": "https://api.anthropic.com",
+    "openai": "https://api.openai.com/v1",
+    "gemini": "https://generativelanguage.googleapis.com/",
+    "meta": "https://api.meta.ai/v1",
+}
+
 # The only hosts a key read from the environment is sent to. Any other remote base_url (a gateway,
 # a proxy, another vendor's OpenAI-compatible server) must be given its key with api_key=.
 _OWN_HOSTS: dict[str, str] = {
-    "anthropic": "api.anthropic.com",
-    "openai": "api.openai.com",
-    "meta": "api.meta.ai",
+    name: host for name, url in OWN_BASE_URLS.items() if (host := urlsplit(url).hostname)
 }
 
 
@@ -199,7 +208,9 @@ def create_provider(
     with no OpenAI model rule. The API key is required
     unless ``base_url`` points at a loopback host (localhost), where local servers
     ignore it. A key from the environment only goes to the provider's own API
-    host; a remote ``base_url`` elsewhere needs ``api_key=``.
+    host; a remote ``base_url`` elsewhere needs ``api_key=``. No endpoint is read
+    from the environment: without ``base_url``, every adapter sends to its
+    provider's own API (D48).
 
     Args:
         provider: Force a specific provider, bypassing prefix detection.

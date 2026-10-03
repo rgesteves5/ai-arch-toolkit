@@ -20,6 +20,7 @@ from typing import Any, cast
 from ai_arch_toolkit.core._exceptions import RequestError
 from ai_arch_toolkit.core._middleware import Request
 from ai_arch_toolkit.core._model_id import lookup
+from ai_arch_toolkit.core._providers import OWN_BASE_URLS
 from ai_arch_toolkit.core._providers._base import Options, Prepared, parse_options
 from ai_arch_toolkit.core._providers._imports import require_sdk
 
@@ -38,8 +39,6 @@ with require_sdk("meta"):
         input_items,
         request_params,
     )
-
-DEFAULT_BASE_URL = "https://api.meta.ai/v1"
 
 # Parameters forwarded to ``responses.create()`` as given (``max_tokens`` is renamed).
 _FORWARDED = frozenset(
@@ -138,7 +137,7 @@ class MetaProvider(ResponsesProvider):
         # would be neither metered nor represented in Response.attempts.
         client_kwargs: dict[str, Any] = {
             "api_key": api_key,
-            "base_url": base_url or DEFAULT_BASE_URL,
+            "base_url": base_url or OWN_BASE_URLS["meta"],
             "max_retries": 0,
         }
         if timeout is not None:
