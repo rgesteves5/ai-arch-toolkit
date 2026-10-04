@@ -185,15 +185,6 @@ class RequestSizing(Protocol):
     def wants_request_size(self) -> bool: ...
 
 
-@runtime_checkable
-class FailureBoundController(Protocol):
-    """An optional controller capability: bound the cost of an indeterminate operation."""
-
-    def failure_bound(
-        self, request: OperationRequest, reservation: Reservation
-    ) -> Money | None: ...
-
-
 def limit_denial(
     snap: MeterSnapshot,
     limits: ResourceLimits | None,

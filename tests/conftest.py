@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import socket
 from collections.abc import Callable, Iterator
+from datetime import date
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 
+from ai_arch_toolkit.core import _pricing
 from ai_arch_toolkit.core._middleware import Request
 from ai_arch_toolkit.core._providers._base import Prepared
 from ai_arch_toolkit.toolkit.tools import _http
@@ -80,6 +82,18 @@ def _checked(
         return prepared
 
     return checked
+
+
+# The day prices are read for, fixed: a price may end on a date (D50), and the tests that assert
+# the table's promotional prices must not change verdict when a promotion ends. A test of the
+# switch patches ``_pricing._today`` itself.
+PRICE_DAY = date(2026, 10, 4)
+
+
+@pytest.fixture(autouse=True)
+def price_day(monkeypatch: pytest.MonkeyPatch) -> date:
+    monkeypatch.setattr(_pricing, "_today", lambda: PRICE_DAY)
+    return PRICE_DAY
 
 
 @pytest.fixture(autouse=True)

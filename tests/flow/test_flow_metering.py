@@ -132,7 +132,9 @@ async def test_iter_flow_abandonment_finalizes_the_scope():
 
     assert gen.meter_scope is not None
     snap = gen.meter_scope.snapshot()
-    assert snap.llm_calls == 1 and snap.unknown_cost_count == 1  # close() incompleted the op
+    # close() incompleted the op, bounded by its worst case (D49)
+    assert snap.llm_calls == 1
+    assert (snap.unknown_cost_count, snap.uncertain_cost_count) == (0, 1)
 
 
 async def test_policy_max_cost_trips_on_metered_spend():
@@ -269,7 +271,7 @@ async def test_stream_context_manager_error_does_not_settle_as_success():
             async for _chunk in s:
                 raise ValueError("mid-stream boom")
     snap = scope.snapshot()
-    assert snap.llm_calls == 1 and snap.unknown_cost_count == 1
+    assert snap.llm_calls == 1 and (snap.unknown_cost_count, snap.uncertain_cost_count) == (0, 1)
 
 
 async def test_stream_events_context_manager_error_does_not_settle_as_success():
@@ -282,7 +284,7 @@ async def test_stream_events_context_manager_error_does_not_settle_as_success():
             async for _ev in s:
                 raise ValueError("mid-stream boom")
     snap = scope.snapshot()
-    assert snap.llm_calls == 1 and snap.unknown_cost_count == 1
+    assert snap.llm_calls == 1 and (snap.unknown_cost_count, snap.uncertain_cost_count) == (0, 1)
 
 
 async def test_stream_clean_early_break_stays_incomplete_not_settled(caplog):
@@ -299,7 +301,7 @@ async def test_stream_clean_early_break_stays_incomplete_not_settled(caplog):
             async for _chunk in s:
                 break  # abandon after the first chunk, before the stream drains
     snap = scope.snapshot()
-    assert snap.llm_calls == 1 and snap.unknown_cost_count == 1
+    assert snap.llm_calls == 1 and (snap.unknown_cost_count, snap.uncertain_cost_count) == (0, 1)
     assert s.response is not None and s.response.text == "ok"  # partial kept, not discarded
     assert s.response.attempts[0].error_type == "StreamAbandoned"
     assert "keeping the first outcome" not in caplog.text  # no spurious re-terminal warning
@@ -314,7 +316,7 @@ async def test_stream_events_clean_early_break_stays_incomplete_not_settled():
             async for _ev in s:
                 break
     snap = scope.snapshot()
-    assert snap.llm_calls == 1 and snap.unknown_cost_count == 1
+    assert snap.llm_calls == 1 and (snap.unknown_cost_count, snap.uncertain_cost_count) == (0, 1)
 
 
 def test_sync_stream_clean_early_break_stays_incomplete_not_settled():
@@ -326,7 +328,7 @@ def test_sync_stream_clean_early_break_stays_incomplete_not_settled():
         for _chunk in s:
             break
     snap = scope.snapshot()
-    assert snap.llm_calls == 1 and snap.unknown_cost_count == 1
+    assert snap.llm_calls == 1 and (snap.unknown_cost_count, snap.uncertain_cost_count) == (0, 1)
 
 
 async def test_step_spans_are_reclaimed_not_leaked():

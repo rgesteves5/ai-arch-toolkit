@@ -28,7 +28,6 @@ from ai_arch_toolkit.core._exceptions import Delivery
 from ai_arch_toolkit.core._metering._admission import (
     AdmissionController,
     AdmissionDenied,
-    FailureBoundController,
     MeterSnapshot,
     Reservation,
     ResourceLimits,
@@ -151,17 +150,23 @@ def _abort(c: _Counters, op: _LiveOp) -> None:
         c.o_tool -= op.request.count
 
 
-def _fail_cost(op: _LiveOp, delivery: Delivery) -> Cost:
-    """Price a failure outside the store lock; foreign estimation must never break cleanup."""
+type FailureBound = Callable[[OperationRequest], Money | None]
+
+
+def _fail_cost(op: _LiveOp, delivery: Delivery, bound_of: FailureBound | None) -> Cost:
+    """Price a failure outside the store lock: uncertain, at most the operation's strict hold, or
+    else the worst case of its facts (D49). Foreign pricing must never break cleanup."""
     if delivery in ("not_sent", "unbilled") or op.request.kind == "tool":
         return _ZERO_COST
+    if op.reservation != Reservation():
+        return Cost.unknown("operation did not settle", at_most=op.reservation.cost)
     bound = None
-    if isinstance(op.controller, FailureBoundController):
+    if bound_of is not None:
         try:
             request = op.request
             if request.content_size_hint is None and op.failure_request is not None:
                 request = op.failure_request()
-            bound = op.controller.failure_bound(request, op.reservation)
+            bound = bound_of(request)
         except Exception:
             logger.exception("failure bound could not be estimated")
     return Cost.unknown("operation did not settle", at_most=bound)
@@ -198,8 +203,10 @@ class MeterStore:
         sinks: Sequence[UsageSink] = (),
         redactor: Redactor | None = None,
         sink_error_policy: str = "log",
+        failure_bound: FailureBound | None = None,
     ) -> None:
         self._lock = threading.Lock()
+        self._failure_bound = failure_bound
         self._clock = clock
         self._started_at = clock()
         self._sinks = tuple(sinks)
@@ -431,7 +438,11 @@ class MeterStore:
                 op = self._ops.get(op_id)
             if op is None:
                 return
-            cost = (reported or _fail_cost(op, delivery)) if op.started else _ZERO_COST
+            cost = (
+                (reported or _fail_cost(op, delivery, self._failure_bound))
+                if op.started
+                else _ZERO_COST
+            )
             with self._lock:
                 if self._ops.get(op_id) is not op:
                     continue

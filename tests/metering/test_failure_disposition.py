@@ -30,6 +30,15 @@ class FixedEstimate:
         return Reservation(cost=Money.from_usd(0.6))
 
 
+@dataclass(frozen=True, slots=True)
+class FixedPrice:
+    """Prices any operation at $0.6: a soft budget's failure is bounded by the worst case at the
+    run's prices (D49), a strict one's by its reservation (``FixedEstimate``)."""
+
+    def price(self, request: OperationRequest, usage: Usage) -> Cost:
+        return Cost.known(Money.from_usd(0.6))
+
+
 @pytest.mark.parametrize("delivery", ["not_sent", "unbilled"])
 def test_free_failure_preserves_started_count_and_allows_next_operation(delivery):
     scope = MeterScope(
@@ -55,7 +64,8 @@ def test_free_failure_preserves_started_count_and_allows_next_operation(delivery
 @pytest.mark.parametrize("reserve", ["none", "strict"])
 def test_uncertain_bound_is_retained_and_enforced_without_counting_as_spend(reserve):
     controller = BudgetController(BudgetPolicy(max_cost=1.0, reserve=reserve), FixedEstimate())
-    with MeterScope(RunConfig(controller=controller, retain_meter_events=True)) as scope:
+    config = RunConfig(controller=controller, pricer=FixedPrice(), retain_meter_events=True)
+    with MeterScope(config) as scope:
         request = OperationRequest(kind="llm", parent_span_id="run", model="priced")
         op = scope.open(request)
         op.mark_started()
@@ -80,15 +90,15 @@ def test_uncertain_bound_is_retained_and_enforced_without_counting_as_spend(rese
     assert scope.events()[0].cost.at_most == Money.from_usd(0.6)
 
 
-def test_failure_sizing_and_estimator_run_outside_store_lock():
-    class PeekingEstimator:
-        def estimate(self, request):
+def test_failure_sizing_and_pricing_run_outside_store_lock():
+    class PeekingPricer:
+        def price(self, request, usage):
             assert scope.snapshot().llm_calls == 1
             assert request.content_size_hint == 123
-            return Reservation(cost=Money.from_usd(0.1))
+            return Cost.known(Money.from_usd(0.1))
 
-    controller = BudgetController(BudgetPolicy(max_cost=1.0), PeekingEstimator())
-    with MeterScope(RunConfig(controller=controller)) as scope:
+    controller = BudgetController(BudgetPolicy(max_cost=1.0))
+    with MeterScope(RunConfig(controller=controller, pricer=PeekingPricer())) as scope:
 
         def sized():
             assert scope.snapshot().llm_calls == 1

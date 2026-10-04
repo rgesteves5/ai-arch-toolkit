@@ -186,10 +186,9 @@ def expectation(kind, path, recovery, mode):
     primary = 2 if succeeds and recovery in ("next", "step_retry", "retry") else 1
     primary -= int(kind == "request")
     backup = int(succeeds and recovery in ("fallback", "step_fallback"))
-    served = succeeds
-    if mode == "measure" and recovery == "step_retry" and kind not in ("429", "request"):
-        succeeds = False  # max_cost must fail closed on an unbounded measured failure.
-    return succeeds, primary, backup, served
+    # Every failure has a ceiling, metered with or without a budget (D49): a step's max_cost
+    # passes after a retry that succeeded.
+    return succeeds, primary, backup, succeeds
 
 
 @pytest.mark.parametrize(
@@ -226,10 +225,9 @@ async def test_failure_matrix(kind, mode, path, recovery):
         assert snap.llm_calls == sent
         assert snap.cost == (KNOWN if served else Money.zero())
         uncertain = kind not in ("429", "request")
-        bounded = uncertain and mode in ("soft", "strict")
-        assert snap.unknown_cost_count == int(uncertain and not bounded)
-        assert snap.uncertain_cost_count == int(bounded)
-        assert snap.uncertain_cost == (BOUND if bounded else Money.zero())
+        assert snap.unknown_cost_count == 0
+        assert snap.uncertain_cost_count == int(uncertain)
+        assert snap.uncertain_cost == (BOUND if uncertain else Money.zero())
         assert not scope.has_live_ops(scope.run_span_id)
         # The next operation's admission remains usable, including after an uncertain failure.
         assert await invoke(backup, path) == "ok"

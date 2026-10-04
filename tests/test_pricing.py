@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from ai_arch_toolkit.core import ModelPricing, PricingRegistry, pricing
+from ai_arch_toolkit.core import ModelPricing, PricingRegistry, _pricing, pricing
 from ai_arch_toolkit.core._pricing import estimate_cost
 
 
@@ -1054,3 +1055,105 @@ class TestImagePricing:
         price = registry.get("img")
         assert price is not None
         assert (price.image_output, price.per_image) == (30.0, 0.02)
+
+
+class TestDatedPrices:
+    """A promotional price has its last day and the price after it (D50)."""
+
+    PROMO = ModelPricing(
+        input=4.0,
+        output=20.0,
+        until=date(2026, 11, 21),
+        then=ModelPricing(input=5.0, output=30.0),
+    )
+
+    def test_the_price_of_a_day_is_the_promotion_until_its_last_day(self) -> None:
+        assert self.PROMO.on(date(2026, 11, 21)).input == 4.0
+        assert self.PROMO.on(date(2026, 11, 22)) == ModelPricing(input=5.0, output=30.0)
+        assert ModelPricing(input=1.0).on(date(2030, 1, 1)).input == 1.0
+
+    def test_the_registry_reads_the_price_of_today_or_of_a_day_asked(self, monkeypatch) -> None:
+        registry = PricingRegistry()
+        registry.register("promo", self.PROMO)
+        assert registry.get("promo", on=date(2026, 12, 1)).input == 5.0  # type: ignore[union-attr]
+        monkeypatch.setattr(_pricing, "_today", lambda: date(2026, 11, 1))
+        assert registry.estimate_cost("promo", input_tokens=1_000_000) == pytest.approx(4.0)
+        monkeypatch.setattr(_pricing, "_today", lambda: date(2026, 11, 22))
+        assert registry.estimate_cost("promo", input_tokens=1_000_000) == pytest.approx(5.0)
+
+    def test_the_meter_prices_by_the_day(self, monkeypatch) -> None:
+        from ai_arch_toolkit.core import OperationRequest, Usage
+
+        registry = PricingRegistry()
+        registry.register("promo", self.PROMO)
+        request = OperationRequest(kind="llm", parent_span_id="run", model="promo")
+        usage = Usage(output_tokens=1_000_000)
+        monkeypatch.setattr(_pricing, "_today", lambda: date(2026, 11, 21))
+        assert registry.price(request, usage).amount.to_float() == pytest.approx(20.0)
+        monkeypatch.setattr(_pricing, "_today", lambda: date(2026, 11, 22))
+        assert registry.price(request, usage).amount.to_float() == pytest.approx(30.0)
+
+    def test_a_dated_price_loads_from_toml(self, tmp_path: Path) -> None:
+        table = tmp_path / "prices.toml"
+        table.write_text(
+            '["promo-1.0"]\naliases = ["promo-latest"]\ninput = 4.0\noutput = 20.0\n'
+            "until = 2026-11-21\n\n"
+            '["promo-1.0".then]\ninput = 5.0\noutput = 30.0\n'
+        )
+        registry = PricingRegistry()
+        registry.load(table)
+        for model in ("promo-1.0", "promo-latest"):
+            assert registry.get(model, on=date(2026, 11, 21)).input == 4.0  # type: ignore[union-attr]
+            assert registry.get(model, on=date(2026, 11, 22)).output == 30.0  # type: ignore[union-attr]
+
+    def test_an_until_that_is_not_a_date_is_refused(self, tmp_path: Path) -> None:
+        table = tmp_path / "prices.toml"
+        table.write_text('[promo]\ninput = 4.0\nuntil = "2026-11-21"\n')
+        with pytest.raises(ValueError, match="until must be a TOML date"):
+            PricingRegistry().load(table)
+
+
+class TestTablePromotionsAndVendors:
+    """The table's dated promotions and the vendors the ai-network uses (G-20)."""
+
+    @pytest.mark.parametrize(
+        ("model", "last_day", "now", "after"),
+        [
+            ("gpt-5.6-sol", date(2026, 11, 21), (4.0, 20.0, 0.40), (5.0, 30.0, 0.50)),
+            ("gpt-5.6", date(2026, 11, 21), (4.0, 20.0, 0.40), (5.0, 30.0, 0.50)),
+            ("gemini-3.8-flash", date(2026, 12, 31), (0.75, 3.75, 0.075), (1.50, 7.50, 0.15)),
+            ("gemini-3.7-flash", date(2026, 12, 31), (0.75, 3.75, 0.075), (1.50, 7.50, 0.15)),
+            ("gemini-3.6-flash", date(2026, 12, 31), (0.75, 3.75, 0.075), (1.50, 7.50, 0.15)),
+        ],
+    )
+    def test_a_promotion_ends_on_its_day(self, model, last_day, now, after) -> None:
+        on_last_day = pricing.get(model, on=last_day)
+        on_next_day = pricing.get(model, on=last_day + timedelta(days=1))
+        assert on_last_day is not None and on_next_day is not None
+        assert on_last_day.until == last_day
+        assert (on_last_day.input, on_last_day.output, on_last_day.cache_read) == now
+        assert (on_next_day.input, on_next_day.output, on_next_day.cache_read) == after
+
+    def test_gpt_5_6_sol_long_context_and_batch_follow_the_promotion(self) -> None:
+        after = pricing.get("gpt-5.6-sol", on=date(2026, 11, 22))
+        assert after is not None
+        assert (after.long_context_input, after.long_context_output) == (10.0, 45.0)
+        assert (after.batch_input, after.batch_output) == (2.50, 15.0)
+
+    @pytest.mark.parametrize(
+        ("model", "rates"),
+        [
+            ("deepseek-flash", (0.30, 1.20, 0.006)),
+            ("deepseek-v4-flash", (0.30, 1.20, 0.006)),
+            ("deepseek-v4-pro", (1.32, 3.96, 0.044)),
+            ("mistral-small-2603", (0.15, 0.60, 0.015)),
+            ("mistral-small-latest", (0.15, 0.60, 0.015)),
+            ("codestral-2508", (0.30, 0.90, 0.03)),
+            ("codestral-latest", (0.30, 0.90, 0.03)),
+            ("poolside/laguna-s-2.1", (0.10, 0.20, 0.01)),
+        ],
+    )
+    def test_the_vendors_the_ai_network_uses_are_priced(self, model, rates) -> None:
+        price = pricing.get(model)
+        assert price is not None
+        assert (price.input, price.output, price.cache_read) == rates

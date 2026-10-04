@@ -9,7 +9,10 @@ response = await llm.complete("Hello")
 print(f"${response.cost:.6f}")  # e.g. $0.000342
 ```
 
-Costs come from a bundled pricing registry (`_default_pricing.toml`) covering the supported models.
+Costs come from a bundled pricing registry (`_default_pricing.toml`) covering the supported models,
+and some models reached through an OpenAI-compatible `base_url`: DeepSeek (`deepseek-flash`,
+`deepseek-v4-pro`, at the peak-hour price), Mistral (`mistral-small-2603`, `codestral-2508`) and
+Poolside's `poolside/laguna-s-2.1` on OpenRouter.
 When the provider reports the call's cost itself (xAI does), `response.cost` is that amount. It is
 `None` when the model has no price, or when the provider reported no usage (an
 OpenAI-compatible server that sends no usage chunk, for example): an unknown cost is never zero.
@@ -55,6 +58,37 @@ pricing.register("llama3", ModelPricing(), match="prefix")
 
 # List all priced models
 pricing.list_models()
+```
+
+### Promotional prices
+
+A price can say the last day it applies and the price from the day after. The registry reads the
+price of the day (UTC) at every lookup, so the meter switches on its own when a promotion ends
+(D50):
+
+```python
+from datetime import date
+
+price = pricing.get("gpt-5.6-sol")             # today's price
+price.until, price.then                         # its last day, and the price after it
+pricing.get("gpt-5.6-sol", on=date(2027, 1, 1))  # the price on another day
+pricing.register(
+    "my-model",
+    ModelPricing(input=1.0, output=2.0, until=date(2026, 12, 31), then=ModelPricing(input=2.0, output=4.0)),
+)
+```
+
+In a TOML file, `until` is a date and the next price is a `then` table:
+
+```toml
+["my-model"]
+input = 1.0
+output = 2.0
+until = 2026-12-31
+
+["my-model".then]
+input = 2.0
+output = 4.0
 ```
 
 ### How a model id finds its price
@@ -120,8 +154,10 @@ without becoming reported spend. A failed response that reports its usage (Meta'
 provider's documented billing ([LLM Facade → Provider errors](llm.md#provider-errors)).
 
 Bounded uncertainty enters `max_cost` and per-step cost checks. `unpriced="fail_closed"` applies
-only to unknowns with no bound. Strict budgets retain the failed operation's own worst-case hold;
-soft budgets estimate the bound at failure. Measure-only runs have no controller to supply a bound.
+only to unknowns with no bound. Every failure that may have been billed gets a bound, with or
+without a budget: a strict budget's own worst-case hold, or else the worst case of the request's
+facts at the run's prices (D49). Only what has no price stays unbounded: a provider-hosted tool,
+or a pricer that fails.
 Strict reservations also cover tools priced by a custom `Pricer`. Use
 `budget_scope(policy, pricer=...)` to wire the same pricer into reservation and settlement.
 

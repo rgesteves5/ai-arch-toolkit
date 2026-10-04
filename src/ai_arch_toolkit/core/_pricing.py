@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import tomllib
 from dataclasses import dataclass, fields
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -29,6 +30,9 @@ class ModelPricing:
 
     An image model's image tokens take ``image_input``/``image_output`` (each falls back to the
     text rate when left out); a provider that bills per image instead sets ``per_image``.
+
+    A promotional price says the last day it applies (``until``, UTC) and the price from the day
+    after (``then``); the registry picks the price of the day (D50).
     """
 
     input: float = 0.0
@@ -66,9 +70,37 @@ class ModelPricing:
     batch_image_output: float | None = None
     per_image: float | None = None
     batch_per_image: float | None = None
+    # A price with an end
+    until: date | None = None
+    then: ModelPricing | None = None
+
+    def on(self, day: date) -> ModelPricing:
+        """The price that applies on ``day``: this one until its ``until``, then the next."""
+        price = self
+        while price.until is not None and day > price.until and price.then is not None:
+            price = price.then
+        return price
 
 
-_PRICE_FIELDS = frozenset(field.name for field in fields(ModelPricing))
+_RATE_FIELDS = frozenset(field.name for field in fields(ModelPricing)) - {"until", "then"}
+
+
+def _today() -> date:
+    """Today in UTC, the day a price is read for (tests fix it)."""
+    return datetime.now(UTC).date()
+
+
+def _price_of(values: dict[str, Any]) -> ModelPricing:
+    """A TOML entry's price: its rates, and the price after its ``until`` (a ``then`` table)."""
+    then = values.get("then")
+    until = values.get("until")
+    if until is not None and not isinstance(until, date):
+        raise ValueError(f"until must be a TOML date (2026-11-21), got {until!r}")
+    return ModelPricing(
+        **{key: value for key, value in values.items() if key in _RATE_FIELDS},
+        until=until,
+        then=_price_of(then) if isinstance(then, dict) else None,
+    )
 
 
 def _first_rate(*rates: float | None) -> float | None:
@@ -137,12 +169,14 @@ class PricingRegistry:
 
     # ── Query ──
 
-    def get(self, model: str) -> ModelPricing | None:
-        """The price of ``model`` (memoized), or ``None`` when it has none."""
+    def get(self, model: str, *, on: date | None = None) -> ModelPricing | None:
+        """The price of ``model`` on day ``on`` (today, UTC, by default), or ``None`` when it has
+        none. The lookup is memoized; the day is applied on every call."""
         if model not in self._cache:
             found = lookup(model, self._models, self._prefixes)
             self._cache[model] = found.value if found is not None else None
-        return self._cache[model]
+        price = self._cache[model]
+        return price.on(on or _today()) if price is not None else None
 
     def has(self, model: str) -> bool:
         """Check if a model has pricing registered."""
@@ -334,7 +368,7 @@ class PricingRegistry:
 
         for model, values in data.items():
             if isinstance(values, dict):
-                price = ModelPricing(**{k: v for k, v in values.items() if k in _PRICE_FIELDS})
+                price = _price_of(values)
                 table = self._table(values.get("match", "exact"))
                 for name in (model, *values.get("aliases", ())):
                     table[name] = price

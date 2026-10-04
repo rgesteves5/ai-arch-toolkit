@@ -22,11 +22,13 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Protocol
 
 from ai_arch_toolkit.core._metering._store import MeterStore
+from ai_arch_toolkit.core._metering._worst_case import worst_case
 
 if TYPE_CHECKING:
     from ai_arch_toolkit.core._metering._admission import AdmissionController, MeterSnapshot
     from ai_arch_toolkit.core._metering._cost import Cost
     from ai_arch_toolkit.core._metering._events import UsageEvent, UsageSink
+    from ai_arch_toolkit.core._metering._money import Money
     from ai_arch_toolkit.core._metering._operation import MeterOperation, OperationRequest
     from ai_arch_toolkit.core._redaction import Redactor
     from ai_arch_toolkit.core._response import Usage
@@ -87,17 +89,26 @@ class MeterScope:
         if cfg.retain_meter_events:
             self._retained = _RetainingSink()
             sinks.append(self._retained)  # composed as a sink -> no hot-path change in the store
+        self.pricer = cfg.pricer
         self._store = MeterStore(
             clock=cfg.clock or time.monotonic,
             sinks=sinks,
             redactor=cfg.redactor,
             sink_error_policy=cfg.sink_error_policy,
+            failure_bound=self._failure_bound,
         )
         self._controller = cfg.controller
-        self.pricer = cfg.pricer
         self.allow_unmetered_batch = cfg.allow_unmetered_batch
         self._scope_token: object | None = None
         self._span_token: object | None = None
+
+    def _failure_bound(self, request: OperationRequest) -> Money | None:
+        """The ceiling of a failure that may have been billed: the worst case of its facts, at
+        this run's prices (D49)."""
+        from ai_arch_toolkit.core._pricing import pricing  # the pricing registry needs the meter
+
+        found = worst_case(request, self.pricer or pricing)
+        return found.cost if found is not None else None
 
     def events(self) -> tuple[UsageEvent, ...]:
         """Events retained this run — empty unless ``RunConfig.retain_meter_events`` is set."""

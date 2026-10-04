@@ -360,10 +360,12 @@ bounded uncertainty and outstanding holds. A successful retry adds its actual co
 pretending that the failed attempt's bound was a charge.
 
 Under `reserve="strict"`, an indeterminate failure retains its own reservation as its bound.
-Under `reserve="none"`, the controller runs the same estimator on failure, computing request size
-only then. Without a controller, failed indeterminate work remains unbounded. Thus a step with
-`Policy(max_cost=...)` still fails closed after an unbounded measured failure, even if its retry
-succeeded; under an enforcing budget the bounded failed cost enters that step's cap.
+Otherwise, with a soft budget or none at all, the meter bounds it by the worst case of the
+request's facts at the run's prices (input at four characters a token plus an allowance per media
+part, output at `max_tokens` plus an allowance per image asked for), computing the request size
+only then (D49). A step with `Policy(max_cost=...)` therefore passes after a failed attempt that
+its retry recovered, as long as the bound fits the cap. A provider-hosted tool's failure stays
+unbounded: its charge is not in the token counts.
 
 Middleware after hooks observe settlement first. Sync stream abandonment uses the captured
 lifecycle handle, so cleanup can run safely from the consumer's thread.

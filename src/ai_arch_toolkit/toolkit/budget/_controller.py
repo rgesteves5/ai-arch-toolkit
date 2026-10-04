@@ -10,7 +10,6 @@ from ai_arch_toolkit.core._metering._admission import (
     Reservation,
     limit_denial,
 )
-from ai_arch_toolkit.core._metering._money import Money
 from ai_arch_toolkit.core._metering._operation import OperationRequest
 from ai_arch_toolkit.toolkit.budget._estimator import Estimator, HeuristicEstimator
 from ai_arch_toolkit.toolkit.budget._exceptions import BudgetExceeded
@@ -21,7 +20,8 @@ __all__ = ["BudgetController"]
 
 @dataclass(frozen=True, slots=True)
 class BudgetController:
-    """Admit operations and bound failures using the same estimator."""
+    """Admit operations under a budget; a strict budget reserves its estimator's worst case, which
+    then also bounds the operation if it fails."""
 
     policy: BudgetPolicy
     estimator: Estimator = field(default_factory=HeuristicEstimator)
@@ -29,13 +29,6 @@ class BudgetController:
     def wants_request_size(self) -> bool:
         """Only strict admission needs the size; soft failures size lazily."""
         return self.policy.reserve == "strict"
-
-    def failure_bound(self, request: OperationRequest, reservation: Reservation) -> Money | None:
-        """Retain the operation's strict hold, or estimate its bound after a soft failure."""
-        if self.policy.reserve == "strict":
-            return reservation.cost
-        estimate = self.estimator.estimate(request)
-        return estimate.cost if estimate is not None else None
 
     def admit(self, snapshot: MeterSnapshot, request: OperationRequest) -> AdmissionDecision:
         reservation = Reservation()

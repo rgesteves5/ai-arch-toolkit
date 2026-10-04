@@ -85,12 +85,13 @@ async def test_enforcing_scope_denies_over_the_call_cap():
     assert prov.calls == 0  # denied before the provider was ever touched
 
 
-async def test_failed_attempt_keeps_the_count_as_unknown_cost():
+async def test_failed_attempt_keeps_the_count_and_a_cost_ceiling():
+    # Measure-only too, a failure that may have been billed is bounded by its worst case (D49).
     llm, _ = fake_llm(ValueError("boom"))  # non-retryable, not a PROVIDER_ERROR
     with MeterScope() as scope, pytest.raises(ValueError, match="boom"):
         await llm.complete("hi")
     snap = scope.snapshot()
-    assert snap.llm_calls == 1 and snap.unknown_cost_count == 1
+    assert snap.llm_calls == 1 and (snap.unknown_cost_count, snap.uncertain_cost_count) == (0, 1)
     assert snap.out_llm_calls == 0 and snap.out_cost == Money.zero()
 
 
@@ -170,7 +171,8 @@ async def test_started_but_undrained_stream_is_incomplete_at_scope_close():
         await stream.__anext__()  # started, then left undrained and unclosed
         del stream
     snap = scope.snapshot()
-    assert snap.llm_calls == 1 and snap.unknown_cost_count == 1  # count kept, cost unknown
+    assert snap.llm_calls == 1  # the count is kept, the cost bounded (D49)
+    assert (snap.unknown_cost_count, snap.uncertain_cost_count) == (0, 1)
     assert snap.input_tokens == 0  # never settled with usage
 
 
@@ -189,7 +191,7 @@ async def test_stream_provider_failure_is_a_failed_attempt():
     with MeterScope() as scope, pytest.raises(ConnectionError):
         await _drain(llm.stream("hi"))
     snap = scope.snapshot()
-    assert snap.llm_calls == 1 and snap.unknown_cost_count == 1
+    assert snap.llm_calls == 1 and (snap.unknown_cost_count, snap.uncertain_cost_count) == (0, 1)
 
 
 async def test_stream_retry_meters_every_physical_attempt(monkeypatch):
@@ -210,7 +212,7 @@ async def test_stream_retry_meters_every_physical_attempt(monkeypatch):
     snap = scope.snapshot()
     assert prov.calls == 2
     assert snap.llm_calls == 2
-    assert snap.unknown_cost_count == 1
+    assert (snap.unknown_cost_count, snap.uncertain_cost_count) == (0, 1)
     assert snap.input_tokens == 20 and snap.output_tokens == 4
     assert stream.response is not None
     assert [attempt.status for attempt in stream.response.attempts] == ["failed", "ok"]
@@ -232,7 +234,8 @@ async def test_stream_retry_admission_denial_is_terminal(monkeypatch):
 
     assert prov.calls == 1
     assert scope.snapshot().llm_calls == 1
-    assert scope.snapshot().unknown_cost_count == 1
+    snap = scope.snapshot()
+    assert (snap.unknown_cost_count, snap.uncertain_cost_count) == (0, 1)
 
 
 async def test_stream_events_is_metered_on_drain():
@@ -330,7 +333,8 @@ async def test_baseexception_fails_the_op_promptly_not_leaked():
         with pytest.raises(Boom):
             await llm.complete("hi")
         snap = scope.snapshot()  # before close(): op is already failed, not merely started
-        assert snap.llm_calls == 1 and snap.unknown_cost_count == 1
+        assert snap.llm_calls == 1
+        assert (snap.unknown_cost_count, snap.uncertain_cost_count) == (0, 1)
         assert snap.out_llm_calls == 0 and snap.out_cost == Money.zero()
 
 

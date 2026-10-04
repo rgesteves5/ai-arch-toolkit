@@ -54,6 +54,16 @@ flows, manifests) needs these changes; each one is detailed below.
   - `select` or `serialize_as` on an inline template.
 
 ### Added
+- Prices for DeepSeek (`deepseek-flash` and its v4 aliases, `deepseek-v4-pro`; the peak-hour
+  price), Mistral (`mistral-small-2603`, `codestral-2508`, with their `-latest` aliases) and
+  Poolside's `poolside/laguna-s-2.1` on OpenRouter, models reached through an OpenAI-compatible
+  `base_url`. The promotions in the table end on their day: `gpt-5.6-sol` after 2026-11-21 (then
+  the price before the promotion, since OpenAI states none for after it), and `gemini-3.8-flash`,
+  `-3.7-flash` and `-3.6-flash` after 2026-12-31 (then Google's 2027 price).
+- **Prices with an end date** (D50). `ModelPricing` gains `until` (the last day, UTC) and `then`
+  (the price from the day after); `pricing.get(model, on=date)` reads the price of a day, today by
+  default, so the meter switches when a promotion ends. TOML entries take `until = 2026-11-21` and
+  a `then` table.
 - **Image generation: `LLM.generate_image()` and `generate_image_sync()`** (D46, D47). An image
   model draws from a prompt, or edits by a prompt and `images=[image(...)]`. The images come back
   in the new `Response.images` as `GeneratedImage(data, media_type, revised_prompt)`. The call runs
@@ -220,6 +230,14 @@ flows, manifests) needs these changes; each one is detailed below.
   [docs/agents.md](docs/agents.md#file-backed-agent-manifests).
 
 ### Changed
+- **Every failure that may have been billed has a ceiling, with or without a budget** (D49). A
+  measure-only run used to leave a failed indeterminate call unknown, with no bound; it is now
+  uncertain, at most the worst case of the request's facts at the run's prices, so a step's
+  `Policy(max_cost=...)` passes after a failed attempt that its retry recovered. Only a
+  provider-hosted tool's cost stays unbounded. The worst case moved to core
+  (`core/_metering/_worst_case.py`): the `HeuristicEstimator` delegates to it, a soft budget no
+  longer bounds failures with its own estimator, and the internal `FailureBoundController`
+  protocol is gone.
 - `StreamEvent.kind` can be `"image"`, with the new `StreamEvent.image`; a `match` over the kinds
   sees a new case.
 - An OpenAI GPT Image model refuses `complete()`, and a chat model refuses `generate_image()`,
