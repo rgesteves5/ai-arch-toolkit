@@ -781,3 +781,30 @@ Só acrescentar. Uma decisão revista ganha uma nova entrada que diz qual substi
   - deixar como estava e só o escrever nos docs.
 - **Consequência:** o GDELT anónimo continua a aguentar poucos pedidos por minuto e por IP; a tool
   deixa de o agravar e diz quanto esperar.
+
+## D54 · As chamadas ao LLM de um flow iterado correm em stream e chegam como eventos do flow (frente A, G-22)
+
+- **Contexto:**
+  - As dez estratégias chamam `llm.complete` em 18 sítios, e o texto do modelo só chega no
+    `step_end` do passo.
+  - Para mostrar os tokens, o ai-network copia o `react_flow` e corre ele próprio o ciclo:
+    o texto da última volta, as omissões e as chamadas em paralelo.
+- **Decisão** (o dono escolheu-a a 2026-10-04):
+  - o core ganha um canal (`llm_events_to(sink)`). Enquanto está ligado, o `LLM.complete`
+    corre pelo caminho de stream e entrega cada `StreamEvent` ao `sink`, com o id da chamada. A
+    `Response` é a mesma;
+  - cada passo de um flow que se itera (`iter()`, sempre: o dono preferiu-o a uma flag) liga o
+    canal. Cada evento chega como `FlowEvent(type="llm_event")`, com o passo, o evento e a
+    chamada;
+  - o `run()` não liga o canal;
+  - um flow aninhado herda o canal do passo de fora, e as chamadas de dentro das tools também
+    passam por ele.
+- **Alternativas rejeitadas:**
+  - um helper em cada estratégia: obriga a mudar as 18 chamadas, e um flow da app teria de o
+    usar também;
+  - os tokens só com uma flag no `iter()`.
+- **Consequência:**
+  - quem consome um `iter()` passa a receber `llm_event`s;
+  - dentro de um flow iterado, uma chamada que falhe depois do primeiro evento já não se repete
+    (a semântica do stream); antes dele, o retry e o fallback são os de sempre;
+  - o `run()` fica como estava.

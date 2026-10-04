@@ -7,12 +7,14 @@
   a 2026-10-03 e publicada (`002642c`). A A02, o grupo 2 (o custo), está feita a 2026-10-04 e
   publicada (`4bb8cc0`). A A03, o grupo 3 (a correcção), está feita a 2026-10-04 e
   publicada (`87c7e35`); a G-15 já tinha fechado na frente O. A A04, o grupo 4 (as fontes que falham, G-30), está feita a 2026-10-04 e
-  publicada (`331786d`). O próximo é o grupo 5, o streaming dentro das estratégias (G-22).
+  publicada (`331786d`). A A05, o grupo 5 (o streaming dentro das estratégias, G-22), está feita a
+  2026-10-05 e publicada (`31bf368`). O próximo é o grupo 6, as exportações (G-14, G-24).
 - **Origem:** o briefing de 29/09, onde a app lista o que contorna no toolkit. Cada lacuna diz o
   que falta, a evidência e quando fica feita. A G-36 (imagens) já fechou na frente I.
 - **Decisões:** D48 (nenhum endereço lido do ambiente), D49 (toda a falha tem tecto), D50 (um
   preço pode ter data de fim), D51 (o TLS das tools com as autoridades do sistema), D52 (a chave
-  opcional de uma tool vem do ambiente), D53 (um 429 fecha o host durante a espera).
+  opcional de uma tool vem do ambiente), D53 (um 429 fecha o host durante a espera), D54 (as chamadas ao LLM de um flow
+  iterado correm em stream).
 - **Fora do âmbito:** o ai-network. Não se edita daqui; o dono leva-lhe a nota de cada grupo
   fechado.
 
@@ -22,6 +24,7 @@
 | A02 | Custo: toda a falha tem tecto (G-29), preços com data e os que faltam (G-20) | Claude | done | nada |
 | A03 | Correcção: tools com nome repetido e embrulhadas (G-21), ids das chamadas (G-23), o cliente xAI sem loop (G-17), pedidos longos da Anthropic (G-18), `cwd` no `run_command` (G-26), ligações no `search_files` (G-27) | Claude | done | nada |
 | A04 | As fontes que falham (G-30): o TLS com as autoridades do sistema (Eurostat), a chave do Semantic Scholar, a espera do GDELT depois de um 429, e o User-Agent | Claude | done | nada |
+| A05 | O streaming dentro das estratégias (G-22): o `StepTrace` no fim de cada passo, todo o passo que começa acaba, e os tokens das chamadas ao LLM num flow iterado | Claude | done | nada |
 
 ## Frente activa: geração de imagens
 
@@ -136,7 +139,7 @@
   declarações dos manifestos mudaram o terreno de C02, C05, C07 e C08).
 - **Estado:** aberta em 2026-09-15. As nove fichas estão escritas; nenhuma tarefa começou.
 - **Antes de codificar:** o dono fixa as "Decisões a fixar" de cada ficha. Cada decisão tomada entra
-  em `DECISIONS.md` a partir de D54 (as D15 a D42 foram para as frentes R e T, as D43 a D45
+  em `DECISIONS.md` a partir de D55 (as D15 a D42 foram para as frentes R e T, as D43 a D45
   para a frente O, as D46 e D47 para a frente I e as D48 a D50 para a frente A), com o número dado pelo coordenador.
 - **Origem:** o que `docs/internal/agentes-app-toolkit-review.md` pediu ao toolkit (L1, L3–L7, L9, L13
   e o ponto D) e que `docs/internal/toolkit-fix-plan.md` §4 (itens 3 e 10) deixou de fora por ser

@@ -699,3 +699,21 @@ R01 publicada em `main` (`b3dae3f`); a R02 começa com a leitura obrigatória da
 - Provado ao vivo: o Eurostat responde no Python do ai-network com o `truststore`.
 - Gate: 6317 passed, 42 skipped.
 - Próximo: o grupo 5 do briefing, o streaming dentro das estratégias (G-22).
+
+## 2026-10-05 · A05 feita: o streaming dentro das estratégias (Claude, a pedido do dono)
+
+- A A04 foi commitada e publicada (`331786d`, `ff6e8ba`).
+- G-22, parte 1: o `step_end` traz o `StepTrace`, e todo o passo que começa acaba, também os
+  cortados por um timeout, por um budget negado ou por uma excepção do motor.
+- G-22, parte 2 (D54): o dono escolheu o canal no LLM e os tokens sempre no `iter()`. Cada
+  `llm.complete` de um passo de um flow iterado vai em stream e chega como `llm_event`; o `run()`
+  não muda.
+- Uma revisão independente encontrou quatro defeitos, todos corrigidos com testes:
+  - eventos de chamadas órfãs depois do passo, e uma falha no `iter_sync` com o loop fechado;
+  - eventos em fila perdidos num corte;
+  - o `inference_limit` que deixava de limitar;
+  - docs.
+
+  Corrigido também um bug antigo do `aclose()` logo a seguir ao `flow_start`.
+- Gate: 6333 passed, 42 skipped.
+- Próximo: o grupo 6 do briefing, as exportações (G-14, G-24).
