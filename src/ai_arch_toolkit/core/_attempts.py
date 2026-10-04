@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import logging
 import threading
@@ -472,8 +473,19 @@ class _Chain:
 class Execution:
     """A call's explicit lifecycle, shared by complete, both streams and sync wrappers."""
 
-    def __init__(self, owner: LLM, request: Request, arguments: Arguments, path: Path) -> None:
+    def __init__(
+        self,
+        owner: LLM,
+        request: Request,
+        arguments: Arguments,
+        path: Path,
+        *,
+        whole_slot: bool = False,
+    ) -> None:
         self.path: Path = path
+        # A stream read by code that yields to no one (``complete`` into an LLM event sink) holds
+        # its inference slot to the end, as a complete call does (D54).
+        self.whole_slot = whole_slot
         self.scope = current_meter()
         self.parent_span_id = current_span_id() or (self.scope.run_span_id if self.scope else None)
         self.lock = threading.RLock()
@@ -507,20 +519,23 @@ class Execution:
     async def _physical_items(self, attempt: _PhysicalAttempt) -> AsyncIterator[Item]:
         source: AsyncIterator[StreamEvent | Answer] | None = None
         try:
-            async with inference_slot():
+            async with contextlib.AsyncExitStack() as slot:
+                await slot.enter_async_context(inference_slot())
                 if not attempt.start():
                     raise StreamAbandoned("stream abandoned before its attempt started")
                 source = dispatch(attempt.owner._provider, attempt.prepared, self.path)
                 item = await anext(source, None)
-            while item is not None:
-                if isinstance(item, Answer):
-                    attempt.finish(item)
-                else:
-                    attempt.seen.append(item)
-                    if (view := self._view(item)) is not None:
-                        self.delivered = True
-                        yield view
-                item = await anext(source, None)
+                if not self.whole_slot:
+                    await slot.aclose()  # released before the caller-controlled yields
+                while item is not None:
+                    if isinstance(item, Answer):
+                        attempt.finish(item)
+                    else:
+                        attempt.seen.append(item)
+                        if (view := self._view(item)) is not None:
+                            self.delivered = True
+                            yield view
+                    item = await anext(source, None)
         except BaseException as error:
             attempt.fail(error)
             raise

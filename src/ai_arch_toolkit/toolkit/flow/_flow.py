@@ -10,11 +10,11 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from ai_arch_toolkit.core._metering._scope import MeterScope, RunConfig
 from ai_arch_toolkit.core._policy import Policy
-from ai_arch_toolkit.core._response import Usage
+from ai_arch_toolkit.core._response import StreamEvent, Usage
 from ai_arch_toolkit.core._state import State, StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._sync import _run_sync
-from ai_arch_toolkit.core._trace import TRACE_CAPTURE_MODES, Trace, TraceCapture
+from ai_arch_toolkit.core._trace import TRACE_CAPTURE_MODES, StepTrace, Trace, TraceCapture
 from ai_arch_toolkit.toolkit.budget import BudgetController, BudgetPolicy, BudgetReport
 from ai_arch_toolkit.toolkit.flow._scope import Scope
 
@@ -95,7 +95,15 @@ class FlowResult:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class FlowEvent:
-    """Streaming event from Flow execution."""
+    """Streaming event from Flow execution.
+
+    Every ``step_start`` is followed by its step's ``step_end``, also when the run cuts the step
+    short (the flow's timeout, a budget denial, an exception leaving the engine): ``step_end`` and
+    ``step_skipped`` carry the step's ``step_trace``, the entry the run's trace records, with the
+    reason a cut step ended in its ``error`` and ``policy_decisions`` (G-22). In a run being
+    iterated, each LLM call a step makes streams: an ``llm_event`` carries one of its events and
+    the call's id, ``llm_call`` (D54).
+    """
 
     type: Literal[
         "flow_start",
@@ -107,6 +115,7 @@ class FlowEvent:
         "fallback",
         "timeout",
         "policy_decision",
+        "llm_event",
     ]
     flow_name: str = ""
     step_name: str = ""
@@ -114,6 +123,9 @@ class FlowEvent:
     error: str | None = None
     policy_decision: str | None = None
     trace: Trace | None = None
+    step_trace: StepTrace | None = None
+    llm_event: StreamEvent | None = None
+    llm_call: str = ""
 
 
 class Flow:

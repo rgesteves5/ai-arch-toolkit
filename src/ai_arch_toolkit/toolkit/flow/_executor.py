@@ -12,6 +12,7 @@ across a ``yield``.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from collections import deque
 from collections.abc import AsyncGenerator, Callable, Iterator
@@ -19,6 +20,7 @@ from contextvars import ContextVar
 from dataclasses import replace
 from typing import Any
 
+from ai_arch_toolkit.core._llm_events import llm_events_to
 from ai_arch_toolkit.core._metering._admission import AdmissionDenied
 from ai_arch_toolkit.core._metering._scope import (
     MeterScope,
@@ -27,6 +29,7 @@ from ai_arch_toolkit.core._metering._scope import (
     current_meter,
     current_span_id,
 )
+from ai_arch_toolkit.core._response import StreamEvent
 from ai_arch_toolkit.core._state import State, StateSnapshot
 from ai_arch_toolkit.core._step import Result
 from ai_arch_toolkit.core._step_engine import execute_step
@@ -92,8 +95,12 @@ def iter_flow(
     budget_policy: BudgetPolicy | None = None,
     config: RunConfig | None = None,
 ) -> FlowExecution:
-    """Start iterating a flow run: events as they happen, then ``.result``."""
-    return FlowExecution(_FlowRun(flow, state, budget_policy=budget_policy, config=config))
+    """Start iterating a flow run: events as they happen, then ``.result``.
+
+    The LLM calls its steps make stream, as ``llm_event``s (D54).
+    """
+    run = _FlowRun(flow, state, budget_policy=budget_policy, config=config, tokens=True)
+    return FlowExecution(run)
 
 
 class FlowExecution:
@@ -210,6 +217,7 @@ class _FlowRun:
         "_events",
         "_running",
         "_signal",
+        "_started",
         "budget_policy",
         "config",
         "deadline",
@@ -220,6 +228,7 @@ class _FlowRun:
         "scope",
         "span_id",
         "state",
+        "tokens",
         "traces",
     )
 
@@ -230,11 +239,15 @@ class _FlowRun:
         *,
         budget_policy: BudgetPolicy | None,
         config: RunConfig | None,
+        tokens: bool = False,
     ) -> None:
         self.flow = flow
         self.state = state
         self.budget_policy = budget_policy
         self.config = config
+        self.tokens = tokens
+        # The steps announced with a step_start and not yet ended, with when they started.
+        self._started: dict[str, float] = {}
         self.traces: list[StepTrace] = []
         self.results: dict[str, Result] = {}
         self.result: FlowResult | None = None
@@ -264,27 +277,17 @@ class _FlowRun:
         if flow.timeout is not None:
             self.deadline = asyncio.get_running_loop().time() + flow.timeout
 
-        yield FlowEvent(type="flow_start", flow_name=flow.name)
         body = self._run_dag() if flow.is_dag else self._run_sequential()
+        stopping = self._stopping(body)
         try:
-            try:
-                async for event in body:
-                    yield event
-            except AdmissionDenied as exc:
-                if not self.owned:
-                    raise  # nested run: the owning (outermost) run converts it once, at the top
-                _append_denial(exc, self.traces, self.results, capture)
-                yield FlowEvent(
-                    type="policy_decision", flow_name=flow.name, policy_decision="budget_exceeded"
-                )
-            except _FlowTimeout:
-                message = self._record_timeout()
-                await self._cancel_running()  # stopped before the consumer hears of the timeout
-                yield FlowEvent(type="timeout", flow_name=flow.name, error=message)
+            yield FlowEvent(type="flow_start", flow_name=flow.name)
+            async for event in stopping:
+                yield event
         finally:
             # Also runs when the consumer abandons the iteration (GeneratorExit/cancellation):
             # no step keeps running and no started meter operation leaks past the run.
             try:
+                await stopping.aclose()
                 await body.aclose()
                 await self._cancel_running()
             finally:
@@ -313,6 +316,44 @@ class _FlowRun:
                 )
             )
         yield FlowEvent(type="flow_end", flow_name=flow.name, trace=trace)
+
+    async def _stopping(self, body: AsyncGenerator[FlowEvent]) -> AsyncGenerator[FlowEvent]:
+        """The body's events, then how the run stopped, if it stopped early: a budget denial,
+        the flow's timeout, or a bug leaving the engine. Every step still running ends first."""
+        flow = self.flow
+        try:
+            async for event in body:
+                yield event
+        except AdmissionDenied as exc:
+            if not self.owned:
+                raise  # nested run: the owning (outermost) run converts it once, at the top
+            _append_denial(exc, self.traces, self.results, flow.trace_capture)
+            yield FlowEvent(
+                type="policy_decision", flow_name=flow.name, policy_decision="budget_exceeded"
+            )
+        except _FlowTimeout:
+            message = self._timeout_message()
+            await self._cancel_running()  # stopped before the consumer hears of the timeout
+            for event in self._queued():
+                yield event
+            for event in self._cut_all(f"cut by the flow's timeout: {message}", "timeout"):
+                yield event
+            self._record_timeout(message)
+            yield FlowEvent(type="timeout", flow_name=flow.name, error=message)
+        except Exception as exc:
+            await self._cancel_running()
+            for event in self._queued():
+                yield event
+            for event in self._cut_all(f"the flow stopped: {type(exc).__name__}: {exc}", "halt"):
+                yield event
+            raise
+
+    def _queued(self) -> list[FlowEvent]:
+        """The events the steps emitted that no one has heard yet (a ``step_start``, a step's
+        ``llm_event``s): they come before the ends of the steps the run cuts."""
+        queued = list(self._events)
+        self._events.clear()
+        return queued
 
     async def _cancel_running(self) -> None:
         running = [task for task in self._running if not task.done()]
@@ -430,12 +471,15 @@ class _FlowRun:
         events: list[FlowEvent] = []
         if isinstance(error, AdmissionDenied):
             wave.denial = wave.denial or error
+            events.append(
+                self._cut(fs.step.name, f"stopped by the budget: {error}", "budget_exceeded")
+            )
         elif error is not None:
             raise error
         else:
             result, trace = task.result()
             wave.finished.append((index, fs, result))
-            events.append(self._ended(fs, result, trace))
+            events.append(self._ended(fs.step.name, result, trace))
         if wave.pending == 0:
             self._merge(wave)
         return events
@@ -473,6 +517,7 @@ class _FlowRun:
     async def _execute(self, fs: FlowStep, scoped: StateSnapshot) -> tuple[Result, StepTrace]:
         flow_name = self.flow.name
         name = fs.step.name
+        self._started[name] = time.monotonic()
         self._emit(FlowEvent(type="step_start", flow_name=flow_name, step_name=name))
 
         def on_decision(decision: PolicyDecision) -> None:
@@ -481,7 +526,7 @@ class _FlowRun:
         children: list[StepTrace] = []
         token = _child_traces.set(children)
         try:
-            with bind_meter(self.scope, self.span_id):
+            with bind_meter(self.scope, self.span_id), self._llm_events(name):
                 result, trace = await execute_step(
                     fs.step,
                     scoped,
@@ -494,6 +539,50 @@ class _FlowRun:
         if children:
             trace = replace(trace, children=_link_children(name, children))
         return result, trace
+
+    @contextlib.contextmanager
+    def _llm_events(self, name: str) -> Iterator[None]:
+        """In an iterated run, the step's LLM calls stream into its events (D54).
+
+        A run that is not iterated binds nothing, so a nested ``run()`` keeps the channel of the
+        step it runs in, and its calls show under that step. A call the step leaves running (a
+        tool's thread the executor stopped waiting for, a task nobody awaits) keeps the channel
+        but is heard no more once the step has ended, and never fails because the run's loop has
+        closed.
+        """
+        if not self.tokens:
+            yield
+            return
+        loop = asyncio.get_running_loop()
+        flow_name = self.flow.name
+        live = True
+
+        def deliver(streamed: FlowEvent) -> None:
+            if live:  # checked on the run's loop, where the step's end is made
+                self._emit(streamed)
+
+        def sink(event: StreamEvent, call: str) -> None:
+            if not live:
+                return
+            streamed = FlowEvent(
+                type="llm_event",
+                flow_name=flow_name,
+                step_name=name,
+                llm_event=event,
+                llm_call=call,
+            )
+            if _running_loop() is loop:
+                deliver(streamed)
+                return
+            # A call made in another thread (a sync tool's ``complete_sync``).
+            with contextlib.suppress(RuntimeError):  # the run's loop has closed: nobody listens
+                loop.call_soon_threadsafe(deliver, streamed)
+
+        with llm_events_to(sink):
+            try:
+                yield
+            finally:
+                live = False
 
     def _emit(self, event: FlowEvent) -> None:
         self._events.append(event)
@@ -560,25 +649,53 @@ class _FlowRun:
         except Exception as exc:
             raise _OrchestrationError("condition", exc) from exc
 
-    def _ended(self, fs: FlowStep, result: Result, trace: StepTrace) -> FlowEvent:
+    def _ended(self, name: str, result: Result, trace: StepTrace) -> FlowEvent:
         """Record how a step ended and announce it: the one place a ``step_end`` is made."""
+        self._started.pop(name, None)
         self.traces.append(trace)
-        self.results[fs.step.name] = result
+        self.results[name] = result
         return FlowEvent(
             type="step_end",
             flow_name=self.flow.name,
-            step_name=fs.step.name,
+            step_name=name,
             result=result,
             error=result.error,
+            step_trace=trace,
         )
 
-    def _record_skip(self, fs: FlowStep, reason: str) -> FlowEvent:
-        self.traces.append(
-            StepTrace(
-                name=fs.step.name, skipped=True, skip_reason=reason, started_at=time.monotonic()
-            )
+    def _cut(self, name: str, reason: str, decision: PolicyDecision) -> FlowEvent:
+        """End a started step the run cut short: its trace says why and how long it ran."""
+        now = time.monotonic()
+        started = self._started.get(name, now)
+        result = Result(error=reason)
+        output_result, output_keys = capture_result(result.to_dict(), self.flow.trace_capture)
+        trace = StepTrace(
+            name=name,
+            output_result=output_result,
+            output_keys=output_keys,
+            duration=now - started,
+            error=reason,
+            policy_decisions=(decision,),
+            started_at=started,
         )
-        return FlowEvent(type="step_skipped", flow_name=self.flow.name, step_name=fs.step.name)
+        return self._ended(name, result, trace)
+
+    def _cut_all(self, reason: str, decision: PolicyDecision) -> list[FlowEvent]:
+        """End every step still running, in the order they started."""
+        names = sorted(self._started, key=self._started.__getitem__)
+        return [self._cut(name, reason, decision) for name in names]
+
+    def _record_skip(self, fs: FlowStep, reason: str) -> FlowEvent:
+        trace = StepTrace(
+            name=fs.step.name, skipped=True, skip_reason=reason, started_at=time.monotonic()
+        )
+        self.traces.append(trace)
+        return FlowEvent(
+            type="step_skipped",
+            flow_name=self.flow.name,
+            step_name=fs.step.name,
+            step_trace=trace,
+        )
 
     def _record_orchestration_error(
         self, fs: FlowStep, error: _OrchestrationError
@@ -597,12 +714,14 @@ class _FlowRun:
             started_at=time.monotonic(),
         )
         start = FlowEvent(type="step_start", flow_name=self.flow.name, step_name=name)
-        return start, self._ended(fs, result, trace)
+        return start, self._ended(name, result, trace)
 
-    def _record_timeout(self) -> str:
+    def _timeout_message(self) -> str:
         in_flight = sorted(name for task, name in self._running.items() if not task.done())
         suffix = f" (in flight: {', '.join(in_flight)})" if in_flight else ""
-        message = f"Flow {self.flow.name!r} timed out after {self.flow.timeout}s{suffix}"
+        return f"Flow {self.flow.name!r} timed out after {self.flow.timeout}s{suffix}"
+
+    def _record_timeout(self, message: str) -> None:
         result = Result(error=message)
         self.results["flow_timeout"] = result
         output_result, output_keys = capture_result(result.to_dict(), self.flow.trace_capture)
@@ -616,7 +735,6 @@ class _FlowRun:
                 started_at=time.monotonic(),
             )
         )
-        return message
 
     def _halts(self, fs: FlowStep, result: Result) -> bool:
         """Whether a sequential flow stops here: an error, under a policy that halts on it."""
@@ -839,3 +957,10 @@ def _append_budget_exceeded_trace(
             started_at=time.monotonic(),
         )
     )
+
+
+def _running_loop() -> asyncio.AbstractEventLoop | None:
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        return None

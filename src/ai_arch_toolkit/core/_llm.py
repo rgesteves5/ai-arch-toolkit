@@ -9,6 +9,7 @@ from ai_arch_toolkit.core._attempts import Arguments, Execution
 from ai_arch_toolkit.core._content import ImagePart, user
 from ai_arch_toolkit.core._exceptions import ProviderError, RequestError
 from ai_arch_toolkit.core._images import ImageFormat, ImageRequest, ImageResolution
+from ai_arch_toolkit.core._llm_events import LLMEventSink, llm_event_sink, new_call_id
 from ai_arch_toolkit.core._metering._admission import NotMeteredOperationError
 from ai_arch_toolkit.core._metering._scope import current_meter
 from ai_arch_toolkit.core._middleware import Request
@@ -257,12 +258,13 @@ class LLM:
         tools: list[dict[str, Any]] | ToolGroup | Callable[..., Any] | None,
         options: dict[str, Any],
         extra: dict[str, Any],
+        whole_slot: bool = False,
     ) -> Execution:
         arguments = Arguments(options=options, extra=extra)
         request = self._prepare_call(
             self._normalize(messages), system, prepare_tools(tools), arguments
         )
-        return Execution(self, request, arguments, path)
+        return Execution(self, request, arguments, path, whole_slot=whole_slot)
 
     async def complete(
         self,
@@ -279,10 +281,16 @@ class LLM:
         logprobs: bool = False,
         **kwargs: Any,
     ) -> Response:
-        """Send messages and return a Response."""
+        """Send messages and return a Response.
+
+        Where an LLM event sink is bound (``llm_events_to``, as in a flow being iterated), the call
+        streams: each event reaches the sink as it arrives, and the Response is the same (D54).
+        """
+        sink = llm_event_sink()
         execution = self._execution(
             messages,
-            path="complete",
+            path="complete" if sink is None else "stream_events",
+            whole_slot=sink is not None,
             system=system,
             tools=tools,
             options={
@@ -296,7 +304,9 @@ class LLM:
             },
             extra=kwargs,
         )
-        return await execution.complete()
+        if sink is None:
+            return await execution.complete()
+        return await _streamed(execution, sink)
 
     def stream(
         self,
@@ -607,3 +617,20 @@ class LLM:
         return SyncStreamResponse(
             sync_iter, async_stream._finalizer, lifecycle=async_stream._lifecycle
         )
+
+
+async def _streamed(execution: Execution, sink: LLMEventSink) -> Response:
+    """Run ``execution`` (a ``stream_events`` one) to its end, handing each event to ``sink``."""
+    call = new_call_id()
+    stream = RichStreamResponse(
+        cast("AsyncIterator[StreamEvent]", execution.items()),
+        execution.finalize,
+        lifecycle=execution,
+    )
+    async with stream:
+        async for event in stream:
+            sink(event, call)
+    response = stream.response
+    if response is None:  # pragma: no cover - a finished stream always has its response
+        raise RuntimeError("the stream ended without a response")
+    return response

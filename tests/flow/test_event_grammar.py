@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -15,7 +16,7 @@ from ai_arch_toolkit.core._state import State, StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.toolkit.budget import BudgetPolicy
 from ai_arch_toolkit.toolkit.flow import Flow, FlowEvent, FlowResult, FlowStep, Scope
-from tests.fake_provider import fake_llm
+from tests.fake_provider import Reply, fake_llm
 from tests.flow.event_grammar import check_grammar
 
 _MODEL = "claude-sonnet-4-6"
@@ -37,6 +38,17 @@ def _calls_model(name: str) -> Step:
     async def fn(snap: StateSnapshot) -> Result:
         await llm.complete("hi")
         return Result(value=name)
+
+    return Step(name=name, fn=fn)
+
+
+def _streams_model(name: str) -> Step:
+    reply = Reply(response=Response(text="Hello", usage=Usage(input_tokens=1), model=_MODEL))
+    llm, _ = fake_llm(replace(reply, chunks=["Hel", "lo"]), model=_MODEL)
+
+    async def fn(snap: StateSnapshot) -> Result:
+        response = await llm.complete("hi")
+        return Result(value=response.text)
 
     return Step(name=name, fn=fn)
 
@@ -115,6 +127,14 @@ _SCENARIOS: dict[str, _Scenario] = {
     ),
     "sequential, the flow times out": lambda: (
         _sequential(_step("a"), _step("slow", delay=10), timeout=0.1),
+        {},
+    ),
+    "sequential, a step streams the model's text": lambda: (
+        _sequential(_step("a"), _streams_model("b"), _step("c")),
+        {},
+    ),
+    "dag, two steps stream at once": lambda: (
+        _dag(_after(_streams_model("left")), _after(_streams_model("right"))),
         {},
     ),
     "cyclic, two passes": lambda: (
@@ -209,6 +229,9 @@ def test_the_checker_catches_a_step_that_never_ends_and_a_story_the_trace_does_n
     closed = FlowEvent(type="step_end", flow_name="f", step_name="a")
     with pytest.raises(AssertionError, match="trace says"):
         check_grammar([start, open_step, closed, end], _trace())
+    stop = FlowEvent(type="timeout", flow_name="f")
+    with pytest.raises(AssertionError, match="still running at the stop"):
+        check_grammar([start, open_step, stop, end], _trace())
 
 
 def _trace() -> Any:

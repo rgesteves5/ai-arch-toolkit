@@ -56,6 +56,13 @@ flows, manifests) needs these changes; each one is detailed below.
   - `select` or `serialize_as` on an inline template.
 
 ### Added
+- **An iterated flow streams its LLM calls** (D54). Each `llm.complete` a step makes in a run
+  being iterated (`flow.iter()`, `agent.iter()`, their sync forms) runs on the stream path, and
+  its events arrive as `FlowEvent(type="llm_event")` with the `StreamEvent` (`llm_event`) and the
+  call's id (`llm_call`): the ten strategies stream their model output without being rewritten,
+  and nested loops stream under the step they run in. `run()` streams nothing. The mechanism is
+  the core's `llm_events_to(sink)`, which streams any `complete` made where it is bound.
+- `FlowEvent.step_trace`: every `step_end` and `step_skipped` carries the step's trace entry.
 - **The `truststore` extra** (D51): with it installed, the tools verify TLS with the system's
   certificate store, as pip does. Without it, they keep OpenSSL's CA file, and a certificate error
   says how to switch. On uv's standalone Pythons for macOS, whose file has no root for Eurostat's
@@ -242,6 +249,16 @@ flows, manifests) needs these changes; each one is detailed below.
   [docs/agents.md](docs/agents.md#file-backed-agent-manifests).
 
 ### Changed
+- **Every step that starts ends** (G-22). A step the flow's timeout cancels, a step whose call a
+  budget denies, and a step still running when a bug makes the engine raise now report a
+  `step_end`, before the run's `timeout`, `policy_decision` or exception, with a trace entry that
+  gives the reason (`policy_decisions` `timeout`, `budget_exceeded` or `halt`) and the time it
+  ran. The run's trace records them before its own `flow_timeout` or `budget_exceeded` entry,
+  where they were missing, so `AgentResult.errors` lists them too.
+- `iter()` delivers `llm_event`s, a new `FlowEvent.type`; inside an iterated run a call that fails
+  after its first streamed event is not retried, as with `stream_events()`, and an
+  OpenAI-compatible server that reports no usage in a stream leaves the call's cost unknown.
+- `aclose()` right after `flow_start` now runs the run's cleanup (the meter scope's close).
 - **A host that answered 429 rests** (D53): for its `Retry-After`, or the time the tool module
   declares (`Api(cooldown_s=...)`; GDELT 60 s), a call fails at once, without a request, and says
   when to try again, instead of prolonging the limit. An API's `min_interval_s` counts from the end

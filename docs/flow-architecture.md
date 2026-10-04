@@ -448,6 +448,8 @@ async with flow.iter(state) as execution:
     async for event in execution:
         match event.type:
             case "step_start":   print(f"  Running {event.step_name}")
+            case "llm_event" if event.llm_event.kind == "text":
+                print(event.llm_event.text, end="")   # the model's text, as it is made
             case "retry" | "timeout" | "fallback":
                 print(f"  {event.type} in {event.step_name}")
             case "policy_decision":
@@ -467,8 +469,9 @@ with flow.iter_sync(state) as sync_execution:
 | Event | Emitted when |
 |---|---|
 | `flow_start`, `flow_end` | The run starts; the run has finished (`flow_end.trace` is the complete trace). |
-| `step_start`, `step_end` | A step starts; a step finishes (`step_end.result` and `step_end.error` carry the outcome). |
-| `step_skipped` | A `when` condition was false, or a DAG dependency failed or was skipped. |
+| `step_start`, `step_end` | A step starts; a step finishes (`step_end.result` and `step_end.error` carry the outcome, `step_end.step_trace` the step's trace entry). Every `step_start` has its `step_end`, also for a step the run cut short. |
+| `step_skipped` | A `when` condition was false, or a DAG dependency failed or was skipped (`step_trace` is its trace entry). |
+| `llm_event` | An LLM call the step made streamed one event: `llm_event` is the `StreamEvent` (text, thinking, tool call, image), `llm_call` the call's id, shared by its events. |
 | `retry`, `timeout`, `fallback` | The step engine takes that decision — while the step is still running. A `timeout` without a `step_name` means the run's own `timeout` elapsed. |
 | `policy_decision` | Any other decision: `low_confidence`, `escalate`, `halt`, `cost_exceeded`, `budget_exceeded`. |
 
@@ -476,7 +479,24 @@ The run only moves past a step when you ask for the next event. A `break` does n
 itself: while you still hold the execution, the step in flight keeps running. Leaving the
 `async with` block, or `await execution.aclose()`, cancels the steps still running and closes the
 run's meter (for `iter_sync`, the `with` block or `close()`). When a run times out, the steps in
-flight are cancelled before the `timeout` event is delivered. In a parallel wave, each sibling
+flight are cancelled and each reports its `step_end` (its trace says it was cut by the timeout,
+with the decision `timeout`) before the `timeout` event is delivered. A step whose LLM call a
+budget denies ends the same way (decision `budget_exceeded`), before the run's
+`policy_decision`; and if a bug makes the engine raise, the steps still running end (decision
+`halt`) before the exception reaches you. The run's trace records these steps too, followed by
+its own `flow_timeout` or `budget_exceeded` entry.
+
+While a run is iterated, every `llm.complete` a step makes runs on the stream path and delivers
+its events as `llm_event`s, between the step's `step_start` and `step_end` (D54). The step gets
+the same `Response`; the difference is that a call failing after its first event is not retried
+(as with `stream_events()`), where before it, retry and fallback behave as usual. A nested run
+(an inner `flow.run()`, an inner ReAct loop) reports its calls under the step it runs in, and the
+LLM calls a tool or a reviewer makes show too: `llm_call` tells the calls of one step apart. A
+call the step leaves running (a tool's thread that outlived its deadline) is heard no more once the
+step has ended. Each call holds its `inference_limit` slot to the end. An OpenAI-compatible server
+must report usage in a stream (`stream_options.include_usage`) for such a call to be priced; one
+that does not leaves its cost unknown. `run()` streams nothing. Under the hood the run binds the core's
+channel, `llm_events_to(sink)`, around each step (see [LLM](llm.md#streaming-into-a-caller)). In a parallel wave, each sibling
 reports `step_end` as it finishes, and the wave's artifacts are merged into the state once every
 sibling has finished; if the run times out mid-wave, the siblings that already finished are kept. A step whose `when` or `Scope` callable raises is recorded with the
 error, reported by `step_end`, and the flow stops.

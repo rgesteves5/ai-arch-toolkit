@@ -88,6 +88,21 @@ for event in llm.stream_events_sync("Hello"):   # sync rich events (SyncRichStre
     ...
 ```
 
+### Streaming into a caller
+
+`llm_events_to(sink)` binds a sink for the code inside it: each `llm.complete` made there runs on
+the stream path and hands every `StreamEvent` to `sink(event, call_id)` as it arrives, and returns
+the same `Response` (D54). A flow being iterated binds one around each step, which is how
+`flow.iter()` and `agent.iter()` deliver the model's text as it is made. The binding follows the
+context into the tasks and threads started inside it; `llm_events_to(None)` unbinds.
+
+```python
+from ai_arch_toolkit.core import llm_events_to
+
+with llm_events_to(lambda event, call: print(event.text, end="") if event.kind == "text" else None):
+    response = await llm.complete("Write a haiku.")   # printed as it streams; same Response
+```
+
 The messages argument is a string (one user message) or a list of message dicts, and a message's content is `Content` — a string or a multimodal list. See [Content & Messages](content.md).
 
 `system=` never replaces the `system()` messages in `messages`, or the other way round: Anthropic, Gemini and xAI receive one system prompt with `system=` first and the `system()` messages after it, separated by a blank line, while the OpenAI and Meta adapters send `system=` as the Responses API's `instructions` and keep each `system()` message at its position — batch requests included. An OpenAI-compatible server (Chat Completions) gets `system=` as a leading system message, and each `system()` message at its position.

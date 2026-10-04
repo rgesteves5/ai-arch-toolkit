@@ -459,7 +459,11 @@ async def test_a_timeout_in_a_parallel_wave_keeps_the_siblings_that_finished() -
 
     assert result.results["a"].value == "a"
     assert state["a"] is True
-    assert [st.name for st in result.trace.steps] == ["a", "flow_timeout"]
+    # The step the timeout cut ends too, with the reason, before the run's own entry (G-22).
+    assert [st.name for st in result.trace.steps] == ["a", "b", "flow_timeout"]
+    cut = result.trace.steps[1]
+    assert cut.policy_decisions == ("timeout",)
+    assert cut.error is not None and cut.error.startswith("cut by the flow's timeout")
     assert log == ["a done", "b cancelled"]
 
 

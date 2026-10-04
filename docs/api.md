@@ -106,7 +106,7 @@ The neutral meter under every budget. See [Cumulative budgets](safety.md#cumulat
 | `Flow` | Composes Steps into sequential, cyclic, or DAG execution graphs |
 | `FlowStep` | Wraps a Step with optional `when` conditions and `after` dependencies |
 | `FlowResult` | Total cost, duration, usage, full Trace, and the run's `meter` report |
-| `FlowEvent` | Streaming events: `flow_start`, `flow_end`, `step_start`, `step_end`, `step_skipped`, `retry`, `timeout`, `fallback`, `policy_decision` |
+| `FlowEvent` | Streaming events: `flow_start`, `flow_end`, `step_start`, `step_end` (with the step's `step_trace`), `step_skipped`, `retry`, `timeout`, `fallback`, `policy_decision`, and `llm_event` (an LLM call's stream event, in an iterated run) |
 | `Scope` | Controls what keys a Step can see (include/exclude/transform/enrich) |
 | `execute_flow()`, `iter_flow()` | Execution and streaming entry points |
 | `FlowExecution`, `SyncFlowExecution` | What `Flow.iter()` / `iter_sync()` return: iterate the events, then read `.result`; close them (`async with` / `with`) to stop a run early |

@@ -240,8 +240,17 @@ alone leaves the step in flight running while you still hold the execution.
 Events come from the steps of the strategy's flow ([Flow Architecture](flow-architecture.md#streaming)).
 An inner ReAct loop that runs inside one step reports through that step's
 `step_start`/`step_end`, and each inner run appears in the trace among that step's
-`children`, as a `react` entry holding its steps. `iter()` is not token streaming:
-model output arrives with `step_end`.
+`children`, as a `react` entry holding its steps. The model's output streams: each LLM call a
+step makes delivers its events as `llm_event`s (the inner ReAct loop's under the outer step), and
+every `step_end` carries the step's trace entry, also for a step a timeout or a budget cut short
+(see [Flow Architecture](flow-architecture.md#streaming)).
+
+```python
+async with agent.iter("Summarise the latest news on X.") as execution:
+    async for event in execution:
+        if event.type == "llm_event" and event.llm_event.kind == "text":
+            print(event.llm_event.text, end="")
+```
 
 ## Budgets
 

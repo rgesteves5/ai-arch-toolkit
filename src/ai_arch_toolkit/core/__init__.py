@@ -33,6 +33,7 @@ from ai_arch_toolkit.core._exceptions import (
 )
 from ai_arch_toolkit.core._images import ImageFormat, ImageRequest, ImageResolution
 from ai_arch_toolkit.core._llm import LLM
+from ai_arch_toolkit.core._llm_events import LLMEventSink, llm_events_to
 from ai_arch_toolkit.core._metering import (
     AdmissionController,
     AdmissionDecision,
@@ -189,6 +190,7 @@ __all__ = [
     "ImagePart",
     "ImageRequest",
     "ImageResolution",
+    "LLMEventSink",
     "MergeConflictError",
     "MergeStrategy",
     "MeterScope",
@@ -273,6 +275,7 @@ __all__ = [
     "image_generation",
     "infer_schema",
     "inference_limit",
+    "llm_events_to",
     "prepare_tools",
     "pricing",
     "redact",

@@ -124,7 +124,7 @@ Composable orchestration framework built on core/ primitives. See [Flow Architec
 - **`Flow`** — composes Steps into sequential, cyclic, or DAG execution graphs.
 - **`FlowStep`** — wraps a Step with optional `when` conditions and `after` dependencies.
 - **`FlowResult`** — total cost, duration, usage, and full Trace.
-- **`FlowEvent`** — streaming events (`flow_start`, `step_start`, `step_end`, `step_skipped`, `flow_end`, plus `retry`, `fallback`, `timeout`, and `policy_decision`).
+- **`FlowEvent`** — streaming events (`flow_start`, `step_start`, `step_end` with the step's `step_trace`, `step_skipped`, `flow_end`, plus `retry`, `fallback`, `timeout`, `policy_decision`, and the `llm_event`s of the LLM calls in an iterated run).
 - **`Scope`** — controls what keys a Step can see (include/exclude/transform/enrich).
 - **`execute_flow()`** / **`iter_flow()`** — execution and streaming entry points.
 
