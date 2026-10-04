@@ -975,3 +975,16 @@ que o código não usa; a do `36` fala de chaves da Anthropic e do xAI que o scr
 - `research/agent-strategies/02-react.md` (linhas 13 e 144) e `00-index.md` (linha 65) diziam que
   o OpenAI não reenvia o raciocínio → corrigidos com autorização do dono (2026-10-02), que levantou
   para isto a regra da R00 sobre `research/`.
+
+## 2026-10-04 · Frente A (Claude): visto na A03
+
+- **`~utilizador` que não existe faz `read_file`, `list_directory` e `search_files` levantar.**
+  O `Path(path).expanduser()` de cada uma fica fora do `try`, e um `~nome` de um utilizador que o
+  sistema não tem levanta `RuntimeError` ("Could not determine home directory"), contra a regra das
+  tools do toolkit de devolver uma frase de erro. O executor apanha-o, mas a pessoa recebe "Tool
+  execution failed". Reprodução: `read_file("~nao_existe/x")`. O `cwd` novo do `run_command`
+  (A03) já devolve "Not a directory".
+- **Um nome, uma tool, só no `ToolGroup`** (da revisão independente da A03). O `prepare_tools`
+  manda nomes repetidos para `tools=[a, b]` ou `tools=[grupo1, grupo2]`, que os fornecedores
+  recusam com um 400, e o `execute_tool`/`run_tools` com uma lista corre em silêncio a primeira
+  que encontrar. Os fluxos dos agentes recebem um `ToolGroup` e estão protegidos.

@@ -5,7 +5,9 @@
 - **Estado:** aberta em 2026-10-03, a pedido do dono, pela ordem do briefing do ai-network
   (`ai-network/board/toolkit-brief.md`, D-54 dele). A A01, o grupo 1 (a segurança), está feita
   a 2026-10-03 e publicada (`002642c`). A A02, o grupo 2 (o custo), está feita a 2026-10-04 e
-  publicada (`4bb8cc0`). O próximo é o grupo 3, a correcção (G-21, G-23, G-17, G-18, G-26, G-27).
+  publicada (`4bb8cc0`). A A03, o grupo 3 (a correcção), está feita a 2026-10-04 e
+  publicada (`87c7e35`); a G-15 já tinha fechado na frente O. O próximo é o grupo 4, as seis fontes que falham
+  (G-30).
 - **Origem:** o briefing de 29/09, onde a app lista o que contorna no toolkit. Cada lacuna diz o
   que falta, a evidência e quando fica feita. A G-36 (imagens) já fechou na frente I.
 - **Decisões:** D48 (nenhum endereço lido do ambiente), D49 (toda a falha tem tecto), D50 (um
@@ -17,6 +19,7 @@
 |---|---|---|---|---|
 | A01 | Segurança: nenhum endereço do ambiente (G-16) e as chaves `xai-`, `gsk_` e `AIza` no `Redactor` (G-19) | Claude | done | nada |
 | A02 | Custo: toda a falha tem tecto (G-29), preços com data e os que faltam (G-20) | Claude | done | nada |
+| A03 | Correcção: tools com nome repetido e embrulhadas (G-21), ids das chamadas (G-23), o cliente xAI sem loop (G-17), pedidos longos da Anthropic (G-18), `cwd` no `run_command` (G-26), ligações no `search_files` (G-27) | Claude | done | nada |
 
 ## Frente activa: geração de imagens
 

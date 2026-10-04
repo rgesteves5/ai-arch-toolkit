@@ -655,3 +655,27 @@ R01 publicada em `main` (`b3dae3f`); a R02 começa com a leitura obrigatória da
   - os testes leem os preços num dia fixo.
 - Gate: 6256 passed, 42 skipped.
 - Próximo: o grupo 3 do briefing, a correcção.
+
+## 2026-10-04 · A03 feita: a correcção (Claude, a pedido do dono)
+
+- A A02 foi commitada e publicada (`4bb8cc0`, `565fca4`).
+- O grupo 3 do briefing, verificado no `main`, tinha seis lacunas abertas; a G-15 já tinha
+  fechado na frente O.
+- Resolvidas:
+  - G-21: um nome repetido num `ToolGroup` é um erro; uma tool embrulhada corre o invólucro;
+    o bloqueio de tools perigosas fala para a pessoa;
+  - G-23: os ids das chamadas de ferramenta nascem num sítio só (`named_calls`, no `_answer`);
+  - G-17: os clientes dos SDKs nascem no primeiro uso, dentro do loop. O `prepare()` do xAI
+    deixou de mexer no cliente;
+  - G-18: um pedido longo da Anthropic vai por stream quando o SDK recusa mandá-lo sem;
+  - G-26: `run_command(cwd=...)`;
+  - G-27: o `search_files` e o `list_directory` ficam dentro da pasta.
+- Uma revisão independente encontrou cinco problemas, e quatro foram corrigidos com testes:
+  - o `close()` depois de chamadas sync (uma regressão);
+  - os streams sync do xAI (a G-17 estava só em parte);
+  - o limite do `list_directory`;
+  - o `OpenAIModerator`.
+
+  O quinto, nomes repetidos fora do `ToolGroup`, ficou em `FINDINGS.md`.
+- Gate: 6298 passed, 42 skipped.
+- Próximo: o grupo 4 do briefing, as seis fontes que falham (G-30).
