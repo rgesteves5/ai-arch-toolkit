@@ -136,6 +136,40 @@ class TestSemanticScholarSearch:
         assert "rate limited" in result
 
     @patch(HTTP_OPEN)
+    def test_a_429_without_a_key_says_how_to_get_one(self, mock_urlopen, monkeypatch):
+        monkeypatch.delenv("SEMANTIC_SCHOLAR_API_KEY", raising=False)
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            url="https://api.semanticscholar.org/graph/v1/paper/search",
+            code=429,
+            msg="Too Many Requests",
+            hdrs=None,
+            fp=None,
+        )
+
+        result = semantic_scholar_search("test")
+
+        assert "Set SEMANTIC_SCHOLAR_API_KEY" in result
+        assert "https://www.semanticscholar.org/product/api#api-key-form" in result
+
+    @patch(HTTP_OPEN)
+    def test_a_key_in_the_environment_goes_in_x_api_key(self, mock_urlopen, monkeypatch):
+        monkeypatch.setenv("SEMANTIC_SCHOLAR_API_KEY", "s2-key")
+        mock_urlopen.return_value = respond({"total": 0, "data": []})
+
+        semantic_scholar_search("test")
+
+        assert mock_urlopen.call_args.args[0].get_header("X-api-key") == "s2-key"
+
+    @patch(HTTP_OPEN)
+    def test_without_a_key_no_key_header_goes(self, mock_urlopen, monkeypatch):
+        monkeypatch.delenv("SEMANTIC_SCHOLAR_API_KEY", raising=False)
+        mock_urlopen.return_value = respond({"total": 0, "data": []})
+
+        semantic_scholar_search("test")
+
+        assert mock_urlopen.call_args.args[0].get_header("X-api-key") is None
+
+    @patch(HTTP_OPEN)
     def test_parse_failure(self, mock_urlopen):
         mock_urlopen.return_value = respond("not json")
 

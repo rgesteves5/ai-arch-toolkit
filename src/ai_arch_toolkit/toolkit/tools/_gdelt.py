@@ -23,11 +23,15 @@ def _query_error(answer: object) -> str | None:
 
 
 # At most one request every 5 seconds, with a margin: GDELT answers faster callers with a 429.
+# After a 429 its gate stays shut a minute or more, with no Retry-After
+# (https://github.com/cyanheads/gdelt-mcp-server/issues/44; every request of 2026-10-04 got one,
+# whatever the User-Agent): the host rests 60 s instead of prolonging it (D53).
 _API = Api(
     base="https://api.gdeltproject.org/api/v2/doc/doc",
     name="GDELT",
     timeout_s=15,
     min_interval_s=5.1,
+    cooldown_s=60.0,
     body_error=_query_error,
 )
 _MAX_RESULTS_LIMIT = 20

@@ -9,8 +9,13 @@ imported nowhere else in the package (architecture test).
 
 from __future__ import annotations
 
+import email.utils
 import http.client
+import importlib.metadata
 import json
+import math
+import os
+import ssl
 import threading
 import time
 import urllib.error
@@ -21,7 +26,16 @@ from dataclasses import dataclass, field
 from email.message import Message
 from typing import IO, Any, Protocol
 
-USER_AGENT = "ai-arch-toolkit/1.0 (https://github.com/ai-arch-toolkit)"
+
+def _version() -> str:
+    try:
+        return importlib.metadata.version("ai-arch-toolkit")
+    except importlib.metadata.PackageNotFoundError:  # run from a source tree, not installed
+        return "dev"
+
+
+# Who is asking, for the services that limit callers who do not say.
+USER_AGENT = f"ai-arch-toolkit/{_version()} (+https://github.com/rgesteves5/ai-arch-toolkit)"
 
 type ParamValue = str | int | float | Sequence[str]
 type Params = Mapping[str, ParamValue]
@@ -39,12 +53,21 @@ class HttpError(Exception):
         status: The HTTP status of an error response; ``None`` when no response arrived, or when
             the API reported the error inside a successful one (``Api.body_error``).
         body: The start of an error response's body, for APIs that explain errors there.
+        retry_after_s: The seconds an error response's ``Retry-After`` asked to wait, if it did.
     """
 
-    def __init__(self, message: str, *, status: int | None = None, body: str = "") -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: int | None = None,
+        body: str = "",
+        retry_after_s: float | None = None,
+    ) -> None:
         super().__init__(message)
         self.status = status
         self.body = body
+        self.retry_after_s = retry_after_s
 
 
 class _Response(Protocol):
@@ -87,8 +110,31 @@ class _SameHostRedirect(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+def _tls_context() -> ssl.SSLContext:
+    """The TLS context that verifies every request: the system's certificate store when the
+    ``truststore`` extra is installed, and OpenSSL's CA file otherwise (D51).
+
+    On some Pythons that file lacks recent roots: uv's standalone builds on macOS read
+    ``/etc/ssl/cert.pem``, which has no GlobalSign Root R46 (Eurostat's, measured 2026-10-04).
+    """
+    try:
+        import truststore
+    except ImportError:
+        return ssl.create_default_context()
+    return truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+
+
+_TLS = _tls_context()
+_SYSTEM_STORE = type(_TLS) is not ssl.SSLContext
+_TRUSTSTORE_HINT = (
+    " (to verify with the system's certificate store, install truststore: "
+    "pip install truststore, or the ai-arch-toolkit[truststore] extra)"
+)
+
+
 def _build_opener(*handlers: urllib.request.BaseHandler) -> urllib.request.OpenerDirector:
-    return urllib.request.build_opener(_SameHostRedirect(), *handlers)
+    tls = urllib.request.HTTPSHandler(context=_TLS)
+    return urllib.request.build_opener(_SameHostRedirect(), tls, *handlers)
 
 
 _OPENER = _build_opener()
@@ -100,7 +146,12 @@ def _open(request: urllib.request.Request, timeout: float) -> _Response:
 
 
 class _Throttle:
-    """Spaces requests that share a clock: one clock per (host, interval), across threads."""
+    """Spaces requests that share a clock: one clock per (host, interval), across threads.
+
+    A request takes a slot before it goes and frees the next ``interval`` after it ends, so a slow
+    answer does not let the next request out early. A host that answered 429 rests (``cool``):
+    until then, its requests do not go out (D53).
+    """
 
     def __init__(
         self,
@@ -112,6 +163,7 @@ class _Throttle:
         self._clock = clock
         self._lock = threading.Lock()
         self._free_at: dict[tuple[str, float], float] = {}
+        self._rest_until: dict[str, float] = {}
 
     def wait(self, host: str, interval_s: float) -> None:
         """Block until this caller's slot: reserved under the lock, slept outside it."""
@@ -123,6 +175,26 @@ class _Throttle:
             slot = max(now, self._free_at.get(key, now))
             self._free_at[key] = slot + interval_s
         self._sleep(slot - now)
+
+    def done(self, host: str, interval_s: float) -> None:
+        """The request that took a slot has ended: the next goes ``interval_s`` after now."""
+        if interval_s <= 0:
+            return
+        key = (host, interval_s)
+        with self._lock:
+            end = self._clock() + interval_s
+            self._free_at[key] = max(self._free_at.get(key, end), end)
+
+    def cool(self, host: str, seconds: float) -> None:
+        """``host`` asked to slow down: it takes no request for ``seconds``."""
+        with self._lock:
+            until = self._clock() + seconds
+            self._rest_until[host] = max(self._rest_until.get(host, until), until)
+
+    def resting(self, host: str) -> float:
+        """The seconds left before ``host`` takes requests again; 0 when it does."""
+        with self._lock:
+            return max(0.0, self._rest_until.get(host, 0.0) - self._clock())
 
 
 _THROTTLE = _Throttle()
@@ -221,17 +293,35 @@ def _fetch(
     except urllib.error.HTTPError as error:
         status, body = error.code, _error_body(error)
         message = describe(status, str(error.reason), body)
-        raise HttpError(message, status=status, body=body) from error
+        wait = _retry_after(error.headers)
+        raise HttpError(message, status=status, body=body, retry_after_s=wait) from error
     except _Redirected as refused:
         target = refused.target
         raise HttpError(f"refused a redirect to {target} (only same-host HTTPS)") from refused
     except urllib.error.URLError as error:
-        raise HttpError(f"URL error: {error.reason}") from error
+        hint = ""
+        if isinstance(error.reason, ssl.SSLCertVerificationError) and not _SYSTEM_STORE:
+            hint = _TRUSTSTORE_HINT
+        raise HttpError(f"URL error: {error.reason}{hint}") from error
     except TimeoutError as error:
         raise HttpError("request timed out.") from error
     except (OSError, http.client.HTTPException) as error:
         raise HttpError(f"network error: {str(error) or type(error).__name__}") from error
     return status, body, charset, complete
+
+
+def _retry_after(headers: Message | None) -> float | None:
+    """The seconds a ``Retry-After`` header asks to wait: a number, or an HTTP date."""
+    value = (headers.get("Retry-After") if headers is not None else None) or ""
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        when = email.utils.parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    return max(0.0, when.timestamp() - time.time())
 
 
 def _text(body: bytes, charset: str) -> str:
@@ -318,8 +408,13 @@ class Api:
         name: The API's name, for the rate-limit message.
         timeout_s: Deadline of one request, checked between reads of the body.
         max_bytes: Largest body read; a longer one is an error.
-        min_interval_s: Least time between two requests. Requests to one host with one interval
-            share a clock, across modules and threads.
+        min_interval_s: Least time between the end of a request and the start of the next.
+            Requests to one host with one interval share a clock, across modules and threads.
+        cooldown_s: After a 429 without a ``Retry-After``, how long the host takes no request: a
+            request in that time fails at once and says when to try again (D53).
+        key_env: The environment variable that holds the API's optional key (D52), read at each
+            request and sent in ``key_header``; without it, a 429 says where to get one
+            (``key_url``).
         params: Query parameters sent with every request.
         segment_safe: Characters left raw in path segments.
         query_safe: Characters left raw in the query string.
@@ -342,6 +437,10 @@ class Api:
     query_safe: str = ""
     status_messages: Mapping[int, str] = field(default_factory=dict)
     body_error: Callable[[object], str | None] | None = None
+    cooldown_s: float = 0.0
+    key_env: str | None = None
+    key_header: str = "x-api-key"
+    key_url: str = ""
 
     def __post_init__(self) -> None:
         if not _plain_base(self.base):
@@ -479,15 +578,30 @@ class Api:
             {**self.params, **(params or {})}, doseq=True, safe=self.query_safe
         )
         headers = {"User-Agent": USER_AGENT}
+        if key := self._key():
+            headers[self.key_header] = key
         data = None
         if body is not None:
             data, headers["Content-Type"] = body
         url = f"{self.base}{path}?{query}" if query else f"{self.base}{path}"
         request = urllib.request.Request(url, data=data, headers=headers)
+        if (rest := _THROTTLE.resting(self.host)) > 0:
+            msg = f"{self.name} asked to slow down (HTTP 429): try again in {math.ceil(rest)} s."
+            raise HttpError(msg, status=429)
         _THROTTLE.wait(self.host, self.min_interval_s)
-        status, raw, charset, complete = _fetch(
-            request, timeout_s=self.timeout_s, max_bytes=self.max_bytes, describe=self._describe
-        )
+        try:
+            status, raw, charset, complete = _fetch(
+                request,
+                timeout_s=self.timeout_s,
+                max_bytes=self.max_bytes,
+                describe=self._describe,
+            )
+        except HttpError as error:
+            if error.status == 429 and (wait := error.retry_after_s or self.cooldown_s) > 0:
+                _THROTTLE.cool(self.host, wait)
+            raise
+        finally:
+            _THROTTLE.done(self.host, self.min_interval_s)
         if not complete:
             raise HttpError(f"response larger than {self.max_bytes} bytes")
         return status, _text(raw, charset)
@@ -499,8 +613,19 @@ class Api:
         if status in self.status_messages:
             return self.status_messages[status]
         if status == 429:
-            return f"rate limited by {self.name} (HTTP 429). Try again later."
+            return f"rate limited by {self.name} (HTTP 429). Try again later.{self._key_hint()}"
         return _status_text(status, reason)
+
+    def _key(self) -> str:
+        """The API's optional key, from its environment variable; empty without one."""
+        return os.environ.get(self.key_env, "").strip() if self.key_env else ""
+
+    def _key_hint(self) -> str:
+        """For an API that takes an optional key, unset: how to set one."""
+        if not self.key_env or self._key():
+            return ""
+        where = f" (a free key: {self.key_url})" if self.key_url else ""
+        return f" Set {self.key_env} to send a key of your own{where}."
 
     def _explained(self, body: str) -> str | None:
         """The error an error status's body reports (``body_error``), or ``None``.

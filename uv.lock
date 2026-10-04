@@ -37,6 +37,7 @@ all = [
     { name = "openai" },
     { name = "pyyaml" },
     { name = "tiktoken" },
+    { name = "truststore" },
     { name = "xai-sdk" },
     { name = "youtube-transcript-api" },
 ]
@@ -68,6 +69,7 @@ dev = [
     { name = "pyyaml" },
     { name = "ruff" },
     { name = "tiktoken" },
+    { name = "truststore" },
     { name = "xai-sdk" },
     { name = "youtube-transcript-api" },
 ]
@@ -101,6 +103,9 @@ templates = [
 tokens = [
     { name = "tiktoken" },
 ]
+truststore = [
+    { name = "truststore" },
+]
 xai = [
     { name = "xai-sdk" },
 ]
@@ -122,6 +127,7 @@ requires-dist = [
     { name = "ai-arch-toolkit", extras = ["openai"], marker = "extra == 'all'" },
     { name = "ai-arch-toolkit", extras = ["prompts"], marker = "extra == 'all'" },
     { name = "ai-arch-toolkit", extras = ["tokens"], marker = "extra == 'all'" },
+    { name = "ai-arch-toolkit", extras = ["truststore"], marker = "extra == 'all'" },
     { name = "ai-arch-toolkit", extras = ["xai"], marker = "extra == 'all'" },
     { name = "ai-arch-toolkit", extras = ["yaml"], marker = "extra == 'all'" },
     { name = "ai-arch-toolkit", extras = ["youtube"], marker = "extra == 'all'" },
@@ -149,10 +155,11 @@ requires-dist = [
     { name = "reflex", marker = "extra == 'app'", specifier = ">=0.9.11.post1" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.16" },
     { name = "tiktoken", marker = "extra == 'tokens'", specifier = ">=0.11" },
+    { name = "truststore", marker = "extra == 'truststore'", specifier = ">=0.10" },
     { name = "xai-sdk", marker = "extra == 'xai'", specifier = ">=1.18,<2" },
     { name = "youtube-transcript-api", marker = "extra == 'youtube'", specifier = ">=1.2.4" },
 ]
-provides-extras = ["anthropic", "gemini", "meta", "openai", "xai", "graph", "tokens", "yaml", "templates", "prompts", "youtube", "all", "app", "bench", "docs", "telemetry", "dev"]
+provides-extras = ["anthropic", "gemini", "meta", "openai", "xai", "graph", "tokens", "yaml", "templates", "prompts", "youtube", "truststore", "all", "app", "bench", "docs", "telemetry", "dev"]
 
 [[package]]
 name = "aiobotocore"

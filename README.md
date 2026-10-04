@@ -44,6 +44,7 @@ Extras:
 | `templates` | `jinja2>=3.1` (optional Jinja prompt templates)       |
 | `prompts`   | YAML, Jinja, and JSON Schema prompt support            |
 | `youtube`   | `youtube-transcript-api>=1.2.4`                       |
+| `truststore` | `truststore>=0.10`: the tools verify TLS with the system's certificate store |
 | `all`       | Every extra above                                     |
 | `app`       | Reflex app support plus `graph,yaml`                  |
 | `bench`     | Inspect AI benchmark tooling                          |

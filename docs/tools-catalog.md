@@ -107,6 +107,8 @@ without credentials or ports.
 - `gdelt_news_search` — Search global news coverage via GDELT DOC 2.0
 - `gdelt_timeline` — Get a GDELT volume timeline for a news query
 
+GDELT's free API takes few requests per minute from one address: after a 429 both tools wait 60 s, answering at once with when to try again.
+
 **Video transcripts** — `_youtube.py`
 
 - `youtube_transcript` — Fetch public YouTube transcript text or timestamped segments
@@ -129,7 +131,7 @@ without credentials or ports.
 
 **Academic graph & metadata** — `_semantic_scholar.py`, `_crossref.py`, `_ror.py`, `_datacite.py`
 
-- `semantic_scholar_search` — Search Semantic Scholar papers via the public Academic Graph API
+- `semantic_scholar_search` — Search Semantic Scholar papers via the public Academic Graph API (an optional free key in `SEMANTIC_SCHOLAR_API_KEY` gives 1 request per second; without it, callers share one limit that is often spent)
 - `semantic_scholar_paper` — Get detailed metadata for a Semantic Scholar paper
 - `semantic_scholar_citations` — Get papers that cite a Semantic Scholar paper
 - `crossref_search` — Search Crossref works by title, DOI, topic, or citation fragment
@@ -234,7 +236,7 @@ without credentials or ports.
 - `who_indicators` — Search WHO Global Health Observatory indicators
 - `who_indicator` — Get WHO GHO indicator metadata by code
 - `who_series` — Fetch WHO GHO observations for an indicator
-- `eurostat_dataset_search` — Search Eurostat datasets by ID or title
+- `eurostat_dataset_search` — Search Eurostat datasets by ID or title (on a Python whose CA file lacks Eurostat's root, such as uv's standalone builds on macOS, install the `truststore` extra)
 - `eurostat_dataset` — Get Eurostat dataset metadata and dimension summary
 - `eurostat_dimensions` — List Eurostat dimensions and sample category codes
 - `eurostat_series` — Get Eurostat observations with generic dimension filters

@@ -33,6 +33,9 @@ yaml = ["pyyaml>=6.0.2"]
 templates = ["jinja2>=3.1"]
 prompts = ["pyyaml>=6.0.2", "jinja2>=3.1", "jsonschema>=4.0"]
 youtube = ["youtube-transcript-api>=1.2.4"]
+# The tools verify TLS against the system's certificate store instead of OpenSSL's file, which on
+# some Pythons (uv's standalone builds on macOS) lacks recent roots (D51).
+truststore = ["truststore>=0.10"]
 
 # Aggregate: install every provider plus every optional feature.
 all = [
@@ -43,6 +46,7 @@ all = [
     "ai-arch-toolkit[openai]",
     "ai-arch-toolkit[prompts]",
     "ai-arch-toolkit[tokens]",
+    "ai-arch-toolkit[truststore]",
     "ai-arch-toolkit[xai]",
     "ai-arch-toolkit[youtube]",
     "ai-arch-toolkit[yaml]",

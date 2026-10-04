@@ -74,6 +74,19 @@ class TestGdeltNewsSearch:
         assert "rate limited by GDELT" in result
         assert "one every 5 seconds" in result
 
+    @patch(HTTP_OPEN)
+    def test_after_a_429_gdelt_rests_and_the_next_call_says_when(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(
+            429, "Too Many Requests", body=b"Please limit requests to one every 5 seconds."
+        )
+        gdelt_news_search("test")
+
+        result = gdelt_timeline("test")
+
+        assert result.startswith("GDELT timeline failed: GDELT asked to slow down (HTTP 429)")
+        assert "try again in 60 s." in result
+        assert mock_urlopen.call_count == 1  # the second call did not go out
+
 
 def _timeline(*values: float) -> dict[str, object]:
     """A ``timelinevol`` answer: one series, its points under ``data``."""

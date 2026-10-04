@@ -9,8 +9,17 @@ from typing import Any
 from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
+# Without a key, every caller shares one limit, spent on 2026-10-04 (a 429 at the first request);
+# a free key gives its holder 1 request per second, in the x-api-key header
+# (https://www.semanticscholar.org/product/api/tutorial). The key is optional (D52).
 _API = Api(
-    base="https://api.semanticscholar.org/graph/v1", name="Semantic Scholar", segment_safe=":"
+    base="https://api.semanticscholar.org/graph/v1",
+    name="Semantic Scholar",
+    segment_safe=":",
+    min_interval_s=1.0,
+    key_env="SEMANTIC_SCHOLAR_API_KEY",
+    key_header="x-api-key",
+    key_url="https://www.semanticscholar.org/product/api#api-key-form",
 )
 _MAX_RESULTS_LIMIT = 20
 _ABSTRACT_MAX_CHARS = 900

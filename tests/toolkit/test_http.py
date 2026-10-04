@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import email.message
 import http.client
+import importlib.metadata
 import io
 import json
 import socket
+import ssl
+import sys
 import threading
 import time
 import urllib.error
@@ -152,6 +155,13 @@ class TestRequests:
         API.get_json("a", parse=dict)
 
         assert web.seen[0].get_header("User-agent") == _http.USER_AGENT
+
+    def test_the_user_agent_gives_the_packages_version_and_its_repository(self) -> None:
+        version = importlib.metadata.version("ai-arch-toolkit")
+
+        assert (
+            f"ai-arch-toolkit/{version} (+https://github.com/rgesteves5/ai-arch-toolkit)"
+        ) == _http.USER_AGENT
 
     def test_post_json_sends_the_payload(self, web: _Transport) -> None:
         web.add("https://api.example.org/v1/query", {"n": 1})
@@ -674,3 +684,200 @@ _STATUS_MESSAGES = Api(
     status_messages={404: "no matching records found."},
     body_error=_reported,
 )
+
+
+# --- D51: TLS with the system's certificate store, when truststore is installed ------------------
+
+_UNVERIFIED = ssl.SSLCertVerificationError(
+    1, "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer"
+)
+
+
+class TestTls:
+    def test_with_truststore_installed_the_systems_store_verifies(self) -> None:
+        import truststore
+
+        context = _http._tls_context()
+
+        assert isinstance(context, truststore.SSLContext)
+        assert context.verify_mode == ssl.CERT_REQUIRED
+        assert context.check_hostname is True
+
+    def test_without_truststore_the_standard_context_verifies(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setitem(sys.modules, "truststore", None)  # the import raises ImportError
+
+        context = _http._tls_context()
+
+        assert type(context) is ssl.SSLContext
+        assert context.verify_mode == ssl.CERT_REQUIRED
+        assert context.check_hostname is True
+
+    def test_the_opener_verifies_with_that_context(self) -> None:
+        handlers = [
+            h for h in _http._OPENER.handlers if isinstance(h, urllib.request.HTTPSHandler)
+        ]
+
+        assert [handler._context for handler in handlers] == [_http._TLS]  # type: ignore[attr-defined]
+
+    def _unverified(self, monkeypatch: pytest.MonkeyPatch) -> str:
+        def fail(request: urllib.request.Request, timeout: float) -> Any:
+            raise urllib.error.URLError(_UNVERIFIED)
+
+        monkeypatch.setattr(_http, "_open", fail)
+        with pytest.raises(HttpError) as caught:
+            API.get_json("x", parse=dict)
+        return str(caught.value)
+
+    def test_a_certificate_the_standard_store_cannot_verify_says_how_to_fix_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(_http, "_SYSTEM_STORE", False)
+
+        message = self._unverified(monkeypatch)
+
+        assert message.startswith("URL error: [SSL: CERTIFICATE_VERIFY_FAILED]")
+        assert "install truststore: pip install truststore" in message
+
+    def test_with_the_systems_store_the_error_stays_as_it_is(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(_http, "_SYSTEM_STORE", True)
+
+        assert "truststore" not in self._unverified(monkeypatch)
+
+
+# --- D52: an optional key from the environment ---------------------------------------------------
+
+KEYED = Api(
+    base="https://api.example.org/v1",
+    name="Example",
+    key_env="EXAMPLE_API_KEY",
+    key_header="x-api-key",
+    key_url="https://example.org/key",
+)
+
+
+class TestKeys:
+    def test_a_declared_key_goes_in_its_header(
+        self, web: _Transport, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("EXAMPLE_API_KEY", "k-123")
+        web.add("https://api.example.org/v1/a", {})
+
+        KEYED.get_json("a", parse=dict)
+
+        assert web.seen[0].get_header("X-api-key") == "k-123"
+
+    def test_without_the_key_no_header_goes(
+        self, web: _Transport, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("EXAMPLE_API_KEY", raising=False)
+        web.add("https://api.example.org/v1/a", {})
+
+        KEYED.get_json("a", parse=dict)
+
+        assert web.seen[0].get_header("X-api-key") is None
+
+    def test_a_429_without_the_key_says_how_to_get_one(
+        self, web: _Transport, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("EXAMPLE_API_KEY", raising=False)
+        web.add("https://api.example.org/v1/x", b"", status=429)
+
+        with pytest.raises(HttpError) as caught:
+            KEYED.get_json("x", parse=dict)
+
+        message = str(caught.value)
+        assert message.startswith("rate limited by Example (HTTP 429)")
+        assert "EXAMPLE_API_KEY" in message
+        assert "https://example.org/key" in message
+
+    def test_a_429_with_the_key_asks_for_none(
+        self, web: _Transport, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("EXAMPLE_API_KEY", "k-123")
+        web.add("https://api.example.org/v1/x", b"", status=429)
+
+        with pytest.raises(HttpError) as caught:
+            KEYED.get_json("x", parse=dict)
+
+        assert "EXAMPLE_API_KEY" not in str(caught.value)
+        assert "k-123" not in str(caught.value)
+
+
+# --- D53: a 429 rests the host; the interval counts from the end of a request --------------------
+
+COOLED = Api(base="https://api.example.org/v1", name="Example", cooldown_s=60.0)
+
+
+class TestRest:
+    @pytest.fixture
+    def clock(self, monkeypatch: pytest.MonkeyPatch) -> list[float]:
+        now = [1000.0]
+        monkeypatch.setattr(
+            _http, "_THROTTLE", _http._Throttle(sleep=lambda _s: None, clock=lambda: now[0])
+        )
+        return now
+
+    def test_after_a_429_the_host_rests_for_the_declared_time(
+        self, web: _Transport, clock: list[float]
+    ) -> None:
+        web.add("https://api.example.org/v1/x", b"", status=429)
+        with pytest.raises(HttpError, match="HTTP 429"):
+            COOLED.get_json("x", parse=dict)
+
+        clock[0] += 20
+        with pytest.raises(HttpError) as resting:
+            COOLED.get_json("x", parse=dict)
+        assert str(resting.value) == "Example asked to slow down (HTTP 429): try again in 40 s."
+        assert resting.value.status == 429
+        assert len(web.seen) == 1  # the request did not go out
+
+        clock[0] += 41
+        web.add("https://api.example.org/v1/x", {"ok": True})
+        assert COOLED.get_json("x", parse=dict) == {"ok": True}
+        assert len(web.seen) == 2
+
+    def test_retry_after_wins_over_the_declared_time(
+        self, web: _Transport, clock: list[float]
+    ) -> None:
+        web.add("https://api.example.org/v1/x", b"", status=429, **{"Retry-After": "7"})
+        with pytest.raises(HttpError):
+            COOLED.get_json("x", parse=dict)
+
+        with pytest.raises(HttpError, match=r"try again in 7 s\.$"):
+            COOLED.get_json("x", parse=dict)
+
+    def test_the_rest_covers_every_api_on_the_host(
+        self, web: _Transport, clock: list[float]
+    ) -> None:
+        web.add("https://api.example.org/v1/x", b"", status=429)
+        with pytest.raises(HttpError):
+            COOLED.get_json("x", parse=dict)
+
+        with pytest.raises(HttpError, match="asked to slow down"):
+            API.get_json("y", parse=dict)
+
+    def test_without_a_declared_time_or_retry_after_a_429_rests_nothing(
+        self, web: _Transport, clock: list[float]
+    ) -> None:
+        web.add("https://api.example.org/v1/x", b"", status=429)
+        for _ in range(2):
+            with pytest.raises(HttpError, match=r"^rate limited by Example"):
+                API.get_json("x", parse=dict)
+
+        assert len(web.seen) == 2
+
+    def test_the_interval_counts_from_the_end_of_the_previous_request(self) -> None:
+        now = [100.0]
+        slept: list[float] = []
+        throttle = _http._Throttle(sleep=slept.append, clock=lambda: now[0])
+
+        throttle.wait("api.example.org", 5.0)
+        now[0] += 12.0  # a slow answer
+        throttle.done("api.example.org", 5.0)
+        throttle.wait("api.example.org", 5.0)
+
+        assert slept == [0.0, 5.0]

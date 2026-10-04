@@ -56,6 +56,14 @@ flows, manifests) needs these changes; each one is detailed below.
   - `select` or `serialize_as` on an inline template.
 
 ### Added
+- **The `truststore` extra** (D51): with it installed, the tools verify TLS with the system's
+  certificate store, as pip does. Without it, they keep OpenSSL's CA file, and a certificate error
+  says how to switch. On uv's standalone Pythons for macOS, whose file has no root for Eurostat's
+  certificate, the Eurostat tools need it.
+- `SEMANTIC_SCHOLAR_API_KEY` (D52): the Semantic Scholar tools send a key found in the environment
+  (`x-api-key`, 1 request per second for its holder); keyless callers share one limit, and their
+  429 now says where to get a free key. `Api(key_env=..., key_header=..., key_url=...)` declares
+  such a key for any tool.
 - `run_command(cwd=...)` runs the command in another folder, which must exist; only the command's
   process changes folder, so the caller's runtime stays where it was.
 - Prices for DeepSeek (`deepseek-flash` and its v4 aliases, `deepseek-v4-pro`; the peak-hour
@@ -234,6 +242,12 @@ flows, manifests) needs these changes; each one is detailed below.
   [docs/agents.md](docs/agents.md#file-backed-agent-manifests).
 
 ### Changed
+- **A host that answered 429 rests** (D53): for its `Retry-After`, or the time the tool module
+  declares (`Api(cooldown_s=...)`; GDELT 60 s), a call fails at once, without a request, and says
+  when to try again, instead of prolonging the limit. An API's `min_interval_s` counts from the end
+  of each request, so a slow answer no longer lets the next request out early.
+- The tools' `User-Agent` names the package's real version and its repository
+  (`ai-arch-toolkit/<version> (+https://github.com/rgesteves5/ai-arch-toolkit)`).
 - **A `ToolGroup` holds one tool per name.** The model calls a tool by its name, so another tool
   under a name the group holds raises `ValueError` instead of replacing the first with a warning;
   adding a tool the group holds changes nothing.
