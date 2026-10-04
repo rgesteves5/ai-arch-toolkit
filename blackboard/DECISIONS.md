@@ -724,3 +724,60 @@ Só acrescentar. Uma decisão revista ganha uma nova entrada que diz qual substi
 - **Consequência:**
   - O custo de uma chamada passa a depender do dia em que se calcula: os testes fixam o dia.
   - O catálogo de uma app pode ler `until` e `then`, para mostrar a data de fim e o preço a seguir.
+
+## D51 · As tools verificam o TLS com as autoridades do sistema, por um extra opcional (frente A, G-30)
+
+- **Contexto:**
+  - O Python standalone do uv no macOS, o que o ai-network usa, lê as autoridades de
+    `/etc/ssl/cert.pem`: 128 raízes, sem a `GlobalSign Root R46`. O Eurostat (`ec.europa.eu`)
+    falha nesse Python com `CERTIFICATE_VERIFY_FAILED`.
+  - A mesma raiz está no Keychain do sistema e no ficheiro do Homebrew (192 raízes), onde o
+    pedido passa. Medido a 2026-10-04.
+  - Não é só o Eurostat: qualquer site com uma raiz recente falha nesse Python.
+- **Decisão** (o dono escolheu-a a 2026-10-04):
+  - Com o pacote `truststore` instalado (extra `truststore`), o `_http.py` verifica com o
+    armazém de certificados do sistema;
+  - sem ele, fica o contexto da biblioteca padrão, e o erro de certificado diz como resolver;
+  - o `truststore` tem licença MIT, não tem dependências, e é o que o pip usa por omissão desde a
+    24.2.
+- **Alternativas rejeitadas:**
+  - uma dependência obrigatória, que tira ao toolkit as zero dependências obrigatórias;
+  - deixar à app o `truststore.inject_into_ssl()`, que muda o `ssl` de todo o processo.
+- **Consequência:** as tools continuam só com a biblioteca padrão por omissão; a app que corre
+  num Python destes instala o extra.
+
+## D52 · Uma tool lê do ambiente a chave opcional do seu serviço (frente A, G-30)
+
+- **Contexto:** sem chave, o Semantic Scholar partilha um limite por todos os anónimos, esgotado
+  a 2026-10-04 (429 logo ao primeiro pedido). Uma chave gratuita dá 1 pedido por segundo a quem a
+  tem (https://www.semanticscholar.org/product/api/tutorial).
+- **Decisão** (o dono escolheu-a a 2026-10-04):
+  - um `Api` pode declarar a variável de ambiente da chave (`key_env`), o cabeçalho que a leva
+    (`key_header`) e onde se pede (`key_url`). A chave lê-se em cada pedido;
+  - sem chave, um 429 diz que variável definir e onde a pedir;
+  - a primeira é a `SEMANTIC_SCHOLAR_API_KEY`, no cabeçalho `x-api-key`.
+- **Alternativas rejeitadas:** só melhorar a mensagem do 429, que deixa a tool sem resposta
+  enquanto o limite partilhado estiver esgotado.
+- **Consequência:** é a primeira tool que lê uma chave do ambiente. A chave nunca entra no texto
+  que a tool devolve.
+
+## D53 · Um 429 fecha o host durante o tempo que a API pede, e o ritmo conta do fim do pedido (frente A, G-30)
+
+- **Contexto:**
+  - O GDELT respondeu 429 a todos os pedidos de 2026-10-04, com qualquer User-Agent, mesmo
+    depois de 150 s de pausa.
+  - Relatos de 2026-07 e 2026-09 medem uma porta que fica fechada um minuto ou mais depois de
+    um 429, sem `Retry-After` (https://github.com/cyanheads/gdelt-mcp-server/issues/44).
+  - O toolkit espaçava os pedidos pelo início de cada um e voltava a bater logo a seguir a um
+    429, o que prolonga o castigo.
+- **Decisão** (o dono escolheu-a a 2026-10-04):
+  - depois de um 429, o `_http.py` não manda mais pedidos a esse host durante o `Retry-After`,
+    ou o `cooldown_s` que o `Api` declara: responde logo que o serviço pediu para abrandar e
+    quando voltar a tentar;
+  - o `min_interval_s` passa a contar do fim de cada pedido;
+  - o GDELT declara 60 s.
+- **Alternativas rejeitadas:**
+  - tirar as tools do GDELT do catálogo;
+  - deixar como estava e só o escrever nos docs.
+- **Consequência:** o GDELT anónimo continua a aguentar poucos pedidos por minuto e por IP; a tool
+  deixa de o agravar e diz quanto esperar.

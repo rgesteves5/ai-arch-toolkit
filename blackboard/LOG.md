@@ -679,3 +679,23 @@ R01 publicada em `main` (`b3dae3f`); a R02 começa com a leitura obrigatória da
   O quinto, nomes repetidos fora do `ToolGroup`, ficou em `FINDINGS.md`.
 - Gate: 6298 passed, 42 skipped.
 - Próximo: o grupo 4 do briefing, as seis fontes que falham (G-30).
+
+## 2026-10-04 · A04 feita: as fontes que falham (Claude, a pedido do dono)
+
+- A A03 foi commitada e publicada (`87c7e35`, `0619e1a`).
+- Uma chamada a sério por fonte, gratuita:
+  - responderam o arXiv, os países, o UniProt, o PDB, o Eurostat e o `define_word`;
+  - o Eurostat falha no Python do ai-network, porque o ficheiro de autoridades dele não tem a
+    raiz `GlobalSign Root R46`;
+  - o GDELT e o Semantic Scholar dão 429.
+- O dono escolheu as três recomendações:
+  - D51: o TLS das tools verifica com as autoridades do sistema quando o extra `truststore` está
+    instalado;
+  - D52: a chave opcional de uma tool vem do ambiente; a primeira é a
+    `SEMANTIC_SCHOLAR_API_KEY`;
+  - D53: um 429 deixa o host em espera pelo `Retry-After` ou pelo tempo declarado (GDELT 60 s), e
+    o ritmo conta do fim do pedido.
+- O User-Agent passou a ter a versão real e o repositório.
+- Provado ao vivo: o Eurostat responde no Python do ai-network com o `truststore`.
+- Gate: 6317 passed, 42 skipped.
+- Próximo: o grupo 5 do briefing, o streaming dentro das estratégias (G-22).
