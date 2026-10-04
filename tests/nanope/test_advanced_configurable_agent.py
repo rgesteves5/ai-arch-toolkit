@@ -557,7 +557,8 @@ def test_dangerous_tools_are_blocked_by_default() -> None:
     assert result.ok is False
     assert result.error is not None
     assert result.error.type == "dangerous_tool_blocked"
-    assert "--allow-dangerous-tools" in result.to_model_text()
+    # The gate speaks to the person the model repeats it to, not of the CLI's flag (G-21).
+    assert "did not run" in result.to_model_text()
 
 
 def test_allowed_dangerous_tools_run(tmp_path) -> None:

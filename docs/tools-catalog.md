@@ -254,13 +254,13 @@ These execute real side effects and live in the explicit `ai_arch_toolkit.toolki
 **Filesystem** — `dangerous`
 
 - `read_file` — Read file contents with a line limit (1–10 000); reads at most 100 000 characters
-- `list_directory` — List files/dirs with sizes and types (up to 1000 entries)
-- `search_files` — Recursively search for text in files (1–1000 results; matching lines cut at 300 characters)
+- `list_directory` — List files/dirs with sizes and types (up to 1000 entries); lists only entries inside the folder, so a pattern that climbs out (`../*`) or goes through a link (`link/*`) finds nothing there
+- `search_files` — Recursively search for text in files (1–1000 results; matching lines cut at 300 characters); a link that points out of the folder is not read
 - `csv_read` — Read CSV files, return a formatted table (1–10 000 rows)
 
 **Shell** — `dangerous`
 
-- `run_command` — Execute shell commands and return output (timeout 1–600 s, output 1–100 000 characters); governed execution gives up at the tool's default 120 s `timeout_s` with a `timeout` failure, and the command runs on until it ends or its own timeout stops it
+- `run_command` — Execute shell commands and return output (timeout 1–600 s, output 1–100 000 characters; `cwd` runs the command in another folder, without moving the process); governed execution gives up at the tool's default 120 s `timeout_s` with a `timeout` failure, and the command runs on until it ends or its own timeout stops it
 
 **Python** — `dangerous`
 

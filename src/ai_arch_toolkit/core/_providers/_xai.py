@@ -449,6 +449,21 @@ def _chunk_events(chunk: xai_chat.Chunk) -> list[StreamEvent]:
     return events
 
 
+class _OfflineChat(ChatClient):
+    """The SDK's ``chat.create`` on no channel: it builds and checks a request that belongs to no
+    client, and so to no event loop (G-17). ``XAIProvider._bound`` copies the request into one of
+    the client, in the loop of the call."""
+
+    def __init__(self) -> None:  # the SDK's own opens a stub on a channel
+        pass
+
+    def _make_chat(self, conversation_id: str | None, **settings: Any) -> Chat:
+        return Chat(cast("Any", None), conversation_id, **settings)
+
+
+_OFFLINE_CHAT = _OfflineChat()
+
+
 # ---------------------------------------------------------------------------
 # Provider
 # ---------------------------------------------------------------------------
@@ -470,9 +485,6 @@ class XAIProvider(LoopAwareClientCache, BaseProvider[_Call, _Final]):
                 api_key=api_key, channel_options=_CHANNEL_OPTIONS, timeout=timeout
             )
         )
-
-    async def close(self) -> None:
-        await self._client.close()
 
     def _profile(self) -> _Profile:
         found = lookup(self._model, _PROFILES)
@@ -577,21 +589,31 @@ class XAIProvider(LoopAwareClientCache, BaseProvider[_Call, _Final]):
             params["tool_choice"] = _tool_choice(options.tool_choice)
 
     def _create(self, params: _Create) -> Chat:
-        """The SDK's request: ``chat.create`` builds it locally, with no RPC."""
-        chat: ChatClient = self._client.chat
+        """The SDK's request: ``chat.create`` builds it locally, with no RPC and no client, so
+        ``prepare()`` stays pure (a sync stream prepares in its caller's thread)."""
         try:
-            return chat.create(**params)
+            return _OFFLINE_CHAT.create(**params)
         except (TypeError, ValueError) as refused:  # the SDK's own validation
             raise RequestError(f"the xAI SDK refused the request: {refused}") from refused
 
+    def _bound(self, chat: Chat) -> Chat:
+        """``chat`` as a request of the client, which is built here, in the call's loop, on
+        first use (G-17)."""
+        client: ChatClient = self._client.chat
+        bound = client.create(model=chat.proto.model)
+        bound.proto.CopyFrom(chat.proto)
+        return bound
+
     async def send(self, prepared: _Call) -> _Final:
-        mark_dispatched()  # every local step ran in prepare
         if isinstance(prepared, _ImageCall):
             return await self._sample_images(prepared)
-        return await prepared.params.sample()
+        chat = self._bound(prepared.params)
+        mark_dispatched()  # every local step ran: the request leaves now
+        return await chat.sample()
 
     async def _sample_images(self, call: _ImageCall) -> _Images:
-        images = self._client.image
+        images = self._client.image  # built here, in the call's loop (G-17)
+        mark_dispatched()
         if call.n == 1:
             return _Images((await images.sample(**call.params),))
         found: Sequence[ImageResponse] = await images.sample_batch(n=call.n, **call.params)
@@ -600,10 +622,11 @@ class XAIProvider(LoopAwareClientCache, BaseProvider[_Call, _Final]):
     async def open_stream(self, prepared: _Call) -> AsyncIterator[StreamEvent | Done[_Final]]:
         if isinstance(prepared, _ImageCall):
             raise RequestError("an image generation is not streamed: use generate_image()")
+        chat = self._bound(prepared.params)
         mark_dispatched()
         # The SDK pairs every chunk with the response accumulated so far.
         final: xai_chat.Response | None = None
-        async for accumulated, chunk in prepared.params.stream():
+        async for accumulated, chunk in chat.stream():
             final = accumulated
             for event in _chunk_events(chunk):
                 yield event

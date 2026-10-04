@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 
 from ai_arch_toolkit.core import tool
 
@@ -22,6 +23,7 @@ def run_command(
     command: str,
     timeout: int = _DEFAULT_TIMEOUT,
     max_output: int = _DEFAULT_MAX_OUTPUT,
+    cwd: str | None = None,
 ) -> str:
     """Run a shell command and return its output.
 
@@ -29,9 +31,14 @@ def run_command(
         command: The shell command to execute.
         timeout: Maximum seconds to wait (1-600). Defaults to 30.
         max_output: Maximum characters of output to return (1-100000). Defaults to 8000.
+        cwd: The folder to run the command in. Defaults to the current one.
     """
     timeout = max(1, min(timeout, _MAX_TIMEOUT))
     max_output = max(1, min(max_output, _MAX_OUTPUT))
+    # Only the command's own process changes folder: the caller's stays where it was.
+    folder = None if cwd is None else _folder(cwd)
+    if cwd is not None and folder is None:
+        return f"Not a directory: {cwd}"
     try:
         result = subprocess.run(
             command,
@@ -39,6 +46,7 @@ def run_command(
             capture_output=True,
             text=True,
             timeout=timeout,
+            cwd=folder,
         )
     except subprocess.TimeoutExpired:
         return f"Command timed out after {timeout}s: {command}"
@@ -58,3 +66,12 @@ def run_command(
     if len(output) > max_output:
         return output[:max_output] + f"\n\n[Truncated — {len(output)} total chars]"
     return output
+
+
+def _folder(path: str) -> Path | None:
+    """``path`` as a folder that exists, or ``None``."""
+    try:
+        folder = Path(path).expanduser()
+    except RuntimeError:  # "~name" for a user this system does not have
+        return None
+    return folder if folder.is_dir() else None

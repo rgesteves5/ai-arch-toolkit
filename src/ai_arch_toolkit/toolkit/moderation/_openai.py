@@ -7,6 +7,7 @@ from typing import Any
 from ai_arch_toolkit.core._exceptions import APIError, RateLimitError
 from ai_arch_toolkit.core._moderation import ModerationResult
 from ai_arch_toolkit.core._providers import OWN_BASE_URLS
+from ai_arch_toolkit.core._providers._base import LoopAwareClientCache
 from ai_arch_toolkit.core._providers._imports import require_sdk
 from ai_arch_toolkit.core._sync import _run_sync
 
@@ -14,7 +15,7 @@ with require_sdk("openai"):
     import openai
 
 
-class OpenAIModerator:
+class OpenAIModerator(LoopAwareClientCache):
     """Moderator backed by OpenAI's free moderation endpoint.
 
     Uses ``omni-moderation-latest`` by default which supports text
@@ -29,8 +30,6 @@ class OpenAIModerator:
             print(result.categories)
     """
 
-    __slots__ = ("_client", "_model")
-
     def __init__(
         self,
         *,
@@ -38,8 +37,10 @@ class OpenAIModerator:
         model: str = "omni-moderation-latest",
     ) -> None:
         # The endpoint is always given: left out, the SDK reads OPENAI_BASE_URL and would send
-        # the key there (D48).
-        self._client = openai.AsyncOpenAI(api_key=api_key, base_url=OWN_BASE_URLS["openai"])
+        # the key there (D48). The client is built on first use, in the call's event loop, and
+        # rebuilt when a sync call's loop has closed (G-17).
+        base_url = OWN_BASE_URLS["openai"]
+        self._install_client(lambda: openai.AsyncOpenAI(api_key=api_key, base_url=base_url))
         self._model = model
 
     async def moderate(self, text: str) -> ModerationResult:
@@ -68,10 +69,6 @@ class OpenAIModerator:
     def moderate_sync(self, text: str) -> ModerationResult:
         """Synchronous wrapper around :meth:`moderate`."""
         return _run_sync(self.moderate(text))
-
-    async def close(self) -> None:
-        """Close the underlying HTTP client."""
-        await self._client.close()
 
     async def __aenter__(self) -> OpenAIModerator:
         return self

@@ -30,6 +30,7 @@ from ai_arch_toolkit.core._providers._base import (
     Prepared,
     StreamEvent,
     _parse_retry_after,
+    dispatched,
     mark_dispatched,
     merge_system_prompts,
     on_request,
@@ -522,9 +523,6 @@ class AnthropicProvider(LoopAwareClientCache, BaseProvider[Prepared[Params], Mes
             lambda: anthropic.AsyncAnthropic(**client_kwargs, http_client=_http())
         )
 
-    async def close(self) -> None:
-        await self._client.close()
-
     def _messages(self) -> AsyncMessages:
         return self._client.messages
 
@@ -680,7 +678,22 @@ class AnthropicProvider(LoopAwareClientCache, BaseProvider[Prepared[Params], Mes
         params["tool_choice"] = _tool_choice(choice)
 
     async def send(self, prepared: Prepared[Params]) -> Message:
-        return await self._messages().create(**prepared.params)
+        """``messages.create``, or a stream when the SDK refuses to send the request unstreamed.
+
+        Without a timeout of the caller's own, the SDK refuses, before sending it, a non-streaming
+        request it expects to take over 10 minutes: a large ``max_tokens``, a thinking budget
+        included (https://platform.claude.com/docs/en/cli-sdks-libraries/sdks/python#long-requests).
+        Such a request goes by stream, whose final message is the answer: the SDK's own limit
+        decides, whatever it becomes.
+        """
+        messages = self._messages()
+        try:
+            return await messages.create(**prepared.params)
+        except ValueError:
+            if dispatched():  # a response that could not be read: the request is never resent
+                raise
+        async with messages.stream(**prepared.params) as stream:
+            return await stream.get_final_message()
 
     async def open_stream(
         self, prepared: Prepared[Params]

@@ -838,7 +838,8 @@ class TestBatch:
 class TestClient:
     @patch("ai_arch_toolkit.core._providers._openai.openai.AsyncOpenAI")
     def test_disables_hidden_sdk_retries(self, client_cls):
-        OpenAIProvider("gpt-4o", "test-key")
+        provider = OpenAIProvider("gpt-4o", "test-key")
+        assert provider._client is client_cls.return_value  # built on first use (G-17)
 
         kwargs = client_cls.call_args.kwargs
         assert (kwargs["api_key"], kwargs["max_retries"]) == ("test-key", 0)

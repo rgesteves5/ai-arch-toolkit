@@ -907,16 +907,48 @@ async def test_claude_a_refused_connection_was_never_sent() -> None:
     await provider.close()
 
 
-async def test_claude_a_request_the_sdk_refuses_was_never_sent() -> None:
+@pytest.mark.parametrize(
+    ("model", "options"),
+    [
+        ("claude-opus-5", {"max_tokens": 128_000}),
+        # An older model's thinking budget adds to max_tokens: 16 000 and 8 000 pass the limit.
+        ("claude-sonnet-4-5", {"max_tokens": 16_000, "thinking": True, "thinking_budget": 8_000}),
+    ],
+)
+async def test_claude_a_request_the_sdk_would_refuse_goes_by_stream(
+    model: str, options: dict[str, Any]
+) -> None:
     # Without a timeout of its own, the SDK refuses a non-streaming call that may take over
-    # 10 minutes, before sending it.
+    # 10 minutes, before sending it (G-18): the adapter streams it and returns the whole message.
+    server, port, stats = await fakeserver.start("sse", events=[*CLAUDE_START, *CLAUDE_END])
+    async with server:
+        provider = AnthropicProvider(model, "local-test", base_url=f"http://127.0.0.1:{port}")
+        response = await complete(provider, HI, **options)
+        await provider.close()
+    assert json.loads(stats.bodies[0])["stream"] is True
+    assert response.text == "ok"
+    assert response.usage.output_tokens == 2
+
+
+async def test_claude_a_request_within_the_sdk_limit_goes_without_a_stream() -> None:
     server, port, stats = await fakeserver.start("status", body=CLAUDE_OK)
     async with server:
         provider = _claude(port, timeout=None)
-        outcome = await _outcome(complete(provider, HI, max_tokens=128_000))
+        response = await complete(provider, HI, max_tokens=8_000)
         await provider.close()
-    assert outcome == Outcome(RequestError, "not_sent")
-    assert stats.requests == 0
+    assert "stream" not in json.loads(stats.bodies[0])
+    assert response.text == "ok"
+
+
+async def test_claude_a_timeout_of_the_callers_own_keeps_a_long_request_unstreamed() -> None:
+    # A timeout the caller sets turns the SDK's refusal off: the request goes as they chose.
+    server, port, stats = await fakeserver.start("status", body=CLAUDE_OK)
+    async with server:
+        provider = _claude(port, timeout=30.0)
+        response = await complete(provider, HI, max_tokens=128_000)
+        await provider.close()
+    assert "stream" not in json.loads(stats.bodies[0])
+    assert response.text == "ok"
 
 
 async def test_claude_success_through_the_real_sdk() -> None:

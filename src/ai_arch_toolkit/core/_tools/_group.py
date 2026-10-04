@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import warnings
 from collections.abc import Callable, Sequence
 from typing import Any
 
@@ -69,11 +68,12 @@ class ToolGroup:
         self._redactor = default_redactor()
 
     def add(self, fn: Callable[..., Any]) -> None:
-        """Add a function to the group.
+        """Add a function to the group; adding a tool the group holds changes nothing.
 
         Raises:
             TypeError: If ``fn`` is a provider-hosted :class:`ServerTool` (pass it to the LLM
                 next to the group instead) or is not callable.
+            ValueError: If the group holds another tool with the same name.
         """
         if isinstance(fn, ServerTool):
             msg = (
@@ -87,11 +87,14 @@ class ToolGroup:
             raise TypeError(msg)
         definition = _definition_for(fn)
         name = definition.schema.name
-        if name in self._defs:
-            warnings.warn(
-                f"Duplicate tool name {name!r} in ToolGroup; overwriting previous",
-                stacklevel=2,
+        held = self._defs.get(name)
+        # Equal, not identical: each read of ``obj.method`` makes a new bound method.
+        if held is not None and held.fn != definition.fn:
+            msg = (
+                f"ToolGroup already holds a tool named {name!r}: under one name, the model "
+                "could not choose between them. Give one another name with @tool(name=...)."
             )
+            raise ValueError(msg)
         self._defs[name] = definition
 
     @property

@@ -548,7 +548,8 @@ class TestParseSdkResponse:
 class TestComplete:
     @patch("ai_arch_toolkit.core._providers._openai_compatible.openai.AsyncOpenAI")
     def test_disables_hidden_sdk_retries(self, client_cls):
-        OpenAICompatibleProvider("llama3.2", "not-needed", base_url=LOCAL)
+        provider = OpenAICompatibleProvider("llama3.2", "not-needed", base_url=LOCAL)
+        assert provider._client is client_cls.return_value  # built on first use (G-17)
 
         kwargs = client_cls.call_args.kwargs
         assert (kwargs["api_key"], kwargs["base_url"], kwargs["max_retries"]) == (

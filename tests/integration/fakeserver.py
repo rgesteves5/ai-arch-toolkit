@@ -6,6 +6,7 @@ import asyncio
 import json
 import socket
 import struct
+import threading
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -151,3 +152,61 @@ async def start(
 
     server = await asyncio.start_server(handle, "127.0.0.1", 0)
     return server, server.sockets[0].getsockname()[1], stats
+
+
+class KeepAlive:
+    """A loopback HTTP server in a thread of its own that keeps each connection open across
+    requests, as a real API does: a sync call's pooled connection outlives the call's event loop.
+
+    Every request gets ``body`` as JSON with a 200. Use it as a context manager.
+    """
+
+    def __init__(self, body: dict[str, object]) -> None:
+        self.body = body
+        self.stats = Stats()
+        self.port = 0
+        self._ready = threading.Event()
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._stop: asyncio.Event | None = None
+        self._thread = threading.Thread(target=self._run, name="keep-alive", daemon=True)
+
+    def __enter__(self) -> KeepAlive:
+        self._thread.start()
+        self._ready.wait()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        if self._loop is not None and self._stop is not None:
+            self._loop.call_soon_threadsafe(self._stop.set)
+        self._thread.join()
+
+    def _run(self) -> None:
+        asyncio.run(self._serve())
+
+    async def _serve(self) -> None:
+        self._loop = asyncio.get_running_loop()
+        self._stop = asyncio.Event()
+        server = await asyncio.start_server(self._handle, "127.0.0.1", 0)
+        self.port = server.sockets[0].getsockname()[1]
+        self._ready.set()
+        await self._stop.wait()
+        # Not ``wait_closed()``: a client may leave its connection open (one whose loop died),
+        # and asyncio.run cancels the handlers that still read from one.
+        server.close()
+
+    async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            while True:
+                self.stats.bodies.append(await _read_body(reader))
+                self.stats.requests += 1
+                payload = json.dumps(self.body).encode()
+                head = (
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n"
+                    f"content-length: {len(payload)}\r\n\r\n"
+                )
+                writer.write(head.encode() + payload)
+                await writer.drain()
+        except (asyncio.IncompleteReadError, ConnectionError):
+            pass
+        finally:
+            writer.close()

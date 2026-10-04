@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Sequence
-from contextlib import asynccontextmanager
+import threading
+from collections.abc import AsyncIterator, Iterator, Sequence
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 
 import grpc
@@ -168,10 +169,37 @@ async def serving(script: Script | None = None) -> AsyncIterator[tuple[Script, i
         await (chat.stopping or server.stop(None))
 
 
-async def provider(model: str, port: int, *, timeout: float = 2.0) -> XAIProvider:
-    """An adapter whose SDK client, configured as the adapter's own, talks to 127.0.0.1."""
-    adapter = XAIProvider(model, "local-test", timeout=timeout)
-    await adapter.close()  # its client for api.x.ai never connected
+@contextmanager
+def serving_in_thread(script: Script | None = None) -> Iterator[tuple[Script, int]]:
+    """Serve ``script`` from a thread of its own, for sync code that runs loops of its own."""
+    ready = threading.Event()
+    served: dict[str, object] = {}
+
+    async def serve() -> None:
+        async with serving(script) as (running, port):
+            served.update(script=running, port=port, loop=asyncio.get_running_loop())
+            stop = asyncio.Event()
+            served["stop"] = stop
+            ready.set()
+            await stop.wait()
+
+    thread = threading.Thread(target=lambda: asyncio.run(serve()), name="grpc", daemon=True)
+    thread.start()
+    ready.wait()
+    try:
+        yield served["script"], served["port"]  # type: ignore[misc]
+    finally:
+        loop: asyncio.AbstractEventLoop = served["loop"]  # type: ignore[assignment]
+        stop: asyncio.Event = served["stop"]  # type: ignore[assignment]
+        loop.call_soon_threadsafe(stop.set)
+        thread.join()
+
+
+def point(adapter: XAIProvider, port: int, *, timeout: float = 2.0) -> None:
+    """Give ``adapter`` an SDK client, configured as the adapter's own, that talks to 127.0.0.1.
+
+    The adapter builds its client on first use (G-17), so the one for api.x.ai never existed.
+    """
     adapter._install_client(
         lambda: xai_sdk.AsyncClient(
             api_key="local-test",
@@ -181,4 +209,10 @@ async def provider(model: str, port: int, *, timeout: float = 2.0) -> XAIProvide
             timeout=timeout,
         )
     )
+
+
+async def provider(model: str, port: int, *, timeout: float = 2.0) -> XAIProvider:
+    """An adapter whose SDK client, configured as the adapter's own, talks to 127.0.0.1."""
+    adapter = XAIProvider(model, "local-test", timeout=timeout)
+    point(adapter, port, timeout=timeout)
     return adapter

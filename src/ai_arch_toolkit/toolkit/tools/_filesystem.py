@@ -106,7 +106,12 @@ def list_directory(path: str = ".", pattern: str = "*") -> str:
     except (OSError, ValueError) as e:
         return f"Cannot list {path!r}: {_error_text(e)}"
     try:
-        entries = sorted(itertools.islice(p.glob(pattern), _MAX_ENTRIES + 1))
+        found = list(itertools.islice(p.glob(pattern), _MAX_ENTRIES + 1))
+        # A pattern may climb out (``../*``) or go through a link (``link/*``): only entries
+        # whose folder is inside ``path`` are listed (G-27). The cap counts every match, inside
+        # or not, so such a pattern walks no further than any other.
+        base = p.resolve()
+        entries = sorted(e for e in found if e.parent.resolve().is_relative_to(base))
     except PermissionError:
         return f"Permission denied: {path}"
     except OSError as e:
@@ -117,8 +122,8 @@ def list_directory(path: str = ".", pattern: str = "*") -> str:
         return f"No entries matching {pattern!r} in {path}"
     lines = [_entry_line(entry) for entry in entries[:_MAX_ENTRIES]]
     header = f"{path} ({len(lines)} entries):"
-    if len(entries) > _MAX_ENTRIES:
-        header = f"{path} (first {_MAX_ENTRIES} entries found):"
+    if len(found) > _MAX_ENTRIES:
+        header = f"{path} (first {len(lines)} entries found):"
     return header + "\n" + "\n".join(lines)
 
 
@@ -163,9 +168,12 @@ def search_files(directory: str, pattern: str, max_results: int = _DEFAULT_MAX_R
 
 
 def _matches(root: Path, needle: str, max_results: int) -> list[str]:
+    base = root.resolve()
     matches: list[str] = []
     for filepath in root.rglob("*"):
         if filepath.suffix in _BINARY_SUFFIXES or not filepath.is_file():
+            continue
+        if not filepath.resolve().is_relative_to(base):  # a link out of the folder (G-27)
             continue
         try:
             text, _ = read_prefix(filepath, _MAX_SCAN_CHARS, errors="strict")

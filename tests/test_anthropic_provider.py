@@ -498,6 +498,7 @@ class TestAnthropicProviderComplete:
         mock_client.messages.create.return_value = _sdk_message(text="Hello!")
 
         provider = AnthropicProvider("claude-sonnet-4-6", "test-key")
+        assert provider._client is mock_client  # built on first use (G-17)
         mock_sdk.AsyncAnthropic.assert_called_once_with(
             api_key="test-key",
             # Given explicitly: left out, the SDK would read ANTHROPIC_BASE_URL (D48).
@@ -1381,7 +1382,8 @@ class TestErrorsR02:
 
     def test_the_client_marks_the_dispatch(self):
         with patch("ai_arch_toolkit.core._providers._anthropic.anthropic") as sdk:
-            AnthropicProvider("claude-opus-5", "test-key")
+            provider = AnthropicProvider("claude-opus-5", "test-key")
+            assert provider._client is sdk.AsyncAnthropic.return_value  # built on first use
         kwargs = sdk.AsyncAnthropic.call_args.kwargs
         assert sdk.DefaultAsyncHttpxClient.call_args.kwargs == {
             "event_hooks": {"request": [on_request]}

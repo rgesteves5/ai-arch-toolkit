@@ -128,8 +128,8 @@ class DangerousToolGate:
             return GateBlock(
                 error_type="dangerous_tool_blocked",
                 message=(
-                    f"Tool blocked by governance: {ctx.tool_call.name!r} "
-                    "requires --allow-dangerous-tools."
+                    f"The tool {ctx.tool_call.name!r} did not run: it is marked dangerous, "
+                    "and this run does not allow dangerous tools."
                 ),
             )
         return None

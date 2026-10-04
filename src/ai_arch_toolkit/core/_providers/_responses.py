@@ -732,9 +732,6 @@ class ResponsesProvider(LoopAwareClientCache, BaseProvider[Call, Final]):
         self._profile = profile
         self._install_client(client)
 
-    async def close(self) -> None:
-        await self._client.close()
-
     def _responses(self) -> AsyncResponses:
         return self._client.responses
 

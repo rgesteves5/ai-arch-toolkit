@@ -11,6 +11,7 @@ from ai_arch_toolkit.core._response import ToolCall
 from ai_arch_toolkit.core._server_tools import code_execution, web_search
 from ai_arch_toolkit.core._tools._approval import ApprovalDecision
 from ai_arch_toolkit.core._tools._decorator import tool
+from ai_arch_toolkit.core._tools._executor import execute_tool
 from ai_arch_toolkit.core._tools._governance import DangerousToolGate, DryRunGate
 from ai_arch_toolkit.core._tools._group import ToolGroup
 
@@ -109,6 +110,84 @@ class TestToolGroupBasics:
         defs = group.definitions
         assert defs[0]["name"] == "plain_function"
         assert defs[0]["description"] == "Double a number."
+
+
+class TestOneToolPerName:
+    """Two tools under one name leave the model unable to choose: the group refuses the second."""
+
+    def test_another_tool_under_a_name_the_group_has_is_an_error(self):
+        @tool(name="get_weather")
+        def other_weather(city: str) -> str:
+            """Another weather tool."""
+            return f"Rain in {city}"
+
+        group = ToolGroup(get_weather)
+
+        with pytest.raises(ValueError, match="'get_weather'"):
+            group.add(other_weather)
+        kept = group.execute(ToolCall(id="tc_1", name="get_weather", input={"city": "Porto"}))
+        assert kept.value == "Sunny in Porto"
+
+    def test_the_constructor_refuses_two_callables_with_one_name(self):
+        with pytest.raises(ValueError, match="'scale'"):
+            ToolGroup(functools.partial(scale, 2.0), functools.partial(scale, 3.0))
+
+    def test_the_same_tool_twice_is_one_tool(self):
+        group = ToolGroup(get_weather, get_weather)
+
+        assert len(group) == 1
+
+    def test_the_same_method_read_twice_is_one_tool(self):
+        class Weather:
+            def forecast(self, city: str) -> str:
+                """The forecast for a city."""
+                return f"Sun in {city}"
+
+        weather = Weather()
+        group = ToolGroup(weather.forecast, weather.forecast)
+
+        assert len(group) == 1
+        result = group.execute(ToolCall(id="tc_1", name="forecast", input={"city": "Porto"}))
+        assert result.value == "Sun in Porto"
+
+
+class TestWrappedTools:
+    """``functools.wraps`` copies a tool's definition onto its wrapper, and the wrapper runs."""
+
+    def test_a_group_runs_the_wrapper(self):
+        seen: list[str] = []
+
+        @functools.wraps(get_weather)
+        def logged(*args, **kwargs):
+            seen.append("wrapper")
+            return get_weather(*args, **kwargs)
+
+        group = ToolGroup(logged)
+        result = group.execute(ToolCall(id="tc_1", name="get_weather", input={"city": "Porto"}))
+
+        assert result.ok is True, result.to_model_text()
+        assert result.value == "Sunny in Porto"
+        assert seen == ["wrapper"]
+        assert group.tools == [logged]
+
+    def test_execute_tool_runs_the_wrapper(self):
+        @functools.wraps(get_weather)
+        def shouting(*args, **kwargs):
+            return get_weather(*args, **kwargs).upper()
+
+        result = execute_tool(
+            ToolCall(id="tc_1", name="get_weather", input={"city": "Porto"}), [shouting]
+        )
+
+        assert result.value == "SUNNY IN PORTO"
+
+    def test_the_wrapper_and_the_tool_it_wraps_are_two_tools_with_one_name(self):
+        @functools.wraps(get_weather)
+        def logged(*args, **kwargs):
+            return get_weather(*args, **kwargs)
+
+        with pytest.raises(ValueError, match="'get_weather'"):
+            ToolGroup(get_weather, logged)
 
 
 class TestRejectsNonLocalTools:
@@ -260,6 +339,18 @@ class TestGovernanceGates:
         assert result.ok is False
         assert result.error is not None
         assert result.error.type == "dangerous_tool_blocked"
+
+    def test_the_block_reads_as_a_sentence_for_a_person(self):
+        """The model repeats the block to the person: it names no command-line flag."""
+        group = ToolGroup(get_weather, gates=(DangerousToolGate(blocked={"get_weather"}),))
+
+        result = group.execute(ToolCall(id="tc_1", name="get_weather", input={"city": "NYC"}))
+
+        assert result.error is not None
+        message = result.error.message
+        assert "--" not in message
+        assert message.startswith("The tool 'get_weather' did not run")
+        assert "dangerous" in message
 
     def test_dangerous_allowed(self):
         group = ToolGroup(

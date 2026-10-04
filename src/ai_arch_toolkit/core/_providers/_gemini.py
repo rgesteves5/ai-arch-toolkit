@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 import json
 import logging
-import uuid
 import warnings
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -383,7 +382,7 @@ def _parse_sdk_response(
         ),
         tool_calls=tuple(
             ToolCall(
-                id=part.function_call.id or uuid.uuid4().hex[:24],
+                id=part.function_call.id or "",  # the base names a call without one
                 name=part.function_call.name or "",
                 input=dict(part.function_call.args or {}),
             )
@@ -504,8 +503,7 @@ class GeminiProvider(
             )
         )
 
-    async def close(self) -> None:
-        client = self._client
+    async def _close_client(self, client: genai.Client) -> None:
         await client.aio.aclose()
         client.close()
 

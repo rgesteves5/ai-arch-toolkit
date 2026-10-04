@@ -69,12 +69,14 @@ def _definition_for(fn: Callable[..., Any]) -> ToolDefinition:
     """Return the canonical ``ToolDefinition`` for a callable.
 
     Decorated functions carry one; plain callables get a synthesized definition
-    with an inferred schema and a default (low-risk, no-approval) policy.
+    with an inferred schema and a default (low-risk, no-approval) policy. A definition whose
+    ``fn`` is another function was copied onto ``fn`` (``functools.wraps`` copies the wrapped
+    tool's ``__dict__``): it keeps its schema and policy, and runs ``fn``, the wrapper.
     """
     definition = getattr(fn, "__tool_definition__", None)
-    if definition is not None:
-        return definition
-    return ToolDefinition(fn=fn, schema=tool_schema(fn), policy=ToolRuntimePolicy())
+    if definition is None:
+        return ToolDefinition(fn=fn, schema=tool_schema(fn), policy=ToolRuntimePolicy())
+    return definition if definition.fn is fn else replace(definition, fn=fn)
 
 
 def _resolve_definition(tool_call: ToolCall, tools: list[Callable[..., Any]]) -> ToolDefinition:

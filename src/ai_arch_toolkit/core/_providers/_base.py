@@ -11,6 +11,7 @@ import dataclasses
 import json
 import logging
 import re
+import uuid
 import warnings
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping
@@ -29,7 +30,7 @@ from ai_arch_toolkit.core._exceptions import (
 )
 from ai_arch_toolkit.core._middleware import Request
 from ai_arch_toolkit.core._pricing import _estimate_response_cost
-from ai_arch_toolkit.core._response import OutputSchema, Response, StreamEvent, Usage
+from ai_arch_toolkit.core._response import OutputSchema, Response, StreamEvent, ToolCall, Usage
 from ai_arch_toolkit.core._stream_lifecycle import close_async
 
 logger = logging.getLogger(__name__)
@@ -92,6 +93,12 @@ def mark_dispatched() -> None:
         current.sent = True
 
 
+def dispatched() -> bool:
+    """Whether the current call's request has left the SDK for the transport."""
+    current = _dispatch.get()
+    return current is not None and current.sent
+
+
 async def on_request(request: object) -> None:
     """An ``httpx``/``httpx2`` request event hook: the SDK hands a built request to the
     transport. Adapters install it on their SDK's HTTP client."""
@@ -113,44 +120,51 @@ def _parse_retry_after(value: str | None) -> float | None:
 
 
 class LoopAwareClientCache:
-    """Rebuild a cached async SDK client whose pool died with its event loop.
+    """Build an async SDK client on first use, and rebuild it when its event loop dies.
 
-    The sync wrappers drive every call through a fresh ``asyncio.run()`` loop
-    that is closed afterwards. An async SDK client binds its connection pool
-    (httpx, gRPC aio) to the loop that served its first request, so the next
-    call — on a new loop — fails with a connection error. Providers install
-    their client with ``_install_client``; the ``_client`` property rebuilds it
-    from the factory once the loop it served is closed. A client assigned
-    directly (``provider._client = mock`` in tests) has no factory and is never
-    replaced. Using one provider from two concurrently *live* loops remains
-    unsupported.
+    Building a provider does no work bound to an event loop (G-17): an app may build its ``LLM``
+    in a worker thread or before its loop runs, and a gRPC aio channel (xAI's) cannot be created
+    outside a running loop. Providers install a factory with ``_install_client``; the ``_client``
+    property builds the client when it is first read, which in a call is inside the loop.
+
+    The sync wrappers drive every call through a fresh ``asyncio.run()`` loop that is closed
+    afterwards. An async SDK client binds its connection pool (httpx, gRPC aio) to the loop that
+    served its first request, so the next call, on a new loop, would fail with a connection error:
+    ``_client`` rebuilds it from the factory once the loop it served is closed. A client assigned
+    directly (``provider._client = mock`` in tests) has no factory and is never replaced. Using
+    one provider from two concurrently *live* loops remains unsupported.
     """
 
-    _client_value: Any
+    _client_value: Any = None
     _client_factory: Callable[[], Any] | None = None
     _client_loop: asyncio.AbstractEventLoop | None = None
 
     def _install_client(self, factory: Callable[[], Any]) -> None:
-        """Install an SDK client that ``_client`` may rebuild after loop turnover."""
-        self._client_value = factory()
+        """Install the factory of the SDK client, which ``_client`` builds on first use."""
+        self._client_value = None
         self._client_factory = factory
         self._client_loop = None
 
     @property
     def _client(self) -> Any:
-        if self._client_factory is not None:
-            try:
-                loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = None
-            if loop is not None:
-                if self._client_loop is None:
-                    self._client_loop = loop
-                elif self._client_loop is not loop and self._client_loop.is_closed():
-                    # The dead loop's pool cannot be closed without its loop —
-                    # drop the old client and start fresh on this one.
-                    self._client_value = self._client_factory()
-                    self._client_loop = loop
+        factory = self._client_factory
+        if factory is None:
+            return self._client_value
+        try:
+            loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if self._client_value is None:
+            self._client_value = factory()
+            self._client_loop = loop
+        elif loop is not None:
+            if self._client_loop is None:
+                self._client_loop = loop
+            elif self._client_loop is not loop and self._client_loop.is_closed():
+                # The dead loop's pool cannot be closed without its loop —
+                # drop the old client and start fresh on this one.
+                self._client_value = factory()
+                self._client_loop = loop
         return self._client_value
 
     @_client.setter
@@ -158,6 +172,25 @@ class LoopAwareClientCache:
         self._client_value = value
         self._client_factory = None
         self._client_loop = None
+
+    async def close(self) -> None:
+        """Close the SDK client, if one was built: a provider that never ran built none.
+
+        A client whose event loop has closed (a sync call's) is dropped instead: its connections
+        died with that loop, and closing them from this one would touch the dead loop. A later
+        call builds a new client.
+        """
+        client, loop = self._client_value, self._client_loop
+        if client is None:
+            return
+        if loop is not None and loop.is_closed():
+            self._client_value = None
+            return
+        await self._close_client(client)
+
+    async def _close_client(self, client: Any) -> None:
+        """Close ``client``; an SDK whose client closes another way overrides this."""
+        await client.close()
 
 
 @dataclass(frozen=True, slots=True)
@@ -297,7 +330,12 @@ class BaseProvider[P, F](ABC):
         cost = response.provider_cost
         if cost is None and usage is not None:
             cost = _estimate_response_cost(self._model, usage, is_batch=batch)
-        response = dataclasses.replace(response, usage=usage or Usage(), cost=cost)
+        response = dataclasses.replace(
+            response,
+            usage=usage or Usage(),
+            cost=cost,
+            tool_calls=named_calls(response.tool_calls),
+        )
         return Answer(response, usage_reported=usage is not None)
 
     async def batch_submit(
@@ -338,6 +376,21 @@ class BaseProvider[P, F](ABC):
 
     async def __aexit__(self, *args: Any) -> None:
         await self.close()
+
+
+def named_calls(calls: tuple[ToolCall, ...]) -> tuple[ToolCall, ...]:
+    """Each call with an id of its own, which its result names: a call that came without one, or
+    with the id of an earlier call of the same answer (an OpenAI-compatible server may send
+    either), gets a fresh one. Every answer gets it in ``_answer``; a Chat Completions batch line,
+    read without an adapter, in ``chat_batch_response``."""
+    taken: set[str] = set()
+    named: list[ToolCall] = []
+    for call in calls:
+        fresh = not call.id or call.id in taken
+        kept = dataclasses.replace(call, id=f"call_{uuid.uuid4().hex[:24]}") if fresh else call
+        taken.add(kept.id)
+        named.append(kept)
+    return tuple(named)
 
 
 # ---------------------------------------------------------------------------

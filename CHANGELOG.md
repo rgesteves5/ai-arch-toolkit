@@ -37,6 +37,8 @@ flows, manifests) needs these changes; each one is detailed below.
     inside the tool.
   - `ip_lookup` queries ipwho.is over HTTPS; the MediaWiki tools accept only HTTPS Wikimedia
     hosts.
+  - A `ToolGroup` refuses another tool under a name it holds (`ValueError`), where it used to
+    replace the first with a warning.
 - **Flows and agents.**
   - The steps of a parallel DAG wave read the wave's snapshot: return changes as artifacts, since
     a value mutated in place now changes the state in every mode. The trace records a wave's steps
@@ -54,6 +56,8 @@ flows, manifests) needs these changes; each one is detailed below.
   - `select` or `serialize_as` on an inline template.
 
 ### Added
+- `run_command(cwd=...)` runs the command in another folder, which must exist; only the command's
+  process changes folder, so the caller's runtime stays where it was.
 - Prices for DeepSeek (`deepseek-flash` and its v4 aliases, `deepseek-v4-pro`; the peak-hour
   price), Mistral (`mistral-small-2603`, `codestral-2508`, with their `-latest` aliases) and
   Poolside's `poolside/laguna-s-2.1` on OpenRouter, models reached through an OpenAI-compatible
@@ -230,6 +234,12 @@ flows, manifests) needs these changes; each one is detailed below.
   [docs/agents.md](docs/agents.md#file-backed-agent-manifests).
 
 ### Changed
+- **A `ToolGroup` holds one tool per name.** The model calls a tool by its name, so another tool
+  under a name the group holds raises `ValueError` instead of replacing the first with a warning;
+  adding a tool the group holds changes nothing.
+- `DangerousToolGate`'s block is a sentence for the person the model repeats it to ("The tool
+  'run_command' did not run: it is marked dangerous, and this run does not allow dangerous
+  tools."), no longer a command-line flag.
 - **Every failure that may have been billed has a ceiling, with or without a budget** (D49). A
   measure-only run used to leave a failed indeterminate call unknown, with no bound; it is now
   uncertain, at most the worst case of the request's facts at the run's prices, so a step's
@@ -546,6 +556,28 @@ flows, manifests) needs these changes; each one is detailed below.
   - `select` or `serialize_as` on an inline template (they were ignored).
 
 ### Fixed
+- A `@tool` function wrapped with `functools.wraps` runs the wrapper. The wrapper carried a copy
+  of the tool's definition, which ran the inner function and skipped the wrapper.
+- Every tool call in a `Response` has an id of its own. An OpenAI-compatible server (Ollama,
+  LM Studio, llama.cpp, vLLM) may send a call without an id, or with another call's: the tool ran,
+  and `tool_result()` then refused the empty id. The base adapter now names such a call
+  `call_<24 hex>`, as it names a Gemini call that came without one.
+- An `LLM` with an xAI model builds without an event loop (in a worker thread, or before the loop
+  runs), and its sync streams run from any thread: the gRPC client needed a running loop, and the
+  request was bound to it while being prepared, in the caller's thread. Every adapter now builds
+  its SDK client on first use, inside the call's loop, and xAI's request binds to the client only
+  when it is sent.
+- `close()` after sync calls no longer fails with "Event loop is closed" (`with LLM(...) as llm:`
+  around `complete_sync()`): a client whose loop has closed is dropped instead of closed. The
+  `OpenAIModerator` gets the same client handling, so its second `moderate_sync()` no longer fails
+  on the first call's closed loop.
+- Anthropic: a request the SDK refuses to send without streaming (one it expects to take over
+  10 minutes, such as a `max_tokens` above about 21 000, a thinking budget included) goes by stream
+  and returns the same `Response`, instead of raising `RequestError`. A `timeout=` of the caller's
+  own still turns the SDK's refusal off.
+- `search_files` no longer reads a file through a link that points out of the folder, and
+  `list_directory` lists only entries inside the folder: a pattern such as `../*` or `link/*`
+  used to list outside it.
 - **Security: no endpoint is read from the environment** (D48). Without `base_url`, the OpenAI,
   Anthropic and Gemini SDKs read `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL` or
   `GOOGLE_GEMINI_BASE_URL`, and the toolkit sent its environment key to whatever host that

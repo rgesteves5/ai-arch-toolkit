@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import errno
+import itertools
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -168,3 +170,84 @@ def test_search_skips_binary_files(tmp_path):
     (tmp_path / "notes.txt").write_text("a needle here\n")
 
     assert search_files(str(tmp_path), "needle") == "notes.txt:1: a needle here"
+
+
+class TestLinksOutOfTheFolder:
+    """A link inside the folder that points out of it is not followed (G-27)."""
+
+    @staticmethod
+    def _folders(tmp_path: Path) -> tuple[Path, Path]:
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "secret.txt").write_text("a needle in the secret\n")
+        root = tmp_path / "root"
+        root.mkdir()
+        (root / "notes.txt").write_text("a needle here\n")
+        return root, outside
+
+    def test_search_does_not_read_a_file_linked_from_outside(self, tmp_path):
+        root, outside = self._folders(tmp_path)
+        (root / "link.txt").symlink_to(outside / "secret.txt")
+
+        assert search_files(str(root), "needle") == "notes.txt:1: a needle here"
+
+    def test_search_does_not_walk_a_folder_linked_from_outside(self, tmp_path):
+        root, outside = self._folders(tmp_path)
+        (root / "linked").symlink_to(outside, target_is_directory=True)
+
+        assert search_files(str(root), "needle") == "notes.txt:1: a needle here"
+
+    def test_search_reads_a_link_that_stays_inside(self, tmp_path):
+        root, _ = self._folders(tmp_path)
+        (root / "alias.txt").symlink_to(root / "notes.txt")
+
+        assert sorted(search_files(str(root), "needle").splitlines()) == [
+            "alias.txt:1: a needle here",
+            "notes.txt:1: a needle here",
+        ]
+
+    def test_search_from_a_linked_folder_reads_its_files(self, tmp_path):
+        root, _ = self._folders(tmp_path)
+        alias = tmp_path / "alias"
+        alias.symlink_to(root, target_is_directory=True)
+
+        assert search_files(str(alias), "needle") == "notes.txt:1: a needle here"
+
+    def test_list_does_not_go_through_a_link_out_of_the_folder(self, tmp_path):
+        root, outside = self._folders(tmp_path)
+        (root / "linked").symlink_to(outside, target_is_directory=True)
+
+        assert list_directory(str(root), "linked/*") == f"No entries matching 'linked/*' in {root}"
+
+    def test_list_does_not_climb_out_with_dot_dot(self, tmp_path):
+        root, _ = self._folders(tmp_path)
+
+        assert list_directory(str(root), "../*") == f"No entries matching '../*' in {root}"
+
+    def test_list_shows_a_link_inside_the_folder_by_its_name(self, tmp_path):
+        root, outside = self._folders(tmp_path)
+        (root / "linked").symlink_to(outside, target_is_directory=True)
+
+        assert "[dir]  linked/" in list_directory(str(root))
+
+    def test_list_goes_into_a_real_subfolder(self, tmp_path):
+        root, _ = self._folders(tmp_path)
+        (root / "sub").mkdir()
+        (root / "sub" / "inner.txt").write_text("x")
+
+        assert "inner.txt" in list_directory(str(root), "sub/*")
+
+    def test_list_stops_at_its_cap_when_every_match_is_outside(self, tmp_path, monkeypatch):
+        walked = 0
+
+        def endless(self: Path, pattern: str) -> Iterator[Path]:
+            nonlocal walked
+            for index in itertools.count():
+                walked += 1
+                assert walked <= 2_000, "the walk went past the cap"
+                yield tmp_path.parent / f"outside-{index}"
+
+        monkeypatch.setattr(Path, "glob", endless)
+
+        assert list_directory(str(tmp_path), "../*") == f"No entries matching '../*' in {tmp_path}"
+        assert walked == 1_001

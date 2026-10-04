@@ -100,6 +100,8 @@ group.tools                # the registered callables
 group.add(another_tool)    # register one more
 ```
 
+One name, one tool: the model calls a tool by its name, so another tool under a name the group already holds raises `ValueError` (give one of them another name with `@tool(name=...)`); adding a tool the group already holds changes nothing. A wrapper made with `functools.wraps` around a `@tool` function carries the tool's definition, its name and policy included, and the group runs the wrapper.
+
 Constructor:
 
 ```python

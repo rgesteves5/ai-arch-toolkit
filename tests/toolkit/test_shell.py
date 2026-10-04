@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from ai_arch_toolkit.toolkit.tools._shell import run_command
 
 
@@ -39,3 +41,34 @@ class TestArguments:
     def test_timeout_and_max_output_are_clamped(self):
         assert run_command("echo hello", timeout=-1) == "hello\n"
         assert run_command("echo hello", max_output=-1).startswith("h\n\n[Truncated")
+
+
+class TestWorkingDirectory:
+    """``cwd`` runs the command in a folder without moving the process (G-26)."""
+
+    def test_the_command_runs_in_cwd(self, tmp_path):
+        (tmp_path / "marker.txt").write_text("x")
+
+        assert run_command("ls", cwd=str(tmp_path)) == "marker.txt\n"
+
+    def test_the_process_stays_where_it_was(self, tmp_path):
+        before = os.getcwd()
+
+        run_command("true", cwd=str(tmp_path))
+
+        assert os.getcwd() == before
+
+    def test_cwd_expands_the_home_folder(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        (tmp_path / "marker.txt").write_text("x")
+
+        assert run_command("ls", cwd="~") == "marker.txt\n"
+
+    def test_a_cwd_that_is_not_a_folder_is_an_error_string(self, tmp_path):
+        missing = tmp_path / "missing"
+        a_file = tmp_path / "file.txt"
+        a_file.write_text("x")
+
+        assert run_command("true", cwd=str(missing)) == f"Not a directory: {missing}"
+        assert run_command("true", cwd=str(a_file)) == f"Not a directory: {a_file}"
+        assert run_command("true", cwd="~no_such_user_g26") == "Not a directory: ~no_such_user_g26"

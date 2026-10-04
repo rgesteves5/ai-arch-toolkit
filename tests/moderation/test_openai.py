@@ -100,8 +100,20 @@ class TestOpenAIModerator:
 
         client = mock_openai.AsyncOpenAI.return_value
         client.close = AsyncMock()
+        client.moderations.create = AsyncMock(
+            return_value=_make_moderation_result(flagged=False, categories={}, scores={})
+        )
 
         mod = OpenAIModerator(api_key="test-key")
         async with mod as m:
             assert m is mod
+            await m.moderate("text")  # the client is built on first use (G-17)
         client.close.assert_awaited_once()
+
+    async def test_an_unused_moderator_builds_no_client(self, mock_openai) -> None:
+        from ai_arch_toolkit.toolkit.moderation._openai import OpenAIModerator
+
+        async with OpenAIModerator(api_key="test-key"):
+            pass
+
+        mock_openai.AsyncOpenAI.assert_not_called()

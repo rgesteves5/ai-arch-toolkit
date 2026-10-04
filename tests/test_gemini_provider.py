@@ -393,7 +393,8 @@ class TestRequest:
                 captured.update(kwargs)
 
         monkeypatch.setattr("ai_arch_toolkit.core._providers._gemini.genai.Client", FakeClient)
-        GeminiProvider("gemini-3.8-flash", "test-key", timeout=45)
+        provider = GeminiProvider("gemini-3.8-flash", "test-key", timeout=45)
+        assert isinstance(provider._client, FakeClient)  # built on first use (G-17)
 
         options: types.HttpOptions = captured["http_options"]
         assert captured["api_key"] == "test-key"
@@ -533,8 +534,10 @@ class TestParseSdkResponse:
         ]
 
     def test_a_call_without_an_id_gets_one(self):
-        (call,) = _parse_sdk_response(_response(_call("fn")), "gemini-2.5-flash").tool_calls
-        assert call.id
+        # The base names it, as it names every adapter's calls (G-23).
+        provider = GeminiProvider("gemini-2.5-flash", "test-key")
+        (call,) = assembled(provider, _response(_call("fn"))).tool_calls
+        assert call.id.startswith("call_")
 
     def test_thinking_blocks(self):
         resp = _response(

@@ -35,7 +35,9 @@ Every call starts from the `LLM`'s defaults: `temperature=0.0`, `max_tokens=4096
 keyword argument given to the constructor (a provider parameter such as `top_p`); a call's own
 keyword arguments override them. `timeout=` is the SDK client's request timeout, in seconds. An
 `LLM` holds its provider's SDK client, which its async calls share, so build one and reuse it
-(the sync wrappers run each call on a new event loop and rebuild the client for it).
+(the sync wrappers run each call on a new event loop and rebuild the client for it). The client
+is built on the first call, inside its event loop, so an `LLM` can be built anywhere: in a worker
+thread, or before any loop runs.
 `await llm.close()` closes the client, and those of the fallbacks built from model names;
 `async with LLM(...) as llm:` (or `with` in sync code) closes it on exit.
 
@@ -100,7 +102,7 @@ Every LLM call returns a `Response`:
 
 ```python
 response.text           # answer text
-response.tool_calls     # tuple of ToolCall(id, name, input)
+response.tool_calls     # tuple of ToolCall(id, name, input); every id is non-empty and unique
 response.thinking       # tuple of ThinkingBlock (extended thinking)
 response.images         # tuple of GeneratedImage(data, media_type, revised_prompt): drawn images
 response.parsed         # structured output (if output_schema used)
@@ -414,7 +416,10 @@ model that reasons gets no sampling parameter or logprobs at all.
 
 On the Anthropic models that take a budget, the budget is added to `max_tokens`, so the answer
 keeps its room; elsewhere reasoning tokens count toward `max_tokens`, so keep that budget
-generous. OpenAI's and Meta's raw reasoning stays encrypted: append `response.to_message()` to
+generous. Anthropic's SDK refuses to send without streaming a request it expects to take over
+10 minutes (a `max_tokens` above about 21 000, the budget included): `complete()` streams such a
+request and returns the same `Response`, unless you set a `timeout=` of your own, which turns
+the SDK's refusal off. OpenAI's and Meta's raw reasoning stays encrypted: append `response.to_message()` to
 the conversation and the next request replays it to the same model family, so a tool loop keeps
 its chain of thought (the Anthropic and Gemini adapters replay their providers' thinking
 signatures the same way). See

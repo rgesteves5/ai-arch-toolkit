@@ -2,8 +2,8 @@
 
 A request is read from the SDK's own request proto (``chat.create`` builds it without an RPC);
 answers come from the SDK's response type, or from a loopback gRPC server
-(``tests/integration/fakegrpc.py``). The adapter's client needs a running event loop, so the tests
-that build one are async.
+(``tests/integration/fakegrpc.py``). The adapter's gRPC client needs a running event loop, so it
+is built on first use, inside the call's loop (G-17).
 """
 
 from __future__ import annotations
@@ -55,7 +55,7 @@ EFFORT = chat_pb2.ReasoningEffort
 
 @pytest.fixture
 async def grok() -> AsyncIterator[XAIProvider]:
-    """An adapter for the current generation (its gRPC client needs a running loop)."""
+    """An adapter for the current generation, closed after the test."""
     async with XAIProvider("grok-4.6", "test-key") as provider:
         yield provider
 
@@ -335,14 +335,16 @@ class TestRequest:
 
     @patch("ai_arch_toolkit.core._providers._xai.xai_sdk.AsyncClient")
     def test_disables_transparent_grpc_retries(self, client_cls):
-        XAIProvider("grok-4.6", "test-key")
+        provider = XAIProvider("grok-4.6", "test-key")
+        assert provider._client is client_cls.return_value  # built on first use (G-17)
         client_cls.assert_called_once_with(
             api_key="test-key", channel_options=[("grpc.enable_retries", 0)], timeout=None
         )
 
     @patch("ai_arch_toolkit.core._providers._xai.xai_sdk.AsyncClient")
     def test_forwards_timeout(self, client_cls):
-        XAIProvider("grok-4.6", "test-key", timeout=2.5)
+        provider = XAIProvider("grok-4.6", "test-key", timeout=2.5)
+        assert provider._client is client_cls.return_value  # built on first use (G-17)
         client_cls.assert_called_once_with(
             api_key="test-key", channel_options=[("grpc.enable_retries", 0)], timeout=2.5
         )

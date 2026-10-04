@@ -149,7 +149,11 @@ group = ToolGroup(run_command, gates=[DangerousToolGate(blocked=["run_command"])
 result = await group.async_execute(call)   # call -> run_command
 result.ok            # False
 result.error.type    # "dangerous_tool_blocked"
+result.error.message # "The tool 'run_command' did not run: it is marked dangerous, and this
+                     #  run does not allow dangerous tools."
 ```
+
+The message is written for the person the model repeats it to.
 
 `DangerousToolGate(*, blocked, allow=False)` — names in `blocked` are refused; set `allow=True` to turn the gate into a no-op (e.g. flip it per environment).
 

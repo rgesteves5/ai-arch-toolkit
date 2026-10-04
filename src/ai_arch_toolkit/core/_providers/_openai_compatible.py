@@ -44,6 +44,7 @@ from ai_arch_toolkit.core._providers._base import (
     Options,
     Prepared,
     _parse_retry_after,
+    named_calls,
     on_request,
     parse_options,
     parse_structured,
@@ -401,7 +402,9 @@ def chat_batch_response(body: dict[str, Any], model: str) -> Response:
     usage = _extract_usage(completion.usage) if completion.usage else Usage()
     response = _parse_sdk_response(completion, model)
     cost = _estimate_response_cost(model, usage, is_batch=True)
-    return dataclasses.replace(response, usage=usage, cost=cost)
+    return dataclasses.replace(
+        response, usage=usage, cost=cost, tool_calls=named_calls(response.tool_calls)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -442,9 +445,6 @@ class OpenAICompatibleProvider(
             return client
 
         self._install_client(_new_client)
-
-    async def close(self) -> None:
-        await self._client.close()
 
     # ------------------------------------------------------------------
     # The contract
