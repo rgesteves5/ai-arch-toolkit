@@ -671,3 +671,56 @@ Só acrescentar. Uma decisão revista ganha uma nova entrada que diz qual substi
 - **Consequência:**
   - Quem usava `OPENAI_BASE_URL` ou `ANTHROPIC_BASE_URL` para um gateway passa a dar `base_url=`
     (com `api_key=`, se não for loopback). Fica no `CHANGELOG`, com a migração.
+
+## D49 · Toda a falha tem tecto, com ou sem budget (frente A, G-29)
+
+- **Contexto:**
+  - Uma chamada que falha depois de enviada (um 5xx, um corte a meio) pode ter sido cobrada. Com
+    um `BudgetController`, ela fica incerta com tecto (D20): a reserva estrita, ou a estimativa do
+    controller (`FailureBoundController`). Verificado a 2026-10-04 no `6d1a989`: até $0.0615, e a
+    nova tentativa num modelo com preço é admitida.
+  - Sem controller, só a medir, a falha fica desconhecida, sem tecto. Um `Policy(max_cost=...)`
+    por passo falha então mesmo quando a nova tentativa deu certo (achado de 2026-09-18), e o
+    ledger do ai-network mostra a chamada "sem preço" (a G-29 dele).
+  - O tecto é um facto do pedido (o preço do modelo, a entrada, o `max_tokens`), não uma opinião
+    do controller. Com a D16, todo o modelo sob um meter tem preço.
+  - A proposta estava no BOARD desde 2026-09-18, e o dono escolheu-a a 2026-10-04.
+- **Decisão:**
+  - O pior caso de uma operação passa para o core (`core/_metering/_worst_case.py`). É a casa
+    única do tecto de uma falha e da estimativa por omissão da reserva estrita.
+  - O meter calcula sempre o tecto de uma falha: a reserva estrita quando existe, senão o pior
+    caso dos factos do pedido, ao preço do pricer da execução.
+  - Sai o `Protocol` `FailureBoundController`. O `HeuristicEstimator` do toolkit passa a delegar no
+    core.
+  - Fica desconhecido sem tecto só o que não tem preço: uma server tool, ou um pricer que falha.
+- **Alternativas rejeitadas:**
+  - Deixar como está: um tecto por passo sem budget continua a falhar depois de um retry com
+    êxito, e a G-29 do ai-network fica meia fechada.
+  - O tecto só nos runs com budget, mas com um controller "medidor" por omissão: seria uma
+    segunda maneira de dizer o mesmo.
+- **Consequência:**
+  - Muda o contrato da R01 ("sem controller não há tecto").
+  - Num run só a medir, uma falha passa de `unknown_cost_count` a `uncertain_cost` com tecto. Os
+    testes que afirmavam o contrato antigo corrigem-se e listam-se na ficha.
+  - As constantes do pior caso (quatro caracteres por token, a folga por imagem e por documento)
+    passam do toolkit para o core: são limites, não estimativas.
+
+## D50 · Um preço pode ter data de fim (frente A, G-20)
+
+- **Contexto:**
+  - A tabela tem preços promocionais com data de fim: o `gpt-5.6-sol` até 2026-11-21, e o
+    `gemini-3.8-flash`, o `-3.7-flash` e o `-3.6-flash` até 2026-12-31. A data está só num
+    comentário.
+  - Depois dela, o meter cobraria o preço antigo até alguém mudar a tabela e publicar uma versão.
+    Uma app que não actualize o toolkit, como o ai-network, conta a menos sem saber.
+- **Decisão** (o dono escolheu-a a 2026-10-04):
+  - Um `ModelPricing` pode dizer até quando vale (`until`, o último dia, inclusive) e o preço que
+    vale a seguir (`then`, outro `ModelPricing`).
+  - O registo escolhe, em cada consulta, o preço do dia (UTC). O `get` aceita um dia para
+    consultar outro.
+  - No TOML, `until` é uma data e o preço seguinte é uma subtabela `then`.
+- **Alternativas rejeitadas:** só a tabela, com o comentário e uma versão nova no dia. Depende de
+  quem a usa actualizar a tempo.
+- **Consequência:**
+  - O custo de uma chamada passa a depender do dia em que se calcula: os testes fixam o dia.
+  - O catálogo de uma app pode ler `until` e `then`, para mostrar a data de fim e o preço a seguir.

@@ -638,3 +638,20 @@ R01 publicada em `main` (`b3dae3f`); a R02 começa com a leitura obrigatória da
 - Dois testes que afirmavam o bug foram corrigidos (listados na ficha).
 - Gate: 6232 passed, 42 skipped.
 - Próximo: o grupo 2 do briefing, o custo (G-20, G-29).
+
+## 2026-10-04 · A02 feita: o custo (Claude, a pedido do dono)
+
+- O dono escolheu as duas recomendações: toda a falha tem tecto, com ou sem budget (D49), e um
+  preço pode ter data de fim (D50).
+- G-29: o pior caso passou para o core (`_worst_case.py`) e o meter usa-o sempre. Sai o
+  `FailureBoundController`. Um passo com `max_cost` passa depois de um retry com êxito: era o
+  achado de 2026-09-18, pendente no BOARD. Os testes que afirmavam o contrato antigo (150 casos da
+  matriz e 14 outros) foram corrigidos e estão listados na ficha.
+- G-20:
+  - `ModelPricing.until`/`then`, e o registo lê o preço do dia;
+  - as promoções do `gpt-5.6-sol` (até 2026-11-21) e dos Gemini 3.8, 3.7 e 3.6 Flash (até
+    2026-12-31) mudam sozinhas;
+  - preços do DeepSeek, do Mistral e do Poolside, das páginas oficiais;
+  - os testes leem os preços num dia fixo.
+- Gate: 6256 passed, 42 skipped.
+- Próximo: o grupo 3 do briefing, a correcção.

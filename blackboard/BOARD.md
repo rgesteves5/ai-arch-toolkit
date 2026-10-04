@@ -4,16 +4,19 @@
 
 - **Estado:** aberta em 2026-10-03, a pedido do dono, pela ordem do briefing do ai-network
   (`ai-network/board/toolkit-brief.md`, D-54 dele). A A01, o grupo 1 (a segurança), está feita
-  a 2026-10-03, por commitar; o próximo é o grupo 2, o custo (G-20, G-29).
+  a 2026-10-03 e publicada (`002642c`). A A02, o grupo 2 (o custo), está feita a 2026-10-04 e
+  publicada (`4bb8cc0`). O próximo é o grupo 3, a correcção (G-21, G-23, G-17, G-18, G-26, G-27).
 - **Origem:** o briefing de 29/09, onde a app lista o que contorna no toolkit. Cada lacuna diz o
   que falta, a evidência e quando fica feita. A G-36 (imagens) já fechou na frente I.
-- **Decisões:** D48 (nenhum endereço lido do ambiente).
+- **Decisões:** D48 (nenhum endereço lido do ambiente), D49 (toda a falha tem tecto), D50 (um
+  preço pode ter data de fim).
 - **Fora do âmbito:** o ai-network. Não se edita daqui; o dono leva-lhe a nota de cada grupo
   fechado.
 
 | ID | Tarefa | Dono | Estado | Depende de |
 |---|---|---|---|---|
 | A01 | Segurança: nenhum endereço do ambiente (G-16) e as chaves `xai-`, `gsk_` e `AIza` no `Redactor` (G-19) | Claude | done | nada |
+| A02 | Custo: toda a falha tem tecto (G-29), preços com data e os que faltam (G-20) | Claude | done | nada |
 
 ## Frente activa: geração de imagens
 
@@ -128,8 +131,8 @@
   declarações dos manifestos mudaram o terreno de C02, C05, C07 e C08).
 - **Estado:** aberta em 2026-09-15. As nove fichas estão escritas; nenhuma tarefa começou.
 - **Antes de codificar:** o dono fixa as "Decisões a fixar" de cada ficha. Cada decisão tomada entra
-  em `DECISIONS.md` a partir de D49 (as D15 a D42 foram para as frentes R e T, as D43 a D45
-  para a frente O, as D46 e D47 para a frente I e a D48 para a frente A), com o número dado pelo coordenador.
+  em `DECISIONS.md` a partir de D51 (as D15 a D42 foram para as frentes R e T, as D43 a D45
+  para a frente O, as D46 e D47 para a frente I e as D48 a D50 para a frente A), com o número dado pelo coordenador.
 - **Origem:** o que `docs/internal/agentes-app-toolkit-review.md` pediu ao toolkit (L1, L3–L7, L9, L13
   e o ponto D) e que `docs/internal/toolkit-fix-plan.md` §4 (itens 3 e 10) deixou de fora por ser
   âmbito, não contrato partido.
@@ -355,22 +358,7 @@ que ficou aberto está em "Por fazer".
 - **Decidir, achados de 2026-09-18 sem tarefa (`FINDINGS.md`):** o `LLM("grok-…")` criado depois de
   um `asyncio.run` levanta `RuntimeError`; o xAI larga imagens e documentos. (O `thinking_effort`
   do OpenAI e o preço do batch ficaram resolvidos na frente O, D45.)
-- **Decidir (sem pressa, não bloqueia nada): o tecto de uma falha sem `BudgetPolicy`.** Um step com
-  `Policy(max_cost=...)` num run sem `BudgetPolicy` falha depois de uma chamada `indeterminate` (5xx
-  do OpenAI, xAI ou Meta; timeout ou queda depois do envio, em qualquer fornecedor), mesmo que o retry
-  tenha dado certo: sem controller ninguém calcula o pior caso da falha, que fica sem tecto. Com
-  `BudgetPolicy` o step passa (reprodução de 2026-09-18: gasto $0.000105, no máximo $0.0616).
-  Proposta (`FINDINGS.md`, 2026-09-18): o estimador do pior caso passa para o core e calcula sempre o
-  tecto de uma falha; sai o `FailureBoundController`. Contradiz o contrato da R01 ("sem controller não
-  há tecto"); a D20 diz "o resto fica incerto com tecto", sem condição. Pistas para investigar, de
-  memória e por confirmar: as frameworks de LLM ou não têm tecto de custo (limites de pedidos e
-  tokens: Pydantic AI `UsageLimits`, `max_turns` do OpenAI Agents SDK, `recursion_limit` do
-  LangGraph) ou contam só o custo das respostas com sucesso (orçamentos do LiteLLM), isto é, uma falha
-  custa zero; os sistemas de cobrança em tempo real reservam o pior caso antes e debitam o real
-  depois, com uma política declarada para a falha (Diameter Credit-Control, RFC 4006 e RFC 8506:
-  `Credit-Control-Failure-Handling` = `TERMINATE`, `CONTINUE` ou `RETRY_AND_TERMINATE`; a pré-
-  autorização dos cartões: cativa o máximo, cobra o real, liberta o resto). Nestes últimos é o
-  próprio sistema de medição que calcula o pior caso, seja quem for que fixa o orçamento.
+- ~~O tecto de uma falha sem `BudgetPolicy`~~: decidido a 2026-10-04 (D49) e feito na A02.
 - **R02, verificação ao vivo:** comandos no relatório final de `tasks/R02-providers.md` (o do Gemini
   decide se sai a nota "Known issue").
 - **Plano de robustez (`docs/internal/hardening-plan.md`):** as decisões R1–R15 foram fixadas na D20
