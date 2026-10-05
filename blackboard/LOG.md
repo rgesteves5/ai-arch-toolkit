@@ -799,3 +799,17 @@ R01 publicada em `main` (`b3dae3f`); a R02 começa com a leitura obrigatória da
   modelo, qualidade e tamanho. Sem contagens, 24 000 tokens.
 - A segunda revisão independente (A12 a A14 e o resto da A11) não achou falhas graves. Corrigi as duas médias: o pensamento do Gemini fora da reserva, e os modelos cobrados por imagem a reservarem tokens. Corrigi também as baixas.
 - Gate: 6565 passed, 42 skipped; ruff, formatação e pyright limpos. Publicada em `1e1e223`.
+
+## 2026-10-05 · T01 feita: as falhas tipadas das tools (Claude, a pedido do dono)
+
+- A frente A foi publicada (`1e1e223`, `1d73c4e`), e o dono pediu para avançar para a frente T.
+- **O core** (`ToolFailure`, o executor, o `is_error` da Anthropic e do Gemini, o runner e o
+  ReAct) e **a porta** (o `HttpError` tipado pelo estado e pelo sítio onde é levantado): o
+  coordenador.
+- **Os 44 módulos:** cinco agentes em paralelo, com módulos e testes disjuntos e o mesmo guia (a
+  nota de desenho da ficha). Nenhum devolve uma string de erro, e um teste de arquitectura recusa
+  um `except HttpError` que devolva.
+- A revisão independente não achou falhas graves. Corrigi as médias que eram da T01 (as tools de
+  memória, as docs, o `csv_read`, o 404 do OFF) e as baixas. As duas médias que são da porta
+  passaram para a ficha T02.
+- Gate: 6769 passed, 42 skipped; ruff, formatação e pyright limpos.

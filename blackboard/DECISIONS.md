@@ -462,6 +462,10 @@ Só acrescentar. Uma decisão revista ganha uma nova entrada que diz qual substi
     outros fornecedores, o `Tool error [type]: …` do `to_model_text()` já o diz no texto.
   - O `HttpError` da porta é uma subclasse de `ToolFailure`.
 - **Consequência:** a D37 lê-se com estes nomes; o `ToolError` não muda.
+- **Adenda (T01, 2026-10-05):** o Gemini também tem onde o pôr. O `FunctionResponse.response` lê
+  a chave `error` como "error details" (docstring do `google-genai`), e o adaptador põe lá o
+  resultado de uma chamada que falhou. A Responses API, a Chat Completions e o xAI continuam só com
+  o texto.
 
 ## D43 · OpenAI pela Responses API no host oficial; Chat Completions só para servidores compatíveis (frente O)
 

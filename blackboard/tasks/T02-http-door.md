@@ -11,6 +11,19 @@
 
 ## Problema
 
+- **Pela T01 (2026-10-05):** o `HttpError` já é um `ToolFailure`. A revisão da T01 deixou aqui:
+  - os onze `status_messages={404: "no matching records found."}`, que hoje saem `upstream` com
+    uma mensagem que parece "sem resultados". As docstrings do `earthquake_event` e do
+    `rxnorm_concept` prometem `not_found`;
+  - o `body_error` só sabe dar `upstream`, quando deve poder dar um tipo:
+    - as entradas inactivas da UniProt são `not_found`;
+    - o erro 120 do World Bank (um indicador desconhecido, num 200) é `not_found`;
+    - o `missingtitle` e o `invalidtitle` da MediaWiki, hoje lidos pela mensagem;
+    - o 413 `ASYNCHRONOUS_RESPONSE` do Eurostat;
+    - o `ratelimited` da MediaWiki e o 503 do Open Food Facts são `rate_limited`;
+  - uma chave em falta ("no key: set X") é hoje `upstream`;
+  - os 400 do Overpass e do SPARQL perdem a razão da fonte.
+
 - O `body_error` só vê o corpo de um 2xx. O estado e os cabeçalhos não chegam aos módulos, o que
   impede ler o `MediaWiki-API-Error` ou o cabeçalho `message` da NVD.
 - Doze módulos declaram `status_messages={404: "no matching records found."}`: `_chembl`,

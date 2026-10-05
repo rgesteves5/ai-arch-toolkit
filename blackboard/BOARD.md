@@ -91,7 +91,8 @@
 
 ## Frente activa: contrato das tools
 
-- **Estado:** aberta em 2026-09-30. Fichas T00 (regras) e T01 a T09 escritas. A T03 e a T04a
+- **Estado:** aberta em 2026-09-30. Fichas T00 (regras) e T01 a T09 escritas. A T01 está feita a
+  2026-10-05 (Claude, a pedido do dono, com cinco agentes nos módulos) e publicada (`8cd6c3c`); a seguir, a T02. A T03 e a T04a
   estão feitas: PR #71, em `main` desde 2026-09-30 (`84c0ee2`). A T01 já pode começar: a sessão
   paralela, que mexia no `_http.py` e em nove módulos, terminou (`6a34668`).
 - **Plano:** `docs/internal/tools-contract-plan.md`. **Regras:** `tasks/T00-rules.md`, que remete
@@ -117,7 +118,7 @@
 
 | ID | Tarefa | Dono | Estado | Depende de |
 |---|---|---|---|---|
-| T01 | Falhas tipadas: `ToolFailure`, executor, `is_error`, os 44 módulos sem strings de erro | — | todo | nada |
+| T01 | Falhas tipadas: `ToolFailure`, executor, `is_error`, os 44 módulos sem strings de erro | Claude | done | nada |
 | T02 | Porta HTTP: um leitor de erros por fonte, 404 por endpoint, erro da fonte na mensagem | — | todo | T01 |
 | T03 | Janela: primitiva de corte com rodapé e continuação | Claude | done | nada |
 | T04a | Limites na assinatura: marcador no schema e no validador | Claude | done | nada; em série com a C02 |
