@@ -26,7 +26,7 @@ from ai_arch_toolkit.toolkit.memory import (
     TemporalView,
     composite_score,
 )
-from ai_arch_toolkit.toolkit.memory.graph._networkx import NetworkXBackend
+from ai_arch_toolkit.toolkit.memory.graph import NetworkXBackend
 
 
 async def main() -> None:

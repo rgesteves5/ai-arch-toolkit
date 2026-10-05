@@ -57,6 +57,12 @@ from ai_arch_toolkit.core._middleware import Middleware, Request
 from ai_arch_toolkit.core._moderation import ModerationError, ModerationResult, Moderator
 from ai_arch_toolkit.core._policy import OnExhausted, OnLowConfidence, OnTimeout, Policy
 from ai_arch_toolkit.core._pricing import ModelPricing, PricingRegistry, pricing
+from ai_arch_toolkit.core._providers import (
+    MODEL_IDS,
+    MODEL_PREFIXES,
+    is_local_url,
+    resolve_provider_name,
+)
 from ai_arch_toolkit.core._rate_limit import RateLimitMiddleware
 from ai_arch_toolkit.core._redaction import (
     RedactionMode,
@@ -153,6 +159,8 @@ if not any(isinstance(h, logging.NullHandler) for h in _pkg_logger.handlers):
 
 __all__ = [
     "LLM",
+    "MODEL_IDS",
+    "MODEL_PREFIXES",
     "APIError",
     "AdmissionController",
     "AdmissionDecision",
@@ -275,11 +283,13 @@ __all__ = [
     "image_generation",
     "infer_schema",
     "inference_limit",
+    "is_local_url",
     "llm_events_to",
     "prepare_tools",
     "pricing",
     "redact",
     "redact_text",
+    "resolve_provider_name",
     "system",
     "tokens_to_chars",
     "tool",

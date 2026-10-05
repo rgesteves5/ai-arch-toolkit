@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from ai_arch_toolkit.toolkit.memory._presets import cognitive
 from ai_arch_toolkit.toolkit.memory._views import SimilarityView, TemporalView
-from ai_arch_toolkit.toolkit.memory.graph._networkx import NetworkXBackend
+from ai_arch_toolkit.toolkit.memory.graph import NetworkXBackend
 from ai_arch_toolkit.toolkit.memory.graph._store import GraphStore
 from tests.memory.conftest import make_node
 

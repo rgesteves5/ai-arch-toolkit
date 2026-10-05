@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 import os
 import warnings
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
@@ -13,7 +15,13 @@ from ai_arch_toolkit.core._model_id import lookup
 if TYPE_CHECKING:
     from ai_arch_toolkit.core._providers._base import BaseProvider
 
-__all__ = ["create_provider", "resolve_provider_name"]
+__all__ = [
+    "MODEL_IDS",
+    "MODEL_PREFIXES",
+    "create_provider",
+    "is_local_url",
+    "resolve_provider_name",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +49,13 @@ _MODEL_IDS: dict[str, str] = {
 
 # Derived from the routing table so it can never drift from what create_provider builds.
 _PROVIDER_NAMES: frozenset[str] = frozenset(_MODEL_PREFIXES.values())
+
+# The routing tables, read-only, for an app that shows or checks them (G-14): views of the ones
+# create_provider routes by, so they cannot drift from it.
+MODEL_PREFIXES: Mapping[str, str] = MappingProxyType(_MODEL_PREFIXES)
+"""Model id prefix → provider name (``"claude-"`` → ``"anthropic"``)."""
+MODEL_IDS: Mapping[str, str] = MappingProxyType(_MODEL_IDS)
+"""Model ids matched whole → provider name (``"o3"`` → ``"openai"``)."""
 
 # Loopback hosts run on the user's own machine — no auth, key is optional.
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
@@ -87,8 +102,12 @@ def _detect_provider(model: str) -> str:
     raise _unknown_model_error(model)
 
 
-def _is_local_url(base_url: str | None) -> bool:
-    """Return True when base_url points at a loopback host (local server)."""
+def is_local_url(base_url: str | None) -> bool:
+    """Whether ``base_url`` points at a loopback host, a server on this machine.
+
+    Such a server needs no API key, and no key from the environment is sent to it: ``localhost``,
+    ``127.0.0.0/8``, ``::1``, ``0.0.0.0`` and any ``*.localhost`` name.
+    """
     if not base_url:
         return False
     host = urlsplit(base_url).hostname
@@ -219,7 +238,7 @@ def create_provider(
             honor it; xAI and Gemini ignore it with a warning.
     """
     base_url = base_url or None  # normalize "" so it never masks the key check
-    local = _is_local_url(base_url)
+    local = is_local_url(base_url)
     name = resolve_provider_name(model, provider=provider, base_url=base_url)
 
     if name == "anthropic":

@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ai_arch_toolkit.toolkit.memory.graph._networkx import NetworkXBackend
+from ai_arch_toolkit.toolkit.memory.graph import NetworkXBackend
 from ai_arch_toolkit.toolkit.memory.graph._store import GraphStore
 from tests.memory.conftest import make_node, mock_embed_fn
 

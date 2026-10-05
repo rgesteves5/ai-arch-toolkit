@@ -9,10 +9,10 @@ import pytest
 
 from ai_arch_toolkit.core._providers import (
     _detect_provider,
-    _is_local_url,
     _match_provider,
     _resolve_key,
     create_provider,
+    is_local_url,
     resolve_provider_name,
 )
 from ai_arch_toolkit.core._providers._imports import require_sdk
@@ -397,17 +397,17 @@ class TestCreateProvider:
 
 class TestIsLocalUrl:
     def test_loopback_hosts(self):
-        assert _is_local_url("http://localhost:11434/v1")
-        assert _is_local_url("http://127.0.0.1:8000/v1")
-        assert _is_local_url("http://127.5.5.5/v1")
-        assert _is_local_url("http://[::1]:8000/v1")
-        assert _is_local_url("http://0.0.0.0:1234")
+        assert is_local_url("http://localhost:11434/v1")
+        assert is_local_url("http://127.0.0.1:8000/v1")
+        assert is_local_url("http://127.5.5.5/v1")
+        assert is_local_url("http://[::1]:8000/v1")
+        assert is_local_url("http://0.0.0.0:1234")
 
     def test_remote_hosts(self):
-        assert not _is_local_url("https://openrouter.ai/api/v1")
-        assert not _is_local_url("https://api.openai.com/v1")
-        assert not _is_local_url("http://192.168.1.50:11434/v1")
+        assert not is_local_url("https://openrouter.ai/api/v1")
+        assert not is_local_url("https://api.openai.com/v1")
+        assert not is_local_url("http://192.168.1.50:11434/v1")
 
     def test_none_and_empty(self):
-        assert not _is_local_url(None)
-        assert not _is_local_url("")
+        assert not is_local_url(None)
+        assert not is_local_url("")

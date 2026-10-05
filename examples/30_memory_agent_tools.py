@@ -16,7 +16,7 @@ import asyncio
 from ai_arch_toolkit import LLM, State
 from ai_arch_toolkit.toolkit.agents import react_flow, react_initial_state
 from ai_arch_toolkit.toolkit.memory import GraphStore, Node, memory_tools
-from ai_arch_toolkit.toolkit.memory.graph._networkx import NetworkXBackend
+from ai_arch_toolkit.toolkit.memory.graph import NetworkXBackend
 
 
 def make_embed_fn():

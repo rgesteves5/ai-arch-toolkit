@@ -12,7 +12,7 @@ from ai_arch_toolkit.toolkit.memory._views import (
     TemporalView,
     composite_score,
 )
-from ai_arch_toolkit.toolkit.memory.graph._networkx import NetworkXBackend
+from ai_arch_toolkit.toolkit.memory.graph import NetworkXBackend
 from ai_arch_toolkit.toolkit.memory.graph._store import GraphStore
 from tests.memory.conftest import make_node, mock_embed_fn
 

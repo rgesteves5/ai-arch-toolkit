@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from ai_arch_toolkit.core.graph._networkx import NetworkXBackend
+from ai_arch_toolkit.core.graph import NetworkXBackend
 from ai_arch_toolkit.core.graph._store import Graph
 
 

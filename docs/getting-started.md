@@ -153,6 +153,12 @@ it by accident:
 llm = LLM("llama-3.3-70b", base_url="https://api.together.xyz/v1", api_key=together_key)
 ```
 
+The routing is public, for an app that shows or checks it without copying it:
+`resolve_provider_name(model, provider=None, base_url=None)` names the adapter `LLM` would build,
+`MODEL_PREFIXES` and `MODEL_IDS` are the read-only tables it routes by, and
+`is_local_url(base_url)` is the loopback rule (`localhost`, `127.x`, `::1`, `0.0.0.0`,
+`*.localhost`), all from `ai_arch_toolkit.core`.
+
 No endpoint is read from the environment. Without `base_url`, each adapter sends to its
 provider's own API, whatever `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL` or
 `GOOGLE_GEMINI_BASE_URL` say, so an environment key never follows a variable to another host. The
@@ -190,7 +196,7 @@ Install the `graph` extra for this section, for example
 
 ```python
 from ai_arch_toolkit import Graph, GraphNode
-from ai_arch_toolkit.core.graph._networkx import NetworkXBackend
+from ai_arch_toolkit.core.graph import NetworkXBackend
 
 g = Graph(NetworkXBackend())
 

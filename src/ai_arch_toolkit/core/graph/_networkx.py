@@ -16,11 +16,13 @@ except ImportError as e:
     raise ImportError(msg) from e
 
 
-class NetworkXBackend:
+class NetworkXBackend[N: Node[Any] = Node[Any]]:
     """Async graph backend backed by NetworkX MultiDiGraph.
 
     Wraps sync NetworkX operations as async methods. Uses ``relation`` as the
-    edge key to support multiple edges between the same pair of nodes.
+    edge key to support multiple edges between the same pair of nodes. ``N`` is the
+    node type it holds and returns, so a backend of a ``Node`` subclass (the memory
+    graph's) satisfies a protocol written for that subclass (G-24).
     """
 
     __slots__ = ("_graph",)
@@ -30,20 +32,20 @@ class NetworkXBackend:
 
     # --- Node operations ---
 
-    async def add_node(self, node: Node[Any]) -> None:
+    async def add_node(self, node: N) -> None:
         self._graph.add_node(node.id, node=node)
 
-    async def get_node(self, node_id: NodeID) -> Node[Any] | None:
+    async def get_node(self, node_id: NodeID) -> N | None:
         data = self._graph.nodes.get(node_id)
         if data is None:
             return None
         return data.get("node")
 
-    async def update_node(self, node_id: NodeID, **attrs: object) -> Node[Any] | None:
+    async def update_node(self, node_id: NodeID, **attrs: object) -> N | None:
         data = self._graph.nodes.get(node_id)
         if data is None:
             return None
-        old: Node[Any] = data["node"]
+        old: N = data["node"]
         updated = dataclasses.replace(old, **attrs)
         self._graph.nodes[node_id]["node"] = updated
         return updated
@@ -56,10 +58,10 @@ class NetworkXBackend:
 
     async def list_nodes(
         self, *, type: NodeType | None = None, limit: int | None = None
-    ) -> Sequence[Node[Any]]:
-        nodes: list[Node[Any]] = []
+    ) -> Sequence[N]:
+        nodes: list[N] = []
         for _, data in self._graph.nodes(data=True):
-            node: Node[Any] = data["node"]
+            node: N = data["node"]
             if type is not None and node.type != type:
                 continue
             nodes.append(node)
@@ -118,12 +120,12 @@ class NetworkXBackend:
 
     async def neighbors(
         self, node_id: NodeID, *, depth: int = 1, relation: str | None = None
-    ) -> Sequence[Node[Any]]:
+    ) -> Sequence[N]:
         if node_id not in self._graph:
             return []
         visited: set[NodeID] = {node_id}
         queue: deque[tuple[NodeID, int]] = deque([(node_id, 0)])
-        result: list[Node[Any]] = []
+        result: list[N] = []
         while queue:
             current, d = queue.popleft()
             if d >= depth:
@@ -186,12 +188,12 @@ class NetworkXBackend:
 
     # --- Graph algorithms ---
 
-    async def bfs(self, start: NodeID, *, relation: str | None = None) -> Sequence[Node[Any]]:
+    async def bfs(self, start: NodeID, *, relation: str | None = None) -> Sequence[N]:
         if start not in self._graph:
             return []
         visited: set[NodeID] = {start}
         queue: deque[NodeID] = deque([start])
-        result: list[Node[Any]] = [self._graph.nodes[start]["node"]]
+        result: list[N] = [self._graph.nodes[start]["node"]]
         while queue:
             current = queue.popleft()
             for _, neighbor, _, data in self._graph.out_edges(current, data=True, keys=True):
@@ -203,11 +205,11 @@ class NetworkXBackend:
                     queue.append(neighbor)
         return result
 
-    async def dfs(self, start: NodeID, *, relation: str | None = None) -> Sequence[Node[Any]]:
+    async def dfs(self, start: NodeID, *, relation: str | None = None) -> Sequence[N]:
         if start not in self._graph:
             return []
         visited: set[NodeID] = set()
-        result: list[Node[Any]] = []
+        result: list[N] = []
         stack: list[NodeID] = [start]
         while stack:
             current = stack.pop()
@@ -224,7 +226,7 @@ class NetworkXBackend:
 
     async def shortest_path(
         self, source: NodeID, target: NodeID, *, relation: str | None = None
-    ) -> Sequence[Node[Any]] | None:
+    ) -> Sequence[N] | None:
         if source not in self._graph or target not in self._graph:
             return None
         if relation is not None:
@@ -262,8 +264,8 @@ class NetworkXBackend:
             view = self._graph
         return [list(c) for c in nx.weakly_connected_components(view)]
 
-    async def subgraph(self, node_ids: Sequence[NodeID]) -> NetworkXBackend:
-        new = NetworkXBackend()
+    async def subgraph(self, node_ids: Sequence[NodeID]) -> NetworkXBackend[N]:
+        new = type(self)()
         sub = self._graph.subgraph(node_ids).copy()
         new._graph = sub
         return new
@@ -286,8 +288,8 @@ class NetworkXBackend:
             return set()
         return nx.descendants(self._graph, node_id)
 
-    async def ego_graph(self, node_id: NodeID, *, radius: int = 1) -> NetworkXBackend:
-        new = NetworkXBackend()
+    async def ego_graph(self, node_id: NodeID, *, radius: int = 1) -> NetworkXBackend[N]:
+        new = type(self)()
         if node_id not in self._graph:
             return new
         sub = nx.ego_graph(self._graph, node_id, radius=radius)

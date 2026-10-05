@@ -63,7 +63,7 @@ The `Graph` class is the primary API. It delegates storage to a `GraphBackend` a
 
 ```python
 from ai_arch_toolkit.core.graph import Graph, Node
-from ai_arch_toolkit.core.graph._networkx import NetworkXBackend
+from ai_arch_toolkit.core.graph import NetworkXBackend
 
 graph = Graph(NetworkXBackend())
 ```
@@ -324,7 +324,7 @@ graph.has_algorithms  # True if backend implements GraphAlgorithms
 The default in-memory implementation. Uses a NetworkX `MultiDiGraph` (supports multiple edges between the same pair of nodes via the `relation` as edge key). Implements both `GraphBackend` and `GraphAlgorithms`.
 
 ```python
-from ai_arch_toolkit.core.graph._networkx import NetworkXBackend
+from ai_arch_toolkit.core.graph import NetworkXBackend
 
 backend = NetworkXBackend()
 graph = Graph(backend)
@@ -336,7 +336,7 @@ Import-guarded — requires the `[graph]` extra:
 pip install "ai-arch-toolkit[graph] @ git+https://github.com/rgesteves5/ai-arch-toolkit.git"
 ```
 
-The `NetworkXBackend` is not re-exported from the `core.graph` package to keep the import guard effective. Import it directly from `core.graph._networkx`.
+`NetworkXBackend` comes from `ai_arch_toolkit.core.graph` (lazily, so the package imports without `networkx`; asking for it without the `graph` extra raises an `ImportError` that names it). It is generic in the node type it holds: `NetworkXBackend[MyNode]` returns `MyNode`s, so it satisfies a protocol written for a `Node` subclass.
 
 ---
 
@@ -350,7 +350,7 @@ but not the algorithms, stats, or `copy()`, and adds memory-specific features. I
 
 ```python
 from ai_arch_toolkit import GraphStore
-from ai_arch_toolkit.toolkit.memory.graph._networkx import NetworkXBackend
+from ai_arch_toolkit.toolkit.memory.graph import NetworkXBackend
 
 store = GraphStore(NetworkXBackend())
 ```

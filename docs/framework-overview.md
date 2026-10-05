@@ -107,7 +107,7 @@ General-purpose graph with typed nodes, directed edges, and pluggable backends.
 - **`Graph`** — primary facade. Async-first with `_sync` wrappers. Type-indexed node lookup, persistence (`save`/`load`/`to_dict`/`from_dict`).
 - **`GraphBackend`** protocol — storage interface (node/edge CRUD, neighbors, clear).
 - **`GraphAlgorithms`** protocol — optional algorithms (BFS, DFS, shortest path, centrality, connected components, subgraph, find_all_paths, ancestors, descendants, ego_graph, PageRank).
-- **`NetworkXBackend`** — default in-memory implementation (requires `networkx`, import-guarded).
+- **`NetworkXBackend`** — default in-memory implementation, generic in its node type (requires `networkx`; exported lazily).
 
 See [Graph Layer](graph.md) for full documentation.
 

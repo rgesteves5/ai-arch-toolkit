@@ -17,8 +17,9 @@ def _keyword_score(node: Node, tokens: list[str]) -> float:
     return hits / len(tokens) if tokens else 0.0
 
 
-class NetworkXBackend(_CoreNetworkXBackend):
-    """Memory-compatible backend. Adds search methods needed by GraphStore."""
+class NetworkXBackend(_CoreNetworkXBackend[Node]):
+    """The memory graph's backend: the core's NetworkX backend holding memory ``Node``s, with the
+    search methods ``GraphStore`` needs. It satisfies ``MemoryBackend``."""
 
     async def search_content(
         self, query: str, *, type: NodeType | None = None, k: int = 5

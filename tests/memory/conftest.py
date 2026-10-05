@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ai_arch_toolkit.toolkit.memory._types import Node
-from ai_arch_toolkit.toolkit.memory.graph._networkx import NetworkXBackend
+from ai_arch_toolkit.toolkit.memory.graph import NetworkXBackend
 from ai_arch_toolkit.toolkit.memory.graph._store import GraphStore
 
 

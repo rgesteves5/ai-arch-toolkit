@@ -13,7 +13,7 @@ reference content under stable keys), or a [Prompt](prompts.md) (resolved instru
 
 Graph-backed memory for agents. Built on the [`core/graph/`](graph.md) layer: every memory is a `Node`, relationships are `Edge`s, and a `GraphStore` coordinates the backend, an optional vector index, and an optional embedding function.
 
-The whole API is async-first. All symbols below are re-exported from the top-level package (`from ai_arch_toolkit import GraphStore, Node, ...`) or from `ai_arch_toolkit.toolkit.memory`, except two: `NetworkXBackend` is import-guarded, so import it from `ai_arch_toolkit.toolkit.memory.graph._networkx` as shown, and the `MemoryBackend` protocol comes from `ai_arch_toolkit.toolkit.memory.graph`.
+The whole API is async-first. All symbols below are re-exported from the top-level package (`from ai_arch_toolkit import GraphStore, Node, ...`) or from `ai_arch_toolkit.toolkit.memory`. `NetworkXBackend` comes from `ai_arch_toolkit.toolkit.memory` or `ai_arch_toolkit.toolkit.memory.graph`, lazily, since it needs the `graph` extra; it holds memory `Node`s and satisfies the `MemoryBackend` protocol, which comes from `ai_arch_toolkit.toolkit.memory.graph`.
 
 ---
 
@@ -23,7 +23,7 @@ The primary facade. It wraps a graph backend and handles auto-embedding, access 
 
 ```python
 from ai_arch_toolkit import GraphStore, Node
-from ai_arch_toolkit.toolkit.memory.graph._networkx import NetworkXBackend
+from ai_arch_toolkit.toolkit.memory.graph import NetworkXBackend
 
 store = GraphStore(NetworkXBackend())   # NetworkX backend (needs the [graph] extra)
 
@@ -267,7 +267,7 @@ The recall query is the text of the latest `user` message: string content, or di
 `save` and `to_dict` are instance methods; `load` and `from_dict` are classmethods that build a **fresh** store on a given backend (so pass the backend, and optionally `embed=`/`index=`).
 
 ```python
-from ai_arch_toolkit.toolkit.memory.graph._networkx import NetworkXBackend
+from ai_arch_toolkit.toolkit.memory.graph import NetworkXBackend
 
 await store.save("memory.json")                                    # dump to disk (atomic, versioned)
 restored = await GraphStore.load("memory.json", NetworkXBackend())  # → new GraphStore

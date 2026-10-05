@@ -23,7 +23,7 @@ from ai_arch_toolkit.toolkit.memory import (
     TemporalView,
     cognitive,
 )
-from ai_arch_toolkit.toolkit.memory.graph._networkx import NetworkXBackend
+from ai_arch_toolkit.toolkit.memory.graph import NetworkXBackend
 
 
 def make_embed_fn():

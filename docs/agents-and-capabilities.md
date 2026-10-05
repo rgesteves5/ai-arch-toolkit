@@ -37,7 +37,7 @@ from ai_arch_toolkit.core import State
 from ai_arch_toolkit.toolkit.tools import get_weather, wikipedia_search, datetime_now
 from ai_arch_toolkit.toolkit.agents.flows import react_flow, react_initial_state
 from ai_arch_toolkit.toolkit.memory import memory_tools
-from ai_arch_toolkit.toolkit.memory.graph._networkx import NetworkXBackend
+from ai_arch_toolkit.toolkit.memory.graph import NetworkXBackend
 
 # Knowledge base
 knowledge = KnowledgeRegistry()

@@ -56,6 +56,12 @@ flows, manifests) needs these changes; each one is detailed below.
   - `select` or `serialize_as` on an inline template.
 
 ### Added
+- The model routing is public (G-14): `resolve_provider_name`, the read-only tables
+  `MODEL_PREFIXES` and `MODEL_IDS` (views of the ones `create_provider` routes by), and
+  `is_local_url`, the loopback rule, from `ai_arch_toolkit.core`.
+- `NetworkXBackend` is public (G-24): from `ai_arch_toolkit.toolkit.memory`,
+  `ai_arch_toolkit.toolkit.memory.graph` and `ai_arch_toolkit.core.graph`, lazily (it needs the
+  `graph` extra).
 - **An iterated flow streams its LLM calls** (D54). Each `llm.complete` a step makes in a run
   being iterated (`flow.iter()`, `agent.iter()`, their sync forms) runs on the stream path, and
   its events arrive as `FlowEvent(type="llm_event")` with the `StreamEvent` (`llm_event`) and the
@@ -587,6 +593,9 @@ flows, manifests) needs these changes; each one is detailed below.
   - `select` or `serialize_as` on an inline template (they were ignored).
 
 ### Fixed
+- `GraphStore(NetworkXBackend())` type-checks: the core `NetworkXBackend` is generic in its node
+  type, and the memory one holds memory `Node`s, so it satisfies `MemoryBackend` (pyright refused
+  it).
 - A `@tool` function wrapped with `functools.wraps` runs the wrapper. The wrapper carried a copy
   of the tool's definition, which ran the inner function and skipped the wrapper.
 - Every tool call in a `Response` has an id of its own. An OpenAI-compatible server (Ollama,

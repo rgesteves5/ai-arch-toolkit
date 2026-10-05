@@ -67,7 +67,7 @@ are the recommended entry point, `Agent` (see [Toolkit — Agents](#toolkit-agen
 | `NodeID`, `NodeType`, `Direction` | Type aliases (`Direction` from `ai_arch_toolkit.core.graph`) |
 | `GraphBackend` | Protocol — storage interface |
 | `GraphAlgorithms` | Protocol — optional algorithms (from `ai_arch_toolkit.core.graph`) |
-| `NetworkXBackend` | Default in-memory backend (import from `core.graph._networkx`) |
+| `NetworkXBackend` | Default in-memory backend, generic in its node type (`ai_arch_toolkit.core.graph`; needs the `graph` extra) |
 
 **Graph facade methods** (all but `to_dict` have `_sync` counterparts):
 
