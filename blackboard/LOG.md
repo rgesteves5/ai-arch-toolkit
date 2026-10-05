@@ -784,3 +784,18 @@ R01 publicada em `main` (`b3dae3f`); a R02 começa com a leitura obrigatória da
 - Publicada (`34da992`). O dono pediu para não fazer o grupo 12 do briefing (os argumentos das
   ferramentas a chegar, G-37): a frente pára até o dono dizer o que se segue. A G-36 (o grupo 11)
   fechou na frente I.
+
+## 2026-10-05 · A11 a A14 feitas: a frente A concluída (Claude, a pedido do dono)
+
+- O dono pediu para terminar a frente A, sem sondas ao vivo nem chamadas pagas. Para saber que
+  modelos vêem imagens, só as páginas dos fornecedores.
+- **A11 (G-37, D60):** eventos `tool_call_delta` em todos os adaptadores. A revisão independente
+  achou um efeito de gravidade média: um pedaço conta como entregue, por isso, depois dele, a
+  chamada não se repete. Ficou decidido e escrito na D60. Os reparos menores estão tratados.
+- **A12 (G-38):** o `MemoryMiddleware` procura pelo texto das partes de um pedido com imagens.
+- **A13 (G-39):** a secção "Image Input" da matriz, o cenário `vision` da sonda (por correr), e o
+  adaptador xAI a mandar as imagens que largava.
+- **A14 (G-40, D61):** a reserva de uma imagem pelas contagens que o fornecedor publica, por
+  modelo, qualidade e tamanho. Sem contagens, 24 000 tokens.
+- A segunda revisão independente (A12 a A14 e o resto da A11) não achou falhas graves. Corrigi as duas médias: o pensamento do Gemini fora da reserva, e os modelos cobrados por imagem a reservarem tokens. Corrigi também as baixas.
+- Gate: 6565 passed, 42 skipped; ruff, formatação e pyright limpos. Publicada em `1e1e223`.

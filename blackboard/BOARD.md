@@ -14,9 +14,10 @@
   publicada (`67dc63e`). A A08, o grupo 8 (o tecto partilhado, G-28), está feita a 2026-10-05 e
   publicada (`8de0d02`). A A09, o grupo 9 (os workflows, G-32 e G-33), está feita a
   2026-10-05 e publicada (`6bea5be`). A A10, o grupo 10 (os manifestos importados, G-34), está feita a
-  2026-10-05 e publicada (`34da992`). O dono pediu para não fazer o grupo 12 (os argumentos das
-  ferramentas a chegar, G-37): a frente pára até o dono dizer o que se segue. A G-36, o grupo 11, já
-  fechou na frente I.
+  2026-10-05 e publicada (`34da992`). A G-36, o grupo 11, fechou na frente I. Depois de pedir uma
+  pausa, o dono pediu para terminar a frente: as A11 a A14 (os grupos 12 a 15: G-37, G-38, G-39,
+  G-40) estão feitas a 2026-10-05 e publicadas (`1e1e223`). **Frente A concluída** com elas: o briefing não
+  tem mais grupos (a G-25 fica de fora, pelo próprio briefing).
 - **Origem:** o briefing de 29/09, onde a app lista o que contorna no toolkit. Cada lacuna diz o
   que falta, a evidência e quando fica feita. A G-36 (imagens) já fechou na frente I.
 - **Decisões:** D48 (nenhum endereço lido do ambiente), D49 (toda a falha tem tecto), D50 (um
@@ -24,7 +25,9 @@
   opcional de uma tool vem do ambiente), D53 (um 429 fecha o host durante a espera), D54 (as chamadas ao LLM de um flow
   iterado correm em stream), D55 (as tools de pesquisa Brave e Tavily), D56 (o preço das tools pagas
   na tabela), D57 (o tecto partilhado), D58 (o gasto de cada passo, os spans públicos e as
-  dependências fracas), D59 (os aliases do YAML, o aninhamento e as heranças com limite).
+  dependências fracas), D59 (os aliases do YAML, o aninhamento e as heranças com limite), D60 (os
+  argumentos das ferramentas a chegar), D61 (a reserva de uma imagem pela qualidade e pelo
+  tamanho).
 - **Fora do âmbito:** o ai-network. Não se edita daqui; o dono leva-lhe a nota de cada grupo
   fechado.
 
@@ -40,6 +43,10 @@
 | A08 | O tecto partilhado (G-28): um `SharedMeter`/`SharedBudget` que várias execuções gastam ao mesmo tempo, sob um lock seu, semeado pela app | Claude | done | nada |
 | A09 | Os workflows: o gasto medido de cada passo e os spans públicos (G-32), as dependências fracas e a razão de um salto (G-33) | Claude | done | nada |
 | A10 | Os manifestos importados (G-34): os aliases do YAML, o aninhamento e as heranças com limite, num só sítio para os manifestos e os recursos | Claude | done | nada |
+| A11 | Os argumentos das ferramentas a chegar (G-37): eventos `tool_call_delta` em todos os adaptadores | Claude | done | nada |
+| A12 | A memória num pedido com imagens (G-38): o `MemoryMiddleware` procura pelo texto das partes | Claude | done | nada |
+| A13 | Que modelos vêem imagens (G-39): a matriz pelas páginas dos fornecedores, o cenário `vision`, e as imagens no adaptador xAI | Claude | done | nada |
+| A14 | A reserva de uma imagem pela qualidade e pelo tamanho (G-40): as contagens publicadas por modelo, nos adaptadores | Claude | done | nada |
 
 ## Frente activa: geração de imagens
 
@@ -154,8 +161,8 @@
   declarações dos manifestos mudaram o terreno de C02, C05, C07 e C08).
 - **Estado:** aberta em 2026-09-15. As nove fichas estão escritas; nenhuma tarefa começou.
 - **Antes de codificar:** o dono fixa as "Decisões a fixar" de cada ficha. Cada decisão tomada entra
-  em `DECISIONS.md` a partir de D60 (as D15 a D42 foram para as frentes R e T, as D43 a D45
-  para a frente O, as D46 e D47 para a frente I e as D48 a D59 para a frente A), com o número dado pelo coordenador.
+  em `DECISIONS.md` a partir de D62 (as D15 a D42 foram para as frentes R e T, as D43 a D45
+  para a frente O, as D46 e D47 para a frente I e as D48 a D61 para a frente A), com o número dado pelo coordenador.
 - **Origem:** o que `docs/internal/agentes-app-toolkit-review.md` pediu ao toolkit (L1, L3–L7, L9, L13
   e o ponto D) e que `docs/internal/toolkit-fix-plan.md` §4 (itens 3 e 10) deixou de fora por ser
   âmbito, não contrato partido.
@@ -378,9 +385,13 @@ que ficou aberto está em "Por fazer".
   correram a 2026-10-02 (77 de 77, O04).
 - **Frente C, decisões:** fixar as da vaga 1 (C02, C06, C07, C08) antes de atribuir donos; a C07 e
   a C08 só começam depois da T01 e da T03.
-- **Decidir, achados de 2026-09-18 sem tarefa (`FINDINGS.md`):** o `LLM("grok-…")` criado depois de
-  um `asyncio.run` levanta `RuntimeError`; o xAI larga imagens e documentos. (O `thinking_effort`
-  do OpenAI e o preço do batch ficaram resolvidos na frente O, D45.)
+- **Decidir, achado de 2026-09-18 sem tarefa (`FINDINGS.md`):** o xAI larga os documentos de um
+  pedido (o SDK tem `file(...)`). As imagens passaram a ir na A13, e o `LLM("grok-…")` depois de
+  um `asyncio.run` já não levanta desde a A03 (G-17). (O `thinking_effort` do OpenAI e o preço do
+  batch ficaram resolvidos na frente O, D45.)
+- **Frente A, ao vivo e no ai-network:** correr o cenário `vision`
+  (`uv run python scripts/probe_models.py --suite full --scenario vision`, uma imagem pequena
+  por modelo), e levar ao briefing do ai-network as linhas do Registo das fichas A01 a A14.
 - ~~O tecto de uma falha sem `BudgetPolicy`~~: decidido a 2026-10-04 (D49) e feito na A02.
 - **R02, verificação ao vivo:** comandos no relatório final de `tasks/R02-providers.md` (o do Gemini
   decide se sai a nota "Known issue").

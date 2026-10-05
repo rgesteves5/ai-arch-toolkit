@@ -974,3 +974,101 @@ Só acrescentar. Uma decisão revista ganha uma nova entrada que diz qual substi
     níveis;
   - um manifesto ou recurso custa em proporção ao seu tamanho. Ler um YAML grande fica 14 a 17%
     mais lento, e um JSON de 15 MB passa de 0,18 s para 0,30 s.
+
+## D60 · Os argumentos de uma chamada a uma ferramenta, a chegar em stream (frente A, G-37)
+
+- **Contexto:**
+  - um `StreamEvent` era `text`, `thinking`, `tool_call` ou `image`. Os adaptadores juntavam os
+    pedaços de uma chamada e só a entregavam completa, depois do fim do stream;
+  - a Anthropic manda o id e o nome de um bloco `tool_use` no início, e o input em pedaços
+    `input_json_delta`. A Responses API manda um item `function_call` e os deltas dos argumentos
+    pelo mesmo `output_index`. A Chat Completions manda deltas por `index`, com o id e o nome no
+    primeiro;
+  - a Gemini API manda cada chamada inteira numa parte: o `stream_function_call_arguments` é só
+    da Vertex AI. O xAI manda cada chamada "in whole in a single chunk";
+  - a app só mostra um artefacto quando ele está guardado.
+- **Decisão** (do coordenador, a 2026-10-05, pela forma que o briefing pede):
+  - um tipo novo de evento, `tool_call_delta`, sempre `partial`, com um `ToolCallDelta`:
+    - `index`, o lugar da chamada entre as chamadas da resposta, o mesmo que em
+      `Response.tool_calls` e na ordem dos eventos `tool_call` finais;
+    - o `id` e o `name` do fornecedor, em cada pedaço. O `id` fica vazio quando o fornecedor não
+      dá nenhum, e a chamada final leva então um id seu;
+    - `input_json`, o pedaço seguinte do input em texto JSON. Os pedaços de uma chamada, juntos
+      pela ordem, são o input inteiro, e um texto vazio é um input vazio. Na Responses API, o
+      `function_call_arguments.done` dá o que os deltas não escreveram, para que a regra valha
+      num servidor que não manda deltas (a Meta partilha o núcleo, e nada mostra que os mande);
+  - o primeiro pedaço sai logo que o nome se sabe, mesmo vazio;
+  - na Gemini e no xAI, cada chamada é um pedaço só, com o input inteiro, enviado logo que o
+    chunk chega;
+  - os eventos `tool_call` finais não mudam: vêm depois do stream, com o input já lido;
+  - um só ajudante, `CallPieces` em `core/_providers/_base.py`, numera as chamadas e constrói os
+    eventos. Cada adaptador só começa as chamadas que o seu `assemble` faz chamadas, pela mesma
+    ordem.
+- **Alternativas rejeitadas:**
+  - `kind="tool_call"` com `partial=True`: um consumidor que lê `event.tool_call` em cada
+    `tool_call` recebia `None`. Um tipo novo não muda o que já se lia;
+  - casar os pedaços com a chamada final pelo id: o id que o toolkit dá a uma chamada sem id é
+    aleatório, e uma chamada pode chegar sem id. O lugar na resposta é estável;
+  - entregar o input parcial já lido como dicionário: o JSON a meio não se lê, e cada fornecedor
+    corta-o noutro sítio. Quem quiser mostrar o parcial junta o texto;
+  - deixar os pedaços fora da regra do D54 (não repetir depois do primeiro evento), para que uma
+    resposta só com chamadas continue a repetir-se num flow iterado: a nova tentativa mandava os
+    seus pedaços com o lugar a recomeçar em 0, misturados com os da que falhou, e o consumidor
+    não as distinguia.
+- **Consequência:**
+  - quem compara todos os `StreamEvent.kind` encontra um novo, e quem conta eventos vê mais;
+  - os pedaços contam como entregues, como o texto (D54): no `stream_events()` e no `complete`
+    de um flow iterado, uma resposta só com chamadas que falhe depois do primeiro pedaço já não
+    se repete nem passa ao fallback. Antes, nada se mostrava até ao fim do stream, e repetia-se.
+    O `complete` sem canal e o `stream()` (que só mostra texto) repetem-se como antes;
+  - um stream abandonado a meio de uma chamada não deixa uma chamada a meio na `Response`;
+  - os eventos chegam também aos `llm_event` de um flow iterado (D54).
+
+## D61 · A reserva de uma imagem pelo modelo, pela qualidade e pelo tamanho (frente A, G-40)
+
+- **Contexto:**
+  - o pior caso (`core/_metering/_worst_case.py`, D49) reservava 16 000 tokens de imagem por
+    imagem pedida, olhando só para o número de imagens. Uma imagem em baixa no Flare, a 1024x1024,
+    custa 196 tokens: a app contorna com a sua própria estimativa por qualidade (D-81 dela);
+  - os 16 000 também não eram um tecto: o gpt-image-2 em `high`, e os 2.5 em `max`, chegam a
+    23 719 tokens a 2880x2880;
+  - a OpenAI publica a tabela dos modelos antes do gpt-image-2 (por qualidade e pelos três
+    tamanhos) e a calculadora do gpt-image-2 e dos 2.5 (uma grelha de mosaicos por qualidade, com
+    o custo de cada mosaico a crescer com os píxeis). O gpt-image-1-mini só tem preços por
+    imagem. O Gemini publica os tokens por tamanho. O xAI e a Meta cobram por imagem;
+  - a fórmula confere com o que a app mediu ao vivo a 4 Out: 1 167 no gpt-image-2 em média a 2:3
+    de 1K, 292 no Flare na mesma, 5 488 no gpt-image-2 em alta a 1024x1536, e 196 no Flare em
+    baixa a 1024x1024 (a corrida da frente I).
+- **Decisão** (do coordenador, a 2026-10-05, pela forma que o briefing pede):
+  - as contagens são regras por modelo, por isso vivem nas tabelas de cada adaptador
+    (`ImageModel.tokens` no OpenAI, `_ImageProfile.sizes` no Gemini). O
+    `BaseProvider.image_token_bound(image)` dá o tecto de uma imagem do pedido, ou `None`;
+  - o `request_facts` leva-o ao meter como facto, `OperationRequest.declared_image_tokens`. O
+    `worst_case` reserva-o por imagem, e o metering continua neutro: não conhece modelos;
+  - o tamanho é o que o adaptador manda (o mesmo `image_size`). Uma qualidade ou um tamanho que
+    ficam ao modelo reservam o mais caro que ele pode escolher: o `auto` não tem contagem
+    publicada;
+  - o gpt-image-1-mini usa os seus preços por imagem a $8 por milhão: o maior número de tokens que
+    cada preço de três casas decimais admite;
+  - um modelo cobrado por imagem (Grok Imagine, Muse Image) dá 0 tokens de imagem;
+  - os modelos de imagem do Gemini pensam sempre ("thinking cannot be disabled in the API"), ao
+    preço do texto: o `image_text_token_bound` dá o limite de saída de cada um (32 768, e 4 096
+    no Flash Lite), que o `request_facts` leva como `declared_max_output_tokens` de uma geração
+    que não declara nenhum. A revisão mostrou que, sem ele, 1 500 tokens de pensamento passavam
+    a reserva exacta da imagem;
+  - um modelo sem contagens publicadas reserva 24 000 tokens, acima da imagem publicada mais cara.
+- **Alternativas rejeitadas:**
+  - uma tabela no core, ao lado do metering: as regras por modelo vivem nos adaptadores (o
+    `AGENTS.md`), e o tamanho que se manda é do adaptador;
+  - passar o `ImageRequest` ao `OperationRequest` e calcular no `worst_case`: o metering teria de
+    conhecer os modelos de imagem;
+  - medir ao vivo: o dono não quer chamadas pagas, e as contagens publicadas conferem com as
+    medidas da app.
+- **Consequência:**
+  - um orçamento estrito reserva perto do que a imagem custa: duas imagens em baixa no Flare
+    reservam 392 tokens, onde reservavam 32 000;
+  - um modelo de imagem sem contagens reserva mais do que antes (24 000 em vez de 16 000), e uma
+    chamada ao gpt-image-2 ou aos 2.5 sem qualidade nem tamanho também (23 719);
+  - o Gemini não promete o número de imagens pedido ("won't always follow the exact number"):
+    imagens a mais do que as pedidas ficam fora da reserva, como antes;
+  - a app pode tirar a estimativa da D-81 quando passa a qualidade.

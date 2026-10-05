@@ -695,7 +695,7 @@ não sofrem (os clientes `httpx`/`httpx2` não pedem loop). A correcção natura
 só no primeiro acesso ao `_client`, mas muda o sítio onde aparecem os erros de construção dos cinco
 adaptadores: fica para decisão, fora da R02.
 
-### O adaptador xAI larga imagens que os modelos Grok aceitam → sem tarefa
+### O adaptador xAI larga imagens que os modelos Grok aceitam → resolvido na A13 (G-39)
 
 `_xai._user_text` avisa "xAI does not support image input" e larga a imagem, mas as páginas dos
 modelos dão `text, image → text` ao `grok-4.6`, `grok-4.5`, `grok-4.3`, `grok-4.20-*` e
