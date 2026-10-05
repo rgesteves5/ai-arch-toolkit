@@ -1,6 +1,6 @@
 # T04 · Limites na assinatura e invariante de contrato
 
-- **Dono:** T04a Claude; T04b por atribuir · **Estado:** T04a done (PR #71, `84c0ee2`); T04b todo
+- **Dono:** T04a Claude; T04b Claude (2026-10-05) · **Estado:** T04a done (PR #71, `84c0ee2`); T04b done
 - **Depende de:** T04a de nada (em série com a C02, que também mexe em `core/_tools`); T04b de T01,
   T02, T03 e T04a
 - **Origem:** plano, secções 3.4 e 4 · **Decisões:** D37 a D42 · **Regras:** `T00-rules.md`
@@ -67,6 +67,38 @@ A invariante passa com a lista inicial. Um módulo de exemplo migrado de propós
 trabalho, faz o teste pedir que se apague a sua linha da lista. Regista na ficha o tamanho inicial
 da lista, por ponto.
 
+### T04b · Nota de desenho (2026-10-05)
+
+- **Partilhado:** a descoberta das tools, os argumentos benignos e o `_answer` saem de
+  `test_tool_invariants.py` para `tests/toolkit/tool_catalog.py`; o `sandbox` passa para o
+  `tests/conftest.py` (o pytest 9.1 perde as fixtures de um `conftest` de pasta quando a linha de
+  comando mistura pastas). A invariante e o contrato importam-nos.
+- **Dívida = o que não está provado.** Um ponto cumpre-se com um caso declarado que passa; sem caso,
+  é dívida. O teste, por tool, calcula os pontos que falham e compara com `contract_debt.py`: um
+  ponto novo a falhar ("the debt list only shrinks") ou um ponto listado que já passa ("delete it
+  from contract_debt.py") falham o teste.
+- **O que cada tool faz** (`contract_cases.py`, `KINDS`, todas as tools, um teste exige-o):
+  `lookup` (um recurso: ponto `not_found`), `search` (uma lista: ponto `zero`) ou `other`. `WHOLE`:
+  as 38 tools que nunca cortam (plano, anexo A), a que o ponto `window` não se aplica.
+- **Os pontos:**
+  - `window`: um `Case` (argumentos, respostas da fonte e ficheiros): o texto acaba num rodapé da
+    janela da T03, e a chamada com os argumentos do `next:` devolve outra parte, numerada a partir
+    de onde a primeira acabou. Uma fonte que pagina por cursor leva também a posição no `next:`.
+  - `errors` (tools de módulos com `Api`): cada corpo de erro de `error_bodies.py` que se aplica à
+    tool (estado, cabeçalhos, corpo, o URL da documentação, o tipo e o texto esperados) dá
+    `ToolFailure` desse tipo, com esse texto. Sem corpo que se aplique, é dívida.
+  - `not_found` (lookups): um caso cuja resposta dá `not_found`.
+  - `zero` (searches): um caso de zero resultados dá texto que diz que nada se achou e contém a
+    consulta (T00, ponto 2).
+  - `limits` (automático): cada parâmetro inteiro tem um limite no schema (o `Range` da T04a), salvo
+    os de `UNBOUNDED` com a razão; o intervalo da docstring, se o escreve, é o do schema; e nem a
+    tool nem um helper do módulo a que ela o passe o aperta (`*clamp*(…)`, ou `min`/`max` com uma
+    constante).
+- **Cortes copiados:** `CUT_HELPERS` em `contract_debt.py` é o número de definições `_truncate` e
+  `_trim` em `toolkit/tools`; o teste exige a igualdade, e quem apaga uma baixa o número.
+- **Sementes:** corpos de erro já provados na T02 (família MediaWiki, Eurostat, UniProt, …) e os
+  `not_found` dos lookups com `missing=`. O resto fica na dívida, para as T05 a T09.
+
 ## Fora do âmbito
 
 Migrar as tools (T05 a T09).
@@ -74,7 +106,7 @@ Migrar as tools (T05 a T09).
 ## Registo do dono
 
 - **Estado:** T04a done — revista no branch `feat/tools-contract-wave1` e aplicada em `main` pelo
-  PR #71 (`84c0ee2`, 2026-09-30); T04b todo.
+  PR #71 (`84c0ee2`, 2026-09-30); T04b done (Claude, 2026-10-05), pela nota de desenho.
 
 ### T04a · Nota de desenho
 
@@ -132,3 +164,34 @@ Migrar as tools (T05 a T09).
   verificados; só os do topo.
 - **Testes novos:** 2: um `Range` num membro de uma união (`Annotated[int, Range(1, 5)] | None`), um
   caminho do `_range_of` que não estava coberto, e um `schema=` com `minimum`.
+
+### T04b · Registo
+
+- **Feito:** `tests/toolkit/test_tool_contract.py`, `contract_cases.py`, `error_bodies.py`,
+  `contract_debt.py` e `tool_catalog.py` (o partilhado com a invariante); o `sandbox` no
+  `tests/conftest.py`; o passo 8 do `CONTRIBUTING.md` e a secção de testes do `AGENTS.md` (e o
+  passo 6 do `CONTRIBUTING.md`, que ainda mandava apanhar um 404).
+- **Tamanho inicial da dívida** (134 tools): 121 com dívida; `window` 96, `errors` 91, `limits`
+  70, `zero` 42, `not_found` 22. `CUT_HELPERS` 15.
+- **Sementes:** os corpos de erro da família MediaWiki (`readonly`, `ratelimited`), do Eurostat
+  (413), da UniProt (400) e do Open-Meteo (400); os `not_found` dos lookups com `missing=` (T02),
+  o `missingtitle` da MediaWiki e os ficheiros que não existem.
+- **Prova:** com o corpo de erro do Open-Meteo acrescentado de propósito, o teste pediu
+  "air_quality_current now keeps ['errors']: delete it from tests/toolkit/contract_debt.py" (e o
+  mesmo para o `air_quality_forecast`); a semente ficou, e as linhas saíram. As próprias
+  verificações têm testes com tools sintéticas, nos dois sentidos.
+- **Revisão independente:** sem falhas graves. Corrigi as médias:
+  - os apertos escondidos num helper, ou de um só lado;
+  - zero resultados que não o dizem;
+  - uma janela que repete o corpo;
+  - dívida que não se podia pagar (o `distance_between`, os argumentos benignos do `who_series` e
+    do `weather_units`, ficheiros nos casos);
+  - um 429 com `Retry-After` que fazia descansar o host nas verificações seguintes (um throttle
+    novo por verificação);
+  - o `sandbox` num `conftest` de pasta.
+  Corrigi também as baixas: um rodapé estranho, casos que nunca correm, um nome estragado na
+  extracção.
+- **Para a T09:** as `youtube_*` não passam pelo `_http`; os seus pontos esperam uma costura
+  própria.
+- Gate: 7045 passed, 42 skipped; ruff, formatação e pyright limpos.
+

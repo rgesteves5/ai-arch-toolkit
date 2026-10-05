@@ -825,3 +825,15 @@ R01 publicada em `main` (`b3dae3f`); a R02 começa com a leitura obrigatória da
   uma falha, salvo o do EONET.
 - A revisão independente não achou falhas graves. Corrigi as médias e as baixas (ficha T02).
 - Gate: 6898 passed, 42 skipped; ruff, formatação e pyright limpos.
+
+## 2026-10-05 · T04b feita: a invariante de contrato e a lista de dívida (Claude, a pedido do dono)
+
+- A T02 foi publicada (`afe6674`, `3e5ff16`), e o dono pediu para avançar para a T04b.
+- **O teste de contrato** verifica, em cada uma das 134 tools, os pontos 1 a 4 do contrato (T00): o
+  rodapé da janela com continuação, os corpos de erro da fonte, o `not_found`, zero resultados com
+  a consulta, e os limites na assinatura (sem apertos no corpo nem nos helpers).
+- **A dívida** é o que não está provado: começa com 121 tools (`window` 96, `errors` 91, `limits`
+  70, `zero` 42, `not_found` 22) e só encolhe. As T05 a T09 acrescentam casos e apagam linhas.
+- A revisão independente não achou falhas graves. Corrigi as médias e as baixas (ficha T04).
+- Gate: 7045 passed, 42 skipped; ruff, formatação e pyright limpos.
+

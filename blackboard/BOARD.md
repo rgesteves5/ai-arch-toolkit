@@ -92,7 +92,7 @@
 ## Frente activa: contrato das tools
 
 - **Estado:** aberta em 2026-09-30. Fichas T00 (regras) e T01 a T09 escritas. A T01 está feita a
-  2026-10-05 (Claude, a pedido do dono, com cinco agentes nos módulos) e publicada (`8cd6c3c`); a T02 também (`afe6674`); a seguir, a T04b. A T03 e a T04a
+  2026-10-05 (Claude, a pedido do dono, com cinco agentes nos módulos) e publicada (`8cd6c3c`); a T02 também (`afe6674`); a T04b também (`7532ba4`); a seguir, a T05. A T03 e a T04a
   estão feitas: PR #71, em `main` desde 2026-09-30 (`84c0ee2`). A T01 já pode começar: a sessão
   paralela, que mexia no `_http.py` e em nove módulos, terminou (`6a34668`).
 - **Plano:** `docs/internal/tools-contract-plan.md`. **Regras:** `tasks/T00-rules.md`, que remete
@@ -122,7 +122,7 @@
 | T02 | Porta HTTP: um leitor de erros por fonte, 404 por endpoint, erro da fonte na mensagem | Claude | done | T01 |
 | T03 | Janela: primitiva de corte com rodapé e continuação | Claude | done | nada |
 | T04a | Limites na assinatura: marcador no schema e no validador | Claude | done | nada; em série com a C02 |
-| T04b | Invariante de contrato e lista de dívida | — | todo | T01, T02, T03, T04a |
+| T04b | Invariante de contrato e lista de dívida | Claude | done | T01, T02, T03, T04a |
 | T05 | Família wiki: HTML, navegação e fusão (8 tools) | — | todo | T04b |
 | T06 | Literatura e identificadores (8 módulos, 18 tools) | — | todo | T05 |
 | T07 | Vida e saúde (9 módulos, 34 tools) | — | todo | T05 |
