@@ -14,7 +14,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from ai_arch_toolkit.core import tool
-from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
+from ai_arch_toolkit.core._tools._result import ToolFailure
+from ai_arch_toolkit.toolkit.tools._http import Api
 
 _MAX_RESULTS = 20
 _SNIPPET_CHARS = 500
@@ -145,21 +146,24 @@ def brave_search(query: str, max_results: int = 10, country: str = "", freshness
         max_results: Number of results to return (1-20). Defaults to 10.
         country: Optional two-letter country code to search from, e.g. "PT" or "US".
         freshness: Optional age limit: "pd" (a day), "pw" (a week), "pm" (a month), "py" (a year).
+
+    Raises:
+        ToolFailure: validation_error when the query is empty or the freshness is unknown;
+            upstream when the key is missing or Brave refuses it.
     """
     query = query.strip()
     if not query:
-        return "Brave search failed: query cannot be empty."
+        raise ToolFailure("validation_error", "empty query; say what to search for")
     if freshness and freshness not in _FRESHNESS:
-        return "Brave search failed: freshness must be one of pd, pw, pm, py."
+        raise ToolFailure(
+            "validation_error", f"invalid freshness {freshness!r}; use pd, pw, pm, py, or ''"
+        )
     params = {"q": query, "count": str(max(1, min(max_results, _MAX_RESULTS)))}
     if country.strip():
         params["country"] = country.strip().upper()
     if freshness:
         params["freshness"] = freshness
-    try:
-        results = _BRAVE.get_json(params=params, parse=_brave_results)
-    except HttpError as e:
-        return f"Brave search failed: {e}"
+    results = _BRAVE.get_json(params=params, parse=_brave_results)
     return _format(query, "Brave", results)
 
 
@@ -180,14 +184,21 @@ def tavily_search(
         topic: "general" or "news". Defaults to "general".
         time_range: Optional age limit: "day", "week", "month" or "year".
         include_answer: Whether Tavily also writes a short answer from the results.
+
+    Raises:
+        ToolFailure: validation_error when the query is empty, or the topic or the time range is
+            unknown; upstream when the key is missing or Tavily refuses it.
     """
     query = query.strip()
     if not query:
-        return "Tavily search failed: query cannot be empty."
+        raise ToolFailure("validation_error", "empty query; say what to search for")
     if topic not in _TOPICS:
-        return "Tavily search failed: topic must be 'general' or 'news'."
+        raise ToolFailure("validation_error", f"invalid topic {topic!r}; use 'general' or 'news'")
     if time_range and time_range not in _TIME_RANGES:
-        return "Tavily search failed: time_range must be one of day, week, month, year."
+        raise ToolFailure(
+            "validation_error",
+            f"invalid time_range {time_range!r}; use day, week, month, year, or ''",
+        )
     payload: dict[str, Any] = {
         "query": query,
         "search_depth": "basic",  # one credit; "advanced" costs two
@@ -198,8 +209,5 @@ def tavily_search(
     }
     if time_range:
         payload["time_range"] = time_range
-    try:
-        answer, results = _TAVILY.post_json(payload=payload, parse=_tavily_answer)
-    except HttpError as e:
-        return f"Tavily search failed: {e}"
+    answer, results = _TAVILY.post_json(payload=payload, parse=_tavily_answer)
     return _format(query, "Tavily", results, answer)

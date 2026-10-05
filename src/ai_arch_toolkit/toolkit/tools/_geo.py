@@ -9,7 +9,8 @@ from decimal import Decimal
 from typing import Any
 
 from ai_arch_toolkit.core import tool
-from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
+from ai_arch_toolkit.core._tools._result import ToolFailure
+from ai_arch_toolkit.toolkit.tools._http import Api
 from ai_arch_toolkit.toolkit.tools._mediawiki import mediawiki_error
 
 _GEOCODING = Api(base="https://geocoding-api.open-meteo.com/v1", name="Open-Meteo", query_safe=",")
@@ -66,10 +67,7 @@ def geocode(city: str) -> str:
         city: City name, e.g. "Tokyo", "London", "São Paulo".
     """
     params = {"name": city, "count": "3", "language": "en", "format": "json"}
-    try:
-        lines = _GEOCODING.get_json("search", params=params, parse=_geocode_lines)
-    except HttpError as e:
-        return f"Geocoding failed: {e}"
+    lines = _GEOCODING.get_json("search", params=params, parse=_geocode_lines)
     if not lines:
         return f"No results for: {city!r}"
     return f"Geocoding results for {city!r}:\n" + "\n".join(lines)
@@ -84,17 +82,15 @@ def reverse_geocode(lat: float, lon: float) -> str:
     Args:
         lat: Latitude in decimal degrees.
         lon: Longitude in decimal degrees.
+
+    Raises:
+        ToolFailure: validation_error when the coordinates are out of range.
     """
-    error = _validate_coords(lat, lon)
-    if error:
-        return error
+    _validate_coords(lat, lon)
     params = {"format": "jsonv2", "lat": lat, "lon": lon, "zoom": "10", "addressdetails": "1"}
-    try:
-        return _NOMINATIM.get_json(
-            "reverse", params=params, parse=lambda data: _place_text(data, lat, lon)
-        )
-    except HttpError as e:
-        return f"Reverse geocoding failed: {e}"
+    return _NOMINATIM.get_json(
+        "reverse", params=params, parse=lambda data: _place_text(data, lat, lon)
+    )
 
 
 @tool(capability="network")
@@ -106,10 +102,11 @@ def timezone_lookup(lat: float, lon: float) -> str:
     Args:
         lat: Latitude in decimal degrees.
         lon: Longitude in decimal degrees.
+
+    Raises:
+        ToolFailure: validation_error when the coordinates are out of range.
     """
-    error = _validate_coords(lat, lon)
-    if error:
-        return error
+    _validate_coords(lat, lon)
     params = {
         "latitude": lat,
         "longitude": lon,
@@ -117,12 +114,9 @@ def timezone_lookup(lat: float, lon: float) -> str:
         "forecast_days": "1",
         "timezone": "auto",
     }
-    try:
-        return _FORECAST.get_json(
-            "forecast", params=params, parse=lambda data: _timezone_text(data, lat, lon)
-        )
-    except HttpError as e:
-        return f"Timezone lookup failed: {e}"
+    return _FORECAST.get_json(
+        "forecast", params=params, parse=lambda data: _timezone_text(data, lat, lon)
+    )
 
 
 @tool(capability="compute")
@@ -141,17 +135,16 @@ def distance_between(
         lat2: Ending latitude in decimal degrees.
         lon2: Ending longitude in decimal degrees.
         unit: Output unit: "km" or "mi". Defaults to kilometers.
+
+    Raises:
+        ToolFailure: validation_error when a coordinate is out of range or ``unit`` is unknown.
     """
-    start_error = _validate_coords(lat1, lon1)
-    if start_error:
-        return start_error.replace("Coordinates", "Start coordinates")
-    end_error = _validate_coords(lat2, lon2)
-    if end_error:
-        return end_error.replace("Coordinates", "End coordinates")
+    _validate_coords(lat1, lon1, "start ")
+    _validate_coords(lat2, lon2, "end ")
 
     unit = unit.lower().strip()
     if unit not in {"km", "mi"}:
-        return f"Invalid unit: {unit!r}. Use 'km' or 'mi'."
+        raise ToolFailure("validation_error", f"invalid unit {unit!r}; use 'km' or 'mi'.")
 
     radius = 6371.0088 if unit == "km" else 3958.7613
     phi1 = math.radians(lat1)
@@ -177,15 +170,17 @@ def ip_lookup(ip: str = "") -> str:
 
     Args:
         ip: Explicit IPv4 or IPv6 address to look up.
+
+    Raises:
+        ToolFailure: validation_error when ``ip`` is not an IP address; upstream when ipwho.is
+            reports it cannot look the address up (a reserved range, for one).
     """
     try:
         target = str(ipaddress.ip_address(ip))
-    except ValueError:
-        return "IP lookup failed: provide a valid IPv4 or IPv6 address"
-    try:
-        return _IPWHOIS.get_json(target, parse=_ip_text)
-    except HttpError as e:
-        return f"IP lookup failed: {e}"
+    except ValueError as e:
+        msg = f"invalid IP address {ip!r}; pass an IPv4 or IPv6 address, e.g. '8.8.8.8'."
+        raise ToolFailure("validation_error", msg) from e
+    return _IPWHOIS.get_json(target, parse=lambda data: _ip_text(data, target))
 
 
 @tool(capability="network")
@@ -196,10 +191,18 @@ def country_info(name: str) -> str:
 
     Args:
         name: Country name or ISO 3166-1 code, e.g. "Japan", "France", "BR".
+
+    Raises:
+        ToolFailure: validation_error when ``name`` is empty or has unsupported characters;
+            not_found when Wikidata has no country by that name or code.
     """
     name = name.strip()
     if not _COUNTRY_RE.fullmatch(name):
-        return "Country info failed: invalid name."
+        msg = (
+            f"invalid name {name!r}; pass a country name or ISO 3166-1 code of up to 80 "
+            "letters, e.g. 'Japan' or 'BR'."
+        )
+        raise ToolFailure("validation_error", msg)
     search = {
         "action": "wbsearchentities",
         "search": name,
@@ -209,19 +212,22 @@ def country_info(name: str) -> str:
         "limit": "10",
         "format": "json",
     }
-    try:
-        qids = _WIKIDATA.get_json(params=search, parse=_candidate_qids)
-        text = (
-            _WIKIDATA_SPARQL.get_json(
-                params={"query": _country_query(qids), "format": "json"},
-                parse=lambda data: _country_text(data, qids),
-            )
-            if qids
-            else ""
+    qids = _WIKIDATA.get_json(params=search, parse=_candidate_qids)
+    text = (
+        _WIKIDATA_SPARQL.get_json(
+            params={"query": _country_query(qids), "format": "json"},
+            parse=lambda data: _country_text(data, qids),
         )
-    except HttpError as e:
-        return f"Country info failed: {e}"
-    return text or f"Country not found: {name!r}"
+        if qids
+        else ""
+    )
+    if not text:
+        msg = (
+            f"no country named {name!r} on Wikidata; try its English name or its ISO 3166-1 "
+            "code, e.g. 'JP'."
+        )
+        raise ToolFailure("not_found", msg)
+    return text
 
 
 def _geocode_lines(data: dict[str, Any]) -> list[str]:
@@ -278,9 +284,10 @@ def _timezone_text(data: dict[str, Any], lat: float, lon: float) -> str:
     return f"Coordinates: {lat}, {lon}\nTimezone: {timezone}\nUTC offset: {offset}"
 
 
-def _ip_text(data: dict[str, Any]) -> str:
+def _ip_text(data: dict[str, Any], target: str) -> str:
     if data.get("success") is not True:
-        return f"IP lookup failed: {data.get('message', 'unknown error')}"
+        reason = str(data.get("message") or "unknown error").rstrip(".")
+        raise ToolFailure("upstream", f"ipwho.is could not look up {target}: {reason}.")
     connection = data.get("connection") or {}
     timezone = data.get("timezone") or {}
     return (
@@ -390,13 +397,14 @@ def _utc_minutes(label: str) -> int:
     return (-1 if sign in {"-", "\u2212"} else 1) * (int(hours) * 60 + int(minutes))
 
 
-def _validate_coords(lat: float, lon: float) -> str | None:
-    """Validate a latitude/longitude pair."""
+def _validate_coords(lat: float, lon: float, which: str = "") -> None:
+    """Validate a latitude/longitude pair; ``which`` names it ("start ") in the message."""
     if not -90 <= lat <= 90:
-        return f"Coordinates out of range: latitude must be between -90 and 90, got {lat}."
+        msg = f"{which}latitude out of range: it must be between -90 and 90, got {lat}."
+        raise ToolFailure("validation_error", msg)
     if not -180 <= lon <= 180:
-        return f"Coordinates out of range: longitude must be between -180 and 180, got {lon}."
-    return None
+        msg = f"{which}longitude out of range: it must be between -180 and 180, got {lon}."
+        raise ToolFailure("validation_error", msg)
 
 
 def _format_utc_offset(offset_seconds: int | None) -> str:

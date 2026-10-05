@@ -8,6 +8,7 @@ import operator
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.core._tools._result import ToolFailure
 
 # ---------------------------------------------------------------------------
 # Safe math evaluator
@@ -112,8 +113,8 @@ def _safe_eval(node: ast.AST) -> float:
         if isinstance(node.func, ast.Name) and node.func.id in _FUNCTIONS:
             args = [_safe_eval(a) for a in node.args]
             return _FUNCTIONS[node.func.id](*args)
-        raise ValueError(f"Unknown function: {ast.dump(node.func)}")
-    raise ValueError(f"Unsupported expression: {ast.dump(node)}")
+        raise ValueError(f"unknown function {ast.unparse(node.func)!r}")
+    raise ValueError(f"unsupported expression {ast.unparse(node)[:80]!r}")
 
 
 @tool(capability="compute")
@@ -129,9 +130,17 @@ def math_eval(expression: str) -> str:
 
     Args:
         expression: A math expression, e.g. "sqrt(144) + 3 * pi".
+
+    Raises:
+        ToolFailure: validation_error when the expression is too long, does not parse, uses
+            something outside the list above, or cannot be computed (a division by zero, a
+            result too large).
     """
     if len(expression) > _MAX_EXPRESSION_CHARS:
-        return f"Error: expression longer than {_MAX_EXPRESSION_CHARS} characters"
+        raise ToolFailure(
+            "validation_error",
+            f"expression longer than {_MAX_EXPRESSION_CHARS} characters; split it into parts",
+        )
     # Allow ^ as power operator
     expression = expression.replace("^", "**")
     try:
@@ -141,15 +150,15 @@ def math_eval(expression: str) -> str:
         if isinstance(result, float) and result == int(result) and not math.isinf(result):
             return str(int(result))
         return str(result)
-    except (
-        ValueError,
-        TypeError,
-        SyntaxError,
-        ArithmeticError,
-        RecursionError,
-        MemoryError,
-    ) as e:
-        return f"Error: {e}"
+    except (ArithmeticError, RecursionError, MemoryError) as e:  # a valid expression, no value
+        reason = str(e) or type(e).__name__
+        raise ToolFailure("validation_error", f"the expression has no value: {reason}") from e
+    except (ValueError, TypeError, SyntaxError) as e:
+        raise ToolFailure(
+            "validation_error",
+            f"cannot evaluate the expression: {str(e) or type(e).__name__}; "
+            "use only the operators, constants and functions math_eval lists",
+        ) from e
 
 
 # ---------------------------------------------------------------------------
@@ -341,6 +350,10 @@ def unit_convert(value: float, from_unit: str, to_unit: str) -> str:
         value: The numeric value to convert.
         from_unit: Source unit, e.g. "km", "lbs", "celsius", "gallons".
         to_unit: Target unit, e.g. "miles", "kg", "fahrenheit", "liters".
+
+    Raises:
+        ToolFailure: validation_error when a unit is unknown or the two are not in the same
+            category.
     """
     from_u = from_unit.lower().strip()
     to_u = to_unit.lower().strip()
@@ -356,4 +369,8 @@ def unit_convert(value: float, from_unit: str, to_unit: str) -> str:
             result = value * cat[from_u] / cat[to_u]
             return f"{value} {from_unit} = {result:.6g} {to_unit}"
 
-    return f"Cannot convert from {from_unit!r} to {to_unit!r}. Units must be in the same category."
+    raise ToolFailure(
+        "validation_error",
+        f"cannot convert from {from_unit!r} to {to_unit!r}; both units must be known and in the "
+        "same category (length, mass, volume, speed, area, time or temperature)",
+    )

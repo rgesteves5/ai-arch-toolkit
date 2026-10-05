@@ -58,8 +58,8 @@ CI; run them locally.
   `_`-prefixed and reach the world only via re-export.
 - Docstrings are Google-style. Don't restate types — the annotations are the
   truth.
-- Toolkit tools return error strings (never raise) so agents can recover
-  gracefully.
+- A toolkit tool that cannot answer raises `ToolFailure`; the executor turns it
+  into a failed `ToolResult`, so agents recover gracefully.
 
 For the practical writing style — how code should look, how to structure
 docstrings/comments, and when to use classes vs functions — see
@@ -98,7 +98,7 @@ docstrings/comments, and when to use classes vs functions — see
    from type hints + Google-style docstring.
 3. Stdlib only. Reach the network only through `toolkit/tools/_http.py`: declare an `Api` for
    the service's HTTPS origin and read each response inside `parse=`, so a malformed answer
-   becomes the tool's error string. If the service explains errors in the body, in a success or
+   becomes the tool's failure. If the service explains errors in the body, in a success or
    an error status, give its `Api` a `body_error=` that reads them, so no `parse` takes an error
    for an empty result and the model reads the service's own words; every `Api` on a MediaWiki
    `api.php` uses `mediawiki_error` (a test checks). A call to a service that answers "nothing
@@ -117,8 +117,13 @@ docstrings/comments, and when to use classes vs functions — see
    tells the model what was shown, the total, and the exact call that reads on
    (`[chars 0-4000 of 34651 | next: offset=4000]`), and `metadata["window"]` tells the app. The
    existing tools do not use it: those that mark a cut do so in their own words.
-6. **Return error strings, never raise.** Agents read the return value as the
-   tool result.
+6. **Fail with a type, never with a string.** When the tool cannot answer, raise
+   `ToolFailure(type, message)` from `ai_arch_toolkit.core`: `not_found` (what was asked for
+   does not exist), `validation_error` (an argument is wrong), `upstream` (the source failed or
+   explained an error) or `rate_limited`. The message gives the source's reason and the next
+   step. Let the door's `HttpError` through (it is a `ToolFailure`); catch it only to raise a
+   more precise one, such as `not_found` for a 404. Zero results is a successful answer that
+   says so, with the query.
 7. Export from `toolkit/tools/__init__.py`, or from `toolkit/tools/dangerous.py` for a tool with
    side effects (files, a shell, an evaluator, any URL), which also requires approval.
 8. Tests in `tests/toolkit/test_<file>.py`: patch `HTTP_OPEN` with `respond(...)` or

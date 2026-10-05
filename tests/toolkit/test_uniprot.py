@@ -8,6 +8,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._uniprot import (
     uniprot_crossrefs,
     uniprot_entry,
@@ -73,11 +74,52 @@ class TestUniProt:
         assert "PDB: 1TRZ" in result
         assert "Method: X-ray" in result
 
+    @pytest.mark.parametrize(
+        ("call", "words"),
+        [
+            (lambda: uniprot_entry("bad/id"), "invalid accession 'bad/id'"),
+            (lambda: uniprot_sequence("x"), "invalid accession 'x'"),
+            (lambda: uniprot_search("insulin", reviewed="maybe"), "invalid reviewed 'maybe'"),
+            (lambda: uniprot_search("insulin", offset=-1), "invalid offset -1"),
+            (lambda: uniprot_search("a;b"), "invalid query"),
+            (lambda: uniprot_features("P01308", feature_type="a;b"), "invalid feature_type"),
+            (lambda: uniprot_crossrefs("P01308", database="a;b"), "invalid database"),
+        ],
+    )
     @patch(HTTP_OPEN)
-    def test_invalid_options_do_not_call_api(self, mock_urlopen):
-        assert "invalid accession" in uniprot_entry("bad/id")
-        assert "reviewed must" in uniprot_search("insulin", reviewed="maybe")
+    def test_invalid_options_do_not_call_api(self, mock_urlopen, call, words):
+        with pytest.raises(ToolFailure) as caught:
+            call()
+
+        assert caught.value.error.type == "validation_error"
+        assert words in caught.value.error.message
         mock_urlopen.assert_not_called()
+
+    @patch(HTTP_OPEN)
+    def test_no_results_is_a_success(self, mock_urlopen):
+        mock_urlopen.return_value = respond({"totalResults": 0, "results": []})
+
+        assert uniprot_search("zzzz") == "No UniProt proteins found."
+
+    @patch(HTTP_OPEN)
+    def test_a_missing_accession_is_an_upstream_failure(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(404, "Not Found")
+
+        with pytest.raises(ToolFailure) as caught:
+            uniprot_entry("Q00000")
+
+        assert caught.value.error.type == "upstream"
+        assert "no matching records found" in caught.value.error.message
+
+    @patch(HTTP_OPEN)
+    def test_rate_limiting_is_typed(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(429, "Too Many Requests")
+
+        with pytest.raises(ToolFailure) as caught:
+            uniprot_search("insulin")
+
+        assert caught.value.error.type == "rate_limited"
+        assert caught.value.error.retryable
 
 
 # Inactive accessions as UniProt answered them live, with HTTP 200 (2026-09-30).
@@ -102,29 +144,29 @@ _DELETED = {
 }
 
 
-@pytest.mark.parametrize(
-    ("fn", "failure"),
-    [
-        (uniprot_entry, "UniProt entry lookup failed"),
-        (uniprot_features, "UniProt features failed"),
-        (uniprot_crossrefs, "UniProt cross-references failed"),
-    ],
-)
+@pytest.mark.parametrize("fn", [uniprot_entry, uniprot_features, uniprot_crossrefs])
 @patch(HTTP_OPEN)
-def test_an_inactive_accession_says_where_it_went(mock_urlopen, fn, failure):
+def test_an_inactive_accession_says_where_it_went(mock_urlopen, fn):
     # It read as a nameless entry, or as an entry with no features or cross-references.
     mock_urlopen.return_value = respond(_DEMERGED)
 
-    assert fn("P00001") == f"{failure}: P00001 is inactive: demerged into P99999, P99998"
+    with pytest.raises(ToolFailure) as caught:
+        fn("P00001")
+
+    assert caught.value.error.type == "upstream"
+    assert caught.value.error.message == "P00001 is inactive: demerged into P99999, P99998"
 
 
 @patch(HTTP_OPEN)
 def test_a_deleted_accession_says_why(mock_urlopen):
     mock_urlopen.return_value = respond(_DELETED)
 
-    assert uniprot_entry("A0A008APQ8") == (
-        "UniProt entry lookup failed: A0A008APQ8 is inactive: deleted "
-        "(Not part of a reference proteome)"
+    with pytest.raises(ToolFailure) as caught:
+        uniprot_entry("A0A008APQ8")
+
+    assert caught.value.error.type == "upstream"
+    assert caught.value.error.message == (
+        "A0A008APQ8 is inactive: deleted (Not part of a reference proteome)"
     )
 
 
@@ -141,4 +183,19 @@ def test_a_search_uniprot_refuses_says_why(mock_urlopen, query, reason):
     body = {"url": "http://rest.uniprot.org/uniprotkb/search", "messages": [reason]}
     mock_urlopen.side_effect = http_error(400, "Bad Request", body=json.dumps(body).encode())
 
-    assert uniprot_search(query) == f"UniProt search failed: HTTP error 400: {reason}"
+    with pytest.raises(ToolFailure) as caught:
+        uniprot_search(query)
+
+    assert caught.value.error.type == "upstream"
+    assert caught.value.error.message == f"HTTP error 400: {reason}"
+
+
+@patch(HTTP_OPEN)
+def test_an_empty_sequence_is_not_found(mock_urlopen):
+    mock_urlopen.return_value = respond("", content_type="text/plain")
+
+    with pytest.raises(ToolFailure) as caught:
+        uniprot_sequence("P01308")
+
+    assert caught.value.error.type == "not_found"
+    assert "uniprot_entry" in caught.value.error.message

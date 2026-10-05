@@ -6,7 +6,8 @@ import re
 from typing import Any
 
 from ai_arch_toolkit.core import tool
-from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
+from ai_arch_toolkit.core._tools._result import ToolFailure
+from ai_arch_toolkit.toolkit.tools._http import Api
 
 
 def _uniprot_error(answer: object) -> str | None:
@@ -52,6 +53,7 @@ _API = Api(
 _MAX_LIMIT = 25
 _TEXT_RE = re.compile(r"^[\w\s,.'()/%:+-]{1,180}$", re.UNICODE)
 _ACCESSION_RE = re.compile(r"^[A-Z0-9]{6,10}(?:-\d+)?$", re.IGNORECASE)
+_TEXT_HINT = "use 1-180 letters, digits, spaces and ,.'()/%:+-"
 
 
 @tool(capability="network")
@@ -70,15 +72,21 @@ def uniprot_search(
         reviewed: Optional reviewed filter: "true" for Swiss-Prot, "false" for TrEMBL.
         max_results: Number of proteins to return (1-25). Defaults to 10.
         offset: Zero-based result offset. Defaults to 0.
+
+    Raises:
+        ToolFailure: validation_error when the query, the organism, ``reviewed`` or the offset is
+            invalid.
     """
     if not _valid_text(query):
-        return "UniProt search failed: invalid query."
+        raise ToolFailure("validation_error", f"invalid query {query!r}; {_TEXT_HINT}")
     if organism and not _valid_text(organism):
-        return "UniProt search failed: invalid organism."
+        raise ToolFailure("validation_error", f"invalid organism {organism!r}; {_TEXT_HINT}")
     if reviewed and reviewed.lower() not in {"true", "false"}:
-        return "UniProt search failed: reviewed must be true, false, or empty."
+        raise ToolFailure(
+            "validation_error", f"invalid reviewed {reviewed!r}; use 'true', 'false', or ''"
+        )
     if offset < 0:
-        return "UniProt search failed: offset must be greater than or equal to 0."
+        raise ToolFailure("validation_error", f"invalid offset {offset}; use 0 or more")
 
     params = {
         "query": _search_query(query, organism, reviewed),
@@ -87,12 +95,9 @@ def uniprot_search(
         "offset": str(offset),
         "fields": "accession,protein_name,gene_names,organism_name,reviewed,length",
     }
-    try:
-        return _API.get_json(
-            "search", params=params, parse=lambda data: _search_text(data, query, offset)
-        )
-    except HttpError as e:
-        return f"UniProt search failed: {e}"
+    return _API.get_json(
+        "search", params=params, parse=lambda data: _search_text(data, query, offset)
+    )
 
 
 @tool(capability="network")
@@ -101,16 +106,14 @@ def uniprot_entry(accession: str) -> str:
 
     Args:
         accession: UniProt accession, e.g. "P01308".
+
+    Raises:
+        ToolFailure: validation_error when the accession is malformed.
     """
-    normalized = accession.strip().upper()
-    if not _ACCESSION_RE.fullmatch(normalized):
-        return f"UniProt entry lookup failed: invalid accession: {accession!r}"
-    try:
-        return _API.get_json(
-            normalized, params={"format": "json"}, parse=lambda data: _entry_text(data, normalized)
-        )
-    except HttpError as e:
-        return f"UniProt entry lookup failed: {e}"
+    normalized = _accession(accession)
+    return _API.get_json(
+        normalized, params={"format": "json"}, parse=lambda data: _entry_text(data, normalized)
+    )
 
 
 @tool(capability="network")
@@ -121,20 +124,20 @@ def uniprot_features(accession: str, feature_type: str = "", max_results: int = 
         accession: UniProt accession, e.g. "P01308".
         feature_type: Optional feature type filter, e.g. "Domain" or "Active site".
         max_results: Number of features to return (1-25). Defaults to 20.
+
+    Raises:
+        ToolFailure: validation_error when the accession or the feature type is malformed.
     """
-    normalized = accession.strip().upper()
-    if not _ACCESSION_RE.fullmatch(normalized):
-        return f"UniProt features failed: invalid accession: {accession!r}"
+    normalized = _accession(accession)
     if feature_type and not _valid_text(feature_type):
-        return "UniProt features failed: invalid feature_type."
-    try:
-        return _API.get_json(
-            normalized,
-            params={"format": "json"},
-            parse=lambda data: _features_text(data, normalized, feature_type, max_results),
+        raise ToolFailure(
+            "validation_error", f"invalid feature_type {feature_type!r}; e.g. 'Domain'"
         )
-    except HttpError as e:
-        return f"UniProt features failed: {e}"
+    return _API.get_json(
+        normalized,
+        params={"format": "json"},
+        parse=lambda data: _features_text(data, normalized, feature_type, max_results),
+    )
 
 
 @tool(capability="network")
@@ -143,17 +146,17 @@ def uniprot_sequence(accession: str) -> str:
 
     Args:
         accession: UniProt accession, e.g. "P01308".
+
+    Raises:
+        ToolFailure: validation_error when the accession is malformed; not_found when UniProt
+            returns no sequence for it.
     """
-    normalized = accession.strip().upper()
-    if not _ACCESSION_RE.fullmatch(normalized):
-        return f"UniProt sequence failed: invalid accession: {accession!r}"
-    try:
-        return _API.get_text(
-            f"{normalized}.fasta",
-            parse=lambda text: text.strip() or f"No UniProt sequence found for {normalized}.",
-        )
-    except HttpError as e:
-        return f"UniProt sequence failed: {e}"
+    normalized = _accession(accession)
+    fasta = _API.get_text(f"{normalized}.fasta", parse=str.strip)
+    if not fasta:
+        msg = f"UniProt has no sequence for {normalized}; check the entry with uniprot_entry"
+        raise ToolFailure("not_found", msg)
+    return fasta
 
 
 @tool(capability="network")
@@ -164,20 +167,30 @@ def uniprot_crossrefs(accession: str, database: str = "", max_results: int = 25)
         accession: UniProt accession, e.g. "P01308".
         database: Optional database filter, e.g. "PDB", "Reactome", or "ChEMBL".
         max_results: Number of cross-references to return (1-25). Defaults to 25.
+
+    Raises:
+        ToolFailure: validation_error when the accession or the database is malformed.
     """
+    normalized = _accession(accession)
+    if database and not _valid_text(database):
+        raise ToolFailure("validation_error", f"invalid database {database!r}; e.g. 'PDB'")
+    return _API.get_json(
+        normalized,
+        params={"format": "json"},
+        parse=lambda data: _crossrefs_text(data, normalized, database, max_results),
+    )
+
+
+def _accession(accession: str) -> str:
+    """``accession`` upper-cased; a malformed one raises ``ToolFailure`` (validation_error)."""
     normalized = accession.strip().upper()
     if not _ACCESSION_RE.fullmatch(normalized):
-        return f"UniProt cross-references failed: invalid accession: {accession!r}"
-    if database and not _valid_text(database):
-        return "UniProt cross-references failed: invalid database."
-    try:
-        return _API.get_json(
-            normalized,
-            params={"format": "json"},
-            parse=lambda data: _crossrefs_text(data, normalized, database, max_results),
+        raise ToolFailure(
+            "validation_error",
+            f"invalid accession {accession!r}; a UniProt accession looks like P01308 "
+            "(find one with uniprot_search)",
         )
-    except HttpError as e:
-        return f"UniProt cross-references failed: {e}"
+    return normalized
 
 
 def _search_query(query: str, organism: str, reviewed: str) -> str:

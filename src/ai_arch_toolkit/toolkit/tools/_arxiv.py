@@ -8,7 +8,8 @@ from dataclasses import dataclass
 from datetime import date
 
 from ai_arch_toolkit.core import tool
-from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
+from ai_arch_toolkit.core._tools._result import ToolFailure
+from ai_arch_toolkit.toolkit.tools._http import Api
 
 
 def _feed_error(answer: object) -> str | None:
@@ -92,24 +93,25 @@ def arxiv_search(
         sort_order: Sort order: ascending or descending.
         from_date: Optional submitted date lower bound as YYYY-MM-DD.
         to_date: Optional submitted date upper bound as YYYY-MM-DD.
+
+    Raises:
+        ToolFailure: validation_error when an argument is invalid; upstream when arXiv reports
+            an error.
     """
     query = query.strip()
     if not query:
-        return "arXiv search failed: query cannot be empty."
+        msg = "query cannot be empty; pass search text such as 'LLM agents' or 'ti:agent'."
+        raise ToolFailure("validation_error", msg)
 
     max_results = max(1, min(max_results, _MAX_RESULTS_LIMIT))
     if start < 0:
-        return "arXiv search failed: start must be greater than or equal to 0."
+        msg = f"start must be greater than or equal to 0, got {start}."
+        raise ToolFailure("validation_error", msg)
     sort_by = sort_by.strip() or "relevance"
     sort_order = sort_order.strip() or "descending"
 
-    validation_error = _validate_search_options(category, sort_by, sort_order)
-    if validation_error:
-        return validation_error
-
+    _validate_search_options(category, sort_by, sort_order)
     search_query = _build_search_query(query, category, from_date, to_date)
-    if search_query.startswith("arXiv search failed:"):
-        return search_query
 
     params = {
         "search_query": search_query,
@@ -118,11 +120,7 @@ def arxiv_search(
         "sortBy": sort_by,
         "sortOrder": sort_order,
     }
-    try:
-        papers = _API.get_text(params=params, parse=_parse_atom)
-    except HttpError as e:
-        return f"arXiv search failed: {e}"
-
+    papers = _API.get_text(params=params, parse=_parse_atom)
     if not papers:
         return f"No arXiv results for: {query!r}"
 
@@ -135,34 +133,35 @@ def arxiv_paper(arxiv_id: str) -> str:
 
     Args:
         arxiv_id: arXiv identifier, e.g. "1706.03762", "1706.03762v1", or an arXiv URL.
+
+    Raises:
+        ToolFailure: validation_error when the ID is malformed; not_found when arXiv has no
+            paper with it; upstream when arXiv reports an error.
     """
     paper_id = _normalize_arxiv_id(arxiv_id)
     if not paper_id:
-        return f"arXiv paper lookup failed: invalid arXiv ID: {arxiv_id!r}"
+        msg = f"invalid arXiv ID {arxiv_id!r}; an arXiv ID looks like 1706.03762 or 1706.03762v1."
+        raise ToolFailure("validation_error", msg)
 
     params = {"id_list": paper_id, "start": "0", "max_results": "1"}
-    try:
-        papers = _API.get_text(params=params, parse=_parse_atom)
-    except HttpError as e:
-        return f"arXiv paper lookup failed: {e}"
-
+    papers = _API.get_text(params=params, parse=_parse_atom)
     if not papers:
-        return f"arXiv paper not found: {paper_id}"
+        msg = f"no arXiv paper with ID {paper_id}; search with arxiv_search."
+        raise ToolFailure("not_found", msg)
 
     return f"arXiv paper {paper_id}:\n" + _format_papers(papers, include_index=False)
 
 
-def _validate_search_options(category: str, sort_by: str, sort_order: str) -> str:
+def _validate_search_options(category: str, sort_by: str, sort_order: str) -> None:
     if category and not _VALID_CATEGORIES.fullmatch(category.strip()):
-        return f"arXiv search failed: invalid category: {category!r}"
+        msg = f"invalid category {category!r}; an arXiv category looks like cs.AI or stat.ML."
+        raise ToolFailure("validation_error", msg)
     if sort_by not in {"relevance", "lastUpdatedDate", "submittedDate"}:
-        return (
-            "arXiv search failed: sort_by must be one of "
-            "relevance, lastUpdatedDate, submittedDate."
-        )
+        msg = f"invalid sort_by {sort_by!r}; use relevance, lastUpdatedDate or submittedDate."
+        raise ToolFailure("validation_error", msg)
     if sort_order not in {"ascending", "descending"}:
-        return "arXiv search failed: sort_order must be ascending or descending."
-    return ""
+        msg = f"invalid sort_order {sort_order!r}; use ascending or descending."
+        raise ToolFailure("validation_error", msg)
 
 
 def _build_search_query(
@@ -181,8 +180,6 @@ def _build_search_query(
         parts.append(f'all:"{_escape_arxiv_phrase(query)}"')
 
     date_filter = _build_submitted_date_filter(from_date, to_date)
-    if date_filter.startswith("arXiv search failed:"):
-        return date_filter
     if date_filter:
         parts.append(date_filter)
 
@@ -202,15 +199,18 @@ def _build_submitted_date_filter(from_date: str, to_date: str) -> str:
     if from_date:
         parsed_start = _parse_date(from_date)
         if parsed_start is None:
-            return f"arXiv search failed: invalid from_date {from_date!r}. Use YYYY-MM-DD."
+            msg = f"invalid from_date {from_date!r}; use YYYY-MM-DD."
+            raise ToolFailure("validation_error", msg)
         start = f"{parsed_start:%Y%m%d}0000"
     if to_date:
         parsed_end = _parse_date(to_date)
         if parsed_end is None:
-            return f"arXiv search failed: invalid to_date {to_date!r}. Use YYYY-MM-DD."
+            msg = f"invalid to_date {to_date!r}; use YYYY-MM-DD."
+            raise ToolFailure("validation_error", msg)
         end = f"{parsed_end:%Y%m%d}2359"
     if parsed_start and parsed_end and parsed_start > parsed_end:
-        return "arXiv search failed: from_date must be before or equal to to_date."
+        msg = f"from_date {from_date} must be before or equal to to_date {to_date}."
+        raise ToolFailure("validation_error", msg)
     return f"submittedDate:[{start} TO {end}]"
 
 
@@ -234,7 +234,7 @@ def _parse_atom(xml_text: str) -> list[_ArxivPaper]:
     papers: list[_ArxivPaper] = []
     for entry in root.findall(f"{_ATOM}entry"):
         if error := _entry_error(entry):
-            raise HttpError(error)
+            raise ToolFailure("upstream", f"arXiv reported: {error}")
         entry_id = _text(entry, "id")
         paper_id = _id_from_abs_url(entry_id)
         abs_url = _normalize_abs_url(entry_id, paper_id)

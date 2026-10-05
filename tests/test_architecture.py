@@ -402,6 +402,54 @@ def test_network_detector_flags_imports_and_attribute_use() -> None:
     assert not network_access("from http import HTTPStatus\n")
 
 
+def catches_http_errors(source: str) -> list[int]:
+    """Lines of an ``except`` that names ``HttpError`` (alone, in a tuple, or as an attribute) and
+    returns from its body.
+
+    A tool lets the door's failure through, typed (T01, D42), or raises a more precise one
+    (``not_found`` for a 404): returning from the handler is how a failure used to become text.
+    """
+
+    def names(node: ast.expr | None) -> list[str]:
+        if node is None:
+            return []
+        if isinstance(node, ast.Tuple):
+            return [name for element in node.elts for name in names(element)]
+        if isinstance(node, ast.Attribute):
+            return [node.attr]
+        return [node.id] if isinstance(node, ast.Name) else []
+
+    return [
+        node.lineno
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.ExceptHandler)
+        and "HttpError" in names(node.type)
+        and any(isinstance(inner, ast.Return) for inner in ast.walk(node))
+    ]
+
+
+def test_no_tool_catches_the_http_doors_failure() -> None:
+    offenders = {
+        f"{path.name}:{line}"
+        for path in (ROOT / "src/ai_arch_toolkit/toolkit/tools").glob("_*.py")
+        if path != _HTTP_DOOR
+        for line in catches_http_errors(path.read_text())
+    }
+    assert offenders == set()
+
+
+def test_the_http_error_catch_detector_sees_every_form() -> None:
+    returns = "    return str(e)\n"
+    assert catches_http_errors(f"try:\n    f()\nexcept HttpError as e:\n{returns}") == [3]
+    assert catches_http_errors(f"try:\n    f()\nexcept (ValueError, HttpError) as e:\n{returns}")
+    assert catches_http_errors(f"try:\n    f()\nexcept _http.HttpError as e:\n{returns}")
+    assert not catches_http_errors(f"try:\n    f()\nexcept ValueError as e:\n{returns}")
+    precise = (
+        "    if e.status == 404:\n        raise ToolFailure('not_found', 'x') from e\n    raise\n"
+    )
+    assert not catches_http_errors(f"try:\n    f()\nexcept HttpError as e:\n{precise}")
+
+
 def duplicated_windows(first: str, second: str, size: int = 8) -> int:
     """How many runs of ``size`` lines (whitespace-normalised, at least 6 non-blank) repeat."""
 

@@ -8,7 +8,7 @@ from ai_arch_toolkit.core._response import Response, ToolCall, Usage
 from ai_arch_toolkit.core._state import State
 from ai_arch_toolkit.core._tools._decorator import tool
 from ai_arch_toolkit.core._tools._group import ToolGroup
-from ai_arch_toolkit.core._tools._result import ToolResult
+from ai_arch_toolkit.core._tools._result import ToolFailure, ToolResult
 from ai_arch_toolkit.toolkit.agents.flows._react import react_flow, react_initial_state
 from ai_arch_toolkit.toolkit.budget import BudgetPolicy
 from tests.fake_provider import fake_llm
@@ -383,3 +383,41 @@ async def test_parallel_tool_budget_surfaces_denial_cleanly():
     result = await flow.run(State(operational=react_initial_state("go")))
     assert "budget_exceeded" in result.results
     assert _budget_dimension(result) == "tool_calls"
+
+
+@tool
+def lookup(title: str) -> str:
+    """Look a page up."""
+    if title == "missing":
+        raise ToolFailure("not_found", "no page 'missing'; search first")
+    return f"page {title}"
+
+
+class TestFailedCallsAreMarked:
+    """A failed call's result goes back with ``is_error`` (T01), in both tool branches."""
+
+    @staticmethod
+    async def _results_sent(parallel: bool, titles: list[str]) -> list[dict]:
+        calls = tuple(
+            ToolCall(id=f"tc{i}", name="lookup", input={"title": title})
+            for i, title in enumerate(titles)
+        )
+        llm = AsyncMock()
+        llm.complete = AsyncMock(
+            side_effect=[_make_response(tool_calls=calls), _make_response(text="done")]
+        )
+        flow = react_flow(llm, ToolGroup(lookup), max_iterations=3, parallel_tool_calls=parallel)
+        await flow.run(State(operational=react_initial_state("Find it.")))
+        sent = llm.complete.await_args_list[1].args[0]
+        return [m for m in sent if m.get("tool_use_id")]
+
+    async def test_one_call_at_a_time(self) -> None:
+        (result,) = await self._results_sent(False, ["missing"])
+
+        assert result["is_error"] is True
+        assert result["content"].startswith("Tool error [not_found]:")
+
+    async def test_parallel_calls(self) -> None:
+        failed, found = await self._results_sent(True, ["missing", "Lisbon"])
+
+        assert failed.get("is_error") is True and "is_error" not in found

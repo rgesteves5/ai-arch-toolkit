@@ -4,12 +4,21 @@ from __future__ import annotations
 
 import pytest
 
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._text import (
     base64_decode,
     base64_encode,
     regex_search,
     text_stats,
 )
+
+
+def _invalid(call, *args) -> str:
+    """The message of the validation_error ``call`` raises."""
+    with pytest.raises(ToolFailure) as caught:
+        call(*args)
+    assert caught.value.error.type == "validation_error"
+    return caught.value.error.message
 
 
 class TestRegexSearch:
@@ -31,8 +40,7 @@ class TestRegexSearch:
         assert "groups=" in result
 
     def test_invalid_regex(self):
-        result = regex_search("text", r"[invalid")
-        assert "Invalid regex" in result
+        assert "invalid regex" in _invalid(regex_search, "text", r"[invalid")
 
 
 class TestTextStats:
@@ -67,8 +75,8 @@ class TestBase64:
         assert base64_decode(base64_encode(original)) == original
 
     def test_decode_invalid(self):
-        result = base64_decode("!!!not-base64!!!")
-        assert "error" in result.lower() or "Error" in result
+        assert "not valid base64" in _invalid(base64_decode, "!!!not-base64!!!")
+        assert "not valid base64" in _invalid(base64_decode, "SGVsbG8=é")
 
 
 class TestRegexGuards:
@@ -87,7 +95,7 @@ class TestRegexGuards:
         ],
     )
     def test_shapes_that_backtrack_exponentially_are_refused(self, pattern):
-        assert regex_search("aaaa!", pattern).startswith("Pattern refused:")
+        assert _invalid(regex_search, "aaaa!", pattern).startswith("pattern refused:")
 
     @pytest.mark.parametrize(
         ("pattern", "text", "expected"),
@@ -107,11 +115,19 @@ class TestRegexGuards:
         assert expected in regex_search(text, pattern)
 
     def test_a_long_pattern_or_text_is_refused(self):
-        assert regex_search("a", "a" * 501).startswith("Pattern refused:")
-        assert regex_search("a" * 20_001, "a").startswith("Text refused:")
+        assert _invalid(regex_search, "a", "a" * 501).startswith("pattern refused:")
+        assert _invalid(regex_search, "a" * 20_001, "a").startswith("text refused:")
 
     def test_matches_stop_at_a_thousand(self):
         result = regex_search("a" * 5000, "a")
 
         assert result.startswith("1000 match(es) shown")
         assert result.count("\n") == 1000  # the header, then one line a match
+
+
+@pytest.mark.parametrize("pattern", ["a{4294967296}", "(" * 2000 + ")" * 2000])
+def test_a_pattern_the_engine_cannot_compile_is_a_validation_error(pattern):
+    with pytest.raises(ToolFailure) as caught:
+        regex_search("aaa", pattern)
+
+    assert caught.value.error.type == "validation_error"

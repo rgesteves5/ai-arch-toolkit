@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._rxnorm_dailymed import (
     dailymed_label,
     dailymed_label_search,
@@ -83,6 +86,47 @@ class TestRxNormDailyMed:
 
     @patch(HTTP_OPEN)
     def test_invalid_options_do_not_call_api(self, mock_urlopen):
-        assert "invalid rxcui" in rxnorm_concept("bad")
-        assert "provide drug_name" in dailymed_label_search()
+        for call, args, kwargs, words in (
+            (rxnorm_concept, ("bad",), {}, "invalid rxcui"),
+            (rxnorm_related, ("bad",), {}, "invalid rxcui"),
+            (rxnorm_related, ("1191",), {"tty": "S C D"}, "invalid tty"),
+            (rxnorm_ndcs, ("bad",), {}, "invalid rxcui"),
+            (rxnorm_drug_search, ("",), {}, "invalid name"),
+            (dailymed_label_search, (), {}, "provide drug_name or ndc"),
+            (dailymed_label_search, (), {"ndc": "abc"}, "invalid ndc"),
+            (dailymed_label_search, (), {"drug_name": "aspirin", "page": 0}, "page must be"),
+            (dailymed_label, ("bad",), {}, "invalid setid"),
+        ):
+            with pytest.raises(ToolFailure) as caught:
+                call(*args, **kwargs)
+            assert caught.value.error.type == "validation_error"
+            assert words in caught.value.error.message
         mock_urlopen.assert_not_called()
+
+    @patch(HTTP_OPEN)
+    def test_an_unknown_rxcui_is_not_found(self, mock_urlopen):
+        mock_urlopen.return_value = respond({})
+
+        with pytest.raises(ToolFailure) as caught:
+            rxnorm_concept("999999999")
+
+        assert caught.value.error.type == "not_found"
+        assert "rxnorm_drug_search" in caught.value.error.message
+
+    @patch(HTTP_OPEN)
+    def test_no_match_is_a_success(self, mock_urlopen):
+        mock_urlopen.return_value = respond({"drugGroup": {"name": "zzqq"}})
+        assert rxnorm_drug_search("zzqq") == "No RxNorm drug concepts found."
+
+        mock_urlopen.return_value = respond({"data": [], "metadata": {"total_elements": 0}})
+        assert dailymed_label_search(drug_name="zzqq") == "No DailyMed labels found."
+
+    @patch(HTTP_OPEN)
+    def test_an_unreadable_label_is_an_upstream_failure(self, mock_urlopen):
+        mock_urlopen.return_value = respond("<not xml")
+
+        with pytest.raises(ToolFailure) as caught:
+            dailymed_label(_SETID)
+
+        assert caught.value.error.type == "upstream"
+        assert "could not parse XML" in caught.value.error.message

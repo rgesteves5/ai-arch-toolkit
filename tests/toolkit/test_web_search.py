@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 
 from ai_arch_toolkit.core import MeterScope, Money, ToolCall, ToolGroup
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools import brave_search, tavily_search
 from tests.toolkit.http_fakes import HTTP_OPEN, http_error, respond
 
@@ -74,26 +75,46 @@ class TestBraveSearch:
     ) -> None:
         monkeypatch.delenv("BRAVE_SEARCH_API_KEY", raising=False)
 
-        text = brave_search("lisbon weather")
+        with pytest.raises(ToolFailure) as caught:
+            brave_search("lisbon weather")
 
-        assert "BRAVE_SEARCH_API_KEY" in text
-        assert "https://brave.com/search/api/" in text
+        assert caught.value.error.type == "upstream"
+        assert "BRAVE_SEARCH_API_KEY" in caught.value.error.message
+        assert "https://brave.com/search/api/" in caught.value.error.message
         mock_open.assert_not_called()
 
     @patch(HTTP_OPEN)
     def test_an_invalid_key_and_the_rate_limit_are_explained(self, mock_open, keys) -> None:
         mock_open.side_effect = http_error(401, "Unauthorized")
-        assert "Brave rejected the key in BRAVE_SEARCH_API_KEY" in brave_search("x")
+        with pytest.raises(ToolFailure) as caught:
+            brave_search("x")
+        assert caught.value.error.type == "upstream"
+        assert "Brave rejected the key in BRAVE_SEARCH_API_KEY" in caught.value.error.message
+
         mock_open.side_effect = http_error(429, "Too Many Requests")
-        assert "rate limited by Brave Search (HTTP 429)" in brave_search("y")
+        with pytest.raises(ToolFailure) as caught:
+            brave_search("y")
+        assert caught.value.error.type == "rate_limited"
+        assert "rate limited by Brave Search (HTTP 429)" in caught.value.error.message
 
     @patch(HTTP_OPEN)
     def test_no_results_is_said(self, mock_open, keys) -> None:
         mock_open.return_value = respond({"type": "search", "web": {"results": []}})
         assert brave_search("zzzz") == "No web results for 'zzzz' (Brave)."
 
-    def test_an_empty_query_is_refused(self, keys) -> None:
-        assert brave_search("  ") == "Brave search failed: query cannot be empty."
+    @pytest.mark.parametrize(
+        ("kwargs", "words"),
+        [
+            ({"query": "  "}, "empty query"),
+            ({"query": "x", "freshness": "pz"}, "invalid freshness 'pz'"),
+        ],
+    )
+    def test_invalid_arguments_are_refused(self, keys, kwargs, words) -> None:
+        with pytest.raises(ToolFailure) as caught:
+            brave_search(**kwargs)
+
+        assert caught.value.error.type == "validation_error"
+        assert words in caught.value.error.message
 
 
 class TestTavilySearch:
@@ -125,21 +146,38 @@ class TestTavilySearch:
     ) -> None:
         monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 
-        text = tavily_search("lisbon weather")
+        with pytest.raises(ToolFailure) as caught:
+            tavily_search("lisbon weather")
 
-        assert "TAVILY_API_KEY" in text
-        assert "https://app.tavily.com" in text
+        assert caught.value.error.type == "upstream"
+        assert "TAVILY_API_KEY" in caught.value.error.message
+        assert "https://app.tavily.com" in caught.value.error.message
         mock_open.assert_not_called()
 
     @patch(HTTP_OPEN)
     def test_a_plan_limit_is_explained(self, mock_open, keys) -> None:
         mock_open.side_effect = http_error(432, "Plan limit")
-        assert "your Tavily plan's limit" in tavily_search("x")
 
-    def test_an_unknown_topic_is_refused(self, keys) -> None:
-        assert tavily_search("x", topic="sports") == (
-            "Tavily search failed: topic must be 'general' or 'news'."
-        )
+        with pytest.raises(ToolFailure) as caught:
+            tavily_search("x")
+
+        assert caught.value.error.type == "upstream"
+        assert "your Tavily plan's limit" in caught.value.error.message
+
+    @pytest.mark.parametrize(
+        ("kwargs", "words"),
+        [
+            ({"query": ""}, "empty query"),
+            ({"query": "x", "topic": "sports"}, "invalid topic 'sports'; use 'general' or 'news'"),
+            ({"query": "x", "time_range": "decade"}, "invalid time_range 'decade'"),
+        ],
+    )
+    def test_invalid_arguments_are_refused(self, keys, kwargs, words) -> None:
+        with pytest.raises(ToolFailure) as caught:
+            tavily_search(**kwargs)
+
+        assert caught.value.error.type == "validation_error"
+        assert words in caught.value.error.message
 
 
 class TestTheMeterCountsTheirCost:

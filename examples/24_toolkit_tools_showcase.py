@@ -7,6 +7,7 @@ URLs are available only through ai_arch_toolkit.toolkit.tools.dangerous.
 Most safe lookup tools require network access (weather, geo, wiki APIs).
 """
 
+from ai_arch_toolkit import ToolFailure
 from ai_arch_toolkit.toolkit.tools import (
     base64_encode,
     datetime_now,
@@ -32,7 +33,10 @@ print("  now:", datetime_now())
 
 # --- Knowledge ---
 print("\n=== Knowledge ===")
-print("  'serendipity':", define_word(word="serendipity")[:200], "...")
+try:  # a tool that cannot answer raises ToolFailure; an agent gets it as a failed result
+    print("  'serendipity':", define_word(word="serendipity")[:200], "...")
+except ToolFailure as failure:
+    print(f"  define_word failed [{failure.error.type}]: {failure.error.message}")
 
 print("\nAll tools available:")
 print(

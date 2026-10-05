@@ -27,6 +27,7 @@ from email.message import Message
 from typing import IO, Any, Protocol
 
 from ai_arch_toolkit.core._tools._billing import bill
+from ai_arch_toolkit.core._tools._result import ToolFailure, ToolFailureType
 
 
 def _version() -> str:
@@ -48,8 +49,13 @@ _CHUNK_BYTES = 64 * 1024
 _ERROR_BODY_CHARS = 2000
 
 
-class HttpError(Exception):
-    """A request that produced no usable body. ``str()`` is the reason shown to the model.
+class HttpError(ToolFailure):
+    """A request that produced no usable body: a tool failure (D42). ``str()`` is the reason shown
+    to the model.
+
+    A 429 is ``rate_limited`` and a 5xx ``upstream``, both retryable; any other failure is
+    ``upstream`` unless the raise site says otherwise (a timeout or a network error is retryable;
+    a URL the module may not reach is a ``validation_error``).
 
     Attributes:
         status: The HTTP status of an error response; ``None`` when no response arrived, or when
@@ -65,8 +71,21 @@ class HttpError(Exception):
         status: int | None = None,
         body: str = "",
         retry_after_s: float | None = None,
+        kind: ToolFailureType | None = None,
+        retryable: bool | None = None,
     ) -> None:
-        super().__init__(message)
+        server = status is not None and status >= 500
+        details: dict[str, float] = {}
+        if status is not None:
+            details["status"] = status
+        if retry_after_s is not None:
+            details["retry_after_s"] = retry_after_s
+        super().__init__(
+            kind or ("rate_limited" if status == 429 else "upstream"),
+            message,
+            retryable=retryable if retryable is not None else status == 429 or server,
+            details=details,
+        )
         self.status = status
         self.body = body
         self.retry_after_s = retry_after_s
@@ -235,7 +254,7 @@ def _plain_base(url: str) -> bool:
 
 def _segment(segment: str, safe: str) -> str:
     if segment in _DOT_SEGMENTS:
-        raise HttpError(f"invalid path segment: {segment!r}")
+        raise HttpError(f"invalid path segment: {segment!r}", kind="validation_error")
     return urllib.parse.quote(segment, safe=safe)
 
 
@@ -263,7 +282,7 @@ def _body(response: _Response, deadline: float, max_bytes: int) -> tuple[bytes, 
     size = 0
     while size <= max_bytes:
         if time.monotonic() > deadline:
-            raise HttpError("request timed out.")
+            raise HttpError("request timed out.", retryable=True)
         chunk = response.read1(min(_CHUNK_BYTES, max_bytes + 1 - size))
         if not chunk:
             return b"".join(chunks), True
@@ -301,14 +320,17 @@ def _fetch(
         target = refused.target
         raise HttpError(f"refused a redirect to {target} (only same-host HTTPS)") from refused
     except urllib.error.URLError as error:
-        hint = ""
-        if isinstance(error.reason, ssl.SSLCertVerificationError) and not _SYSTEM_STORE:
-            hint = _TRUSTSTORE_HINT
-        raise HttpError(f"URL error: {error.reason}{hint}") from error
+        unverified = isinstance(error.reason, ssl.SSLCertVerificationError)
+        hint = _TRUSTSTORE_HINT if unverified and not _SYSTEM_STORE else ""
+        msg = f"URL error: {error.reason}{hint}"
+        raise HttpError(msg, retryable=not unverified) from error  # a certificate stays wrong
     except TimeoutError as error:
-        raise HttpError("request timed out.") from error
+        raise HttpError("request timed out.", retryable=True) from error
+    except http.client.InvalidURL as error:  # a space or a control character in the URL
+        raise HttpError(f"invalid URL: {error}", kind="validation_error") from error
     except (OSError, http.client.HTTPException) as error:
-        raise HttpError(f"network error: {str(error) or type(error).__name__}") from error
+        reason = str(error) or type(error).__name__
+        raise HttpError(f"network error: {reason}", retryable=True) from error
     return status, body, charset, complete
 
 
@@ -477,9 +499,10 @@ class Api:
         parts = _split(url)
         host = (parts.hostname or "") if parts is not None else ""
         if not any(host == domain or host.endswith(f".{domain}") for domain in domains):
-            raise HttpError(f"host not allowed: {url!r}")
+            raise HttpError(f"host not allowed: {url!r}", kind="validation_error")
         if not _plain_base(url):
-            raise HttpError(f"URL not allowed: {url!r} (https://host/path only)")
+            msg = f"URL not allowed: {url!r} (https://host/path only)"
+            raise HttpError(msg, kind="validation_error")
         return cls(
             base=url,
             name=name,
@@ -685,7 +708,7 @@ def fetch_page(url: str, *, max_bytes: int, timeout_s: float = 10.0) -> Page:
     parts = _split(url)
     if parts is None or not _web_origin(parts, _WEB_SCHEMES):
         msg = f"Invalid URL: {url!r}. Use an http:// or https:// URL without credentials."
-        raise HttpError(msg)
+        raise HttpError(msg, kind="validation_error")
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     _, raw, charset, complete = _fetch(
         request,

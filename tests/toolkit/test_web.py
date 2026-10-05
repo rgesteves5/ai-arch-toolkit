@@ -5,15 +5,30 @@ from __future__ import annotations
 from io import BytesIO
 from unittest.mock import patch
 
+import pytest
+
 from ai_arch_toolkit.core import ApprovalDecision, ApprovalRequest, ToolCall, ToolGroup
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._web import http_get, scrape_text
 from tests.toolkit.http_fakes import HTTP_OPEN, respond
 
 
+def _invalid_url(fn, url):
+    with pytest.raises(ToolFailure) as caught:
+        fn(url)
+
+    assert "Invalid URL" in caught.value.error.message
+    return caught.value.error
+
+
+@pytest.mark.parametrize("fn", [http_get, scrape_text])
+def test_an_invalid_url_is_a_validation_error(fn):
+    assert _invalid_url(fn, "not-a-url").type == "validation_error"
+
+
 class TestHttpGet:
     def test_invalid_url(self):
-        result = http_get("not-a-url")
-        assert "Invalid URL" in result
+        _invalid_url(http_get, "not-a-url")
 
     @patch(HTTP_OPEN)
     def test_fetches_content(self, mock_urlopen):
@@ -55,8 +70,8 @@ class TestHttpGet:
 
     @patch(HTTP_OPEN)
     def test_credentials_in_the_url_are_refused(self, mock_urlopen):
-        assert "Invalid URL" in http_get("https://user:secret@example.com/")
-        assert "Invalid URL" in scrape_text("https://user:secret@example.com/")
+        _invalid_url(http_get, "https://user:secret@example.com/")
+        _invalid_url(scrape_text, "https://user:secret@example.com/")
         mock_urlopen.assert_not_called()
 
     @patch(HTTP_OPEN)
@@ -66,20 +81,42 @@ class TestHttpGet:
         mock_urlopen.side_effect = urllib.error.HTTPError(
             "https://example.com", 404, "Not Found", {}, BytesIO()
         )
-        result = http_get("https://example.com")
-        assert "404" in result
+
+        with pytest.raises(ToolFailure) as caught:
+            http_get("https://example.com")
+
+        assert caught.value.error.type == "upstream"
+        assert not caught.value.error.retryable
+        assert "404" in caught.value.error.message
 
     @patch(HTTP_OPEN)
     def test_timeout(self, mock_urlopen):
         mock_urlopen.side_effect = TimeoutError()
-        result = http_get("https://example.com")
-        assert "timed out" in result.lower()
+
+        with pytest.raises(ToolFailure) as caught:
+            http_get("https://example.com")
+
+        assert caught.value.error.type == "upstream"
+        assert caught.value.error.retryable
+        assert "timed out" in caught.value.error.message
+
+    @patch(HTTP_OPEN)
+    def test_rate_limited(self, mock_urlopen):
+        import urllib.error
+
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            "https://example.com", 429, "Too Many Requests", {}, BytesIO()
+        )
+
+        with pytest.raises(ToolFailure) as caught:
+            scrape_text("https://example.com")
+
+        assert caught.value.error.type == "rate_limited"
 
 
 class TestScrapeText:
     def test_invalid_url(self):
-        result = scrape_text("not-a-url")
-        assert "Invalid URL" in result
+        _invalid_url(scrape_text, "not-a-url")
 
     @patch(HTTP_OPEN)
     def test_strips_html(self, mock_urlopen):

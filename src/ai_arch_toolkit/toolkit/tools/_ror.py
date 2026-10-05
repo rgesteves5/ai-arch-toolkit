@@ -6,7 +6,8 @@ import re
 from typing import Any
 
 from ai_arch_toolkit.core import tool
-from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
+from ai_arch_toolkit.core._tools._result import ToolFailure
+from ai_arch_toolkit.toolkit.tools._http import Api
 
 _API = Api(
     base="https://api.ror.org/v2/organizations",
@@ -35,15 +36,32 @@ def ror_search(
         org_type: Optional ROR type filter, e.g. "education", "funder", or "healthcare".
         max_results: Number of organizations to return (1-20). Defaults to 10.
         page: One-based result page. Defaults to 1.
+
+    Raises:
+        ToolFailure: validation_error when the query, ``country`` or ``org_type`` is invalid,
+            or ``page`` is below 1.
     """
     if not _valid_text(query):
-        return "ROR search failed: invalid query."
+        raise ToolFailure(
+            "validation_error",
+            f"invalid query {query!r}; give 1-180 characters of an organization name, acronym "
+            "or domain.",
+        )
     if country and not re.fullmatch(r"^[A-Za-z]{2}$", country.strip()):
-        return "ROR search failed: invalid country. Use ISO2."
+        raise ToolFailure(
+            "validation_error",
+            f"invalid country {country!r}; give an ISO 3166-1 alpha-2 code, e.g. 'PT'.",
+        )
     if org_type and not re.fullmatch(r"^[A-Za-z_-]{1,40}$", org_type.strip()):
-        return "ROR search failed: invalid org_type."
+        raise ToolFailure(
+            "validation_error",
+            f"invalid org_type {org_type!r}; give a ROR type such as 'education', 'funder' or "
+            "'healthcare'.",
+        )
     if page < 1:
-        return "ROR search failed: page must be greater than or equal to 1."
+        raise ToolFailure(
+            "validation_error", f"page must be greater than or equal to 1 (got {page})."
+        )
     params = {"query": query.strip(), "page": str(page)}
     if country.strip():
         params["filter"] = f"country.country_code:{country.strip().lower()}"
@@ -51,12 +69,9 @@ def ror_search(
         existing = params.get("filter")
         type_filter = f"types:{org_type.strip().lower()}"
         params["filter"] = f"{existing},{type_filter}" if existing else type_filter
-    try:
-        return _API.get_json(
-            params=params, parse=lambda data: _search_text(data, query, page, max_results)
-        )
-    except HttpError as e:
-        return f"ROR search failed: {e}"
+    return _API.get_json(
+        params=params, parse=lambda data: _search_text(data, query, page, max_results)
+    )
 
 
 @tool(capability="network")
@@ -65,19 +80,23 @@ def ror_organization(ror_id: str) -> str:
 
     Args:
         ror_id: ROR ID or URL, e.g. "https://ror.org/01c27hj86".
+
+    Raises:
+        ToolFailure: validation_error when ``ror_id`` is not a ROR ID.
     """
     normalized = _normalize_ror_id(ror_id)
     if not normalized:
-        return f"ROR organization lookup failed: invalid ror_id: {ror_id!r}"
-    try:
-        return _API.get_json(
-            normalized,
-            parse=lambda data: "\n".join(
-                [f"ROR organization {normalized}:", *_format_org(data, index=None, details=True)]
-            ),
+        raise ToolFailure(
+            "validation_error",
+            f"invalid ror_id {ror_id!r}; a ROR ID is 0 and eight letters or digits, e.g. "
+            "'01c27hj86' or 'https://ror.org/01c27hj86'; find one with ror_search.",
         )
-    except HttpError as e:
-        return f"ROR organization lookup failed: {e}"
+    return _API.get_json(
+        normalized,
+        parse=lambda data: "\n".join(
+            [f"ROR organization {normalized}:", *_format_org(data, index=None, details=True)]
+        ),
+    )
 
 
 def _search_text(data: dict[str, Any], query: str, page: int, max_results: int) -> str:

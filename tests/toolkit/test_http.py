@@ -24,6 +24,7 @@ from typing import Any
 
 import pytest
 
+from ai_arch_toolkit.core import ToolFailure
 from ai_arch_toolkit.toolkit.tools import _http
 from ai_arch_toolkit.toolkit.tools._http import Api, HttpError, fetch_page
 
@@ -283,6 +284,60 @@ class TestErrors:
         assert str(caught.value) == "HTTP error 500: Internal Server Error"
         assert caught.value.status == 500
         assert json.loads(caught.value.body) == {"reason": "bad day"}
+
+    @pytest.mark.parametrize(
+        ("status", "kind", "retryable"),
+        [(429, "rate_limited", True), (503, "upstream", True), (404, "upstream", False)],
+    )
+    def test_a_status_error_is_a_typed_tool_failure(
+        self, web: _Transport, status: int, kind: str, retryable: bool
+    ) -> None:
+        web.add("https://api.example.org/v1/x", b"", status=status)
+
+        with pytest.raises(ToolFailure) as caught:
+            API.get_json("x", parse=dict)
+
+        assert (caught.value.error.type, caught.value.error.retryable) == (kind, retryable)
+        assert caught.value.error.details["status"] == status
+
+    def test_a_timeout_is_a_retryable_upstream_failure(self, web: _Transport) -> None:
+        web.add("https://api.example.org/v1/x", _SlowBody())
+        api = Api(base="https://api.example.org/v1", name="Example", timeout_s=0.05)
+
+        with pytest.raises(HttpError, match="timed out") as caught:
+            api.get_json("x", parse=dict)
+
+        assert (caught.value.error.type, caught.value.error.retryable) == ("upstream", True)
+
+    def test_a_url_the_module_may_not_reach_is_a_validation_error(self) -> None:
+        with pytest.raises(HttpError) as caught:
+            Api.within("https://evil.example.com/x", ("example.org",), name="Example")
+
+        assert caught.value.error.type == "validation_error"
+
+    def test_an_unsendable_url_is_a_validation_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def refuse(request: urllib.request.Request, timeout: float) -> Any:
+            raise http.client.InvalidURL("URL can't contain control characters")
+
+        monkeypatch.setattr(_http, "_open", refuse)
+
+        with pytest.raises(HttpError) as caught:
+            fetch_page("https://example.org/a b", max_bytes=100)
+
+        assert (caught.value.error.type, caught.value.error.retryable) == (
+            "validation_error",
+            False,
+        )
+
+    def test_retry_after_reaches_the_details(self, web: _Transport) -> None:
+        web.add("https://api.example.org/v1/x", b"", status=503, **{"Retry-After": "7"})
+
+        with pytest.raises(HttpError) as caught:
+            API.get_json("x", parse=dict)
+
+        assert caught.value.error.details == {"status": 503, "retry_after_s": 7.0}
 
     def test_429_names_the_api(self, web: _Transport) -> None:
         web.add("https://api.example.org/v1/x", b"", status=429)

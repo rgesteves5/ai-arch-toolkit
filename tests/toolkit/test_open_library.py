@@ -6,12 +6,28 @@ import urllib.error
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
+import pytest
+
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._open_library import (
     open_library_isbn,
     open_library_search,
     open_library_work,
 )
 from tests.toolkit.http_fakes import HTTP_OPEN, respond
+
+
+def _failure(fn, *args, **kwargs) -> ToolFailure:
+    with pytest.raises(ToolFailure) as caught:
+        fn(*args, **kwargs)
+    return caught.value
+
+
+def _invalid(fn, *args, **kwargs) -> str:
+    failure = _failure(fn, *args, **kwargs)
+    assert failure.error.type == "validation_error"
+    return failure.error.message
+
 
 _SEARCH_DOC = {
     "key": "/works/OL27448W",
@@ -108,17 +124,26 @@ class TestOpenLibrarySearch:
 
     @patch(HTTP_OPEN)
     def test_invalid_options_do_not_call_api(self, mock_urlopen):
-        assert "provide query" in open_library_search("")
-        assert "start must be greater than or equal to 0" in open_library_search("test", start=-1)
+        assert "provide query" in _invalid(open_library_search, "")
+        assert "start must be greater than or equal to 0" in _invalid(
+            open_library_search, "test", start=-1
+        )
         mock_urlopen.assert_not_called()
 
     @patch(HTTP_OPEN)
     def test_parse_failure(self, mock_urlopen):
         mock_urlopen.return_value = respond("not json")
 
-        result = open_library_search("test")
+        failure = _failure(open_library_search, "test")
 
-        assert "could not parse" in result
+        assert failure.error.type == "upstream"
+        assert "could not parse" in str(failure)
+
+    @patch(HTTP_OPEN)
+    def test_no_results_is_an_answer(self, mock_urlopen):
+        mock_urlopen.return_value = respond({"numFound": 0, "docs": []})
+
+        assert open_library_search("zzqqxx") == "No Open Library results found."
 
 
 class TestOpenLibraryWork:
@@ -140,9 +165,7 @@ class TestOpenLibraryWork:
 
     @patch(HTTP_OPEN)
     def test_invalid_work_id(self, mock_urlopen):
-        result = open_library_work("OL123M")
-
-        assert "invalid work_id" in result
+        assert "invalid work_id 'OL123M'" in _invalid(open_library_work, "OL123M")
         mock_urlopen.assert_not_called()
 
     @patch(HTTP_OPEN)
@@ -155,9 +178,27 @@ class TestOpenLibraryWork:
             fp=None,
         )
 
-        result = open_library_work("OL000W")
+        failure = _failure(open_library_work, "OL000W")
 
-        assert "not found" in result.lower()
+        assert failure.error.type == "not_found"
+        assert failure.error.message == (
+            "Open Library has no work OL000W; find works with open_library_search"
+        )
+
+    @patch(HTTP_OPEN)
+    def test_another_status_stays_the_requests_failure(self, mock_urlopen):
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            url="https://openlibrary.org/works/OL1W.json",
+            code=500,
+            msg="Internal Server Error",
+            hdrs=None,
+            fp=None,
+        )
+
+        failure = _failure(open_library_work, "OL1W")
+
+        assert failure.error.type == "upstream"
+        assert failure.error.retryable
 
 
 class TestOpenLibraryIsbn:
@@ -178,10 +219,17 @@ class TestOpenLibraryIsbn:
 
     @patch(HTTP_OPEN)
     def test_invalid_isbn(self, mock_urlopen):
-        result = open_library_isbn("bad")
-
-        assert "invalid ISBN" in result
+        assert "invalid ISBN 'bad'" in _invalid(open_library_isbn, "bad")
         mock_urlopen.assert_not_called()
+
+    @patch(HTTP_OPEN)
+    def test_an_isbn_without_a_record_is_not_found(self, mock_urlopen):
+        mock_urlopen.return_value = respond({})
+
+        failure = _failure(open_library_isbn, "9780140328721")
+
+        assert failure.error.type == "not_found"
+        assert "no edition with ISBN 9780140328721" in failure.error.message
 
 
 # Records as Open Library answered them live, with HTTP 200 (2026-09-30).
@@ -216,8 +264,11 @@ def test_a_merged_work_is_followed_to_the_work_it_went_into(mock_urlopen):
 def test_a_deleted_work_says_so(mock_urlopen):
     mock_urlopen.return_value = respond(_DELETED)
 
-    assert open_library_work("OL1000619W") == (
-        "Open Library work lookup failed: /works/OL1000619W was deleted"
+    failure = _failure(open_library_work, "OL1000619W")
+
+    assert failure.error.type == "not_found"
+    assert failure.error.message == (
+        "Open Library deleted /works/OL1000619W; find another with open_library_search"
     )
 
 
@@ -226,9 +277,10 @@ def test_redirects_that_do_not_end_are_an_error(mock_urlopen):
     loop = {**_MERGED, "location": "/works/OL100005W"}
     mock_urlopen.side_effect = [respond(loop) for _ in range(4)]
 
-    assert open_library_work("OL100005W") == (
-        "Open Library work lookup failed: more than 3 redirects between Open Library records"
-    )
+    failure = _failure(open_library_work, "OL100005W")
+
+    assert failure.error.type == "upstream"
+    assert str(failure) == "more than 3 redirects between Open Library records"
     assert mock_urlopen.call_count == 4
 
 
@@ -247,7 +299,7 @@ def test_an_isbn_whose_edition_was_merged_reads_the_edition_it_went_into(mock_ur
 def test_a_redirect_to_something_that_is_not_a_record_is_an_error(mock_urlopen):
     mock_urlopen.return_value = respond({**_MERGED, "location": "/../admin"})
 
-    assert open_library_work("OL100005W") == (
-        "Open Library work lookup failed: could not parse API response: a redirect without a "
-        "record to go to"
-    )
+    failure = _failure(open_library_work, "OL100005W")
+
+    assert failure.error.type == "upstream"
+    assert str(failure) == ("could not parse API response: a redirect without a record to go to")

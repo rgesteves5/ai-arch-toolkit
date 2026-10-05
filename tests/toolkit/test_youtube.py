@@ -5,11 +5,25 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._youtube import (
     youtube_transcript,
     youtube_transcript_languages,
     youtube_transcript_search,
 )
+
+yt = pytest.importorskip("youtube_transcript_api")
+requests = pytest.importorskip("requests")
+
+_LOADER = "ai_arch_toolkit.toolkit.tools._youtube._load_youtube_transcript_api"
+
+
+def _failure(call):
+    with pytest.raises(ToolFailure) as caught:
+        call()
+    return caught.value.error
 
 
 class FakeYouTubeError(Exception):
@@ -122,24 +136,40 @@ class TestYouTubeTranscript:
 
         assert "kind: generated" in result
 
-    @patch("ai_arch_toolkit.toolkit.tools._youtube._load_youtube_transcript_api")
-    def test_invalid_options_do_not_load_api(self, mock_loader):
-        assert "invalid video URL or ID" in youtube_transcript("bad")
+    @pytest.mark.parametrize(
+        ("call", "words"),
+        [
+            (lambda: youtube_transcript("bad"), "invalid video URL or ID 'bad'"),
+            (
+                lambda: youtube_transcript("dQw4w9WgXcQ", output_format="xml"),
+                "invalid output_format 'xml'",
+            ),
+            (lambda: youtube_transcript("dQw4w9WgXcQ", languages=" , "), "no language code"),
+            (lambda: youtube_transcript_languages("bad"), "invalid video URL or ID"),
+            (lambda: youtube_transcript_search("dQw4w9WgXcQ", "  "), "empty query"),
+            (
+                lambda: youtube_transcript_search("dQw4w9WgXcQ", "x", languages=""),
+                "no language code",
+            ),
+        ],
+    )
+    @patch(_LOADER)
+    def test_invalid_options_do_not_load_api(self, mock_loader, call, words):
+        error = _failure(call)
+
+        assert error.type == "validation_error"
+        assert words in error.message
         mock_loader.assert_not_called()
 
-    @patch("ai_arch_toolkit.toolkit.tools._youtube._load_youtube_transcript_api")
-    def test_invalid_output_format_does_not_load_api(self, mock_loader):
-        assert "output_format must be" in youtube_transcript("dQw4w9WgXcQ", output_format="xml")
-        mock_loader.assert_not_called()
-
-    @patch("ai_arch_toolkit.toolkit.tools._youtube._load_youtube_transcript_api")
+    @patch(_LOADER)
     def test_missing_optional_dependency(self, mock_loader):
         mock_loader.return_value = (None, Exception)
 
-        result = youtube_transcript("dQw4w9WgXcQ")
+        error = _failure(lambda: youtube_transcript("dQw4w9WgXcQ"))
 
-        assert "youtube-transcript-api is not installed" in result
-        assert "uv sync --extra youtube" in result
+        assert error.type == "upstream"
+        assert "youtube-transcript-api is not installed" in error.message
+        assert "uv sync --extra youtube" in error.message
 
 
 class TestYouTubeTranscriptLanguages:
@@ -184,10 +214,112 @@ class _OfflineApi:
         raise ConnectionError("network is unreachable")
 
 
-@patch("ai_arch_toolkit.toolkit.tools._youtube._load_youtube_transcript_api")
-def test_a_network_failure_is_an_error_string(mock_loader):
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: youtube_transcript("dQw4w9WgXcQ"),
+        lambda: youtube_transcript_languages("dQw4w9WgXcQ"),
+        lambda: youtube_transcript_search("dQw4w9WgXcQ", "love"),
+    ],
+)
+@patch(_LOADER)
+def test_a_network_failure_is_a_retryable_upstream_failure(mock_loader, call):
     mock_loader.return_value = (_OfflineApi, FakeYouTubeError)
 
-    assert youtube_transcript("dQw4w9WgXcQ").startswith("YouTube transcript failed:")
-    assert youtube_transcript_languages("dQw4w9WgXcQ").startswith("YouTube")
-    assert youtube_transcript_search("dQw4w9WgXcQ", "love").startswith("YouTube")
+    error = _failure(call)
+
+    assert error.type == "upstream"
+    assert error.retryable
+    assert "network is unreachable" in error.message
+
+
+def _raising(error: Exception):
+    """An API class whose ``list`` raises ``error``, with the library's real base error."""
+
+    class _Api:
+        def list(self, video_id: str):
+            raise error
+
+    return _Api, yt.YouTubeTranscriptApiException
+
+
+def _http_error() -> Exception:
+    return requests.HTTPError("500 Server Error")
+
+
+@pytest.mark.parametrize(
+    ("error", "kind", "words"),
+    [
+        (yt.NoTranscriptFound("dQw4w9WgXcQ", ["en"], None), "not_found", "no transcript in en"),
+        (yt.TranscriptsDisabled("dQw4w9WgXcQ"), "not_found", "transcripts turned off"),
+        (yt.VideoUnavailable("dQw4w9WgXcQ"), "not_found", "no YouTube video dQw4w9WgXcQ"),
+        (yt.InvalidVideoId("dQw4w9WgXcQ"), "not_found", "check the URL or ID"),
+        (yt.RequestBlocked("dQw4w9WgXcQ"), "rate_limited", "blocking requests from this IP"),
+        (yt.IpBlocked("dQw4w9WgXcQ"), "rate_limited", "try again later"),
+        (
+            yt.YouTubeRequestFailed("dQw4w9WgXcQ", _http_error()),
+            "upstream",
+            "the request to YouTube failed: 500 Server Error",
+        ),
+        (yt.AgeRestricted("dQw4w9WgXcQ"), "upstream", "YouTube gave no transcript"),
+    ],
+)
+@patch(_LOADER)
+def test_each_library_error_has_its_type(mock_loader, error, kind, words):
+    mock_loader.return_value = _raising(error)
+
+    failure = _failure(lambda: youtube_transcript("dQw4w9WgXcQ"))
+
+    assert failure.type == kind
+    assert words in failure.message
+    assert "github.com" not in failure.message  # the library's issue referral is left out
+
+
+class _UntranslatableTranscript(FakeTranscript):
+    def translate(self, language_code: str):
+        raise yt.TranslationLanguageNotAvailable("dQw4w9WgXcQ")
+
+
+@patch(_LOADER)
+def test_a_translation_the_transcript_lacks_is_a_validation_error(mock_loader):
+    class _Api:
+        def list(self, video_id: str):
+            return FakeTranscriptList(manual=_UntranslatableTranscript())
+
+    mock_loader.return_value = (_Api, yt.YouTubeTranscriptApiException)
+
+    failure = _failure(lambda: youtube_transcript("dQw4w9WgXcQ", translate_to="xx"))
+
+    assert failure.type == "validation_error"
+    assert "cannot be translated to 'xx'" in failure.message
+    assert "youtube_transcript_languages" in failure.message
+
+
+@patch(_LOADER)
+def test_a_transcript_without_text_is_a_success(mock_loader):
+    # FakeTranscript reads an empty list as "the default segments": give it one blank segment.
+    blank = FakeTranscript(segments=[SimpleNamespace(start=0.0, duration=1.0, text="")])
+
+    class _Api:
+        def list(self, video_id: str):
+            return FakeTranscriptList(manual=blank)
+
+    mock_loader.return_value = (_Api, yt.YouTubeTranscriptApiException)
+
+    assert youtube_transcript("dQw4w9WgXcQ") == (
+        "The YouTube transcript of video dQw4w9WgXcQ has no text."
+    )
+
+
+@pytest.mark.parametrize(
+    ("status", "retryable"), [("500 Server Error", True), ("403 Forbidden", False)]
+)
+@patch(_LOADER)
+def test_only_a_server_error_from_youtube_is_retryable(mock_loader, status, retryable):
+    mock_loader.return_value = _raising(
+        yt.YouTubeRequestFailed("dQw4w9WgXcQ", requests.HTTPError(status))
+    )
+
+    failure = _failure(lambda: youtube_transcript("dQw4w9WgXcQ"))
+
+    assert (failure.type, failure.retryable) == ("upstream", retryable)

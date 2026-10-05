@@ -9,6 +9,7 @@ from datetime import date
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
 _API = Api(base="https://api.crossref.org/works", name="Crossref")
@@ -55,17 +56,20 @@ def crossref_search(
         from_date: Optional publication date lower bound as YYYY-MM-DD.
         to_date: Optional publication date upper bound as YYYY-MM-DD.
         type_filter: Optional Crossref type, e.g. "journal-article" or "proceedings-article".
+
+    Raises:
+        ToolFailure: validation_error when an argument is invalid.
     """
     query = query.strip()
     if not query:
-        return "Crossref search failed: query cannot be empty."
+        msg = "query cannot be empty; pass a title, topic, author, DOI or citation fragment."
+        raise ToolFailure("validation_error", msg)
     if start < 0:
-        return "Crossref search failed: start must be greater than or equal to 0."
+        msg = f"start must be greater than or equal to 0, got {start}."
+        raise ToolFailure("validation_error", msg)
 
     max_results = max(1, min(max_results, _MAX_RESULTS_LIMIT))
     filter_value = _build_filter(from_date, to_date, type_filter)
-    if filter_value.startswith("Crossref search failed:"):
-        return filter_value
 
     params = {
         "query": query,
@@ -75,10 +79,7 @@ def crossref_search(
     if filter_value:
         params["filter"] = filter_value
 
-    try:
-        works = _API.get_json(params=params, parse=_works)
-    except HttpError as e:
-        return f"Crossref search failed: {e}"
+    works = _API.get_json(params=params, parse=_works)
     if not works:
         return f"No Crossref results for: {query!r}"
 
@@ -91,19 +92,27 @@ def crossref_work(doi: str) -> str:
 
     Args:
         doi: DOI string or DOI URL, e.g. "10.1038/nature14539" or "https://doi.org/...".
+
+    Raises:
+        ToolFailure: validation_error when the DOI is malformed; not_found when Crossref has no
+            work with it.
     """
     normalized = _normalize_doi(doi)
     if not normalized:
-        return f"Crossref work lookup failed: invalid DOI: {doi!r}"
+        msg = f"invalid DOI {doi!r}; a DOI looks like 10.1000/xyz."
+        raise ToolFailure("validation_error", msg)
 
+    not_found = ToolFailure(
+        "not_found", f"no Crossref work with DOI {normalized}; search with crossref_search."
+    )
     try:
         work = _API.get_json(normalized, parse=_work)
     except HttpError as e:
         if e.status == 404:
-            return f"Crossref work not found: {normalized}"
-        return f"Crossref work lookup failed: {e}"
+            raise not_found from e
+        raise
     if work is None:
-        return f"Crossref work not found: {normalized}"
+        raise not_found
     return f"Crossref work {normalized}:\n" + _format_works(
         [work],
         include_index=False,
@@ -123,18 +132,25 @@ def _build_filter(from_date: str, to_date: str, type_filter: str) -> str:
     if from_date:
         parsed_start = _parse_date(from_date)
         if parsed_start is None:
-            return f"Crossref search failed: invalid from_date {from_date!r}. Use YYYY-MM-DD."
+            msg = f"invalid from_date {from_date!r}; use YYYY-MM-DD."
+            raise ToolFailure("validation_error", msg)
         filters.append(f"from-pub-date:{from_date}")
     if to_date:
         parsed_end = _parse_date(to_date)
         if parsed_end is None:
-            return f"Crossref search failed: invalid to_date {to_date!r}. Use YYYY-MM-DD."
+            msg = f"invalid to_date {to_date!r}; use YYYY-MM-DD."
+            raise ToolFailure("validation_error", msg)
         filters.append(f"until-pub-date:{to_date}")
     if parsed_start and parsed_end and parsed_start > parsed_end:
-        return "Crossref search failed: from_date must be before or equal to to_date."
+        msg = f"from_date {from_date} must be before or equal to to_date {to_date}."
+        raise ToolFailure("validation_error", msg)
     if type_filter:
         if not _VALID_TYPE_FILTER.fullmatch(type_filter):
-            return f"Crossref search failed: invalid type_filter: {type_filter!r}"
+            msg = (
+                f"invalid type_filter {type_filter!r}; use a Crossref type such as "
+                "journal-article or proceedings-article."
+            )
+            raise ToolFailure("validation_error", msg)
         filters.append(f"type:{type_filter}")
     return ",".join(filters)
 

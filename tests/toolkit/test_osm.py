@@ -6,6 +6,9 @@ import urllib.error
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
+import pytest
+
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._osm import osm_reverse_geocode, osm_search_place
 from tests.toolkit.http_fakes import HTTP_OPEN, respond
 
@@ -23,6 +26,14 @@ _PLACE = {
     "address": {"city": "Lisbon", "country": "Portugal", "postcode": "1100"},
     "extratags": {"wikidata": "Q597", "website": "https://www.lisboa.pt"},
 }
+
+
+def _invalid(call, *args, **kwargs) -> str:
+    """The message of the validation_error ``call`` raises."""
+    with pytest.raises(ToolFailure) as caught:
+        call(*args, **kwargs)
+    assert caught.value.error.type == "validation_error"
+    return caught.value.error.message
 
 
 def _called_request(mock_urlopen):
@@ -66,9 +77,9 @@ class TestOsmSearchPlace:
 
     @patch(HTTP_OPEN)
     def test_invalid_search_options_do_not_call_api(self, mock_urlopen):
-        assert "query cannot be empty" in osm_search_place("")
-        assert "country_codes" in osm_search_place("Lisbon", country_codes="portugal")
-        assert "invalid layer" in osm_search_place("Lisbon", layer="bad")
+        assert "query cannot be empty" in _invalid(osm_search_place, "")
+        assert "country_codes" in _invalid(osm_search_place, "Lisbon", country_codes="portugal")
+        assert "invalid layer" in _invalid(osm_search_place, "Lisbon", layer="bad")
         mock_urlopen.assert_not_called()
 
 
@@ -90,9 +101,9 @@ class TestOsmReverseGeocode:
 
     @patch(HTTP_OPEN)
     def test_invalid_reverse_options_do_not_call_api(self, mock_urlopen):
-        assert "latitude must" in osm_reverse_geocode(-91, 0)
-        assert "longitude must" in osm_reverse_geocode(0, 181)
-        assert "invalid layer" in osm_reverse_geocode(0, 0, layer="bad")
+        assert "must be between -90 and 90" in _invalid(osm_reverse_geocode, -91, 0)
+        assert "must be between -180 and 180" in _invalid(osm_reverse_geocode, 0, 181)
+        assert "invalid layer" in _invalid(osm_reverse_geocode, 0, 0, layer="bad")
         mock_urlopen.assert_not_called()
 
     @patch(HTTP_OPEN)
@@ -104,8 +115,22 @@ class TestOsmReverseGeocode:
             hdrs=None,
             fp=None,
         )
-        assert "rate limited" in osm_search_place("Lisbon")
+        with pytest.raises(ToolFailure) as caught:
+            osm_search_place("Lisbon")
+        assert caught.value.error.type == "rate_limited"
+        assert "rate limited" in caught.value.error.message
 
         mock_urlopen.side_effect = None
         mock_urlopen.return_value = respond("not json")
-        assert "could not parse" in osm_search_place("Lisbon")
+        with pytest.raises(ToolFailure) as caught:
+            osm_search_place("Lisbon")
+        assert caught.value.error.type == "upstream"
+        assert "could not parse" in caught.value.error.message
+
+    @patch(HTTP_OPEN)
+    def test_no_place_is_a_success(self, mock_urlopen):
+        mock_urlopen.return_value = respond([])
+        assert osm_search_place("Nowhereville") == "No OSM places found for: 'Nowhereville'"
+
+        mock_urlopen.return_value = respond({"error": "Unable to geocode"})
+        assert osm_reverse_geocode(0, 0) == "No OSM reverse geocode result for: 0, 0"

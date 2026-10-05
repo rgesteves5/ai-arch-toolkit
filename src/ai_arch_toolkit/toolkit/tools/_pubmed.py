@@ -9,6 +9,7 @@ from datetime import date
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
 
@@ -76,22 +77,28 @@ def pubmed_search(
         from_date: Optional publication date lower bound as YYYY-MM-DD.
         to_date: Optional publication date upper bound as YYYY-MM-DD.
         sort: Sort order: relevance, pub_date, first_author, or journal.
+
+    Raises:
+        ToolFailure: validation_error when the query is empty, ``start`` is negative, ``sort``
+            is unknown or a date is not YYYY-MM-DD or out of order; upstream when ESearch
+            reports an error for the query.
     """
     query = query.strip()
     if not query:
-        return "PubMed search failed: query cannot be empty."
+        raise ToolFailure("validation_error", "query cannot be empty; give PubMed search text.")
     if start < 0:
-        return "PubMed search failed: start must be greater than or equal to 0."
+        raise ToolFailure(
+            "validation_error", f"start must be greater than or equal to 0 (got {start})."
+        )
 
     sort = sort.strip() or "relevance"
     if sort not in _SORT_VALUES:
-        return (
-            "PubMed search failed: sort must be one of relevance, pub_date, first_author, journal."
+        raise ToolFailure(
+            "validation_error",
+            f"unknown sort {sort!r}; use one of relevance, pub_date, first_author, journal.",
         )
 
     date_params = _build_date_params(from_date, to_date)
-    if isinstance(date_params, str):
-        return date_params
 
     max_results = max(1, min(max_results, _MAX_RESULTS_LIMIT))
     params = {
@@ -104,14 +111,10 @@ def pubmed_search(
     }
     params.update(date_params)
 
-    try:
-        pmids = _EUTILS.get_json("esearch.fcgi", params=params, parse=_pmids)
-        if not pmids:
-            return f"No PubMed results for: {query!r}"
-        articles = _articles(pmids)
-    except HttpError as e:
-        return f"PubMed search failed: {e}"
-
+    pmids = _EUTILS.get_json("esearch.fcgi", params=params, parse=_pmids)
+    if not pmids:
+        return f"No PubMed results for: {query!r}"
+    articles = _articles(pmids)
     if not articles:
         return f"No PubMed article metadata found for: {query!r}"
 
@@ -124,18 +127,23 @@ def pubmed_article(pmid: str) -> str:
 
     Args:
         pmid: PubMed identifier, e.g. "26017442".
+
+    Raises:
+        ToolFailure: validation_error when ``pmid`` is not all digits; not_found when PubMed
+            has no article with it.
     """
     normalized = pmid.strip()
     if not normalized.isdigit():
-        return f"PubMed article lookup failed: invalid PMID: {pmid!r}"
+        raise ToolFailure(
+            "validation_error",
+            f"invalid PMID {pmid!r}; a PMID is digits only, e.g. '26017442'.",
+        )
 
-    try:
-        articles = _articles([normalized])
-    except HttpError as e:
-        return f"PubMed article lookup failed: {e}"
-
+    articles = _articles([normalized])
     if not articles:
-        return f"PubMed article not found: {normalized}"
+        raise ToolFailure(
+            "not_found", f"no PubMed article with PMID {normalized}; search with pubmed_search."
+        )
 
     return f"PubMed article {normalized}:\n" + _format_articles(
         articles,
@@ -145,7 +153,7 @@ def pubmed_article(pmid: str) -> str:
     )
 
 
-def _build_date_params(from_date: str, to_date: str) -> dict[str, str] | str:
+def _build_date_params(from_date: str, to_date: str) -> dict[str, str]:
     from_date = from_date.strip()
     to_date = to_date.strip()
     if not from_date and not to_date:
@@ -157,15 +165,20 @@ def _build_date_params(from_date: str, to_date: str) -> dict[str, str] | str:
     if from_date:
         parsed_start = _parse_date(from_date)
         if parsed_start is None:
-            return f"PubMed search failed: invalid from_date {from_date!r}. Use YYYY-MM-DD."
+            raise ToolFailure(
+                "validation_error", f"invalid from_date {from_date!r}; use YYYY-MM-DD."
+            )
         params["mindate"] = _format_ncbi_date(parsed_start)
     if to_date:
         parsed_end = _parse_date(to_date)
         if parsed_end is None:
-            return f"PubMed search failed: invalid to_date {to_date!r}. Use YYYY-MM-DD."
+            raise ToolFailure("validation_error", f"invalid to_date {to_date!r}; use YYYY-MM-DD.")
         params["maxdate"] = _format_ncbi_date(parsed_end)
     if parsed_start and parsed_end and parsed_start > parsed_end:
-        return "PubMed search failed: from_date must be before or equal to to_date."
+        raise ToolFailure(
+            "validation_error",
+            f"from_date {from_date} is after to_date {to_date}; swap them or widen the range.",
+        )
     return params
 
 

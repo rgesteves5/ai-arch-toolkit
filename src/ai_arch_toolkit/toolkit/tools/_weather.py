@@ -6,7 +6,8 @@ from collections.abc import Callable
 from typing import Any
 
 from ai_arch_toolkit.core import tool
-from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
+from ai_arch_toolkit.core._tools._result import ToolFailure
+from ai_arch_toolkit.toolkit.tools._http import Api
 
 _GEOCODING = Api(base="https://geocoding-api.open-meteo.com/v1", name="Open-Meteo")
 _FORECAST = Api(base="https://api.open-meteo.com/v1", name="Open-Meteo", query_safe=",")
@@ -48,17 +49,21 @@ _WMO_CODES: dict[int, str] = {
 }
 
 
-def _at_city(city: str, report: Callable[[float, float, str], str]) -> str:
-    """``report`` at the city's first geocoding match, or why there is none."""
+def _at_city(
+    city: str, report: Callable[[float, float, str], str], by_coords: str = "get_weather_by_coords"
+) -> str:
+    """``report`` at the city's first geocoding match; without one, raises ``ToolFailure``, which
+    points to ``by_coords``, the tool that takes coordinates instead."""
     params = {"name": city, "count": "1", "language": "en", "format": "json"}
-    try:
-        place = _GEOCODING.get_json(
-            "search", params=params, parse=lambda data: _first_match(data, city)
-        )
-    except HttpError as e:
-        return f"Geocoding failed: {e}"
+    place = _GEOCODING.get_json(
+        "search", params=params, parse=lambda data: _first_match(data, city)
+    )
     if place is None:
-        return f"City not found: {city!r}"
+        raise ToolFailure(
+            "not_found",
+            f"Open-Meteo has no place named {city!r}; check the spelling, or give coordinates "
+            f"to {by_coords}",
+        )
     lat, lon, display = place
     return report(lat, lon, display)
 
@@ -78,14 +83,11 @@ def _first_match(data: dict[str, Any], city: str) -> tuple[float, float, str] | 
 def _current_weather(lat: float, lon: float, display: str, unit: str = "c") -> str:
     """The current weather at a coordinate pair, formatted."""
     params = {"latitude": lat, "longitude": lon, "current": _CURRENT_FIELDS, "timezone": "auto"}
-    try:
-        return _FORECAST.get_json(
-            "forecast",
-            params=params,
-            parse=lambda data: _format_current_weather(data, display, unit),
-        )
-    except HttpError as e:
-        return f"Weather API failed: {e}"
+    return _FORECAST.get_json(
+        "forecast",
+        params=params,
+        parse=lambda data: _format_current_weather(data, display, unit),
+    )
 
 
 def _daily_forecast(lat: float, lon: float, display: str, days: int) -> str:
@@ -97,12 +99,9 @@ def _daily_forecast(lat: float, lon: float, display: str, days: int) -> str:
         "timezone": "auto",
         "forecast_days": days,
     }
-    try:
-        return _FORECAST.get_json(
-            "forecast", params=params, parse=lambda data: _format_forecast(data, display, days)
-        )
-    except HttpError as e:
-        return f"Forecast API failed: {e}"
+    return _FORECAST.get_json(
+        "forecast", params=params, parse=lambda data: _format_forecast(data, display, days)
+    )
 
 
 def _format_current_weather(data: dict, display: str, unit: str = "c") -> str:
@@ -116,10 +115,6 @@ def _format_current_weather(data: dict, display: str, unit: str = "c") -> str:
     code = current.get("weather_code", -1)
     condition = _WMO_CODES.get(code, "Unknown")
     tz = data.get("timezone", "")
-
-    unit = unit.lower().strip()
-    if unit not in {"c", "f"}:
-        return f"Invalid unit: {unit!r}. Use 'c' or 'f'."
 
     temp_unit = "°C"
     wind_unit = "km/h"
@@ -191,6 +186,9 @@ def get_weather(city: str) -> str:
 
     Args:
         city: City name, e.g. "Tokyo", "London", "New York".
+
+    Raises:
+        ToolFailure: not_found when Open-Meteo knows no place by that name.
     """
     return _at_city(city, _current_weather)
 
@@ -202,9 +200,16 @@ def get_forecast(city: str, days: int = 3) -> str:
     Args:
         city: City name, e.g. "Tokyo", "London", "New York".
         days: Number of forecast days (1-7). Defaults to 3.
+
+    Raises:
+        ToolFailure: not_found when Open-Meteo knows no place by that name.
     """
     days = max(1, min(days, 7))
-    return _at_city(city, lambda lat, lon, display: _daily_forecast(lat, lon, display, days))
+    return _at_city(
+        city,
+        lambda lat, lon, display: _daily_forecast(lat, lon, display, days),
+        "get_forecast_by_coords",
+    )
 
 
 @tool(capability="network")
@@ -238,5 +243,12 @@ def weather_units(city: str, unit: str = "c") -> str:
     Args:
         city: City name, e.g. "Tokyo", "London", "New York".
         unit: Output unit: "c" or "f". Defaults to Celsius.
+
+    Raises:
+        ToolFailure: validation_error when the unit is not "c" or "f"; not_found when Open-Meteo
+            knows no place by that name.
     """
+    unit = unit.lower().strip()
+    if unit not in {"c", "f"}:
+        raise ToolFailure("validation_error", f"invalid unit {unit!r}; use 'c' or 'f'")
     return _at_city(city, lambda lat, lon, display: _current_weather(lat, lon, display, unit))

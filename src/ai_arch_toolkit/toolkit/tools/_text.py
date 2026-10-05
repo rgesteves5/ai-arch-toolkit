@@ -6,6 +6,7 @@ import base64
 import re
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.core._tools._result import ToolFailure
 
 # A regex match runs in C holding the GIL: no timeout can stop it, not even the executor's. The
 # guards bound it before it starts. One unbounded quantifier over 20 000 characters stays under a
@@ -38,18 +39,33 @@ def regex_search(text: str, pattern: str) -> str:
         text: The text to search in (up to 20000 characters).
         pattern: A regular expression pattern (up to 500 characters). Back-references and groups
             that repeat while holding a quantifier or an alternation are refused.
+
+    Raises:
+        ToolFailure: validation_error when the text or the pattern is too long, the pattern is
+            not a valid regex, or its shape can backtrack exponentially.
     """
     if len(text) > _MAX_TEXT_CHARS:
-        return f"Text refused: longer than {_MAX_TEXT_CHARS} characters."
+        raise ToolFailure(
+            "validation_error",
+            f"text refused: {len(text)} characters, longer than {_MAX_TEXT_CHARS}; search it in "
+            "parts.",
+        )
     if len(pattern) > _MAX_PATTERN_CHARS:
-        return f"Pattern refused: longer than {_MAX_PATTERN_CHARS} characters."
+        raise ToolFailure(
+            "validation_error",
+            f"pattern refused: {len(pattern)} characters, longer than {_MAX_PATTERN_CHARS}.",
+        )
     try:
         compiled = re.compile(pattern)
-    except re.error as e:
-        return f"Invalid regex: {e}"
+    except (re.error, OverflowError, RecursionError) as e:  # a{4294967296}, deep nesting
+        raise ToolFailure("validation_error", f"invalid regex {pattern!r}: {e}.") from e
     risk = _backtracking_risk(pattern)
     if risk:
-        return f"Pattern refused: {risk}, which can backtrack exponentially."
+        raise ToolFailure(
+            "validation_error",
+            f"pattern refused: {risk}, which can backtrack exponentially; rewrite it without "
+            "nested repetition or back-references.",
+        )
 
     lines: list[str] = []
     for m in compiled.finditer(text):
@@ -133,8 +149,12 @@ def base64_decode(encoded: str) -> str:
 
     Args:
         encoded: The base64-encoded string to decode.
+
+    Raises:
+        ToolFailure: validation_error when ``encoded`` is not base64.
     """
     try:
-        return base64.b64decode(encoded).decode("utf-8", errors="replace")
-    except Exception as e:
-        return f"Decode error: {e}"
+        decoded = base64.b64decode(encoded)
+    except ValueError as e:  # binascii.Error, or a non-ASCII character
+        raise ToolFailure("validation_error", f"not valid base64: {e}.") from e
+    return decoded.decode("utf-8", errors="replace")

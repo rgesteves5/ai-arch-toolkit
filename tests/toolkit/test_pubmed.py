@@ -5,6 +5,9 @@ from __future__ import annotations
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
+import pytest
+
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._pubmed import pubmed_article, pubmed_search
 from tests.toolkit.http_fakes import HTTP_OPEN, respond
 
@@ -80,6 +83,13 @@ _EMPTY_ARTICLE_XML = """\
 """
 
 
+def _failure(call, *args, **kwargs):
+    """The ToolError ``call`` raises."""
+    with pytest.raises(ToolFailure) as caught:
+        call(*args, **kwargs)
+    return caught.value.error
+
+
 def _called_request(mock_urlopen, index: int = 0):
     return mock_urlopen.call_args_list[index].args[0]
 
@@ -149,30 +159,40 @@ class TestPubmedSearch:
 
     @patch(HTTP_OPEN)
     def test_invalid_options_do_not_call_api(self, mock_urlopen):
-        assert "query cannot be empty" in pubmed_search("")
-        assert "start must be greater than or equal to 0" in pubmed_search("test", start=-1)
-        assert "invalid from_date" in pubmed_search("test", from_date="01-01-2024")
-        assert "from_date must be before" in pubmed_search(
-            "test", from_date="2024-02-01", to_date="2024-01-01"
-        )
-        assert "sort must be one of" in pubmed_search("test", sort="best")
+        for kwargs, words in (
+            ({"query": ""}, "query cannot be empty"),
+            ({"query": "test", "start": -1}, "start must be greater than or equal to 0"),
+            ({"query": "test", "from_date": "01-01-2024"}, "invalid from_date"),
+            ({"query": "test", "to_date": "2024/12/31"}, "invalid to_date"),
+            (
+                {"query": "test", "from_date": "2024-02-01", "to_date": "2024-01-01"},
+                "is after to_date",
+            ),
+            ({"query": "test", "sort": "best"}, "unknown sort"),
+        ):
+            error = _failure(pubmed_search, **kwargs)
+            assert error.type == "validation_error"
+            assert words in error.message
         mock_urlopen.assert_not_called()
 
     @patch(HTTP_OPEN)
     def test_api_failure(self, mock_urlopen):
         mock_urlopen.side_effect = TimeoutError()
 
-        result = pubmed_search("test")
+        error = _failure(pubmed_search, "test")
 
-        assert "timed out" in result.lower()
+        assert error.type == "upstream"
+        assert error.retryable
+        assert "timed out" in error.message.lower()
 
     @patch(HTTP_OPEN)
     def test_search_parse_failure(self, mock_urlopen):
         mock_urlopen.return_value = respond("not json")
 
-        result = pubmed_search("test")
+        error = _failure(pubmed_search, "test")
 
-        assert "could not parse API response" in result
+        assert error.type == "upstream"
+        assert "could not parse API response" in error.message
 
     @patch(HTTP_OPEN)
     def test_an_error_the_search_reports_is_the_tools_error(self, mock_urlopen):
@@ -187,10 +207,11 @@ class TestPubmedSearch:
             }
         )
 
-        result = pubmed_search("(((")
+        error = _failure(pubmed_search, "(((")
 
-        assert result == (
-            "PubMed search failed: Search Backend failed: An error occurred while processing "
+        assert error.type == "upstream"
+        assert error.message == (
+            "Search Backend failed: An error occurred while processing "
             "request. Details: Empty Term in the request"
         )
         assert mock_urlopen.call_count == 1
@@ -217,9 +238,10 @@ class TestPubmedSearch:
     def test_article_xml_parse_failure(self, mock_urlopen):
         mock_urlopen.side_effect = [respond(_ESEARCH_RESULT), respond("<not xml")]
 
-        result = pubmed_search("test")
+        error = _failure(pubmed_search, "test")
 
-        assert "could not parse article XML" in result
+        assert error.type == "upstream"
+        assert "could not parse article XML" in error.message
 
 
 class TestPubmedArticle:
@@ -243,15 +265,18 @@ class TestPubmedArticle:
 
     @patch(HTTP_OPEN)
     def test_invalid_pmid(self, mock_urlopen):
-        result = pubmed_article("PMID 26017442")
+        error = _failure(pubmed_article, "PMID 26017442")
 
-        assert "invalid PMID" in result
+        assert error.type == "validation_error"
+        assert "invalid PMID" in error.message
         mock_urlopen.assert_not_called()
 
     @patch(HTTP_OPEN)
     def test_not_found(self, mock_urlopen):
         mock_urlopen.return_value = respond(_EMPTY_ARTICLE_XML)
 
-        result = pubmed_article("999999999")
+        error = _failure(pubmed_article, "999999999")
 
-        assert "not found" in result.lower()
+        assert error.type == "not_found"
+        assert "no PubMed article with PMID 999999999" in error.message
+        assert "pubmed_search" in error.message

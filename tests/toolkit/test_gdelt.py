@@ -9,8 +9,15 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._gdelt import gdelt_news_search, gdelt_timeline
 from tests.toolkit.http_fakes import HTTP_OPEN, http_error, respond
+
+
+def _failure(call) -> ToolFailure:
+    with pytest.raises(ToolFailure) as caught:
+        call()
+    return caught.value
 
 
 def _called_params(mock_urlopen) -> dict[str, list[str]]:
@@ -54,9 +61,16 @@ class TestGdeltNewsSearch:
 
     @patch(HTTP_OPEN)
     def test_invalid_options_do_not_call_api(self, mock_urlopen):
-        assert "query cannot be empty" in gdelt_news_search("")
-        assert "invalid timespan" in gdelt_news_search("test", timespan="yesterday")
-        assert "sort must be" in gdelt_news_search("test", sort="random")
+        for call, words in (
+            (lambda: gdelt_news_search(""), "query cannot be empty"),
+            (lambda: gdelt_news_search("test", timespan="yesterday"), "invalid timespan"),
+            (lambda: gdelt_news_search("test", sort="random"), "sort must be"),
+            (lambda: gdelt_timeline(" "), "query cannot be empty"),
+            (lambda: gdelt_timeline("test", timespan="1y"), "invalid timespan"),
+        ):
+            failure = _failure(call)
+            assert failure.error.type == "validation_error"
+            assert words in str(failure)
         mock_urlopen.assert_not_called()
 
     @patch(HTTP_OPEN)
@@ -69,22 +83,24 @@ class TestGdeltNewsSearch:
             fp=io.BytesIO(b"Please limit requests to one every 5 seconds."),
         )
 
-        result = gdelt_news_search("test")
+        failure = _failure(lambda: gdelt_news_search("test"))
 
-        assert "rate limited by GDELT" in result
-        assert "one every 5 seconds" in result
+        assert failure.error.type == "rate_limited"
+        assert failure.error.retryable
+        assert str(failure) == "HTTP error 429: Please limit requests to one every 5 seconds."
 
     @patch(HTTP_OPEN)
     def test_after_a_429_gdelt_rests_and_the_next_call_says_when(self, mock_urlopen):
         mock_urlopen.side_effect = http_error(
             429, "Too Many Requests", body=b"Please limit requests to one every 5 seconds."
         )
-        gdelt_news_search("test")
+        _failure(lambda: gdelt_news_search("test"))
 
-        result = gdelt_timeline("test")
+        failure = _failure(lambda: gdelt_timeline("test"))
 
-        assert result.startswith("GDELT timeline failed: GDELT asked to slow down (HTTP 429)")
-        assert "try again in 60 s." in result
+        assert failure.error.type == "rate_limited"
+        assert str(failure).startswith("GDELT asked to slow down (HTTP 429)")
+        assert "try again in 60 s." in str(failure)
         assert mock_urlopen.call_count == 1  # the second call did not go out
 
 
@@ -140,31 +156,31 @@ class TestGdeltTimeline:
     def test_a_broken_json_answer_is_a_parse_error(self, mock_urlopen):
         mock_urlopen.return_value = respond(b'{"timeline": [{"date": "20260611000000", "val')
 
-        result = gdelt_timeline("test")
+        failure = _failure(lambda: gdelt_timeline("test"))
 
-        assert result.startswith("GDELT timeline failed: could not parse API response: ")
+        assert failure.error.type == "upstream"
+        assert str(failure).startswith("could not parse API response: ")
 
 
 @pytest.mark.parametrize(
-    ("call", "failure", "message"),
+    ("call", "message"),
     [
-        (lambda: gdelt_timeline("a"), "GDELT timeline", "Your query was too short or too long."),
-        (
-            lambda: gdelt_news_search("climate sourcecountry:zz"),
-            "GDELT news search",
-            "Invalid/Unsupported Country.",
-        ),
+        (lambda: gdelt_timeline("a"), "Your query was too short or too long."),
+        (lambda: gdelt_news_search("climate sourcecountry:zz"), "Invalid/Unsupported Country."),
     ],
 )
 @patch(HTTP_OPEN)
-def test_a_request_gdelt_cannot_run_is_the_tools_error(mock_urlopen, call, failure, message):
+def test_a_request_gdelt_cannot_run_is_the_tools_error(mock_urlopen, call, message):
     # As answered live (2026-09-29): HTTP 200, text in place of the JSON, which read as a parse
     # error.
     mock_urlopen.return_value = respond(
         f"{message}\n".encode(), content_type="text/html; charset=utf-8"
     )
 
-    assert call() == f"{failure} failed: {message}"
+    failure = _failure(call)
+
+    assert failure.error.type == "upstream"
+    assert str(failure) == message
 
 
 @pytest.mark.parametrize("body", [b"", b" \n"])
@@ -172,9 +188,10 @@ def test_a_request_gdelt_cannot_run_is_the_tools_error(mock_urlopen, call, failu
 def test_an_empty_body_is_a_parse_error_not_a_message(mock_urlopen, body):
     mock_urlopen.return_value = respond(body, content_type="text/html; charset=utf-8")
 
-    result = gdelt_news_search("climate")
+    failure = _failure(lambda: gdelt_news_search("climate"))
 
-    assert result.startswith("GDELT news search failed: could not parse API response: ")
+    assert failure.error.type == "upstream"
+    assert str(failure).startswith("could not parse API response: ")
 
 
 @patch(HTTP_OPEN)
@@ -191,6 +208,8 @@ def test_an_error_page_is_not_a_message(mock_urlopen):
         500, "Internal Server Error", body=b"<html><body>Server Error</body></html>"
     )
 
-    assert gdelt_timeline("climate") == (
-        "GDELT timeline failed: HTTP error 500: Internal Server Error"
-    )
+    failure = _failure(lambda: gdelt_timeline("climate"))
+
+    assert failure.error.type == "upstream"
+    assert failure.error.retryable
+    assert str(failure) == "HTTP error 500: Internal Server Error"

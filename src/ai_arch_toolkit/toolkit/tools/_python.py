@@ -56,6 +56,7 @@ from collections.abc import Callable
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.core._tools._result import ToolFailure
 
 # ---------------------------------------------------------------------------
 # Whitelisted operations
@@ -320,6 +321,18 @@ def _method(owner: object, name: str) -> Any:
 
 _SENTINEL = object()
 
+_SUBSET = (
+    "python_repl runs a safe subset of Python: no imports, while loops, function or class "
+    "definitions, dunder attributes or f-strings, and bounded loops, ranges and collections"
+)
+
+
+class _Refused(ValueError):
+    """A program the sandbox will not run: a node, name, attribute or size it does not allow.
+
+    Not an error of the program itself (``1/0``, an unknown name), which is its output.
+    """
+
 
 class _SafeEvaluator:
     """Evaluate AST nodes with a local scope for variable bindings."""
@@ -359,7 +372,7 @@ class _SafeEvaluator:
         """Evaluate a parsed program: a module of statements, or one expression."""
         if isinstance(node, ast.Module):
             if len(node.body) > _MAX_STATEMENTS:
-                raise ValueError(f"Too many statements: {len(node.body)}")
+                raise _Refused(f"Too many statements: {len(node.body)}")
             self._run(node.body)
             return self._last_expr_value
         if isinstance(node, ast.Expression):
@@ -371,7 +384,7 @@ class _SafeEvaluator:
         """Evaluate an expression node with its handler; a node without one is refused."""
         handler = _EXPRESSIONS.get(type(node))
         if handler is None:
-            raise ValueError(
+            raise _Refused(
                 _REFUSALS.get(type(node), f"Unsupported expression: {type(node).__name__}")
             )
         return handler(self, node)
@@ -380,7 +393,7 @@ class _SafeEvaluator:
         """Execute a statement node with its handler; a node without one is refused."""
         handler = _STATEMENTS.get(type(node))
         if handler is None:
-            raise ValueError(f"Unsupported statement: {type(node).__name__}")
+            raise _Refused(f"Unsupported statement: {type(node).__name__}")
         handler(self, node)
 
     def _run(self, statements: list[ast.stmt]) -> None:
@@ -405,7 +418,7 @@ class _SafeEvaluator:
     def _for(self, node: ast.For) -> None:
         for count, item in enumerate(self._eval_expr(node.iter), 1):
             if count > _MAX_FOR_ITERATIONS:
-                raise ValueError(f"For loop exceeded {_MAX_FOR_ITERATIONS} iterations")
+                raise _Refused(f"For loop exceeded {_MAX_FOR_ITERATIONS} iterations")
             self._assign(node.target, item)
             self._run(node.body)
         self._run(node.orelse)
@@ -423,13 +436,13 @@ class _SafeEvaluator:
             elif isinstance(target, ast.Subscript):
                 del self._eval_expr(target.value)[self._eval_expr(target.slice)]
             else:
-                raise ValueError(f"Unsupported delete target: {type(target).__name__}")
+                raise _Refused(f"Unsupported delete target: {type(target).__name__}")
 
     def _assign(self, target: ast.AST, value: Any) -> None:
         """Assign a value to a target (name, tuple, list, subscript)."""
         if isinstance(target, ast.Name):
             if target.id in _BLOCKED_FUNCTIONS:
-                raise ValueError(f"Cannot assign to blocked name: {target.id}")
+                raise _Refused(f"Cannot assign to blocked name: {target.id}")
             self.scope[target.id] = value
         elif isinstance(target, (ast.Tuple, ast.List)):
             if not isinstance(value, (tuple, list)):
@@ -445,7 +458,7 @@ class _SafeEvaluator:
             idx = self._eval_expr(target.slice)
             obj[idx] = value
         else:
-            raise ValueError(f"Unsupported assignment target: {type(target).__name__}")
+            raise _Refused(f"Unsupported assignment target: {type(target).__name__}")
 
     # --- expressions ------------------------------------------------------
 
@@ -458,13 +471,13 @@ class _SafeEvaluator:
         if node.id in _SAFE_FUNCTIONS:
             return _SAFE_FUNCTIONS[node.id]
         if node.id in _BLOCKED_FUNCTIONS:
-            raise ValueError(f"Blocked function: {node.id}")
+            raise _Refused(f"Blocked function: {node.id}")
         raise ValueError(f"Unknown name: {node.id}")
 
     def _list(self, node: ast.List) -> list[Any]:
         result = [self._eval_expr(e) for e in node.elts]
         if len(result) > _MAX_COLLECTION:
-            raise ValueError(f"Collection too large: {len(result)}")
+            raise _Refused(f"Collection too large: {len(result)}")
         return result
 
     def _tuple(self, node: ast.Tuple) -> tuple[Any, ...]:
@@ -475,7 +488,7 @@ class _SafeEvaluator:
 
     def _dict(self, node: ast.Dict) -> dict[Any, Any]:
         if any(key is None for key in node.keys):
-            raise ValueError("Dict unpacking (**) is not supported")
+            raise _Refused("Dict unpacking (**) is not supported")
         return {
             self._eval_expr(key): self._eval_expr(value)
             for key, value in zip(node.keys, node.values, strict=True)
@@ -488,7 +501,7 @@ class _SafeEvaluator:
     def _unary_operation(self, node: ast.UnaryOp) -> Any:
         op_fn = _UNARY_OPS.get(type(node.op))
         if op_fn is None:
-            raise ValueError(f"Unsupported unary op: {type(node.op).__name__}")
+            raise _Refused(f"Unsupported unary op: {type(node.op).__name__}")
         return op_fn(self._eval_expr(node.operand))
 
     def _boolean_operation(self, node: ast.BoolOp) -> Any:
@@ -506,7 +519,7 @@ class _SafeEvaluator:
         for op, comparator in zip(node.ops, node.comparators, strict=True):
             op_fn = _COMPARE_OPS.get(type(op))
             if op_fn is None:
-                raise ValueError(f"Unsupported comparison: {type(op).__name__}")
+                raise _Refused(f"Unsupported comparison: {type(op).__name__}")
             right = self._eval_expr(comparator)
             if not op_fn(left, right):
                 return False
@@ -527,19 +540,19 @@ class _SafeEvaluator:
 
     def _attribute(self, node: ast.Attribute) -> Any:
         if node.attr in _BLOCKED_ATTRS or node.attr.startswith("__"):
-            raise ValueError(f"Blocked attribute: {node.attr}")
+            raise _Refused(f"Blocked attribute: {node.attr}")
         owner = self._eval_expr(node.value)
         method = _method(owner, node.attr)
         if method is None:
-            raise ValueError(f"Attribute not allowed: {type(owner).__name__}.{node.attr}")
+            raise _Refused(f"Attribute not allowed: {type(owner).__name__}.{node.attr}")
         return method
 
     def _call(self, node: ast.Call) -> Any:
         func = self._eval_expr(node.func)
         if not self._vetted(func):
-            raise ValueError(f"Function not allowed: {ast.dump(node.func)}")
+            raise _Refused(f"Function not allowed: {ast.dump(node.func)}")
         if any(keyword.arg is None for keyword in node.keywords):
-            raise ValueError("Keyword unpacking (**) is not supported")
+            raise _Refused("Keyword unpacking (**) is not supported")
         args = [self._eval_expr(a) for a in node.args]
         kwargs = {kw.arg: self._eval_expr(kw.value) for kw in node.keywords if kw.arg}
         if func is range:
@@ -579,7 +592,7 @@ class _SafeEvaluator:
         results: list[Any] = []
         self._generate(generators, 0, produce, results)
         if len(results) > _MAX_COLLECTION:
-            raise ValueError(f"Comprehension produced too many items: {len(results)}")
+            raise _Refused(f"Comprehension produced too many items: {len(results)}")
         return results
 
     def _generate(
@@ -615,28 +628,28 @@ class _SafeEvaluator:
                 for t, v in zip(target.elts, value, strict=True):
                     self._assign_comp(t, v, saved)
         else:
-            raise ValueError(f"Unsupported comp target: {type(target).__name__}")
+            raise _Refused(f"Unsupported comp target: {type(target).__name__}")
 
 
 def _binary(op: ast.operator, left: Any, right: Any) -> Any:
     """``left op right`` for a whitelisted operator; ``**`` keeps its exponent guard."""
     op_fn = _BINARY_OPS.get(type(op))
     if op_fn is None:
-        raise ValueError(f"Unsupported binary op: {type(op).__name__}")
+        raise _Refused(f"Unsupported binary op: {type(op).__name__}")
     if isinstance(op, ast.Pow) and isinstance(right, (int, float)) and abs(right) > _MAX_POWER:
-        raise ValueError(f"Exponent too large: {right}")
+        raise _Refused(f"Exponent too large: {right}")
     return op_fn(left, right)
 
 
 def _check_range(args: list[Any]) -> None:
     """Refuse a ``range`` longer than ``_MAX_RANGE``."""
     if len(args) == 1 and isinstance(args[0], int) and args[0] > _MAX_RANGE:
-        raise ValueError(f"range too large: {args[0]}")
+        raise _Refused(f"range too large: {args[0]}")
     if len(args) >= 2:
         start = args[0] if isinstance(args[0], int) else 0
         stop = args[1] if isinstance(args[1], int) else 0
         if abs(stop - start) > _MAX_RANGE:
-            raise ValueError(f"range too large: {abs(stop - start)}")
+            raise _Refused(f"range too large: {abs(stop - start)}")
 
 
 # The nodes the evaluator runs: anything else is refused (see the module docstring).
@@ -699,8 +712,16 @@ def python_repl(code: str) -> str:
     Supports: variables, for loops, if/else, comprehensions, string/list/dict/set
     methods, regex (re), and math. No imports, no file access, no while loops.
 
+    An error of the program (``1/0``, a syntax error, an unknown name) is its output:
+    ``"Error: ..."``, after what it printed.
+
     Args:
         code: Python code to execute. Last expression value is the result.
+
+    Raises:
+        ToolFailure: validation_error when the program uses what the sandbox does not run (an
+            import, a while loop, a blocked function or attribute) or exceeds its size limits;
+            ``details["output"]`` holds what it printed before.
     """
     evaluator = _SafeEvaluator()
     evaluator.scope["re"] = re
@@ -712,6 +733,13 @@ def python_repl(code: str) -> str:
             tree = ast.parse(code, mode="exec")
             evaluator.eval_node(tree)
         return evaluator.get_result()
+    except _Refused as refused:
+        captured = "".join(evaluator._output).rstrip("\n")
+        raise ToolFailure(
+            "validation_error",
+            f"{refused}; {_SUBSET}.",
+            details={"output": captured} if captured else None,
+        ) from refused
     except (
         ValueError,
         TypeError,

@@ -1,6 +1,6 @@
 # Tools Catalog
 
-The complete list of pre-built tools, grouped by domain. All are built on the [`@tool`](tools.md) decorator, use the standard library only (zero extra pip dependencies; the three `youtube_*` tools need the `youtube` extra), and return an error string rather than raising — so agents degrade gracefully. None declares [`Range`](tools.md#defining-tools) bounds: a numeric argument outside a limit given below is moved to the nearest limit without a word, not refused.
+The complete list of pre-built tools, grouped by domain. All are built on the [`@tool`](tools.md) decorator, use the standard library only (zero extra pip dependencies; the three `youtube_*` tools need the `youtube` extra), and raise a typed `ToolFailure` when they cannot answer, which the executor returns as a failed result — so agents degrade gracefully. None declares [`Range`](tools.md#defining-tools) bounds: a numeric argument outside a limit given below is moved to the nearest limit without a word, not refused.
 
 Import any of them and drop them into a `ToolGroup`:
 

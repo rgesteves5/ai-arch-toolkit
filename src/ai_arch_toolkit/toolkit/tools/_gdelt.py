@@ -7,7 +7,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from ai_arch_toolkit.core import tool
-from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
+from ai_arch_toolkit.core._tools._result import ToolFailure
+from ai_arch_toolkit.toolkit.tools._http import Api
 
 
 def _query_error(answer: object) -> str | None:
@@ -79,16 +80,17 @@ def gdelt_news_search(
         max_results: Number of articles to return (1-20). Defaults to 10.
         timespan: Recent time window, e.g. "24h", "7d", or "4w".
         sort: Sort mode: hybrid, date, or tone.
+
+    Raises:
+        ToolFailure: validation_error when ``query`` is empty or ``timespan`` or ``sort`` is
+            invalid.
     """
-    query = query.strip()
-    if not query:
-        return "GDELT news search failed: query cannot be empty."
-    timespan = timespan.strip() or "7d"
-    if not _TIMESPAN_RE.fullmatch(timespan):
-        return f"GDELT news search failed: invalid timespan: {timespan!r}"
+    query = _query(query)
+    timespan = _timespan(timespan, "7d")
     sort = sort.strip() or "hybrid"
     if sort not in _SORT_VALUES:
-        return "GDELT news search failed: sort must be one of hybrid, date, tone."
+        msg = f"sort must be one of hybrid, date, tone, got {sort!r}."
+        raise ToolFailure("validation_error", msg)
 
     max_results = max(1, min(max_results, _MAX_RESULTS_LIMIT))
     params = {
@@ -99,10 +101,7 @@ def gdelt_news_search(
         "timespan": timespan,
         "sort": _SORT_VALUES[sort],
     }
-    try:
-        return _API.get_json(params=params, parse=lambda data: _articles_text(data, query))
-    except HttpError as e:
-        return f"GDELT news search failed: {_reason(e)}"
+    return _API.get_json(params=params, parse=lambda data: _articles_text(data, query))
 
 
 @tool(capability="network")
@@ -112,25 +111,33 @@ def gdelt_timeline(query: str, timespan: str = "30d") -> str:
     Args:
         query: GDELT full-text query.
         timespan: Recent time window, e.g. "24h", "30d", or "12w".
+
+    Raises:
+        ToolFailure: validation_error when ``query`` is empty or ``timespan`` is invalid.
     """
+    query = _query(query)
+    timespan = _timespan(timespan, "30d")
+    params = {"query": query, "mode": "timelinevol", "format": "json", "timespan": timespan}
+    return _API.get_json(params=params, parse=lambda data: _timeline_text(data, query))
+
+
+def _query(query: str) -> str:
     query = query.strip()
     if not query:
-        return "GDELT timeline failed: query cannot be empty."
-    timespan = timespan.strip() or "30d"
+        msg = "query cannot be empty; pass GDELT full-text query terms, e.g. 'climate'."
+        raise ToolFailure("validation_error", msg)
+    return query
+
+
+def _timespan(timespan: str, default: str) -> str:
+    timespan = timespan.strip() or default
     if not _TIMESPAN_RE.fullmatch(timespan):
-        return f"GDELT timeline failed: invalid timespan: {timespan!r}"
-
-    params = {"query": query, "mode": "timelinevol", "format": "json", "timespan": timespan}
-    try:
-        return _API.get_json(params=params, parse=lambda data: _timeline_text(data, query))
-    except HttpError as e:
-        return f"GDELT timeline failed: {_reason(e)}"
-
-
-def _reason(error: HttpError) -> str:
-    """The error's text, or for a 429 with a body, GDELT's own explanation of its limit."""
-    detail = " ".join(error.body.split()) if error.status == 429 else ""
-    return f"rate limited by GDELT (HTTP 429): {detail}" if detail else str(error)
+        msg = (
+            f"invalid timespan {timespan!r}; use a number and a unit m, h, d or w, "
+            "e.g. '24h' or '7d'."
+        )
+        raise ToolFailure("validation_error", msg)
+    return timespan
 
 
 def _articles_text(data: dict[str, Any], query: str) -> str:

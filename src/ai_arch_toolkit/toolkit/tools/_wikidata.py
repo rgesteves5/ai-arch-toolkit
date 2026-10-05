@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 from ai_arch_toolkit.toolkit.tools._mediawiki import mediawiki_error
 
@@ -64,13 +65,14 @@ def wikidata_search(query: str, max_results: int = 5, language: str = "en") -> s
         query: Entity search text.
         max_results: Number of entities to return (1-20). Defaults to 5.
         language: Search language code. Defaults to "en".
+
+    Raises:
+        ToolFailure: validation_error when the query is empty or the language code is malformed.
     """
     query = query.strip()
     if not query:
-        return "Wikidata search failed: query cannot be empty."
-    language = language.strip() or "en"
-    if not _LANG_RE.fullmatch(language):
-        return f"Wikidata search failed: invalid language: {language!r}"
+        raise ToolFailure("validation_error", "empty query; give the entity's name")
+    language = _language(language)
 
     max_results = max(1, min(max_results, _MAX_RESULTS_LIMIT))
     params = {
@@ -82,10 +84,7 @@ def wikidata_search(query: str, max_results: int = 5, language: str = "en") -> s
         "limit": str(max_results),
         "format": "json",
     }
-    try:
-        results = _API.get_json(params=params, parse=_search_results)
-    except HttpError as e:
-        return f"Wikidata search failed: {e}"
+    results = _API.get_json(params=params, parse=_search_results)
 
     if not results:
         return f"No Wikidata results for: {query!r}"
@@ -100,24 +99,32 @@ def wikidata_entity(qid: str, language: str = "en") -> str:
     Args:
         qid: Wikidata item ID, e.g. "Q42".
         language: Preferred label/description language. Defaults to "en".
+
+    Raises:
+        ToolFailure: validation_error when the QID or the language code is malformed; not_found
+            when Wikidata has no entity with that QID.
     """
     normalized = qid.strip().upper()
     if not _QID_RE.fullmatch(normalized):
-        return f"Wikidata entity lookup failed: invalid QID: {qid!r}"
-    language = language.strip() or "en"
-    if not _LANG_RE.fullmatch(language):
-        return f"Wikidata entity lookup failed: invalid language: {language!r}"
+        raise ToolFailure(
+            "validation_error",
+            f"invalid QID {qid!r}; a QID looks like Q42 (find one with wikidata_search)",
+        )
+    language = _language(language)
 
+    missing = ToolFailure(
+        "not_found", f"Wikidata has no entity {normalized}; search for it with wikidata_search"
+    )
     try:
         entity = _ENTITY_DATA.get_json(
             f"{normalized}.json", parse=lambda data: _entity(data, normalized, language)
         )
     except HttpError as e:
         if e.status == 404:
-            return f"Wikidata entity not found: {normalized}"
-        return f"Wikidata entity lookup failed: {e}"
+            raise missing from e
+        raise
     if entity is None:
-        return f"Wikidata entity not found: {normalized}"
+        raise missing
 
     merged = f" (redirects to {entity.qid})" if entity.qid != normalized else ""
     return f"Wikidata entity {normalized}{merged}:\n" + _format_entity(entity)
@@ -130,14 +137,23 @@ def wikidata_sparql(query: str, max_results: int = 20) -> str:
     Args:
         query: SPARQL SELECT or ASK query.
         max_results: LIMIT to append for SELECT queries without an explicit LIMIT (1-20).
+
+    Raises:
+        ToolFailure: validation_error when the query is empty, would change data, or is not a
+            SELECT or ASK query; upstream when the query service rejects it.
     """
     query = query.strip()
     if not query:
-        return "Wikidata SPARQL failed: query cannot be empty."
+        raise ToolFailure("validation_error", "empty query; write a SPARQL SELECT or ASK query")
     if _UNSAFE_SPARQL.search(query):
-        return "Wikidata SPARQL failed: only read-only SELECT or ASK queries are allowed."
+        raise ToolFailure(
+            "validation_error",
+            "only read-only SELECT or ASK queries are allowed; remove the update keywords",
+        )
     if not re.match(r"^(PREFIX\s+\w+:\s*<[^>]+>\s*)*(SELECT|ASK)\b", query, re.IGNORECASE):
-        return "Wikidata SPARQL failed: query must start with SELECT or ASK."
+        raise ToolFailure(
+            "validation_error", "the query must start with SELECT or ASK (after any PREFIX lines)"
+        )
 
     max_results = max(1, min(max_results, _MAX_RESULTS_LIMIT))
     sparql = query
@@ -146,13 +162,20 @@ def wikidata_sparql(query: str, max_results: int = 20) -> str:
     ):
         sparql = f"{query}\nLIMIT {max_results}"
 
-    try:
-        return _SPARQL.get_json(
-            params={"query": sparql, "format": "json"},
-            parse=lambda data: _sparql_text(data, max_results),
+    return _SPARQL.get_json(
+        params={"query": sparql, "format": "json"},
+        parse=lambda data: _sparql_text(data, max_results),
+    )
+
+
+def _language(language: str) -> str:
+    """The stripped language code, "en" when empty; a malformed one raises ``ToolFailure``."""
+    language = language.strip() or "en"
+    if not _LANG_RE.fullmatch(language):
+        raise ToolFailure(
+            "validation_error", f"invalid language {language!r}; use a code such as 'en' or 'pt'"
         )
-    except HttpError as e:
-        return f"Wikidata SPARQL failed: {e}"
+    return language
 
 
 def _search_results(data: dict[str, Any]) -> list[_WikidataSearchResult]:
@@ -184,7 +207,9 @@ def _sparql_text(data: dict[str, Any], max_results: int) -> str:
     results = data.get("results", {}).get("bindings", [])
     variables = head.get("vars", [])
     if not isinstance(variables, list) or not isinstance(results, list):
-        return "Wikidata SPARQL failed: unexpected API response."
+        raise ToolFailure(
+            "upstream", "the Wikidata Query Service answered without head.vars or bindings"
+        )
     if not results:
         return "Wikidata SPARQL returned no rows."
 

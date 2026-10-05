@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.core._tools._result import ToolFailure
 
 _VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 _MAX_CHARS_LIMIT = 50_000
@@ -66,44 +67,35 @@ def youtube_transcript(
         output_format: One of "text", "segments", "json", "srt", or "vtt".
         max_chars: Maximum output characters (1-50000). Defaults to 12000.
         preserve_formatting: Preserve HTML formatting where supported by the provider.
-    """
-    video_id = _normalize_video_id(video_url_or_id)
-    if not video_id:
-        return f"YouTube transcript failed: invalid video URL or ID: {video_url_or_id!r}"
 
-    language_codes = _parse_languages(languages)
-    if not language_codes:
-        return "YouTube transcript failed: provide at least one language code."
+    Raises:
+        ToolFailure: validation_error when the video, the languages, the output format or the
+            translation target is invalid; not_found when the video or a transcript in those
+            languages does not exist; rate_limited when YouTube blocks the requests; upstream
+            when YouTube fails or youtube-transcript-api is not installed.
+    """
+    video_id = _video_id(video_url_or_id)
+    language_codes = _languages(languages)
 
     output_format = output_format.strip().lower()
     if output_format not in {"text", "segments", "json", "srt", "vtt"}:
-        return (
-            'YouTube transcript failed: output_format must be "text", "segments", '
-            '"json", "srt", or "vtt".'
+        raise ToolFailure(
+            "validation_error",
+            f"invalid output_format {output_format!r}; use text, segments, json, srt, or vtt",
         )
 
     max_chars = _clamp(max_chars, 1, _MAX_CHARS_LIMIT)
-    api_cls, error_cls = _load_youtube_transcript_api()
-    if api_cls is None:
-        return f"YouTube transcript failed: {_OPTIONAL_DEP_ERROR}"
-
-    try:
-        transcript = _select_transcript(
-            api_cls().list(video_id),
-            language_codes,
-            prefer_manual=prefer_manual,
-            allow_generated=allow_generated,
-        )
-        if translate_to.strip():
-            transcript = transcript.translate(translate_to.strip())
-        segments = _segments(transcript.fetch(preserve_formatting=preserve_formatting))
-    except (error_cls, OSError) as e:  # OSError: requests' network errors
-        return f"YouTube transcript failed: {e}"
-    except (AttributeError, TypeError, ValueError) as e:
-        return f"YouTube transcript failed: could not parse transcript response: {e}"
+    transcript, segments = _fetch_transcript(
+        video_id,
+        language_codes,
+        prefer_manual=prefer_manual,
+        allow_generated=allow_generated,
+        translate_to=translate_to.strip(),
+        preserve_formatting=preserve_formatting,
+    )
 
     if not segments:
-        return f"YouTube transcript failed: no transcript text found for video {video_id}."
+        return f"The YouTube transcript of video {video_id} has no text."
 
     header = _transcript_header(video_id, transcript)
     body = _format_segments(segments, output_format)
@@ -116,21 +108,23 @@ def youtube_transcript_languages(video_url_or_id: str) -> str:
 
     Args:
         video_url_or_id: YouTube video URL or 11-character video ID.
-    """
-    video_id = _normalize_video_id(video_url_or_id)
-    if not video_id:
-        return f"YouTube transcript languages failed: invalid video URL or ID: {video_url_or_id!r}"
 
-    api_cls, error_cls = _load_youtube_transcript_api()
-    if api_cls is None:
-        return f"YouTube transcript languages failed: {_OPTIONAL_DEP_ERROR}"
+    Raises:
+        ToolFailure: validation_error when the video URL or ID is malformed; not_found when the
+            video does not exist or has transcripts turned off; rate_limited when YouTube blocks
+            the requests; upstream when YouTube fails or youtube-transcript-api is not installed.
+    """
+    video_id = _video_id(video_url_or_id)
+    api_cls, error_cls = _api()
 
     try:
         infos = [_transcript_info(transcript) for transcript in api_cls().list(video_id)]
-    except (error_cls, OSError) as e:  # OSError: requests' network errors
-        return f"YouTube transcript languages failed: {e}"
+    except error_cls as e:
+        raise _transcript_failure(e, video_id) from e
+    except OSError as e:  # requests' network errors
+        raise _network_failure(e) from e
     except (AttributeError, TypeError, ValueError) as e:
-        return f"YouTube transcript languages failed: could not parse transcript list: {e}"
+        raise ToolFailure("upstream", f"could not parse the transcript list: {e}") from e
 
     if not infos:
         return f"No YouTube transcripts found for video {video_id}."
@@ -173,35 +167,28 @@ def youtube_transcript_search(
         max_results: Maximum matching windows to return (1-20). Defaults to 10.
         context_segments: Number of neighboring segments around each match (0-3).
         preserve_formatting: Preserve HTML formatting where supported by the provider.
-    """
-    video_id = _normalize_video_id(video_url_or_id)
-    if not video_id:
-        return f"YouTube transcript search failed: invalid video URL or ID: {video_url_or_id!r}"
-    if not query.strip():
-        return "YouTube transcript search failed: query must not be empty."
 
-    language_codes = _parse_languages(languages)
-    if not language_codes:
-        return "YouTube transcript search failed: provide at least one language code."
+    Raises:
+        ToolFailure: validation_error when the video, the query or the languages are invalid;
+            not_found when the video or a transcript in those languages does not exist;
+            rate_limited when YouTube blocks the requests; upstream when YouTube fails or
+            youtube-transcript-api is not installed.
+    """
+    video_id = _video_id(video_url_or_id)
+    if not query.strip():
+        raise ToolFailure("validation_error", "empty query; give the text to find")
+    language_codes = _languages(languages)
 
     max_results = _clamp(max_results, 1, _MAX_SEARCH_RESULTS)
     context_segments = _clamp(context_segments, 0, 3)
-    api_cls, error_cls = _load_youtube_transcript_api()
-    if api_cls is None:
-        return f"YouTube transcript search failed: {_OPTIONAL_DEP_ERROR}"
-
-    try:
-        transcript = _select_transcript(
-            api_cls().list(video_id),
-            language_codes,
-            prefer_manual=prefer_manual,
-            allow_generated=allow_generated,
-        )
-        segments = _segments(transcript.fetch(preserve_formatting=preserve_formatting))
-    except (error_cls, OSError) as e:  # OSError: requests' network errors
-        return f"YouTube transcript search failed: {e}"
-    except (AttributeError, TypeError, ValueError) as e:
-        return f"YouTube transcript search failed: could not parse transcript response: {e}"
+    transcript, segments = _fetch_transcript(
+        video_id,
+        language_codes,
+        prefer_manual=prefer_manual,
+        allow_generated=allow_generated,
+        translate_to="",
+        preserve_formatting=preserve_formatting,
+    )
 
     needle = query.casefold()
     matches = [
@@ -236,6 +223,126 @@ def _load_youtube_transcript_api() -> tuple[Any | None, type[Exception]]:
     except ImportError:
         return None, Exception
     return YouTubeTranscriptApi, YouTubeTranscriptApiException
+
+
+def _api() -> tuple[Any, type[Exception]]:
+    """The API class and its base error; without the optional extra, raises ``ToolFailure``."""
+    api_cls, error_cls = _load_youtube_transcript_api()
+    if api_cls is None:
+        raise ToolFailure("upstream", _OPTIONAL_DEP_ERROR)
+    return api_cls, error_cls
+
+
+def _fetch_transcript(
+    video_id: str,
+    languages: tuple[str, ...],
+    *,
+    prefer_manual: bool,
+    allow_generated: bool,
+    translate_to: str,
+    preserve_formatting: bool,
+) -> tuple[Any, list[_TranscriptSegment]]:
+    """The chosen transcript (translated when asked) and its segments.
+
+    Raises:
+        ToolFailure: For every error youtube-transcript-api or the network raises.
+    """
+    api_cls, error_cls = _api()
+    try:
+        transcript = _select_transcript(
+            api_cls().list(video_id),
+            languages,
+            prefer_manual=prefer_manual,
+            allow_generated=allow_generated,
+        )
+        if translate_to:
+            transcript = transcript.translate(translate_to)
+        segments = _segments(transcript.fetch(preserve_formatting=preserve_formatting))
+    except error_cls as e:
+        raise _transcript_failure(e, video_id, languages, translate_to) from e
+    except OSError as e:  # requests' network errors
+        raise _network_failure(e) from e
+    except (AttributeError, TypeError, ValueError) as e:
+        raise ToolFailure("upstream", f"could not parse the transcript response: {e}") from e
+    return transcript, segments
+
+
+def _transcript_failure(
+    error: Exception, video_id: str, languages: tuple[str, ...] = (), translate_to: str = ""
+) -> ToolFailure:
+    """The typed failure for an error youtube-transcript-api raised.
+
+    The library's exceptions name the cause
+    (https://github.com/jdepoix/youtube-transcript-api/blob/master/youtube_transcript_api/_errors.py):
+    a missing video or transcript is ``not_found``, a translation target the transcript does not
+    offer is a ``validation_error``, YouTube blocking the IP is ``rate_limited``, and the rest
+    is ``upstream``.
+    """
+    try:
+        import youtube_transcript_api as yt
+    except ImportError:  # pragma: no cover - the error came from the library
+        return ToolFailure("upstream", str(error).strip())
+
+    listing = "list the video's transcripts with youtube_transcript_languages"
+    if isinstance(error, yt.NoTranscriptFound):
+        wanted = ", ".join(languages) or "the requested languages"
+        return ToolFailure(
+            "not_found", f"video {video_id} has no transcript in {wanted}; {listing}"
+        )
+    if isinstance(error, yt.TranscriptsDisabled):
+        return ToolFailure("not_found", f"video {video_id} has its transcripts turned off")
+    if isinstance(error, yt.VideoUnavailable | yt.InvalidVideoId):
+        return ToolFailure(
+            "not_found", f"no YouTube video {video_id} is available; check the URL or ID"
+        )
+    if isinstance(error, yt.TranslationLanguageNotAvailable | yt.NotTranslatable):
+        return ToolFailure(
+            "validation_error",
+            f"the transcript of video {video_id} cannot be translated to {translate_to!r}; "
+            f"{listing} and their translations",
+        )
+    if isinstance(error, yt.RequestBlocked):
+        return ToolFailure(
+            "rate_limited",
+            "YouTube is blocking requests from this IP (too many requests, or a cloud "
+            "provider's address); try again later or from another network",
+            retryable=True,
+        )
+    if isinstance(error, yt.YouTubeRequestFailed):  # the reason starts with the HTTP status
+        server = error.reason[:1] == "5"
+        return ToolFailure(
+            "upstream", f"the request to YouTube failed: {error.reason}", retryable=server
+        )
+    if isinstance(error, yt.CouldNotRetrieveTranscript):
+        cause = error.cause.strip().split("\n\n")[0] or "no reason given"
+        return ToolFailure("upstream", f"YouTube gave no transcript of video {video_id}: {cause}")
+    return ToolFailure("upstream", str(error).strip() or type(error).__name__)
+
+
+def _network_failure(error: OSError) -> ToolFailure:
+    return ToolFailure("upstream", f"network error reaching YouTube: {error}", retryable=True)
+
+
+def _video_id(video_url_or_id: str) -> str:
+    """The 11-character video ID; a value that holds none raises ``ToolFailure``."""
+    video_id = _normalize_video_id(video_url_or_id)
+    if not video_id:
+        raise ToolFailure(
+            "validation_error",
+            f"invalid video URL or ID {video_url_or_id!r}; give a youtube.com or youtu.be URL "
+            "or an 11-character ID such as dQw4w9WgXcQ",
+        )
+    return video_id
+
+
+def _languages(languages: str) -> tuple[str, ...]:
+    """The language codes; none raises ``ToolFailure`` (validation_error)."""
+    codes = _parse_languages(languages)
+    if not codes:
+        raise ToolFailure(
+            "validation_error", "no language code given; use codes such as 'en' or 'en,pt-BR'"
+        )
+    return codes
 
 
 def _select_transcript(

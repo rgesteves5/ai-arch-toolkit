@@ -5,8 +5,11 @@ from __future__ import annotations
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
+import pytest
+
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._ror import ror_organization, ror_search
-from tests.toolkit.http_fakes import HTTP_OPEN, respond
+from tests.toolkit.http_fakes import HTTP_OPEN, http_error, respond
 
 _ORG = {
     "id": "https://ror.org/01c27hj86",
@@ -47,6 +50,31 @@ class TestRor:
 
     @patch(HTTP_OPEN)
     def test_invalid_options_do_not_call_api(self, mock_urlopen):
-        assert "invalid ror_id" in ror_organization("bad")
-        assert "invalid country" in ror_search("x", country="PRT")
+        for call, args, kwargs, words in (
+            (ror_organization, ("bad",), {}, "invalid ror_id"),
+            (ror_search, ("x",), {"country": "PRT"}, "invalid country"),
+            (ror_search, ("x",), {"org_type": "no spaces"}, "invalid org_type"),
+            (ror_search, ("x",), {"page": 0}, "page must be"),
+            (ror_search, ("",), {}, "invalid query"),
+        ):
+            with pytest.raises(ToolFailure) as caught:
+                call(*args, **kwargs)
+            assert caught.value.error.type == "validation_error"
+            assert words in caught.value.error.message
         mock_urlopen.assert_not_called()
+
+    @patch(HTTP_OPEN)
+    def test_no_organization_is_a_success(self, mock_urlopen):
+        mock_urlopen.return_value = respond({"number_of_results": 0, "items": []})
+
+        assert ror_search("zzqqxx") == "No ROR organizations found."
+
+    @patch(HTTP_OPEN)
+    def test_a_rate_limit_raises_rate_limited(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(429, "Too Many Requests")
+
+        with pytest.raises(ToolFailure) as caught:
+            ror_search("Lisbon")
+
+        assert caught.value.error.type == "rate_limited"
+        assert caught.value.error.retryable

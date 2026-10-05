@@ -5,13 +5,22 @@ from __future__ import annotations
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
+import pytest
+
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._gbif import (
     gbif_occurrence_search,
     gbif_species,
     gbif_species_match,
     gbif_species_search,
 )
-from tests.toolkit.http_fakes import HTTP_OPEN, respond
+from tests.toolkit.http_fakes import HTTP_OPEN, http_error, respond
+
+
+def _failure(call) -> ToolFailure:
+    with pytest.raises(ToolFailure) as caught:
+        call()
+    return caught.value
 
 
 def _params(mock_urlopen):
@@ -73,4 +82,40 @@ class TestGbif:
 
         assert "occurrence key: 10" in result
         assert _params(mock_urlopen)["taxonKey"] == ["5219404"]
-        assert "provide taxon_key" in gbif_occurrence_search()
+
+    @pytest.mark.parametrize(
+        ("call", "words"),
+        [
+            (lambda: gbif_occurrence_search(), "provide taxon_key"),
+            (lambda: gbif_occurrence_search(country="POR"), "invalid country code"),
+            (lambda: gbif_occurrence_search(year="20"), "invalid year"),
+            (lambda: gbif_species("abc"), "invalid taxon_key"),
+            (lambda: gbif_species_match(""), "invalid name"),
+            (lambda: gbif_species_search("Puma", offset=-1), "offset must"),
+            (lambda: gbif_species_search("Puma", rank="1"), "invalid rank"),
+        ],
+    )
+    @patch(HTTP_OPEN)
+    def test_invalid_arguments_do_not_call_api(self, mock_urlopen, call, words):
+        failure = _failure(call)
+
+        assert failure.error.type == "validation_error"
+        assert words in str(failure)
+        mock_urlopen.assert_not_called()
+
+    @patch(HTTP_OPEN)
+    def test_zero_results_are_successes(self, mock_urlopen):
+        mock_urlopen.return_value = respond({"matchType": "NONE"})
+        assert gbif_species_match("Zzzz") == "No GBIF species match found."
+
+        mock_urlopen.return_value = respond({"count": 0, "results": []})
+        assert gbif_occurrence_search(country="PT") == "No GBIF occurrences found."
+
+    @patch(HTTP_OPEN)
+    def test_a_server_error_is_a_retryable_upstream_failure(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(503, "Service Unavailable")
+
+        failure = _failure(lambda: gbif_species("1"))
+
+        assert failure.error.type == "upstream"
+        assert failure.error.retryable

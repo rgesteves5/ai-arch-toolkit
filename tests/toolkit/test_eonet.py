@@ -5,6 +5,9 @@ from __future__ import annotations
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
+import pytest
+
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._eonet import eonet_categories, eonet_event, eonet_events
 from tests.toolkit.http_fakes import HTTP_OPEN, http_error, respond
 
@@ -45,10 +48,32 @@ class TestEonet:
 
     @patch(HTTP_OPEN)
     def test_invalid_options_do_not_call_api(self, mock_urlopen):
-        assert "status must" in eonet_events(status="bad")
-        assert "invalid start_date" in eonet_events(start_date="2026")
-        assert "invalid event_id" in eonet_event("bad/id")
+        for call, words in (
+            (lambda: eonet_events(status="bad"), "status must"),
+            (lambda: eonet_events(start_date="2026"), "invalid start_date"),
+            (lambda: eonet_event("bad/id"), "invalid event_id"),
+        ):
+            with pytest.raises(ToolFailure) as caught:
+                call()
+            assert caught.value.error.type == "validation_error"
+            assert words in str(caught.value)
         mock_urlopen.assert_not_called()
+
+    @patch(HTTP_OPEN)
+    def test_no_events_is_a_success(self, mock_urlopen):
+        mock_urlopen.return_value = respond({"events": []})
+
+        assert eonet_events() == "No NASA EONET events found."
+
+    @patch(HTTP_OPEN)
+    def test_a_rate_limit_is_a_retryable_failure(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(429, "Too Many Requests")
+
+        with pytest.raises(ToolFailure) as caught:
+            eonet_categories()
+
+        assert caught.value.error.type == "rate_limited"
+        assert caught.value.error.retryable
 
 
 @patch(HTTP_OPEN)
@@ -58,16 +83,36 @@ def test_the_500_eonet_sends_for_an_unknown_event_says_what_it_may_mean(mock_url
         500, "Internal Server Error", body=b"<!DOCTYPE html><title>Server Error</title>"
     )
 
-    assert eonet_event("EONET_0") == (
-        "NASA EONET event failed: HTTP error 500: Internal Server Error (EONET answers this for "
-        "an event ID it does not know; eonet_events lists the current IDs)"
+    with pytest.raises(ToolFailure) as caught:
+        eonet_event("EONET_0")
+
+    # A 500 may be an outage too, so it stays upstream.
+    assert caught.value.error.type == "upstream"
+    assert caught.value.error.retryable
+    assert str(caught.value) == (
+        "HTTP error 500: Internal Server Error (NASA EONET also answers this for an event ID it "
+        "does not know: check 'EONET_0' with eonet_events, which lists the current IDs, or try "
+        "again later)"
     )
+
+
+@patch(HTTP_OPEN)
+def test_other_http_errors_on_an_event_stay_upstream(mock_urlopen):
+    mock_urlopen.side_effect = http_error(503, "Service Unavailable")
+
+    with pytest.raises(ToolFailure) as caught:
+        eonet_event("EONET_1")
+
+    assert caught.value.error.type == "upstream"
+    assert caught.value.error.retryable
 
 
 @patch(HTTP_OPEN)
 def test_an_answer_without_an_event_is_not_a_blank_event(mock_urlopen):
     mock_urlopen.return_value = respond({})
 
-    assert eonet_event("EONET_1") == (
-        "NASA EONET event failed: could not parse API response: no event in the answer"
-    )
+    with pytest.raises(ToolFailure) as caught:
+        eonet_event("EONET_1")
+
+    assert caught.value.error.type == "upstream"
+    assert "without an event" in str(caught.value)

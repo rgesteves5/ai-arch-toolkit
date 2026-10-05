@@ -6,6 +6,7 @@ import ast
 
 import pytest
 
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._python import (
     _EXPRESSIONS,
     _STATEMENTS,
@@ -117,4 +118,8 @@ def test_a_refused_statement_node_is_refused(name: str) -> None:
     ],
 )
 def test_a_program_using_a_refused_node_is_refused(code: str, refusal: str) -> None:
-    assert refusal in python_repl(code)
+    with pytest.raises(ToolFailure) as caught:
+        python_repl(code)
+
+    assert caught.value.error.type == "validation_error"
+    assert refusal in caught.value.error.message

@@ -6,11 +6,38 @@ import urllib.error
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
+import pytest
+
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._openfda_food import (
     openfda_food_recall,
     openfda_food_recall_search,
 )
 from tests.toolkit.http_fakes import HTTP_OPEN, respond
+
+
+def _failure(fn, *args, **kwargs) -> ToolFailure:
+    with pytest.raises(ToolFailure) as caught:
+        fn(*args, **kwargs)
+    return caught.value
+
+
+def _invalid(fn, *args, **kwargs) -> str:
+    failure = _failure(fn, *args, **kwargs)
+    assert failure.error.type == "validation_error"
+    return failure.error.message
+
+
+def _not_found() -> urllib.error.HTTPError:
+    """openFDA's answer to a search that matches nothing."""
+    return urllib.error.HTTPError(
+        url="https://api.fda.gov/food/enforcement.json",
+        code=404,
+        msg="Not Found",
+        hdrs=None,
+        fp=None,
+    )
+
 
 _RECALL = {
     "recall_number": "F-2473-2016",
@@ -72,29 +99,42 @@ class TestOpenFdaFoodRecallSearch:
 
     @patch(HTTP_OPEN)
     def test_invalid_search_options_do_not_call_api(self, mock_urlopen):
-        assert "provide query" in openfda_food_recall_search()
-        assert "skip must" in openfda_food_recall_search(query="x", skip=-1)
-        assert "invalid query" in openfda_food_recall_search(query="bad<>")
-        assert "invalid from_date" in openfda_food_recall_search(query="x", from_date="2016")
-        assert "from_date must" in openfda_food_recall_search(
-            query="x", from_date="2017-01-01", to_date="2016-01-01"
+        assert "provide query" in _invalid(openfda_food_recall_search)
+        assert "skip must" in _invalid(openfda_food_recall_search, query="x", skip=-1)
+        assert "invalid query" in _invalid(openfda_food_recall_search, query="bad<>")
+        assert "invalid reason" in _invalid(openfda_food_recall_search, reason="bad<>")
+        assert "invalid from_date" in _invalid(
+            openfda_food_recall_search, query="x", from_date="2016"
+        )
+        assert "invalid to_date" in _invalid(openfda_food_recall_search, query="x", to_date="x")
+        assert "from_date must" in _invalid(
+            openfda_food_recall_search, query="x", from_date="2017-01-01", to_date="2016-01-01"
         )
         mock_urlopen.assert_not_called()
 
     @patch(HTTP_OPEN)
-    def test_not_found_and_parse_failure(self, mock_urlopen):
+    def test_a_search_that_matches_nothing_is_an_answer(self, mock_urlopen):
+        mock_urlopen.side_effect = _not_found()
+
+        assert openfda_food_recall_search(query="missing") == "No openFDA food recalls found."
+
+    @patch(HTTP_OPEN)
+    def test_parse_and_server_failures_are_upstream(self, mock_urlopen):
+        mock_urlopen.return_value = respond("not json")
+        not_json = _failure(openfda_food_recall_search, query="x")
+        assert not_json.error.type == "upstream"
+        assert "could not parse" in str(not_json)
+
         mock_urlopen.side_effect = urllib.error.HTTPError(
             url="https://api.fda.gov/food/enforcement.json",
-            code=404,
-            msg="Not Found",
+            code=500,
+            msg="Internal Server Error",
             hdrs=None,
             fp=None,
         )
-        assert "no matching records" in openfda_food_recall_search(query="missing")
-
-        mock_urlopen.side_effect = None
-        mock_urlopen.return_value = respond("not json")
-        assert "could not parse" in openfda_food_recall_search(query="x")
+        server = _failure(openfda_food_recall_search, query="x")
+        assert server.error.type == "upstream"
+        assert server.error.retryable
 
 
 class TestOpenFdaFoodRecall:
@@ -115,5 +155,22 @@ class TestOpenFdaFoodRecall:
 
     @patch(HTTP_OPEN)
     def test_invalid_recall_number(self, mock_urlopen):
-        assert "invalid recall_number" in openfda_food_recall("bad")
+        assert "invalid recall_number 'bad'" in _invalid(openfda_food_recall, "bad")
         mock_urlopen.assert_not_called()
+
+    @patch(HTTP_OPEN)
+    def test_an_unknown_recall_is_not_found(self, mock_urlopen):
+        mock_urlopen.side_effect = _not_found()
+
+        failure = _failure(openfda_food_recall, "F-0000-2016")
+
+        assert failure.error.type == "not_found"
+        assert failure.error.message == (
+            "openFDA has no food recall F-0000-2016; find recalls with openfda_food_recall_search"
+        )
+
+    @patch(HTTP_OPEN)
+    def test_an_answer_without_the_recall_is_not_found(self, mock_urlopen):
+        mock_urlopen.return_value = respond({"meta": {"results": {"total": 0}}, "results": []})
+
+        assert _failure(openfda_food_recall, "F-0000-2016").error.type == "not_found"

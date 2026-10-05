@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import re
 
+import pytest
+
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._datetime import (
     date_add,
     date_diff,
@@ -32,8 +35,11 @@ class TestDatetimeNow:
         assert "JST" in result or "Asia/Tokyo" in result or "20" in result
 
     def test_unknown_timezone(self):
-        result = datetime_now("Mars/Olympus")
-        assert "Unknown timezone" in result
+        with pytest.raises(ToolFailure) as caught:
+            datetime_now("Mars/Olympus")
+
+        assert caught.value.error.type == "validation_error"
+        assert "unknown timezone 'Mars/Olympus'" in caught.value.error.message
 
     def test_format_contains_date(self):
         result = datetime_now("UTC")
@@ -53,12 +59,25 @@ class TestTimezoneConvert:
         assert "18:00" in result  # UTC+9
 
     def test_invalid_timezone(self):
-        result = timezone_convert("12:00", "Fake/Zone", "UTC")
-        assert "Invalid timezone" in result
+        with pytest.raises(ToolFailure) as caught:
+            timezone_convert("12:00", "Fake/Zone", "UTC")
+
+        assert caught.value.error.type == "validation_error"
+        assert "invalid from_tz 'Fake/Zone'" in caught.value.error.message
+
+    def test_invalid_target_timezone(self):
+        with pytest.raises(ToolFailure) as caught:
+            timezone_convert("12:00", "UTC", "Fake/Zone")
+
+        assert caught.value.error.type == "validation_error"
+        assert "invalid to_tz 'Fake/Zone'" in caught.value.error.message
 
     def test_invalid_time_format(self):
-        result = timezone_convert("not-a-time", "UTC", "UTC")
-        assert "Invalid time format" in result
+        with pytest.raises(ToolFailure) as caught:
+            timezone_convert("not-a-time", "UTC", "UTC")
+
+        assert caught.value.error.type == "validation_error"
+        assert "invalid time 'not-a-time'" in caught.value.error.message
 
 
 class TestDateAdd:
@@ -71,8 +90,11 @@ class TestDateAdd:
         assert result == "2026-01-15 02:30"
 
     def test_invalid_input(self):
-        result = date_add("15/01/2026", days=1)
-        assert "Invalid date/time format" in result
+        with pytest.raises(ToolFailure) as caught:
+            date_add("15/01/2026", days=1)
+
+        assert caught.value.error.type == "validation_error"
+        assert "invalid date/time '15/01/2026'" in caught.value.error.message
 
 
 class TestDateDiff:
@@ -85,8 +107,24 @@ class TestDateDiff:
         assert result.endswith("= 3.5 hours")
 
     def test_invalid_unit(self):
-        result = date_diff("2026-01-15", "2026-01-17", unit="weeks")
-        assert "Invalid unit" in result
+        with pytest.raises(ToolFailure) as caught:
+            date_diff("2026-01-15", "2026-01-17", unit="weeks")
+
+        assert caught.value.error.type == "validation_error"
+        assert "invalid unit 'weeks'" in caught.value.error.message
+
+    def test_invalid_start_and_end(self):
+        with pytest.raises(ToolFailure) as caught:
+            date_diff("bad", "2026-01-17")
+
+        assert caught.value.error.type == "validation_error"
+        assert "invalid start date/time 'bad'" in caught.value.error.message
+
+        with pytest.raises(ToolFailure) as caught:
+            date_diff("2026-01-15", "bad")
+
+        assert caught.value.error.type == "validation_error"
+        assert "invalid end date/time 'bad'" in caught.value.error.message
 
 
 class TestDateFormat:
@@ -98,13 +136,26 @@ class TestDateFormat:
         result = date_format("2026-01-15 09:30", "%H:%M on %A")
         assert result.startswith("09:30 on ")
 
+    def test_invalid_input(self):
+        with pytest.raises(ToolFailure) as caught:
+            date_format("2026/01/15", "%Y")
+
+        assert caught.value.error.type == "validation_error"
+        assert "invalid date/time" in caught.value.error.message
+
 
 class TestRange:
-    def test_arithmetic_past_the_calendar_is_an_error_string(self):
-        assert date_add("2024-01-01", days=10**9).startswith("Date out of range")
-        assert date_add("9999-12-31", days=1).startswith("Date out of range")
+    @pytest.mark.parametrize(("date_str", "days"), [("2024-01-01", 10**9), ("9999-12-31", 1)])
+    def test_arithmetic_past_the_calendar_is_a_validation_error(self, date_str, days):
+        with pytest.raises(ToolFailure) as caught:
+            date_add(date_str, days=days)
 
-    def test_a_conversion_past_the_calendar_is_an_error_string(self):
-        result = timezone_convert("9999-12-31 23:59", "America/New_York", "Asia/Tokyo")
+        assert caught.value.error.type == "validation_error"
+        assert "outside the calendar" in caught.value.error.message
 
-        assert result.startswith("Date out of range")
+    def test_a_conversion_past_the_calendar_is_a_validation_error(self):
+        with pytest.raises(ToolFailure) as caught:
+            timezone_convert("9999-12-31 23:59", "America/New_York", "Asia/Tokyo")
+
+        assert caught.value.error.type == "validation_error"
+        assert "outside the calendar" in caught.value.error.message

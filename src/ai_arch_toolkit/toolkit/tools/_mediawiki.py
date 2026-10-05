@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import html
 import re
+from collections.abc import Callable
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
 
@@ -69,14 +71,16 @@ def mediawiki_search(
         api_url: MediaWiki API endpoint. Defaults to English Wiktionary.
         max_results: Number of pages to return (1-25). Defaults to 10.
         offset: Zero-based result offset. Defaults to 0.
+
+    Raises:
+        ToolFailure: validation_error when ``query``, ``api_url`` or ``offset`` is invalid.
     """
-    if not _valid_text(query):
-        return "MediaWiki search failed: invalid query."
+    _check_text("query", query)
     api = _api(api_url)
-    if api is None:
-        return "MediaWiki search failed: invalid api_url."
     if offset < 0:
-        return "MediaWiki search failed: offset must be greater than or equal to 0."
+        raise ToolFailure(
+            "validation_error", f"offset must be greater than or equal to 0, not {offset}"
+        )
     params = {
         "action": "query",
         "list": "search",
@@ -86,10 +90,7 @@ def mediawiki_search(
         "format": "json",
         "utf8": "1",
     }
-    try:
-        return api.get_json(params=params, parse=lambda data: _search_text(data, query, offset))
-    except HttpError as e:
-        return f"MediaWiki search failed: {e}"
+    return api.get_json(params=params, parse=lambda data: _search_text(data, query, offset))
 
 
 @tool(capability="network")
@@ -100,19 +101,18 @@ def mediawiki_page(title: str, api_url: str = _DEFAULT_API, max_chars: int = 120
         title: Page title.
         api_url: MediaWiki API endpoint. Defaults to English Wiktionary.
         max_chars: Maximum cleaned characters to return (200-4000). Defaults to 1200.
+
+    Raises:
+        ToolFailure: validation_error when ``title`` or ``api_url`` is invalid; not_found when
+            the wiki has no page with that title.
     """
-    if not _valid_text(title):
-        return "MediaWiki page failed: invalid title."
-    api = _api(api_url)
-    if api is None:
-        return "MediaWiki page failed: invalid api_url."
-    try:
-        return api.get_json(
-            params=_parse_params(title.strip(), "wikitext|sections"),
-            parse=lambda data: _page_text(data, title, max_chars),
-        )
-    except HttpError as e:
-        return f"MediaWiki page failed: {e}"
+    _check_text("title", title)
+    return _parsed_page(
+        _api(api_url),
+        title.strip(),
+        "wikitext|sections",
+        lambda data: _page_text(data, title, max_chars),
+    )
 
 
 @tool(capability="network")
@@ -122,19 +122,15 @@ def mediawiki_sections(title: str, api_url: str = _DEFAULT_API) -> str:
     Args:
         title: Page title.
         api_url: MediaWiki API endpoint. Defaults to English Wiktionary.
+
+    Raises:
+        ToolFailure: validation_error when ``title`` or ``api_url`` is invalid; not_found when
+            the wiki has no page with that title.
     """
-    if not _valid_text(title):
-        return "MediaWiki sections failed: invalid title."
-    api = _api(api_url)
-    if api is None:
-        return "MediaWiki sections failed: invalid api_url."
-    try:
-        return api.get_json(
-            params=_parse_params(title.strip(), "sections"),
-            parse=lambda data: _sections_text(data, title),
-        )
-    except HttpError as e:
-        return f"MediaWiki sections failed: {e}"
+    _check_text("title", title)
+    return _parsed_page(
+        _api(api_url), title.strip(), "sections", lambda data: _sections_text(data, title)
+    )
 
 
 @tool(capability="network")
@@ -145,22 +141,35 @@ def wiktionary_entry(term: str, language: str = "English", max_chars: int = 1600
         term: Wiktionary term/page title.
         language: Language section to prioritize. Defaults to English.
         max_chars: Maximum cleaned characters to return (200-4000). Defaults to 1600.
+
+    Raises:
+        ToolFailure: validation_error when ``term`` or ``language`` is invalid; not_found when
+            Wiktionary has no page for the term.
     """
-    if not _valid_text(term):
-        return "Wiktionary entry failed: invalid term."
+    _check_text("term", term)
     if not _LANG_RE.fullmatch(language.strip()):
-        return "Wiktionary entry failed: invalid language."
-    try:
-        return _WIKTIONARY.get_json(
-            params=_parse_params(term.strip(), "wikitext|sections"),
-            parse=lambda data: _entry_text(data, term, language.strip(), max_chars),
+        raise ToolFailure(
+            "validation_error",
+            f"invalid language {language!r}; name it in English letters, e.g. 'French'",
         )
-    except HttpError as e:
-        return f"Wiktionary entry failed: {e}"
+    return _parsed_page(
+        _WIKTIONARY,
+        term.strip(),
+        "wikitext|sections",
+        lambda data: _entry_text(data, term, language.strip(), max_chars),
+    )
 
 
-def _api(api_url: str) -> Api | None:
-    """The MediaWiki API at ``api_url``; ``None`` unless it is a Wikimedia ``https://…/api.php``."""
+def _api(api_url: str) -> Api:
+    """The MediaWiki API at ``api_url``.
+
+    Raises:
+        ToolFailure: validation_error unless ``api_url`` is a Wikimedia ``https://…/api.php``.
+    """
+    invalid = (
+        f"invalid api_url {api_url!r}; use a Wikimedia wiki's https://…/api.php, "
+        "e.g. https://en.wikipedia.org/w/api.php"
+    )
     try:
         api = Api.within(
             api_url.strip(),
@@ -170,9 +179,40 @@ def _api(api_url: str) -> Api | None:
             status_messages=_STATUS_MESSAGES,
             body_error=mediawiki_error,
         )
-    except HttpError:
-        return None
-    return api if api.base.endswith("api.php") else None
+    except HttpError as e:
+        raise ToolFailure("validation_error", invalid) from e
+    if not api.base.endswith("api.php"):
+        raise ToolFailure("validation_error", invalid)
+    return api
+
+
+def _parsed_page(api: Api, title: str, props: str, parse: Callable[[dict[str, Any]], str]) -> str:
+    """``action=parse`` of ``title``, read with ``parse``.
+
+    Raises:
+        ToolFailure: not_found when the wiki reports the page missing (``missingtitle``,
+            https://www.mediawiki.org/wiki/API:Parse), validation_error when it reports the title
+            invalid (``invalidtitle``); the request's own failures otherwise.
+    """
+    try:
+        return api.get_json(params=_parse_params(title, props), parse=parse)
+    except HttpError as e:
+        if e.status is None and str(e).startswith("missingtitle"):
+            msg = f"{api.host} has no page titled {title!r}; find the title with mediawiki_search"
+            raise ToolFailure("not_found", msg) from e
+        if e.status is None and str(e).startswith("invalidtitle"):
+            msg = f"{title!r} is not a valid page title on {api.host}: {e}"
+            raise ToolFailure("validation_error", msg) from e
+        raise
+
+
+def _check_text(name: str, value: str) -> None:
+    if not _valid_text(value):
+        raise ToolFailure(
+            "validation_error",
+            f"invalid {name} {value[:200]!r}; use 1-180 letters, digits, spaces and "
+            "basic punctuation (,.'()/%:+-)",
+        )
 
 
 def _parse_params(title: str, props: str) -> dict[str, str]:
@@ -187,7 +227,7 @@ def _parse_result(data: dict[str, Any]) -> dict[str, Any]:
     """
     parse = data.get("parse")
     if not isinstance(parse, dict):
-        raise HttpError('could not parse API response: no "parse" object')
+        raise ToolFailure("upstream", 'could not parse API response: no "parse" object')
     return parse
 
 

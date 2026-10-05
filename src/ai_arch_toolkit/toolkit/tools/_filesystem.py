@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import errno
 import itertools
 import stat
 from pathlib import Path
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.core._tools._result import ToolFailure
 
 _DEFAULT_MAX_LINES = 200
 _DEFAULT_MAX_RESULTS = 50
@@ -46,6 +48,28 @@ def _error_text(error: Exception) -> str:
     return str(getattr(error, "strerror", None) or error)
 
 
+# Errors that say the path itself is malformed, not that the filesystem failed.
+_BAD_PATH_ERRNOS = frozenset({errno.ENAMETOOLONG, errno.EINVAL})
+
+
+def path_failure(error: OSError | ValueError, action: str, path: str) -> ToolFailure:
+    """The failure for an error the filesystem raised while ``action``-ing ``path``.
+
+    A path that does not exist is not_found; a malformed one (a null byte, a name too long) is a
+    validation_error; a permission refusal or any other OS error is upstream.
+    """
+    if isinstance(error, FileNotFoundError | NotADirectoryError):
+        msg = f"no such file or directory: {path!r}; list_directory shows what is there."
+        return ToolFailure("not_found", msg)
+    if isinstance(error, PermissionError):
+        msg = f"permission denied to {action} {path!r}; pick a path this process can read."
+        return ToolFailure("upstream", msg)
+    if isinstance(error, ValueError) or error.errno in _BAD_PATH_ERRNOS:
+        msg = f"cannot {action} {path!r}: {_error_text(error)}; check the path."
+        return ToolFailure("validation_error", msg)
+    return ToolFailure("upstream", f"cannot {action} {path!r}: {_error_text(error)}.")
+
+
 @tool(
     capability="filesystem",
     risk_level="high",
@@ -58,20 +82,21 @@ def read_file(path: str, max_lines: int = _DEFAULT_MAX_LINES) -> str:
     Args:
         path: Path to the file (absolute or relative to cwd).
         max_lines: Maximum number of lines to return (1-10000). Defaults to 200.
+
+    Raises:
+        ToolFailure: not_found when ``path`` does not exist; validation_error when it is not a
+            regular file or is malformed; upstream when the OS refuses or fails the read.
     """
     try:
         return _read_lines(Path(path).expanduser(), path, clamp(max_lines, 1, _MAX_LINES))
-    except FileNotFoundError:
-        return f"File not found: {path}"
-    except PermissionError:
-        return f"Permission denied: {path}"
     except (OSError, ValueError) as e:
-        return f"Cannot read {path!r}: {_error_text(e)}"
+        raise path_failure(e, "read", path) from e
 
 
 def _read_lines(p: Path, path: str, max_lines: int) -> str:
     if not _is_regular_file(p):
-        return f"Not a file: {path}"
+        msg = f"{path!r} is not a regular file; list_directory lists a directory."
+        raise ToolFailure("validation_error", msg)
     text, whole = read_prefix(p, _MAX_READ_CHARS)
     lines = text.splitlines()
     if len(lines) > max_lines:
@@ -94,17 +119,19 @@ def list_directory(path: str = ".", pattern: str = "*") -> str:
     Args:
         path: Directory path. Defaults to current directory.
         pattern: Glob pattern to filter entries, e.g. "*.py", "*.md". Defaults to all.
+
+    Raises:
+        ToolFailure: not_found when ``path`` does not exist; validation_error when it is not a
+            directory, is malformed, or ``pattern`` is unusable; upstream when the OS refuses or
+            fails the listing.
     """
     p = Path(path).expanduser()
     try:
-        if not _is_directory(p):
-            return f"Not a directory: {path}"
-    except FileNotFoundError:
-        return f"Directory not found: {path}"
-    except PermissionError:
-        return f"Permission denied: {path}"
+        is_directory = _is_directory(p)
     except (OSError, ValueError) as e:
-        return f"Cannot list {path!r}: {_error_text(e)}"
+        raise path_failure(e, "list", path) from e
+    if not is_directory:
+        raise ToolFailure("validation_error", _not_a_directory(path))
     try:
         found = list(itertools.islice(p.glob(pattern), _MAX_ENTRIES + 1))
         # A pattern may climb out (``../*``) or go through a link (``link/*``): only entries
@@ -112,12 +139,11 @@ def list_directory(path: str = ".", pattern: str = "*") -> str:
         # or not, so such a pattern walks no further than any other.
         base = p.resolve()
         entries = sorted(e for e in found if e.parent.resolve().is_relative_to(base))
-    except PermissionError:
-        return f"Permission denied: {path}"
     except OSError as e:
-        return f"Cannot list {path!r}: {_error_text(e)}"
+        raise path_failure(e, "list", path) from e
     except (ValueError, NotImplementedError) as e:
-        return f"Invalid pattern {pattern!r}: {e}"
+        msg = f"invalid pattern {pattern!r}: {e}; use a relative glob such as '*.py'."
+        raise ToolFailure("validation_error", msg) from e
     if not entries:
         return f"No entries matching {pattern!r} in {path}"
     lines = [_entry_line(entry) for entry in entries[:_MAX_ENTRIES]]
@@ -125,6 +151,10 @@ def list_directory(path: str = ".", pattern: str = "*") -> str:
     if len(found) > _MAX_ENTRIES:
         header = f"{path} (first {len(lines)} entries found):"
     return header + "\n" + "\n".join(lines)
+
+
+def _not_a_directory(path: str) -> str:
+    return f"{path!r} is not a directory; read_file reads a file."
 
 
 def _entry_line(entry: Path) -> str:
@@ -149,17 +179,19 @@ def search_files(directory: str, pattern: str, max_results: int = _DEFAULT_MAX_R
         directory: Root directory to search in.
         pattern: Text pattern to search for (case-insensitive substring match).
         max_results: Maximum number of matching lines to return (1-1000). Defaults to 50.
+
+    Raises:
+        ToolFailure: not_found when ``directory`` does not exist; validation_error when it is
+            not a directory or is malformed; upstream when the OS refuses or fails the search.
     """
     root = Path(directory).expanduser()
     max_results = clamp(max_results, 1, _MAX_RESULTS)
     try:
         if not _is_directory(root):
-            return f"Not a directory: {directory}"
+            raise ToolFailure("validation_error", _not_a_directory(directory))
         matches = _matches(root, pattern.lower(), max_results)
-    except FileNotFoundError:
-        return f"Directory not found: {directory}"
     except (OSError, ValueError) as e:
-        return f"Cannot search {directory!r}: {_error_text(e)}"
+        raise path_failure(e, "search", directory) from e
     if not matches:
         return f"No matches for {pattern!r} in {directory}"
     if len(matches) >= max_results:

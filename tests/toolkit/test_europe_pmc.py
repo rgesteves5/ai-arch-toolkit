@@ -6,6 +6,9 @@ import urllib.error
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
+import pytest
+
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._europe_pmc import (
     europe_pmc_article,
     europe_pmc_citations,
@@ -51,6 +54,12 @@ _CITATION = {
 }
 
 
+def _failure(call) -> ToolFailure:
+    with pytest.raises(ToolFailure) as caught:
+        call()
+    return caught.value
+
+
 def _called_request(mock_urlopen):
     return mock_urlopen.call_args.args[0]
 
@@ -86,9 +95,20 @@ class TestEuropePmcSearch:
 
     @patch(HTTP_OPEN)
     def test_invalid_search_options_do_not_call_api(self, mock_urlopen):
-        assert "query cannot be empty" in europe_pmc_search("")
-        assert "result_type must" in europe_pmc_search("test", result_type="full")
+        for call, words in (
+            (lambda: europe_pmc_search(""), "query cannot be empty"),
+            (lambda: europe_pmc_search("test", result_type="full"), "result_type must"),
+        ):
+            failure = _failure(call)
+            assert failure.error.type == "validation_error"
+            assert words in str(failure)
         mock_urlopen.assert_not_called()
+
+    @patch(HTTP_OPEN)
+    def test_no_results_is_a_success(self, mock_urlopen):
+        mock_urlopen.return_value = respond({"hitCount": 0, "resultList": {"result": []}})
+
+        assert europe_pmc_search("zzz") == "No Europe PMC results for: 'zzz'"
 
 
 class TestEuropePmcArticle:
@@ -116,9 +136,24 @@ class TestEuropePmcArticle:
 
     @patch(HTTP_OPEN)
     def test_invalid_article_options_do_not_call_api(self, mock_urlopen):
-        assert "identifier cannot be empty" in europe_pmc_article("")
-        assert "invalid source" in europe_pmc_article("26017442", source="bad!")
+        for call, words in (
+            (lambda: europe_pmc_article(""), "identifier cannot be empty"),
+            (lambda: europe_pmc_article("26017442", source="bad!"), "invalid source"),
+        ):
+            failure = _failure(call)
+            assert failure.error.type == "validation_error"
+            assert words in str(failure)
         mock_urlopen.assert_not_called()
+
+    @patch(HTTP_OPEN)
+    def test_an_unknown_article_is_not_found(self, mock_urlopen):
+        mock_urlopen.return_value = respond({"hitCount": 0, "resultList": {"result": []}})
+
+        failure = _failure(lambda: europe_pmc_article("99999999"))
+
+        assert failure.error.type == "not_found"
+        assert "'99999999'" in str(failure)
+        assert "europe_pmc_search" in str(failure)
 
 
 class TestEuropePmcCitations:
@@ -149,6 +184,17 @@ class TestEuropePmcCitations:
         assert "No Europe PMC citations found" in result
 
     @patch(HTTP_OPEN)
+    def test_invalid_citation_options_do_not_call_api(self, mock_urlopen):
+        for call, words in (
+            (lambda: europe_pmc_citations("bad!", "1"), "invalid source"),
+            (lambda: europe_pmc_citations("MED", " "), "identifier cannot be empty"),
+        ):
+            failure = _failure(call)
+            assert failure.error.type == "validation_error"
+            assert words in str(failure)
+        mock_urlopen.assert_not_called()
+
+    @patch(HTTP_OPEN)
     def test_api_and_parse_failures(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.HTTPError(
             url="https://www.ebi.ac.uk/europepmc/webservices/rest/search",
@@ -157,8 +203,12 @@ class TestEuropePmcCitations:
             hdrs=None,
             fp=None,
         )
-        assert "rate limited" in europe_pmc_search("test")
+        failure = _failure(lambda: europe_pmc_search("test"))
+        assert failure.error.type == "rate_limited"
+        assert "rate limited" in str(failure)
 
         mock_urlopen.side_effect = None
         mock_urlopen.return_value = respond("not json")
-        assert "could not parse" in europe_pmc_search("test")
+        failure = _failure(lambda: europe_pmc_search("test"))
+        assert failure.error.type == "upstream"
+        assert "could not parse" in str(failure)

@@ -200,7 +200,7 @@ filesystem access, arbitrary URL fetching, and Python execution require explicit
 | Earth, life & public data | `_gbif.py`, `_open_food_facts.py`, `_openfda_food.py`, `_foodon.py`, `_earthquake.py`, `_eonet.py`, `_world_bank.py`, `_who_gho.py`, `_eurostat.py`, `_nvd.py` |
 | `tools.dangerous` (opt-in) | `_filesystem.py`, `_shell.py`, `_python.py`, `_web.py`, and `csv_read` from `_json.py`: filesystem, shell, Python execution, arbitrary URL fetching |
 
-All use `@tool` decorator from core/. All return error strings (never raise) for graceful agent handling.
+All use `@tool` decorator from core/. One that cannot answer raises a typed `ToolFailure`, which the executor returns as a failed `ToolResult`.
 
 ### Runner
 

@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._weather import (
     get_forecast,
     get_forecast_by_coords,
@@ -57,14 +60,23 @@ class TestGetWeather:
     @patch(HTTP_OPEN)
     def test_city_not_found(self, mock_urlopen):
         mock_urlopen.return_value = respond({"results": None})
-        result = get_weather("Nonexistentville")
-        assert "not found" in result.lower()
+
+        with pytest.raises(ToolFailure) as caught:
+            get_weather("Nonexistentville")
+
+        assert caught.value.error.type == "not_found"
+        assert "no place named 'Nonexistentville'" in caught.value.error.message
+        assert mock_urlopen.call_count == 1
 
     @patch(HTTP_OPEN)
     def test_api_error(self, mock_urlopen):
         mock_urlopen.side_effect = TimeoutError()
-        result = get_weather("Tokyo")
-        assert "failed" in result.lower()
+
+        with pytest.raises(ToolFailure) as caught:
+            get_weather("Tokyo")
+
+        assert caught.value.error.type == "upstream"
+        assert caught.value.error.retryable
 
 
 class TestGetWeatherByCoords:
@@ -91,12 +103,12 @@ class TestWeatherUnits:
 
     @patch(HTTP_OPEN)
     def test_invalid_unit(self, mock_urlopen):
-        mock_urlopen.side_effect = [
-            respond(_GEOCODE_RESPONSE),
-            respond(_CURRENT_WEATHER),
-        ]
-        result = weather_units("Tokyo", unit="k")
-        assert "Invalid unit" in result
+        with pytest.raises(ToolFailure) as caught:
+            weather_units("Tokyo", unit="k")
+
+        assert caught.value.error.type == "validation_error"
+        assert "invalid unit 'k'" in caught.value.error.message
+        mock_urlopen.assert_not_called()
 
 
 class TestGetForecast:
@@ -132,3 +144,16 @@ class TestGetForecastByCoords:
         assert "35.6762, 139.6503" in result
         assert "2026-02-27" in result
         assert "Overcast" in result
+
+
+@patch(HTTP_OPEN)
+def test_an_unknown_city_points_each_tool_to_its_coordinates_twin(mock_urlopen):
+    mock_urlopen.side_effect = [respond({"results": []}), respond({"results": []})]
+
+    for tool_fn, twin in (
+        (get_weather, "get_weather_by_coords"),
+        (get_forecast, "get_forecast_by_coords"),
+    ):
+        with pytest.raises(ToolFailure) as caught:
+            tool_fn("Nowhereville")
+        assert caught.value.error.type == "not_found" and twin in caught.value.error.message

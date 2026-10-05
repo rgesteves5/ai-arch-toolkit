@@ -7,7 +7,8 @@ from collections.abc import Callable
 from typing import Any
 
 from ai_arch_toolkit.core import tool
-from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
+from ai_arch_toolkit.core._tools._result import ToolFailure
+from ai_arch_toolkit.toolkit.tools._http import Api
 
 _API = Api(
     base="https://www.ebi.ac.uk/chembl/api/data",
@@ -28,18 +29,19 @@ def chembl_molecule_search(query: str, max_results: int = 10, offset: int = 0) -
         query: Molecule search text, e.g. "aspirin".
         max_results: Number of molecules to return (1-25). Defaults to 10.
         offset: Zero-based result offset. Defaults to 0.
+
+    Raises:
+        ToolFailure: validation_error when the query or the offset is invalid.
     """
-    if not _valid_text(query):
-        return "ChEMBL molecule search failed: invalid query."
-    if offset < 0:
-        return "ChEMBL molecule search failed: offset must be greater than or equal to 0."
+    _check_query(query)
+    _check_offset(offset)
     params = {"q": query.strip(), "limit": str(_bounded(max_results)), "offset": str(offset)}
     header = f"ChEMBL molecules for {query!r}"
-    return _fetch(
-        "ChEMBL molecule search failed",
-        ("molecule", "search.json"),
-        params,
-        lambda data: _page(data, "molecules", header, offset, _compact_molecule),
+    return _API.get_json(
+        "molecule",
+        "search.json",
+        params=params,
+        parse=lambda data: _page(data, "molecules", header, offset, _compact_molecule),
     )
 
 
@@ -49,15 +51,15 @@ def chembl_molecule(chembl_id: str) -> str:
 
     Args:
         chembl_id: ChEMBL molecule ID, e.g. "CHEMBL25".
+
+    Raises:
+        ToolFailure: validation_error when the ID is malformed.
     """
-    normalized = chembl_id.strip().upper()
-    if not _CHEMBL_RE.fullmatch(normalized):
-        return f"ChEMBL molecule lookup failed: invalid chembl_id: {chembl_id!r}"
-    return _fetch(
-        "ChEMBL molecule lookup failed",
-        ("molecule", f"{normalized}.json"),
-        {},
-        lambda data: "\n".join(
+    normalized = _chembl_id("chembl_id", chembl_id)
+    return _API.get_json(
+        "molecule",
+        f"{normalized}.json",
+        parse=lambda data: "\n".join(
             [f"ChEMBL molecule {normalized}:", *_format_molecule(data, index=None, compact=False)]
         ),
     )
@@ -71,18 +73,19 @@ def chembl_target_search(query: str, max_results: int = 10, offset: int = 0) -> 
         query: Target search text, e.g. gene/protein name.
         max_results: Number of targets to return (1-25). Defaults to 10.
         offset: Zero-based result offset. Defaults to 0.
+
+    Raises:
+        ToolFailure: validation_error when the query or the offset is invalid.
     """
-    if not _valid_text(query):
-        return "ChEMBL target search failed: invalid query."
-    if offset < 0:
-        return "ChEMBL target search failed: offset must be greater than or equal to 0."
+    _check_query(query)
+    _check_offset(offset)
     params = {"q": query.strip(), "limit": str(_bounded(max_results)), "offset": str(offset)}
     header = f"ChEMBL targets for {query!r}"
-    return _fetch(
-        "ChEMBL target search failed",
-        ("target", "search.json"),
-        params,
-        lambda data: _page(data, "targets", header, offset, _format_target),
+    return _API.get_json(
+        "target",
+        "search.json",
+        params=params,
+        parse=lambda data: _page(data, "targets", header, offset, _format_target),
     )
 
 
@@ -92,15 +95,15 @@ def chembl_target(chembl_id: str) -> str:
 
     Args:
         chembl_id: ChEMBL target ID, e.g. "CHEMBL203".
+
+    Raises:
+        ToolFailure: validation_error when the ID is malformed.
     """
-    normalized = chembl_id.strip().upper()
-    if not _CHEMBL_RE.fullmatch(normalized):
-        return f"ChEMBL target lookup failed: invalid chembl_id: {chembl_id!r}"
-    return _fetch(
-        "ChEMBL target lookup failed",
-        ("target", f"{normalized}.json"),
-        {},
-        lambda data: _target_text(data, normalized),
+    normalized = _chembl_id("chembl_id", chembl_id)
+    return _API.get_json(
+        "target",
+        f"{normalized}.json",
+        parse=lambda data: _target_text(data, normalized),
     )
 
 
@@ -120,10 +123,11 @@ def chembl_activity_search(
         standard_type: Optional measurement type, e.g. "IC50", "Ki", or "EC50".
         max_results: Number of activities to return (1-25). Defaults to 10.
         offset: Zero-based result offset. Defaults to 0.
+
+    Raises:
+        ToolFailure: validation_error when no ID is given or an argument is invalid.
     """
-    problem = _activity_problem(molecule_chembl_id, target_chembl_id, standard_type, offset)
-    if problem:
-        return f"ChEMBL activity search failed: {problem}"
+    _check_activity(molecule_chembl_id, target_chembl_id, standard_type, offset)
     params = {"limit": str(_bounded(max_results)), "offset": str(offset)}
     filters = {
         "molecule_chembl_id": molecule_chembl_id.strip().upper(),
@@ -131,38 +135,51 @@ def chembl_activity_search(
         "standard_type": standard_type.strip(),
     }
     params.update({key: value for key, value in filters.items() if value})
-    return _fetch(
-        "ChEMBL activity search failed",
-        ("activity.json",),
-        params,
-        lambda data: _page(data, "activities", "ChEMBL activities", offset, _format_activity),
+    return _API.get_json(
+        "activity.json",
+        params=params,
+        parse=lambda data: _page(
+            data, "activities", "ChEMBL activities", offset, _format_activity
+        ),
     )
 
 
-def _fetch(
-    failure: str,
-    segments: tuple[str, ...],
-    params: dict[str, str],
-    render: Callable[[dict[str, Any]], str],
-) -> str:
-    try:
-        return _API.get_json(*segments, params=params, parse=render)
-    except HttpError as e:
-        return f"{failure}: {e}"
+def _check_query(query: str) -> None:
+    if not _valid_text(query):
+        msg = (
+            f"invalid query {query!r}; use 1-180 letters, digits, spaces and common "
+            "punctuation, e.g. 'aspirin'."
+        )
+        raise ToolFailure("validation_error", msg)
 
 
-def _activity_problem(molecule_id: str, target_id: str, standard_type: str, offset: int) -> str:
-    if not any((molecule_id.strip(), target_id.strip())):
-        return "provide molecule_chembl_id or target_chembl_id."
-    if molecule_id and not _CHEMBL_RE.fullmatch(molecule_id.strip()):
-        return "invalid molecule_chembl_id."
-    if target_id and not _CHEMBL_RE.fullmatch(target_id.strip()):
-        return "invalid target_chembl_id."
-    if standard_type and not _valid_text(standard_type):
-        return "invalid standard_type."
+def _check_offset(offset: int) -> None:
     if offset < 0:
-        return "offset must be greater than or equal to 0."
-    return ""
+        msg = f"offset must be greater than or equal to 0, got {offset}."
+        raise ToolFailure("validation_error", msg)
+
+
+def _chembl_id(name: str, value: str) -> str:
+    """``value`` as a ChEMBL ID in upper case; raises when it is not one."""
+    normalized = value.strip().upper()
+    if not _CHEMBL_RE.fullmatch(normalized):
+        msg = f"invalid {name} {value!r}; a ChEMBL ID looks like CHEMBL25."
+        raise ToolFailure("validation_error", msg)
+    return normalized
+
+
+def _check_activity(molecule_id: str, target_id: str, standard_type: str, offset: int) -> None:
+    if not any((molecule_id.strip(), target_id.strip())):
+        msg = "provide molecule_chembl_id or target_chembl_id, e.g. CHEMBL25."
+        raise ToolFailure("validation_error", msg)
+    if molecule_id:
+        _chembl_id("molecule_chembl_id", molecule_id)
+    if target_id:
+        _chembl_id("target_chembl_id", target_id)
+    if standard_type and not _valid_text(standard_type):
+        msg = f"invalid standard_type {standard_type!r}; use a type such as IC50, Ki or EC50."
+        raise ToolFailure("validation_error", msg)
+    _check_offset(offset)
 
 
 _NOTHING_FOUND = {

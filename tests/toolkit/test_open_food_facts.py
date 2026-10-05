@@ -6,13 +6,16 @@ import urllib.error
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
+import pytest
+
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._open_food_facts import (
     open_food_facts_compare,
     open_food_facts_nutrition,
     open_food_facts_product,
     open_food_facts_search,
 )
-from tests.toolkit.http_fakes import HTTP_OPEN, respond
+from tests.toolkit.http_fakes import HTTP_OPEN, http_error, respond
 
 _PRODUCT = {
     "code": "3017620422003",
@@ -39,6 +42,18 @@ _PRODUCT = {
     },
     "image_front_url": "https://images.openfoodfacts.org/front.jpg",
 }
+
+
+def _failure(fn, *args, **kwargs) -> ToolFailure:
+    with pytest.raises(ToolFailure) as caught:
+        fn(*args, **kwargs)
+    return caught.value
+
+
+def _invalid(fn, *args, **kwargs) -> str:
+    failure = _failure(fn, *args, **kwargs)
+    assert failure.error.type == "validation_error"
+    return failure.error.message
 
 
 def _called_request(mock_urlopen):
@@ -75,14 +90,18 @@ class TestOpenFoodFactsProduct:
     def test_product_not_found(self, mock_urlopen):
         mock_urlopen.return_value = respond({"status": 0})
 
-        result = open_food_facts_product("12345678")
+        failure = _failure(open_food_facts_product, "12345678")
 
-        assert "not found" in result.lower()
+        assert failure.error.type == "not_found"
+        assert failure.error.message == (
+            "Open Food Facts has no product with barcode 12345678; find products with "
+            "open_food_facts_search"
+        )
 
     @patch(HTTP_OPEN)
     def test_invalid_barcode_does_not_call_api(self, mock_urlopen):
-        assert "invalid barcode" in open_food_facts_product("abc")
-        assert "invalid barcode" in open_food_facts_product("123")
+        assert "invalid barcode 'abc'" in _invalid(open_food_facts_product, "abc")
+        assert "invalid barcode '123'" in _invalid(open_food_facts_product, "123")
         mock_urlopen.assert_not_called()
 
 
@@ -102,8 +121,14 @@ class TestOpenFoodFactsNutrition:
 
     @patch(HTTP_OPEN)
     def test_invalid_nutrition_barcode_does_not_call_api(self, mock_urlopen):
-        assert "invalid barcode" in open_food_facts_nutrition("abc")
+        assert "invalid barcode" in _invalid(open_food_facts_nutrition, "abc")
         mock_urlopen.assert_not_called()
+
+    @patch(HTTP_OPEN)
+    def test_nutrition_of_an_unknown_product_is_not_found(self, mock_urlopen):
+        mock_urlopen.return_value = respond({"status": 0})
+
+        assert _failure(open_food_facts_nutrition, "12345678").error.type == "not_found"
 
 
 class TestOpenFoodFactsCompare:
@@ -132,10 +157,58 @@ class TestOpenFoodFactsCompare:
         assert mock_urlopen.call_count == 2
 
     @patch(HTTP_OPEN)
+    def test_a_product_api_v2_answers_with_a_404_is_listed_as_missing(self, mock_urlopen):
+        mock_urlopen.side_effect = [
+            respond({"status": 1, "product": _PRODUCT}),
+            http_error(404, "Not Found", body=b'{"status": 0}'),
+        ]
+
+        result = open_food_facts_compare("3017620422003,00000000")
+
+        assert "1. Nutella | barcode: 3017620422003" in result
+        assert "00000000" in result
+
+    @patch(HTTP_OPEN)
+    def test_a_404_for_one_product_is_not_found(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(404, "Not Found")
+
+        assert _failure(open_food_facts_product, "12345678").error.type == "not_found"
+
+    @patch(HTTP_OPEN)
     def test_invalid_compare_options_do_not_call_api(self, mock_urlopen):
-        assert "invalid barcode" in open_food_facts_compare("abc")
-        assert "at most 5" in open_food_facts_compare("1234,1235,1236,1237,1238,1239")
+        assert "invalid barcode" in _invalid(open_food_facts_compare, "abc")
+        assert "at most 5" in _invalid(open_food_facts_compare, "1234,1235,1236,1237,1238,1239")
         mock_urlopen.assert_not_called()
+
+    @patch(HTTP_OPEN)
+    def test_a_missing_product_is_named_beside_the_found_ones(self, mock_urlopen):
+        mock_urlopen.side_effect = [
+            respond({"status": 1, "product": _PRODUCT}),
+            respond({"status": 0}),
+        ]
+
+        result = open_food_facts_compare("3017620422003,12345678")
+
+        assert "1. Nutella | barcode: 3017620422003" in result
+        assert result.endswith("Missing products: 12345678")
+
+    @patch(HTTP_OPEN)
+    def test_none_found_is_not_found(self, mock_urlopen):
+        mock_urlopen.side_effect = [respond({"status": 0}), respond({"status": 0})]
+
+        failure = _failure(open_food_facts_compare, "12345678,87654321")
+
+        assert failure.error.type == "not_found"
+        assert "none of the products 12345678, 87654321" in failure.error.message
+
+    @patch(HTTP_OPEN)
+    def test_another_failure_stops_the_comparison(self, mock_urlopen):
+        mock_urlopen.side_effect = [respond({"status": 1, "product": _PRODUCT}), TimeoutError()]
+
+        failure = _failure(open_food_facts_compare, "3017620422003,12345678")
+
+        assert failure.error.type == "upstream"
+        assert failure.error.retryable
 
 
 class TestOpenFoodFactsSearch:
@@ -170,10 +243,20 @@ class TestOpenFoodFactsSearch:
 
     @patch(HTTP_OPEN)
     def test_invalid_search_options_do_not_call_api(self, mock_urlopen):
-        assert "provide product_name" in open_food_facts_search()
-        assert "page must" in open_food_facts_search(product_name="test", page=0)
-        assert "invalid filter value" in open_food_facts_search(product_name="bad<>")
+        assert "provide product_name" in _invalid(open_food_facts_search)
+        assert "page must" in _invalid(open_food_facts_search, product_name="test", page=0)
+        assert "invalid filter value for product_name" in _invalid(
+            open_food_facts_search, product_name="bad<>"
+        )
         mock_urlopen.assert_not_called()
+
+    @patch(HTTP_OPEN)
+    def test_no_products_is_an_answer(self, mock_urlopen):
+        mock_urlopen.return_value = respond({"count": 0, "products": []})
+
+        assert (
+            open_food_facts_search(product_name="zzqqxx") == "No Open Food Facts products found."
+        )
 
     @patch(HTTP_OPEN)
     def test_rate_limit_and_parse_failure(self, mock_urlopen):
@@ -185,8 +268,13 @@ class TestOpenFoodFactsSearch:
             fp=None,
         )
 
-        assert "global rate limit" in open_food_facts_search(product_name="test")
+        unavailable = _failure(open_food_facts_search, product_name="test")
+        assert unavailable.error.type == "upstream"
+        assert unavailable.error.retryable
+        assert "global rate limit" in str(unavailable)
 
         mock_urlopen.side_effect = None
         mock_urlopen.return_value = respond("not json")
-        assert "could not parse" in open_food_facts_search(product_name="test")
+        not_json = _failure(open_food_facts_search, product_name="test")
+        assert not_json.error.type == "upstream"
+        assert "could not parse" in str(not_json)

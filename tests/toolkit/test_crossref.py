@@ -6,8 +6,11 @@ import urllib.error
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
+import pytest
+
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._crossref import crossref_search, crossref_work
-from tests.toolkit.http_fakes import HTTP_OPEN, respond
+from tests.toolkit.http_fakes import HTTP_OPEN, http_error, respond
 
 _WORK = {
     "DOI": "10.5555/example",
@@ -100,32 +103,49 @@ class TestCrossrefSearch:
 
         assert "No Crossref results" in result
 
+    @pytest.mark.parametrize(
+        ("kwargs", "words"),
+        [
+            ({"query": ""}, "query cannot be empty"),
+            ({"query": "test", "start": -1}, "start must be greater than or equal to 0"),
+            ({"query": "test", "from_date": "01-01-2024"}, "invalid from_date"),
+            ({"query": "test", "to_date": "2024-13-01"}, "invalid to_date"),
+            (
+                {"query": "test", "from_date": "2024-02-01", "to_date": "2024-01-01"},
+                "must be before or equal to to_date",
+            ),
+            ({"query": "test", "type_filter": "journal article"}, "invalid type_filter"),
+        ],
+    )
     @patch(HTTP_OPEN)
-    def test_invalid_options_do_not_call_api(self, mock_urlopen):
-        assert "query cannot be empty" in crossref_search("")
-        assert "start must be greater than or equal to 0" in crossref_search("test", start=-1)
-        assert "invalid from_date" in crossref_search("test", from_date="01-01-2024")
-        assert "from_date must be before" in crossref_search(
-            "test", from_date="2024-02-01", to_date="2024-01-01"
-        )
-        assert "invalid type_filter" in crossref_search("test", type_filter="journal article")
+    def test_invalid_options_do_not_call_api(self, mock_urlopen, kwargs, words):
+        with pytest.raises(ToolFailure) as caught:
+            crossref_search(**kwargs)
+
+        assert caught.value.error.type == "validation_error"
+        assert words in caught.value.error.message
         mock_urlopen.assert_not_called()
 
     @patch(HTTP_OPEN)
     def test_api_failure(self, mock_urlopen):
         mock_urlopen.side_effect = TimeoutError()
 
-        result = crossref_search("test")
+        with pytest.raises(ToolFailure) as caught:
+            crossref_search("test")
 
-        assert "timed out" in result.lower()
+        assert caught.value.error.type == "upstream"
+        assert caught.value.error.retryable
+        assert "timed out" in caught.value.error.message.lower()
 
     @patch(HTTP_OPEN)
     def test_parse_failure(self, mock_urlopen):
         mock_urlopen.return_value = respond(b"not json")
 
-        result = crossref_search("test")
+        with pytest.raises(ToolFailure) as caught:
+            crossref_search("test")
 
-        assert "could not parse" in result
+        assert caught.value.error.type == "upstream"
+        assert "could not parse" in caught.value.error.message
 
 
 class TestCrossrefWork:
@@ -155,9 +175,11 @@ class TestCrossrefWork:
 
     @patch(HTTP_OPEN)
     def test_invalid_doi(self, mock_urlopen):
-        result = crossref_work("bad doi")
+        with pytest.raises(ToolFailure) as caught:
+            crossref_work("bad doi")
 
-        assert "invalid DOI" in result
+        assert caught.value.error.type == "validation_error"
+        assert "invalid DOI 'bad doi'" in caught.value.error.message
         mock_urlopen.assert_not_called()
 
     @patch(HTTP_OPEN)
@@ -170,6 +192,19 @@ class TestCrossrefWork:
             fp=None,
         )
 
-        result = crossref_work("10.5555/missing")
+        with pytest.raises(ToolFailure) as caught:
+            crossref_work("10.5555/missing")
 
-        assert "not found" in result.lower()
+        assert caught.value.error.type == "not_found"
+        assert caught.value.error.message == (
+            "no Crossref work with DOI 10.5555/missing; search with crossref_search."
+        )
+
+    @patch(HTTP_OPEN)
+    def test_other_statuses_propagate(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(429, "Too Many Requests")
+
+        with pytest.raises(ToolFailure) as caught:
+            crossref_work("10.5555/example")
+
+        assert caught.value.error.type == "rate_limited"

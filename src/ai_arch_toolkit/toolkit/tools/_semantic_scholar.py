@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
 # Without a key, every caller shares one limit, spent on 2026-10-04 (a 429 at the first request);
@@ -118,12 +119,19 @@ def semantic_scholar_search(
         start: Zero-based result offset for pagination. Defaults to 0.
         year: Optional year filter accepted by Semantic Scholar, e.g. "2024" or "2020-2024".
         venue: Optional venue filter, e.g. "NeurIPS" or "Nature".
+
+    Raises:
+        ToolFailure: validation_error when the query is empty or ``start`` is negative.
     """
     query = query.strip()
     if not query:
-        return "Semantic Scholar search failed: query cannot be empty."
+        raise ToolFailure(
+            "validation_error", "query cannot be empty; give a title, topic, author or DOI."
+        )
     if start < 0:
-        return "Semantic Scholar search failed: start must be greater than or equal to 0."
+        raise ToolFailure(
+            "validation_error", f"start must be greater than or equal to 0 (got {start})."
+        )
 
     max_results = max(1, min(max_results, _MAX_RESULTS_LIMIT))
     params = {
@@ -137,11 +145,7 @@ def semantic_scholar_search(
     if venue.strip():
         params["venue"] = venue.strip()
 
-    try:
-        papers = _API.get_json("paper", "search", params=params, parse=_papers)
-    except HttpError as e:
-        return f"Semantic Scholar search failed: {e}"
-
+    papers = _API.get_json("paper", "search", params=params, parse=_papers)
     if not papers:
         return f"No Semantic Scholar results for: {query!r}"
 
@@ -157,22 +161,23 @@ def semantic_scholar_paper(paper_id: str) -> str:
 
     Args:
         paper_id: Semantic Scholar paper ID, DOI/DOI URL, arXiv ID/URL, PMID, or prefixed ID.
-    """
-    normalized = _normalize_paper_id(paper_id)
-    if not normalized:
-        return f"Semantic Scholar paper lookup failed: invalid paper_id: {paper_id!r}"
 
+    Raises:
+        ToolFailure: validation_error when ``paper_id`` is empty or malformed; not_found when
+            Semantic Scholar has no paper with it.
+    """
+    normalized = _paper_id(paper_id)
+    not_found = _not_found(normalized)
     try:
         paper = _API.get_json(
             "paper", normalized, params={"fields": _PAPER_FIELDS}, parse=_parse_paper
         )
     except HttpError as e:
         if e.status == 404:
-            return f"Semantic Scholar paper not found: {normalized}"
-        return f"Semantic Scholar paper lookup failed: {e}"
-
+            raise not_found from e
+        raise
     if paper is None:
-        return f"Semantic Scholar paper not found: {normalized}"
+        raise not_found
 
     return f"Semantic Scholar paper {normalized}:\n" + _format_papers(
         [paper],
@@ -194,13 +199,15 @@ def semantic_scholar_citations(
         paper_id: Semantic Scholar paper ID, DOI/DOI URL, arXiv ID/URL, PMID, or prefixed ID.
         max_results: Number of citing papers to return (1-20). Defaults to 10.
         start: Zero-based result offset for pagination. Defaults to 0.
+
+    Raises:
+        ToolFailure: validation_error when ``paper_id`` is empty or malformed or ``start`` is
+            negative; not_found when Semantic Scholar has no paper with that ID.
     """
-    normalized = _normalize_paper_id(paper_id)
-    if not normalized:
-        return f"Semantic Scholar citations lookup failed: invalid paper_id: {paper_id!r}"
+    normalized = _paper_id(paper_id)
     if start < 0:
-        return (
-            "Semantic Scholar citations lookup failed: start must be greater than or equal to 0."
+        raise ToolFailure(
+            "validation_error", f"start must be greater than or equal to 0 (got {start})."
         )
 
     max_results = max(1, min(max_results, _MAX_RESULTS_LIMIT))
@@ -216,8 +223,8 @@ def semantic_scholar_citations(
         )
     except HttpError as e:
         if e.status == 404:
-            return f"Semantic Scholar paper not found: {normalized}"
-        return f"Semantic Scholar citations lookup failed: {e}"
+            raise _not_found(normalized) from e
+        raise
 
     if not citations:
         return f"No Semantic Scholar citations found for: {normalized}"
@@ -235,6 +242,26 @@ def _citations(data: dict[str, Any]) -> list[_SemanticScholarCitation]:
     items = data.get("data", [])
     citations = [_parse_citation(item) for item in items if isinstance(item, dict)]
     return [citation for citation in citations if citation is not None]
+
+
+def _paper_id(value: str) -> str:
+    """The ID Semantic Scholar takes for ``value``, or a validation_error."""
+    normalized = _normalize_paper_id(value)
+    if not normalized:
+        raise ToolFailure(
+            "validation_error",
+            f"invalid paper_id {value!r}; give a Semantic Scholar paper ID, a DOI, an arXiv ID, "
+            "a PMID or a prefixed ID such as 'CorpusId:123'; find one with "
+            "semantic_scholar_search.",
+        )
+    return normalized
+
+
+def _not_found(paper_id: str) -> ToolFailure:
+    return ToolFailure(
+        "not_found",
+        f"no Semantic Scholar paper with ID {paper_id}; search with semantic_scholar_search.",
+    )
 
 
 def _normalize_paper_id(value: str) -> str:

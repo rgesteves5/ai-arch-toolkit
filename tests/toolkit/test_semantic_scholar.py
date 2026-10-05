@@ -6,12 +6,23 @@ import urllib.error
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
+import pytest
+
+from ai_arch_toolkit.core._tools._result import ToolError, ToolFailure
 from ai_arch_toolkit.toolkit.tools._semantic_scholar import (
     semantic_scholar_citations,
     semantic_scholar_paper,
     semantic_scholar_search,
 )
 from tests.toolkit.http_fakes import HTTP_OPEN, respond
+
+
+def _failure(call, *args, **kwargs) -> ToolError:
+    """The ToolError ``call`` raises."""
+    with pytest.raises(ToolFailure) as caught:
+        call(*args, **kwargs)
+    return caught.value.error
+
 
 _PAPER = {
     "paperId": "649def34f8be52c8b66281af98ae884c09aef38b",
@@ -115,10 +126,12 @@ class TestSemanticScholarSearch:
 
     @patch(HTTP_OPEN)
     def test_invalid_options_do_not_call_api(self, mock_urlopen):
-        assert "query cannot be empty" in semantic_scholar_search("")
-        assert "start must be greater than or equal to 0" in semantic_scholar_search(
-            "test", start=-1
-        )
+        error = _failure(semantic_scholar_search, "")
+        assert error.type == "validation_error"
+        assert "query cannot be empty" in error.message
+        error = _failure(semantic_scholar_search, "test", start=-1)
+        assert error.type == "validation_error"
+        assert "start must be greater than or equal to 0" in error.message
         mock_urlopen.assert_not_called()
 
     @patch(HTTP_OPEN)
@@ -131,9 +144,11 @@ class TestSemanticScholarSearch:
             fp=None,
         )
 
-        result = semantic_scholar_search("test")
+        error = _failure(semantic_scholar_search, "test")
 
-        assert "rate limited" in result
+        assert error.type == "rate_limited"
+        assert error.retryable
+        assert "rate limited" in error.message
 
     @patch(HTTP_OPEN)
     def test_a_429_without_a_key_says_how_to_get_one(self, mock_urlopen, monkeypatch):
@@ -146,10 +161,11 @@ class TestSemanticScholarSearch:
             fp=None,
         )
 
-        result = semantic_scholar_search("test")
+        error = _failure(semantic_scholar_search, "test")
 
-        assert "Set SEMANTIC_SCHOLAR_API_KEY" in result
-        assert "https://www.semanticscholar.org/product/api#api-key-form" in result
+        assert error.type == "rate_limited"
+        assert "Set SEMANTIC_SCHOLAR_API_KEY" in error.message
+        assert "https://www.semanticscholar.org/product/api#api-key-form" in error.message
 
     @patch(HTTP_OPEN)
     def test_a_key_in_the_environment_goes_in_x_api_key(self, mock_urlopen, monkeypatch):
@@ -173,9 +189,10 @@ class TestSemanticScholarSearch:
     def test_parse_failure(self, mock_urlopen):
         mock_urlopen.return_value = respond("not json")
 
-        result = semantic_scholar_search("test")
+        error = _failure(semantic_scholar_search, "test")
 
-        assert "could not parse" in result
+        assert error.type == "upstream"
+        assert "could not parse" in error.message
 
 
 class TestSemanticScholarPaper:
@@ -210,9 +227,10 @@ class TestSemanticScholarPaper:
 
     @patch(HTTP_OPEN)
     def test_invalid_paper_id(self, mock_urlopen):
-        result = semantic_scholar_paper("")
+        error = _failure(semantic_scholar_paper, "")
 
-        assert "invalid paper_id" in result
+        assert error.type == "validation_error"
+        assert "invalid paper_id" in error.message
         mock_urlopen.assert_not_called()
 
     @patch(HTTP_OPEN)
@@ -225,9 +243,26 @@ class TestSemanticScholarPaper:
             fp=None,
         )
 
-        result = semantic_scholar_paper("missing")
+        error = _failure(semantic_scholar_paper, "missing")
 
-        assert "not found" in result.lower()
+        assert error.type == "not_found"
+        assert "no Semantic Scholar paper with ID missing" in error.message
+        assert "semantic_scholar_search" in error.message
+
+    @patch(HTTP_OPEN)
+    def test_another_error_status_stays_the_sources_failure(self, mock_urlopen):
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            url="https://api.semanticscholar.org/graph/v1/paper/x",
+            code=500,
+            msg="Internal Server Error",
+            hdrs=None,
+            fp=None,
+        )
+
+        error = _failure(semantic_scholar_paper, "x")
+
+        assert error.type == "upstream"
+        assert error.retryable
 
 
 class TestSemanticScholarCitations:
@@ -249,9 +284,10 @@ class TestSemanticScholarCitations:
 
     @patch(HTTP_OPEN)
     def test_rejects_negative_start(self, mock_urlopen):
-        result = semantic_scholar_citations("ARXIV:1706.03762", start=-1)
+        error = _failure(semantic_scholar_citations, "ARXIV:1706.03762", start=-1)
 
-        assert "start must be greater than or equal to 0" in result
+        assert error.type == "validation_error"
+        assert "start must be greater than or equal to 0" in error.message
         mock_urlopen.assert_not_called()
 
     @patch(HTTP_OPEN)
@@ -261,3 +297,15 @@ class TestSemanticScholarCitations:
         result = semantic_scholar_citations("ARXIV:1706.03762")
 
         assert "No Semantic Scholar citations" in result
+
+    @patch(HTTP_OPEN)
+    def test_citations_of_an_unknown_paper_are_not_found(self, mock_urlopen):
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            url="https://api.semanticscholar.org/graph/v1/paper/missing/citations",
+            code=404,
+            msg="Not Found",
+            hdrs=None,
+            fp=None,
+        )
+
+        assert _failure(semantic_scholar_citations, "missing").type == "not_found"

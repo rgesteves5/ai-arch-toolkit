@@ -37,7 +37,7 @@ from ai_arch_toolkit.core._tools._governance import (
     ToolGate,
 )
 from ai_arch_toolkit.core._tools._group import ToolGroup
-from ai_arch_toolkit.core._tools._result import ToolError, ToolResult
+from ai_arch_toolkit.core._tools._result import ToolError, ToolFailure, ToolFailureType, ToolResult
 from ai_arch_toolkit.core._tools._schema import Range, infer_schema, tool_schema
 
 __all__ = [
@@ -58,6 +58,8 @@ __all__ = [
     "RunState",
     "ToolDefinition",
     "ToolError",
+    "ToolFailure",
+    "ToolFailureType",
     "ToolGate",
     "ToolGroup",
     "ToolResult",

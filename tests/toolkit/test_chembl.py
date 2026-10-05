@@ -5,6 +5,9 @@ from __future__ import annotations
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
+import pytest
+
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._chembl import (
     chembl_activity_search,
     chembl_molecule,
@@ -12,7 +15,7 @@ from ai_arch_toolkit.toolkit.tools._chembl import (
     chembl_target,
     chembl_target_search,
 )
-from tests.toolkit.http_fakes import HTTP_OPEN, respond
+from tests.toolkit.http_fakes import HTTP_OPEN, http_error, respond
 
 _MOLECULE = {
     "molecule_chembl_id": "CHEMBL25",
@@ -80,8 +83,36 @@ class TestChembl:
         assert "IC50: 10 nM" in result
         assert _params(mock_urlopen)["standard_type"] == ["IC50"]
 
+    @pytest.mark.parametrize(
+        ("call", "words"),
+        [
+            (lambda: chembl_activity_search(), "provide molecule_chembl_id"),
+            (lambda: chembl_activity_search(target_chembl_id="X1"), "invalid target_chembl_id"),
+            (
+                lambda: chembl_activity_search(molecule_chembl_id="CHEMBL25", offset=-1),
+                "offset must be greater than or equal to 0",
+            ),
+            (lambda: chembl_molecule("bad"), "invalid chembl_id 'bad'"),
+            (lambda: chembl_target("CHEMBL"), "invalid chembl_id 'CHEMBL'"),
+            (lambda: chembl_molecule_search("<script>"), "invalid query"),
+            (lambda: chembl_target_search("EGFR", offset=-1), "offset must be"),
+        ],
+    )
     @patch(HTTP_OPEN)
-    def test_invalid_options_do_not_call_api(self, mock_urlopen):
-        assert "provide molecule" in chembl_activity_search()
-        assert "invalid chembl_id" in chembl_molecule("bad")
+    def test_invalid_options_do_not_call_api(self, mock_urlopen, call, words):
+        with pytest.raises(ToolFailure) as caught:
+            call()
+
+        assert caught.value.error.type == "validation_error"
+        assert words in caught.value.error.message
         mock_urlopen.assert_not_called()
+
+    @patch(HTTP_OPEN)
+    def test_upstream_failure_propagates(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(500, "Internal Server Error")
+
+        with pytest.raises(ToolFailure) as caught:
+            chembl_molecule("CHEMBL25")
+
+        assert caught.value.error.type == "upstream"
+        assert caught.value.error.retryable

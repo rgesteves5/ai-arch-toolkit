@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._news import hacker_news
-from tests.toolkit.http_fakes import HTTP_OPEN, respond
+from tests.toolkit.http_fakes import HTTP_OPEN, http_error, respond
 
 
 class TestHackerNews:
@@ -59,8 +62,11 @@ class TestHackerNews:
     @patch(HTTP_OPEN)
     def test_api_failure(self, mock_urlopen):
         mock_urlopen.side_effect = TimeoutError()
-        result = hacker_news()
-        assert "Failed" in result
+        with pytest.raises(ToolFailure) as caught:
+            hacker_news()
+        assert caught.value.error.type == "upstream"
+        assert caught.value.error.retryable
+        assert "timed out" in caught.value.error.message
 
     @patch(HTTP_OPEN)
     def test_says_which_stories_it_could_not_load(self, mock_urlopen):
@@ -87,7 +93,22 @@ class TestHackerNews:
         # The API answers an item it does not have with null (2026-09-30).
         mock_urlopen.side_effect = [respond([100]), respond(b"null")]
 
-        assert hacker_news(count=1) == (
-            "Failed to fetch HN top stories: #1 (item 100: could not parse API response: "
-            "expected a JSON object, got null)"
+        with pytest.raises(ToolFailure) as caught:
+            hacker_news(count=1)
+
+        assert caught.value.error.type == "upstream"
+        assert not caught.value.error.retryable
+        assert caught.value.error.message == (
+            "could not load any of the Hacker News top stories: #1 (item 100: could not parse "
+            "API response: expected a JSON object, got null)"
         )
+
+    @patch(HTTP_OPEN)
+    def test_a_rate_limited_list_is_rate_limited(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(429)
+
+        with pytest.raises(ToolFailure) as caught:
+            hacker_news(count=1)
+
+        assert caught.value.error.type == "rate_limited"
+        assert caught.value.error.retryable

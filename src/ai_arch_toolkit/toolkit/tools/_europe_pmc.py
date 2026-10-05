@@ -8,7 +8,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from ai_arch_toolkit.core import tool
-from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
+from ai_arch_toolkit.core._tools._result import ToolFailure
+from ai_arch_toolkit.toolkit.tools._http import Api
 
 _API = Api(
     base="https://www.ebi.ac.uk/europepmc/webservices/rest", name="Europe PMC", timeout_s=15
@@ -58,13 +59,17 @@ def europe_pmc_search(
         max_results: Number of records to return (1-20). Defaults to 5.
         cursor_mark: Cursor mark for pagination. Defaults to "*".
         result_type: Result detail: lite, core, or idlist. Defaults to lite.
+
+    Raises:
+        ToolFailure: validation_error when ``query`` is empty or ``result_type`` is unknown.
     """
     query = query.strip()
     if not query:
-        return "Europe PMC search failed: query cannot be empty."
+        raise ToolFailure("validation_error", "query cannot be empty; pass search text.")
     result_type = result_type.strip().lower() or "lite"
     if result_type not in _RESULT_TYPES:
-        return "Europe PMC search failed: result_type must be one of lite, core, idlist."
+        msg = f"result_type must be one of lite, core, idlist, got {result_type!r}."
+        raise ToolFailure("validation_error", msg)
 
     params = {
         "query": query,
@@ -73,10 +78,7 @@ def europe_pmc_search(
         "cursorMark": cursor_mark.strip() or "*",
         "resultType": result_type,
     }
-    try:
-        return _API.get_json("search", params=params, parse=lambda data: _search_text(data, query))
-    except HttpError as e:
-        return f"Europe PMC search failed: {e}"
+    return _API.get_json("search", params=params, parse=lambda data: _search_text(data, query))
 
 
 @tool(capability="network")
@@ -86,18 +88,16 @@ def europe_pmc_article(identifier: str, source: str = "") -> str:
     Args:
         identifier: PMID, PMCID, DOI, or Europe PMC external ID.
         source: Optional Europe PMC source, e.g. MED, PMC, AGR, CBA, PAT.
-    """
-    query_or_error = _article_query(identifier, source)
-    if query_or_error.startswith("Europe PMC article lookup failed:"):
-        return query_or_error
 
-    params = {"query": query_or_error, "format": "json", "pageSize": "1", "resultType": "core"}
-    try:
-        return _API.get_json(
-            "search", params=params, parse=lambda data: _article_text(data, identifier.strip())
-        )
-    except HttpError as e:
-        return f"Europe PMC article lookup failed: {e}"
+    Raises:
+        ToolFailure: validation_error when ``identifier`` is empty or ``source`` is malformed;
+            not_found when Europe PMC has no article with that identifier.
+    """
+    query = _article_query(identifier, source)
+    params = {"query": query, "format": "json", "pageSize": "1", "resultType": "core"}
+    return _API.get_json(
+        "search", params=params, parse=lambda data: _article_text(data, identifier.strip())
+    )
 
 
 @tool(capability="network")
@@ -108,25 +108,26 @@ def europe_pmc_citations(source: str, identifier: str, max_results: int = 10) ->
         source: Europe PMC source, e.g. MED or PMC.
         identifier: Source-specific article ID, e.g. a PMID for MED.
         max_results: Number of citing articles to return (1-20). Defaults to 10.
+
+    Raises:
+        ToolFailure: validation_error when ``source`` is malformed or ``identifier`` is empty.
     """
     normalized_source = source.strip().upper()
     identifier = identifier.strip()
     if not _SOURCE_RE.fullmatch(normalized_source):
-        return f"Europe PMC citations failed: invalid source: {source!r}"
+        raise ToolFailure("validation_error", _invalid_source(source))
     if not identifier:
-        return "Europe PMC citations failed: identifier cannot be empty."
+        msg = "identifier cannot be empty; pass the record's ID in that source, e.g. a PMID."
+        raise ToolFailure("validation_error", msg)
 
     record = f"{normalized_source}/{identifier}"
-    try:
-        return _API.get_json(
-            normalized_source,
-            identifier,
-            "citations",
-            params={"format": "json", "pageSize": str(_bounded(max_results))},
-            parse=lambda data: _citations_text(data, record),
-        )
-    except HttpError as e:
-        return f"Europe PMC citations failed: {e}"
+    return _API.get_json(
+        normalized_source,
+        identifier,
+        "citations",
+        params={"format": "json", "pageSize": str(_bounded(max_results))},
+        parse=lambda data: _citations_text(data, record),
+    )
 
 
 def _search_text(data: dict[str, Any], query: str) -> str:
@@ -139,7 +140,10 @@ def _search_text(data: dict[str, Any], query: str) -> str:
 def _article_text(data: dict[str, Any], identifier: str) -> str:
     articles = _articles_from_search(data)
     if not articles:
-        return f"Europe PMC article not found: {identifier}"
+        msg = (
+            f"no Europe PMC article with identifier {identifier!r}; search with europe_pmc_search."
+        )
+        raise ToolFailure("not_found", msg)
     article = articles[0]
     return f"Europe PMC article {article.source}/{article.id}:\n" + _format_articles(
         [article],
@@ -268,9 +272,10 @@ def _article_query(identifier: str, source: str) -> str:
     identifier = identifier.strip()
     source = source.strip().upper()
     if not identifier:
-        return "Europe PMC article lookup failed: identifier cannot be empty."
+        msg = "identifier cannot be empty; pass a PMID, PMCID, DOI, or Europe PMC ID."
+        raise ToolFailure("validation_error", msg)
     if source and not _SOURCE_RE.fullmatch(source):
-        return f"Europe PMC article lookup failed: invalid source: {source!r}"
+        raise ToolFailure("validation_error", _invalid_source(source))
     if identifier.upper().startswith("PMC"):
         query = f"PMCID:{identifier}"
     elif identifier.lower().startswith("10."):
@@ -280,6 +285,10 @@ def _article_query(identifier: str, source: str) -> str:
     if source:
         query = f"SRC:{source} AND {query}"
     return query
+
+
+def _invalid_source(source: str) -> str:
+    return f"invalid source {source!r}; a Europe PMC source is three letters, e.g. MED or PMC."
 
 
 def _full_text_urls(value: Any) -> tuple[str, ...]:

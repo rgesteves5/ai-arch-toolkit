@@ -66,7 +66,7 @@ Deeper reading, in `docs/`: `framework-overview.md` (layer tour), `configuring-a
 - Dataclasses: `frozen=True, slots=True`; add `kw_only=True` at 3+ fields.
 - PEP 695 `type` aliases; `__all__` in every `__init__.py`.
 - Google-style docstrings; never repeat types already in hints.
-- Toolkit tools return error strings instead of raising, so agents can keep going.
+- A toolkit tool that cannot answer raises `ToolFailure` (`not_found`, `validation_error`, `upstream`, `rate_limited`; D37, D42), never an error string: the executor returns it as `ToolResult(ok=False)`, so the agent keeps going and the provider receives the result marked as an error. Zero results is a successful answer that says so. The door's `HttpError` is a `ToolFailure`; no tool catches it to return text (architecture test).
 - User-visible changes get an `[Unreleased]` entry in `CHANGELOG.md` (Added/Changed/Fixed).
 
 ## Testing

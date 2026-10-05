@@ -112,14 +112,18 @@ def tool_result(
     *,
     tool_use_id: str,
     name: str | None = None,
+    is_error: bool = False,
 ) -> dict[str, Any]:
     """Create a tool_result message dict.
 
-    ``tool_use_id`` is the provider-agnostic discriminator for tool results.
+    ``tool_use_id`` is the provider-agnostic discriminator for tool results. ``is_error`` marks
+    the result of a call that failed: each adapter passes it as its provider takes it (D42).
     """
     if not tool_use_id:
         raise ValueError("tool_use_id must be a non-empty string")
     msg = {"role": "tool", "content": content, "tool_use_id": tool_use_id}
     if name:
         msg["name"] = name
+    if is_error:
+        msg["is_error"] = True
     return msg

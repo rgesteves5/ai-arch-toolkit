@@ -5,6 +5,9 @@ from __future__ import annotations
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
+import pytest
+
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._arxiv import arxiv_paper, arxiv_search
 from tests.toolkit.http_fakes import HTTP_OPEN, http_error, respond
 
@@ -113,47 +116,77 @@ class TestArxivSearch:
 
     @patch(HTTP_OPEN)
     def test_invalid_options_do_not_call_api(self, mock_urlopen):
-        result = arxiv_search("test", category="bad category")
+        with pytest.raises(ToolFailure) as caught:
+            arxiv_search("test", category="bad category")
 
-        assert "invalid category" in result
+        assert caught.value.error.type == "validation_error"
+        assert "invalid category" in caught.value.error.message
+        mock_urlopen.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("kwargs", "words"),
+        [
+            ({"query": "  "}, "query cannot be empty"),
+            ({"query": "x", "sort_by": "date"}, "invalid sort_by 'date'"),
+            ({"query": "x", "sort_order": "up"}, "invalid sort_order 'up'"),
+        ],
+    )
+    @patch(HTTP_OPEN)
+    def test_other_invalid_arguments(self, mock_urlopen, kwargs, words):
+        with pytest.raises(ToolFailure) as caught:
+            arxiv_search(**kwargs)
+
+        assert caught.value.error.type == "validation_error"
+        assert words in caught.value.error.message
         mock_urlopen.assert_not_called()
 
     @patch(HTTP_OPEN)
     def test_invalid_date(self, mock_urlopen):
-        result = arxiv_search("test", from_date="01-01-2024")
+        with pytest.raises(ToolFailure) as caught:
+            arxiv_search("test", from_date="01-01-2024")
 
-        assert "invalid from_date" in result
+        assert caught.value.error.type == "validation_error"
+        assert "invalid from_date" in caught.value.error.message
         mock_urlopen.assert_not_called()
 
     @patch(HTTP_OPEN)
     def test_rejects_negative_start(self, mock_urlopen):
-        result = arxiv_search("test", start=-1)
+        with pytest.raises(ToolFailure) as caught:
+            arxiv_search("test", start=-1)
 
-        assert "start must be greater than or equal to 0" in result
+        assert caught.value.error.type == "validation_error"
+        assert "start must be greater than or equal to 0" in caught.value.error.message
         mock_urlopen.assert_not_called()
 
     @patch(HTTP_OPEN)
     def test_rejects_reversed_date_range(self, mock_urlopen):
-        result = arxiv_search("test", from_date="2024-02-01", to_date="2024-01-01")
+        with pytest.raises(ToolFailure) as caught:
+            arxiv_search("test", from_date="2024-02-01", to_date="2024-01-01")
 
-        assert "from_date must be before or equal to to_date" in result
+        assert caught.value.error.type == "validation_error"
+        assert "must be before or equal to to_date" in caught.value.error.message
         mock_urlopen.assert_not_called()
 
     @patch(HTTP_OPEN)
     def test_api_failure(self, mock_urlopen):
         mock_urlopen.side_effect = TimeoutError()
 
-        result = arxiv_search("test")
+        with pytest.raises(ToolFailure) as caught:
+            arxiv_search("test")
 
-        assert "timed out" in result.lower()
+        assert caught.value.error.type == "upstream"
+        assert caught.value.error.retryable
+        assert "timed out" in caught.value.error.message.lower()
 
     @patch(HTTP_OPEN)
     def test_parse_failure(self, mock_urlopen):
         mock_urlopen.return_value = respond("<not xml")
 
-        result = arxiv_search("test")
+        with pytest.raises(ToolFailure) as caught:
+            arxiv_search("test")
 
-        assert "could not parse" in result
+        assert caught.value.error.type == "upstream"
+        assert "could not parse" in caught.value.error.message
 
 
 class TestArxivPaper:
@@ -182,18 +215,23 @@ class TestArxivPaper:
 
     @patch(HTTP_OPEN)
     def test_invalid_id(self, mock_urlopen):
-        result = arxiv_paper("bad id")
+        with pytest.raises(ToolFailure) as caught:
+            arxiv_paper("bad id")
 
-        assert "invalid arXiv ID" in result
+        assert caught.value.error.type == "validation_error"
+        assert "invalid arXiv ID" in caught.value.error.message
         mock_urlopen.assert_not_called()
 
     @patch(HTTP_OPEN)
     def test_not_found(self, mock_urlopen):
         mock_urlopen.return_value = respond(_EMPTY_FEED)
 
-        result = arxiv_paper("2501.00000")
+        with pytest.raises(ToolFailure) as caught:
+            arxiv_paper("2501.00000")
 
-        assert "not found" in result
+        assert caught.value.error.type == "not_found"
+        assert "no arXiv paper with ID 2501.00000" in caught.value.error.message
+        assert "arxiv_search" in caught.value.error.message
 
 
 # What the API answered live, with HTTP 400, to a query it could not read (2026-09-30).
@@ -226,9 +264,11 @@ def test_a_query_arxiv_cannot_read_is_explained(mock_urlopen):
     # It read as "HTTP error 400: Bad Request".
     mock_urlopen.side_effect = http_error(400, "Bad Request", body=_ERROR_FEED)
 
-    assert arxiv_search("ti:(") == (
-        "arXiv search failed: HTTP error 400: Invalid query string: '( ( )'"
-    )
+    with pytest.raises(ToolFailure) as caught:
+        arxiv_search("ti:(")
+
+    assert caught.value.error.type == "upstream"
+    assert caught.value.error.message == "HTTP error 400: Invalid query string: '( ( )'"
 
 
 @patch(HTTP_OPEN)
@@ -241,6 +281,8 @@ def test_an_error_entry_is_the_error_not_a_paper(mock_urlopen):
         .replace("Invalid query string: '( ( )'", "incorrect id format for 1234.1234")
     )
 
-    assert arxiv_paper("1234.1234") == (
-        "arXiv paper lookup failed: incorrect id format for 1234.1234"
-    )
+    with pytest.raises(ToolFailure) as caught:
+        arxiv_paper("1234.1234")
+
+    assert caught.value.error.type == "upstream"
+    assert caught.value.error.message == "arXiv reported: incorrect id format for 1234.1234"

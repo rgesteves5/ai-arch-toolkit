@@ -35,8 +35,9 @@ Prefer the existing local style:
   three or more fields.
 - Core code is async-first. Sync wrappers are convenience surfaces over async
   implementations, not separate logic paths.
-- Toolkit tools return useful error strings instead of raising, so agents can
-  continue from the tool result.
+- A toolkit tool that cannot answer raises `ToolFailure` with its type and a
+  message the agent can act on; the executor returns it as a failed result, so
+  the agent continues.
 
 The repo should read as a typed toolkit, not as an object hierarchy for its own
 sake. Keep public contracts explicit and keep implementation helpers small.
@@ -134,7 +135,8 @@ Before adding or changing code, ask:
 - Can Ruff format this cleanly without manual alignment?
 - Does the docstring describe behavior and arguments without repeating types?
 - If this is a `@tool`, would an agent understand when and how to call it?
-- If this is a toolkit tool, does it return an error string instead of raising?
+- If this is a toolkit tool, does a failure raise a typed `ToolFailure` (and zero
+  results answer successfully)?
 - Are comments explaining invariants and edge cases rather than restating code?
 - Are tests placed near the matching subsystem and using the established
   fixtures/mocking style?

@@ -8,7 +8,8 @@ The tools are discovered from the modules of ``toolkit.tools`` (``pkgutil`` and
 2. its declared ``capability`` is what its code reaches (AST call graph), and nothing that reaches
    files, a shell or a Python evaluator lives outside ``dangerous``;
 3. hostile arguments never move a request off its module's hosts and base paths;
-4. it never raises, whatever the arguments or the response body;
+4. whatever the arguments or the response body, it answers with text or raises a typed
+   ``ToolFailure`` (T01, D42), never anything else;
 5. through the governed executor, its output stays within ``max_output_chars``.
 
 Sockets are blocked and the throttle never sleeps (``conftest.py``).
@@ -30,12 +31,18 @@ import urllib.request
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, get_args
 from urllib.parse import urlsplit
 
 import pytest
 
-from ai_arch_toolkit.core import ApprovalDecision, ToolCall, ToolGroup
+from ai_arch_toolkit.core import (
+    ApprovalDecision,
+    ToolCall,
+    ToolFailure,
+    ToolFailureType,
+    ToolGroup,
+)
 from ai_arch_toolkit.toolkit.tools import _http
 from ai_arch_toolkit.toolkit.tools._http import Api
 from tests.toolkit.http_fakes import respond
@@ -243,6 +250,8 @@ _BENIGN_BY_TOOL: dict[tuple[str, str], Any] = {
     ("wikidata_sparql", "query"): "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1",
     ("weather_units", "unit"): "celsius",
     ("distance_between", "unit"): "km",
+    ("clinical_trials_search", "query"): "asthma",
+    ("earthquake_search", "max_radius_km"): 100.0,
 }
 _TARGETED: dict[str, list[Any]] = {
     "pattern": ["(", "[", "", "/etc/*", "**", "***", "../*", "**/../**", "(?P<x>", "(a+)+$"],
@@ -345,7 +354,7 @@ def test_hostile_arguments_never_move_a_request_off_the_modules_apis(
     module = sys.modules[TOOLS[name].__module__]
 
     for _label, args in _plans(name):
-        TOOLS[name](**args)
+        _answer(name, args)
 
     for url in sent:
         segments = urlsplit(url).path.split("/")
@@ -353,20 +362,33 @@ def test_hostile_arguments_never_move_a_request_off_the_modules_apis(
         assert "." not in segments and ".." not in segments, url
 
 
-# --- 4. Never raises ---------------------------------------------------------------------------
+# --- 4. Text or a typed failure, nothing else -----------------------------------------------
+
+_FAILURE_TYPES = frozenset(get_args(ToolFailureType.__value__))
+
+
+def _answer(name: str, args: dict[str, Any]) -> str | ToolFailure:
+    """The tool's text, or the typed failure it raised; any other exception fails the test."""
+    try:
+        result = TOOLS[name](**args)
+    except ToolFailure as failure:
+        assert failure.error.type in _FAILURE_TYPES, failure.error
+        assert failure.error.message.strip(), failure.error
+        return failure
+    assert isinstance(result, str), result
+    return result
 
 
 @pytest.mark.timeout(60)
 @pytest.mark.parametrize("name", CALLED)
-def test_hostile_arguments_never_raise(
+def test_hostile_arguments_give_text_or_a_typed_failure(
     name: str, monkeypatch: pytest.MonkeyPatch, sandbox: Path
 ) -> None:
     # First with the network failing inside _http, then with the real opener and blocked sockets.
     for opener in (_offline([]), _http._open):
         monkeypatch.setattr(_http, "_open", opener)
         for label, args in _plans(name):
-            result = TOOLS[name](**args)
-            assert isinstance(result, str), (label, result)
+            assert isinstance(_answer(name, args), str | ToolFailure), label
 
 
 _BODIES: list[bytes | int] = [
@@ -389,8 +411,12 @@ _BODIES: list[bytes | int] = [
 ]
 
 
-def _answering(body: bytes | int) -> Callable[[urllib.request.Request, float], Any]:
+def _answering(
+    body: bytes | int, sent: list[str] | None = None
+) -> Callable[[urllib.request.Request, float], Any]:
     def open_(request: urllib.request.Request, timeout: float) -> Any:
+        if sent is not None:
+            sent.append(request.full_url)
         if isinstance(body, int):
             error_body = io.BytesIO(b"<html>" + b"x" * 5000)
             raise urllib.error.HTTPError(
@@ -402,13 +428,21 @@ def _answering(body: bytes | int) -> Callable[[urllib.request.Request, float], A
 
 
 @pytest.mark.parametrize("name", NETWORK)
-def test_hostile_response_bodies_never_raise(
+def test_hostile_response_bodies_give_text_or_a_typed_failure(
     name: str, monkeypatch: pytest.MonkeyPatch, sandbox: Path
 ) -> None:
+    module = sys.modules[TOOLS[name].__module__]
+    for api in (value for value in vars(module).values() if isinstance(value, Api)):
+        if api.key_env:  # a key the tool needs is there, so it sends its request
+            monkeypatch.setenv(api.key_env, "test-key")
     for body in _BODIES:
-        monkeypatch.setattr(_http, "_open", _answering(body))
-        result = TOOLS[name](**_benign(name))
-        assert isinstance(result, str), (body, result)
+        sent: list[str] = []
+        monkeypatch.setattr(_http, "_open", _answering(body, sent))
+        answer = _answer(name, _benign(name))
+        if sent and body in (500, 429):  # a source that fails or rate limits is no answer
+            assert isinstance(answer, ToolFailure), (body, answer)
+            expected = "rate_limited" if body == 429 else "upstream"
+            assert answer.error.type == expected, (body, answer.error)
 
 
 def _keys_read(module: ModuleType) -> list[str]:
@@ -444,14 +478,13 @@ def _shaped_bodies(keys: list[str]) -> list[bytes]:
 
 
 @pytest.mark.parametrize("name", NETWORK)
-def test_bodies_built_from_the_keys_a_module_reads_never_raise(
+def test_bodies_built_from_the_keys_a_module_reads_give_text_or_a_typed_failure(
     name: str, monkeypatch: pytest.MonkeyPatch, sandbox: Path
 ) -> None:
     # A tool that reads a response outside its _http parse boundary crashes on one of these.
     for body in _shaped_bodies(_keys_read(sys.modules[TOOLS[name].__module__])):
         monkeypatch.setattr(_http, "_open", _answering(body))
-        result = TOOLS[name](**_benign(name))
-        assert isinstance(result, str), (body[:200], result)
+        assert isinstance(_answer(name, _benign(name)), str | ToolFailure), body[:200]
 
 
 @pytest.mark.parametrize(
@@ -471,15 +504,20 @@ def test_computations_that_would_hold_the_gil_are_refused_at_once(
     # A long C call holds the GIL, so neither the executor's timeout nor pytest-timeout can stop
     # it in this process: the guard must refuse it before it starts. A child process with a hard
     # deadline keeps a missing guard from hanging the suite.
-    code = f"from {PACKAGE} import {name}; print({name}(**{args!r}))"
+    code = (
+        "from ai_arch_toolkit.core import ToolFailure\n"
+        f"from {PACKAGE} import {name}\n"
+        "try:\n"
+        f"    print({name}(**{args!r}))\n"
+        "except ToolFailure as failure:\n"
+        "    print('refused:', failure.error.type)\n"
+    )
     completed = subprocess.run(
         [sys.executable, "-c", code], capture_output=True, text=True, timeout=10, check=False
     )
 
     assert completed.returncode == 0, completed.stderr
-    assert completed.stdout.startswith(("Error", "Invalid regex", "Pattern refused")), (
-        completed.stdout
-    )
+    assert completed.stdout.startswith("refused: validation_error"), completed.stdout
 
 
 # --- 5. Bounded output -------------------------------------------------------------------------

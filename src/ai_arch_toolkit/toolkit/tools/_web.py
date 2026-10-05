@@ -6,7 +6,7 @@ import html.parser
 from io import StringIO
 
 from ai_arch_toolkit.core import tool
-from ai_arch_toolkit.toolkit.tools._http import HttpError, Page, fetch_page
+from ai_arch_toolkit.toolkit.tools._http import Page, fetch_page
 
 _DEFAULT_MAX_CHARS = 8000
 _MAX_CHARS_LIMIT = 100_000
@@ -71,12 +71,13 @@ def http_get(url: str, max_chars: int = _DEFAULT_MAX_CHARS) -> str:
     Args:
         url: The URL to fetch (http:// or https://). Redirects stay on its host.
         max_chars: Maximum characters to return (1-100000). Defaults to 8000.
+
+    Raises:
+        ToolFailure: validation_error when the URL is not http(s) or carries credentials;
+            upstream or rate_limited when the request fails.
     """
     max_chars = _clamp(max_chars)
-    try:
-        page = fetch_page(url, max_bytes=max_chars * _BYTES_PER_CHAR)
-    except HttpError as e:
-        return str(e)
+    page = fetch_page(url, max_bytes=max_chars * _BYTES_PER_CHAR)
     return _cut(page.text, max_chars, page)
 
 
@@ -92,12 +93,13 @@ def scrape_text(url: str, max_chars: int = _DEFAULT_MAX_CHARS) -> str:
     Args:
         url: The URL to fetch (http:// or https://). Redirects stay on its host.
         max_chars: Maximum characters to return (1-100000). Defaults to 8000.
+
+    Raises:
+        ToolFailure: validation_error when the URL is not http(s) or carries credentials;
+            upstream or rate_limited when the request fails.
     """
     max_chars = _clamp(max_chars)
-    try:
-        page = fetch_page(url, max_bytes=_SCRAPE_MAX_BYTES)
-    except HttpError as e:
-        return str(e)
+    page = fetch_page(url, max_bytes=_SCRAPE_MAX_BYTES)
     extractor = _HTMLTextExtractor()
     extractor.feed(page.text)
     return _cut(extractor.get_text(), max_chars, page)

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
 _API = Api(base="https://openlibrary.org", name="Open Library")
@@ -61,13 +62,20 @@ def open_library_search(
         author: Optional author-specific search.
         subject: Optional subject-specific search.
         isbn: Optional ISBN-specific search.
+
+    Raises:
+        ToolFailure: validation_error when ``start`` is negative or no search field is given.
     """
     if start < 0:
-        return "Open Library search failed: start must be greater than or equal to 0."
+        raise ToolFailure(
+            "validation_error", f"start must be greater than or equal to 0, not {start}"
+        )
     fields = {"q": query, "title": title, "author": author, "subject": subject, "isbn": isbn}
     filters = {key: value.strip() for key, value in fields.items() if value.strip()}
     if not filters:
-        return "Open Library search failed: provide query, title, author, subject, or isbn."
+        raise ToolFailure(
+            "validation_error", "nothing to search; provide query, title, author, subject, or isbn"
+        )
 
     max_results = max(1, min(max_results, _MAX_RESULTS_LIMIT))
     params = {
@@ -76,10 +84,7 @@ def open_library_search(
         **filters,
     }
 
-    try:
-        books = _API.get_json("search.json", params=params, parse=_search_books)
-    except HttpError as e:
-        return f"Open Library search failed: {e}"
+    books = _API.get_json("search.json", params=params, parse=_search_books)
 
     if not books:
         return "No Open Library results found."
@@ -93,20 +98,25 @@ def open_library_work(work_id: str) -> str:
 
     Args:
         work_id: Open Library work ID or URL, e.g. "OL27448W" or "/works/OL27448W".
+
+    Raises:
+        ToolFailure: validation_error when ``work_id`` is not a work ID; not_found when Open
+            Library has no such work, or deleted it.
     """
     normalized = _normalize_work_id(work_id)
     if not normalized:
-        return f"Open Library work lookup failed: invalid work_id: {work_id!r}"
+        raise ToolFailure(
+            "validation_error",
+            f"invalid work_id {work_id!r}; a work ID looks like OL27448W "
+            "(open_library_search returns them)",
+        )
 
-    try:
-        book = _record("works", normalized, _parse_work)
-    except HttpError as e:
-        if e.status == 404:
-            return f"Open Library work not found: {normalized}"
-        return f"Open Library work lookup failed: {e}"
-
-    if book is None:
-        return f"Open Library work not found: {normalized}"
+    book = _record(
+        "works",
+        normalized,
+        _parse_work,
+        missing=f"Open Library has no work {normalized}; find works with open_library_search",
+    )
 
     heading = normalized
     if book.key.startswith("/works/") and book.key != f"/works/{normalized}":
@@ -124,20 +134,28 @@ def open_library_isbn(isbn: str) -> str:
 
     Args:
         isbn: ISBN-10 or ISBN-13 string.
+
+    Raises:
+        ToolFailure: validation_error when ``isbn`` is not an ISBN-10 or ISBN-13; not_found
+            when Open Library has no edition with it, or deleted it.
     """
     normalized = _normalize_isbn(isbn)
     if not normalized:
-        return f"Open Library ISBN lookup failed: invalid ISBN: {isbn!r}"
+        raise ToolFailure(
+            "validation_error",
+            f"invalid ISBN {isbn!r}; an ISBN has 10 characters (digits, the last may be X) "
+            "or 13 digits",
+        )
 
-    try:
-        book = _record("isbn", normalized, _parse_isbn)
-    except HttpError as e:
-        if e.status == 404:
-            return f"Open Library ISBN not found: {normalized}"
-        return f"Open Library ISBN lookup failed: {e}"
-
-    if book is None:
-        return f"Open Library ISBN not found: {normalized}"
+    book = _record(
+        "isbn",
+        normalized,
+        _parse_isbn,
+        missing=(
+            f"Open Library has no edition with ISBN {normalized}; find books with "
+            "open_library_search"
+        ),
+    )
 
     return f"Open Library ISBN {normalized}:\n" + _format_books(
         [book],
@@ -154,21 +172,38 @@ class _Merged:
 
 
 def _record(
-    section: str, identifier: str, parse: Callable[[dict[str, Any]], _OpenLibraryBook | None]
-) -> _OpenLibraryBook | None:
+    section: str,
+    identifier: str,
+    parse: Callable[[dict[str, Any]], _OpenLibraryBook | None],
+    *,
+    missing: str,
+) -> _OpenLibraryBook:
     """The record at ``/{section}/{identifier}.json``, followed through merges.
 
     Open Library keeps a merged record as a ``/type/redirect`` to the one it went into, and a
     deleted one as ``/type/delete`` (https://openlibrary.org/type/redirect), both with HTTP 200
     (seen 2026-09-30); read as books, they had no title.
+
+    Raises:
+        ToolFailure: not_found, saying ``missing``, for a 404 or a record without a title or
+            key; not_found for a deleted record; upstream for a chain of too many redirects.
     """
     segments = (section, f"{identifier}.json")
     for _ in range(_MAX_REDIRECTS + 1):
-        record = _API.get_json(*segments, parse=lambda data: _live_record(data, parse))
+        try:
+            record = _API.get_json(*segments, parse=lambda data: _live_record(data, parse))
+        except HttpError as e:
+            if e.status == 404:
+                raise ToolFailure("not_found", missing) from e
+            raise
+        if record is None:
+            raise ToolFailure("not_found", missing)
         if not isinstance(record, _Merged):
             return record
         segments = record.segments
-    raise HttpError(f"more than {_MAX_REDIRECTS} redirects between Open Library records")
+    raise ToolFailure(
+        "upstream", f"more than {_MAX_REDIRECTS} redirects between Open Library records"
+    )
 
 
 def _live_record(
@@ -176,12 +211,18 @@ def _live_record(
 ) -> _OpenLibraryBook | _Merged | None:
     kind = _string(data.get("type", {}).get("key"))
     if kind == "/type/delete":
-        raise HttpError(f"{_string(data.get('key')) or 'the record'} was deleted")
+        raise ToolFailure(
+            "not_found",
+            f"Open Library deleted {_string(data.get('key')) or 'the record'}; "
+            "find another with open_library_search",
+        )
     if kind != "/type/redirect":
         return parse(data)
     target = _RECORD_KEY_RE.fullmatch(_string(data.get("location")))
     if target is None:
-        raise HttpError("could not parse API response: a redirect without a record to go to")
+        raise ToolFailure(
+            "upstream", "could not parse API response: a redirect without a record to go to"
+        )
     return _Merged((target.group(1), f"{target.group(2)}.json"))
 
 

@@ -5,12 +5,15 @@ from __future__ import annotations
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
+import pytest
+
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._earthquake import (
     earthquake_count,
     earthquake_event,
     earthquake_search,
 )
-from tests.toolkit.http_fakes import HTTP_OPEN, respond
+from tests.toolkit.http_fakes import HTTP_OPEN, http_error, respond
 
 _FEATURE = {
     "type": "Feature",
@@ -49,9 +52,60 @@ class TestEarthquake:
         mock_urlopen.return_value = respond("42")
         assert earthquake_count(start_time="2024-01-01") == "USGS earthquake count: 42"
 
+    @pytest.mark.parametrize(
+        ("call", "words"),
+        [
+            (lambda: earthquake_search(start_time="2024"), "invalid start_time '2024'"),
+            (lambda: earthquake_search(offset=0), "offset must be greater than or equal to 1"),
+            (lambda: earthquake_search(order_by="size"), "invalid order_by 'size'"),
+            (lambda: earthquake_search(latitude=10.0), "must be provided together"),
+            (
+                lambda: earthquake_search(latitude=91.0, longitude=0.0, max_radius_km=10.0),
+                "latitude must be between -90 and 90",
+            ),
+            (lambda: earthquake_event("bad/id"), "invalid event_id 'bad/id'"),
+            (
+                lambda: earthquake_count(min_magnitude=6.0, max_magnitude=5.0),
+                "must be less than or equal to max_magnitude",
+            ),
+            (
+                lambda: earthquake_count(start_time="2024-02-01", end_time="2024-01-01"),
+                "must be before or equal to end_time",
+            ),
+        ],
+    )
     @patch(HTTP_OPEN)
-    def test_invalid_options_do_not_call_api(self, mock_urlopen):
-        assert "invalid start_time" in earthquake_search(start_time="2024")
-        assert "offset must" in earthquake_search(offset=0)
-        assert "invalid event_id" in earthquake_event("bad/id")
+    def test_invalid_options_do_not_call_api(self, mock_urlopen, call, words):
+        with pytest.raises(ToolFailure) as caught:
+            call()
+
+        assert caught.value.error.type == "validation_error"
+        assert words in caught.value.error.message
         mock_urlopen.assert_not_called()
+
+    @patch(HTTP_OPEN)
+    def test_no_events_is_a_success(self, mock_urlopen):
+        mock_urlopen.return_value = respond({"metadata": {"count": 0}, "features": []})
+
+        assert earthquake_search() == "No USGS earthquakes found."
+
+    @patch(HTTP_OPEN)
+    def test_an_empty_event_answer_is_not_found(self, mock_urlopen):
+        mock_urlopen.return_value = respond({})
+
+        with pytest.raises(ToolFailure) as caught:
+            earthquake_event("us0")
+
+        assert caught.value.error.type == "not_found"
+        assert "USGS has no earthquake with ID us0" in caught.value.error.message
+        assert "earthquake_search" in caught.value.error.message
+
+    @patch(HTTP_OPEN)
+    def test_upstream_failure_propagates(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(503, "Service Unavailable")
+
+        with pytest.raises(ToolFailure) as caught:
+            earthquake_count()
+
+        assert caught.value.error.type == "upstream"
+        assert caught.value.error.retryable

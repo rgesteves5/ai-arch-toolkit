@@ -8,7 +8,8 @@ from datetime import date
 from typing import Any
 
 from ai_arch_toolkit.core import tool
-from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
+from ai_arch_toolkit.core._tools._result import ToolFailure
+from ai_arch_toolkit.toolkit.tools._http import Api
 
 # Spaced for NVD's rate limit on requests without an API key.
 _API = Api(
@@ -21,6 +22,7 @@ _MAX_RESULTS_LIMIT = 20
 _CVE_ID_RE = re.compile(r"^CVE-\d{4}-\d{4,}$", re.IGNORECASE)
 _SEVERITIES = {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
 _DESCRIPTION_MAX_CHARS = 900
+_CVE_ID_FORM = "a CVE ID looks like CVE-2021-44228"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -61,27 +63,28 @@ def nvd_cve_search(
         start: Zero-based result offset. Defaults to 0.
         pub_start_date: Optional publication date lower bound as YYYY-MM-DD.
         pub_end_date: Optional publication date upper bound as YYYY-MM-DD.
+
+    Raises:
+        ToolFailure: validation_error when an argument is invalid or no filter is given.
     """
     if start < 0:
-        return "NVD CVE search failed: start must be greater than or equal to 0."
+        raise ToolFailure(
+            "validation_error", f"start must be greater than or equal to 0, not {start}"
+        )
     filters = _search_filters(query, cve_id, cpe_name, cvss_severity)
-    if isinstance(filters, str):
-        return filters
     date_params = _date_params(pub_start_date, pub_end_date)
-    if isinstance(date_params, str):
-        return date_params
     if not filters:
-        return "NVD CVE search failed: provide query, cve_id, cpe_name, or cvss_severity."
+        raise ToolFailure(
+            "validation_error",
+            "no filter given; provide query, cve_id, cpe_name, or cvss_severity",
+        )
     params = {
         "resultsPerPage": str(max(1, min(max_results, _MAX_RESULTS_LIMIT))),
         "startIndex": str(start),
         **filters,
         **date_params,
     }
-    try:
-        cves = _API.get_json(params=params, parse=_cves)
-    except HttpError as e:
-        return f"NVD CVE search failed: {e}"
+    cves = _API.get_json(params=params, parse=_cves)
 
     if not cves:
         return "No NVD CVEs found."
@@ -95,32 +98,51 @@ def nvd_cve(cve_id: str) -> str:
 
     Args:
         cve_id: CVE identifier, e.g. "CVE-2021-44228".
-    """
-    normalized = cve_id.strip().upper()
-    if not _CVE_ID_RE.fullmatch(normalized):
-        return f"NVD CVE lookup failed: invalid CVE ID: {cve_id!r}"
 
-    try:
-        cves = _API.get_json(params={"cveId": normalized}, parse=_cves)
-    except HttpError as e:
-        return f"NVD CVE lookup failed: {e}"
+    Raises:
+        ToolFailure: validation_error when ``cve_id`` is not a CVE ID; not_found when NVD has no
+            such CVE.
+    """
+    normalized = _cve_id(cve_id)
+    if not normalized:
+        raise ToolFailure("validation_error", f"cve_id cannot be empty; {_CVE_ID_FORM}")
+
+    cves = _API.get_json(params={"cveId": normalized}, parse=_cves)
 
     if not cves:
-        return f"NVD CVE not found: {normalized}"
+        raise ToolFailure(
+            "not_found",
+            f"NVD has no CVE {normalized}; check the ID, or search by keyword with nvd_cve_search",
+        )
 
     return f"NVD CVE {normalized}:\n" + _format_cves(cves, include_index=False)
 
 
-def _search_filters(
-    query: str, cve_id: str, cpe_name: str, cvss_severity: str
-) -> dict[str, str] | str:
-    """The search's filter parameters, or the error text for an invalid one."""
-    normalized_cve = cve_id.strip().upper()
-    if normalized_cve and not _CVE_ID_RE.fullmatch(normalized_cve):
-        return f"NVD CVE search failed: invalid CVE ID: {cve_id!r}"
+def _cve_id(cve_id: str) -> str:
+    """``cve_id`` normalized (upper case); empty for an empty one.
+
+    Raises:
+        ToolFailure: validation_error when ``cve_id`` is not a CVE ID.
+    """
+    normalized = cve_id.strip().upper()
+    if normalized and not _CVE_ID_RE.fullmatch(normalized):
+        raise ToolFailure("validation_error", f"invalid CVE ID {cve_id!r}; {_CVE_ID_FORM}")
+    return normalized
+
+
+def _search_filters(query: str, cve_id: str, cpe_name: str, cvss_severity: str) -> dict[str, str]:
+    """The search's filter parameters.
+
+    Raises:
+        ToolFailure: validation_error for an invalid CVE ID or severity.
+    """
+    normalized_cve = _cve_id(cve_id)
     severity = cvss_severity.strip().upper()
     if severity and severity not in _SEVERITIES:
-        return "NVD CVE search failed: cvss_severity must be LOW, MEDIUM, HIGH, or CRITICAL."
+        raise ToolFailure(
+            "validation_error",
+            f"invalid cvss_severity {cvss_severity!r}; use LOW, MEDIUM, HIGH, or CRITICAL",
+        )
     filters = {
         "keywordSearch": query.strip(),
         "cveId": normalized_cve,
@@ -136,21 +158,30 @@ def _cves(data: dict[str, Any]) -> list[_NvdCve]:
     return [cve for cve in cves if cve is not None]
 
 
-def _date_params(start: str, end: str) -> dict[str, str] | str:
+def _date_params(start: str, end: str) -> dict[str, str]:
+    """The publication date range's parameters; none without dates.
+
+    Raises:
+        ToolFailure: validation_error for a date missing, malformed, or out of order.
+    """
     start = start.strip()
     end = end.strip()
     if not start and not end:
         return {}
     if not start or not end:
-        return "NVD CVE search failed: pub_start_date and pub_end_date must be provided together."
+        raise ToolFailure(
+            "validation_error", "pub_start_date and pub_end_date must be provided together"
+        )
     start_date = _parse_date(start)
     end_date = _parse_date(end)
     if start_date is None:
-        return f"NVD CVE search failed: invalid pub_start_date {start!r}. Use YYYY-MM-DD."
+        raise ToolFailure("validation_error", f"invalid pub_start_date {start!r}; use YYYY-MM-DD")
     if end_date is None:
-        return f"NVD CVE search failed: invalid pub_end_date {end!r}. Use YYYY-MM-DD."
+        raise ToolFailure("validation_error", f"invalid pub_end_date {end!r}; use YYYY-MM-DD")
     if start_date > end_date:
-        return "NVD CVE search failed: pub_start_date must be before or equal to pub_end_date."
+        raise ToolFailure(
+            "validation_error", "pub_start_date must be before or equal to pub_end_date"
+        )
     return {
         "pubStartDate": f"{start_date:%Y-%m-%d}T00:00:00.000",
         "pubEndDate": f"{end_date:%Y-%m-%d}T23:59:59.999",

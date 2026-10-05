@@ -5,6 +5,9 @@ from __future__ import annotations
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
+import pytest
+
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._air_quality import (
     air_quality_current,
     air_quality_forecast,
@@ -54,13 +57,33 @@ class TestAirQualityCurrent:
         assert params["current"] == ["european_aqi,pm2_5"]
         assert params["timezone"] == ["auto"]
 
+    @pytest.mark.parametrize(
+        ("kwargs", "words"),
+        [
+            ({"latitude": -91, "longitude": 0}, "latitude must"),
+            ({"latitude": 0, "longitude": 181}, "longitude must"),
+            ({"latitude": 0, "longitude": 0, "variables": ""}, "variables cannot be empty"),
+            ({"latitude": 0, "longitude": 0, "variables": "bad"}, "invalid variables: bad"),
+        ],
+    )
     @patch(HTTP_OPEN)
-    def test_invalid_current_options_do_not_call_api(self, mock_urlopen):
-        assert "latitude must" in air_quality_current(-91, 0)
-        assert "longitude must" in air_quality_current(0, 181)
-        assert "variables cannot be empty" in air_quality_current(0, 0, variables="")
-        assert "invalid variables" in air_quality_current(0, 0, variables="bad")
+    def test_invalid_current_options_do_not_call_api(self, mock_urlopen, kwargs, words):
+        with pytest.raises(ToolFailure) as caught:
+            air_quality_current(**kwargs)
+
+        assert caught.value.error.type == "validation_error"
+        assert words in caught.value.error.message
         mock_urlopen.assert_not_called()
+
+    @patch(HTTP_OPEN)
+    def test_answer_without_current_values_is_upstream(self, mock_urlopen):
+        mock_urlopen.return_value = respond({"latitude": 0, "longitude": 0})
+
+        with pytest.raises(ToolFailure) as caught:
+            air_quality_current(0, 0)
+
+        assert caught.value.error.type == "upstream"
+        assert "without current values" in caught.value.error.message
 
 
 class TestAirQualityForecast:
@@ -89,17 +112,31 @@ class TestAirQualityForecast:
     @patch(HTTP_OPEN)
     def test_api_error_body(self, mock_urlopen):
         mock_urlopen.side_effect = http_error(
-            400, "Bad Request", body=b'{"reason": "invalid variable"}'
+            400, "Bad Request", body=b'{"error": true, "reason": "invalid variable"}'
         )
 
-        result = air_quality_forecast(0, 0)
+        with pytest.raises(ToolFailure) as caught:
+            air_quality_forecast(0, 0)
 
-        assert "HTTP error 400: invalid variable" in result
+        assert caught.value.error.type == "upstream"
+        assert "HTTP error 400: invalid variable" in caught.value.error.message
+
+    @patch(HTTP_OPEN)
+    def test_rate_limited(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(429, "Too Many Requests")
+
+        with pytest.raises(ToolFailure) as caught:
+            air_quality_forecast(0, 0)
+
+        assert caught.value.error.type == "rate_limited"
+        assert caught.value.error.retryable
 
     @patch(HTTP_OPEN)
     def test_parse_failure(self, mock_urlopen):
         mock_urlopen.return_value = respond("not json")
 
-        result = air_quality_current(0, 0)
+        with pytest.raises(ToolFailure) as caught:
+            air_quality_current(0, 0)
 
-        assert "could not parse" in result
+        assert caught.value.error.type == "upstream"
+        assert "could not parse" in caught.value.error.message

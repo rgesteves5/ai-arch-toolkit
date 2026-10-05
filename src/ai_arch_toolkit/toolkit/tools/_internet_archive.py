@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
 
@@ -62,12 +63,17 @@ def internet_archive_search(
         page: One-based result page. Defaults to 1.
         mediatype: Optional mediatype filter, e.g. texts, audio, movies, software.
         collection: Optional collection filter.
+
+    Raises:
+        ToolFailure: validation_error when ``query`` is empty or ``page`` is below 1.
     """
     query = query.strip()
     if not query:
-        return "Internet Archive search failed: query cannot be empty."
+        raise ToolFailure("validation_error", "query cannot be empty; pass the text to search")
     if page < 1:
-        return "Internet Archive search failed: page must be greater than or equal to 1."
+        raise ToolFailure(
+            "validation_error", f"page must be greater than or equal to 1, not {page}"
+        )
 
     filters = []
     if mediatype.strip():
@@ -96,12 +102,9 @@ def internet_archive_search(
         "output": "json",
     }
 
-    try:
-        return _API.get_json(
-            "advancedsearch.php", params=params, parse=lambda data: _search_text(data, query)
-        )
-    except HttpError as e:
-        return f"Internet Archive search failed: {e}"
+    return _API.get_json(
+        "advancedsearch.php", params=params, parse=lambda data: _search_text(data, query)
+    )
 
 
 @tool(capability="network")
@@ -110,19 +113,31 @@ def internet_archive_item(identifier: str) -> str:
 
     Args:
         identifier: Internet Archive item identifier.
+
+    Raises:
+        ToolFailure: validation_error when ``identifier`` is not an identifier; not_found when
+            the Internet Archive has no such item.
     """
     normalized = identifier.strip()
     if not _IDENTIFIER_RE.fullmatch(normalized):
-        return f"Internet Archive item lookup failed: invalid identifier: {identifier!r}"
+        raise ToolFailure(
+            "validation_error",
+            f"invalid identifier {identifier!r}; an identifier has only letters, digits and "
+            "_.- (internet_archive_search returns them)",
+        )
 
+    missing = (
+        f"no Internet Archive item {normalized!r}; find its identifier with "
+        "internet_archive_search"
+    )
     try:
         item = _API.get_json("metadata", normalized, parse=_parse_metadata_item)
     except HttpError as e:
         if e.status == 404:
-            return f"Internet Archive item not found: {normalized}"
-        return f"Internet Archive item lookup failed: {e}"
+            raise ToolFailure("not_found", missing) from e
+        raise
     if item is None:
-        return f"Internet Archive item not found: {normalized}"
+        raise ToolFailure("not_found", missing)
 
     return f"Internet Archive item {normalized}:\n" + _format_items(
         [item],

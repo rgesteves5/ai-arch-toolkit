@@ -8,8 +8,10 @@ from datetime import date
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
+# openFDA answers a search that matches nothing with HTTP 404 ("NOT_FOUND: No matches found!").
 _API = Api(
     base="https://api.fda.gov/food/enforcement.json",
     name="openFDA",
@@ -19,6 +21,7 @@ _API = Api(
 _MAX_RESULTS_LIMIT = 20
 _TEXT_RE = re.compile(r"^[\w\s,.'&()/%:+-]{1,160}$", re.UNICODE)
 _RECALL_RE = re.compile(r"^[A-Z]-\d{3,5}-\d{4}$", re.IGNORECASE)
+_NO_RECALLS = "No openFDA food recalls found."
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -70,17 +73,21 @@ def openfda_food_recall_search(
         to_date: Optional report date upper bound as YYYY-MM-DD.
         max_results: Number of recalls to return (1-20). Defaults to 10.
         skip: Zero-based result offset. Defaults to 0.
+
+    Raises:
+        ToolFailure: validation_error when ``skip`` is negative, a filter or a date is invalid,
+            or nothing is given to search.
     """
     if skip < 0:
-        return "openFDA food recall search failed: skip must be greater than or equal to 0."
+        raise ToolFailure(
+            "validation_error", f"skip must be greater than or equal to 0, not {skip}"
+        )
     search = _build_search(query, product, reason, classification, status, state, country)
-    if search.startswith("invalid"):
-        return f"openFDA food recall search failed: {search}"
     date_filter = _date_filter(from_date, to_date)
-    if date_filter.startswith("openFDA food recall search failed:"):
-        return date_filter
     if not search and not date_filter:
-        return "openFDA food recall search failed: provide query, filters, or date range."
+        raise ToolFailure(
+            "validation_error", "nothing to search; provide query, filters, or date range"
+        )
     if date_filter:
         search = f"({search}) AND {date_filter}" if search else date_filter
 
@@ -92,7 +99,9 @@ def openfda_food_recall_search(
     try:
         return _API.get_json(params=params, parse=_search_text)
     except HttpError as e:
-        return f"openFDA food recall search failed: {e}"
+        if e.status != 404:  # a 404 is a search that matched nothing
+            raise
+    return _NO_RECALLS
 
 
 @tool(capability="network")
@@ -101,21 +110,33 @@ def openfda_food_recall(recall_number: str) -> str:
 
     Args:
         recall_number: FDA recall number, e.g. "F-2473-2016".
+
+    Raises:
+        ToolFailure: validation_error when ``recall_number`` is not a recall number; not_found
+            when openFDA has no recall with it.
     """
     normalized = recall_number.strip().upper()
     if not _RECALL_RE.fullmatch(normalized):
-        return f"openFDA food recall lookup failed: invalid recall_number: {recall_number!r}"
+        raise ToolFailure(
+            "validation_error",
+            f"invalid recall_number {recall_number!r}; a recall number looks like F-2473-2016",
+        )
 
+    missing = (
+        f"openFDA has no food recall {normalized}; find recalls with openfda_food_recall_search"
+    )
     try:
         recalls = _API.get_json(
             params={"search": f'recall_number:"{normalized}"', "limit": "1"},
             parse=_recalls_from_data,
         )
     except HttpError as e:
-        return f"openFDA food recall lookup failed: {e}"
+        if e.status == 404:
+            raise ToolFailure("not_found", missing) from e
+        raise
 
     if not recalls:
-        return f"openFDA food recall not found: {normalized}"
+        raise ToolFailure("not_found", missing)
     return f"openFDA food recall {normalized}:\n" + _format_recalls(
         recalls,
         include_index=False,
@@ -126,7 +147,7 @@ def openfda_food_recall(recall_number: str) -> str:
 def _search_text(data: dict[str, Any]) -> str:
     recalls = _recalls_from_data(data)
     if not recalls:
-        return "No openFDA food recalls found."
+        return _NO_RECALLS
     total = _string(data.get("meta", {}).get("results", {}).get("total")) or "?"
     return f"openFDA food recalls (returned {len(recalls)}, total {total}):\n" + _format_recalls(
         recalls
@@ -142,34 +163,51 @@ def _build_search(
     state: str,
     country: str,
 ) -> str:
+    """The ``search`` expression of the text filters; empty without any.
+
+    Raises:
+        ToolFailure: validation_error for a filter with characters it cannot take.
+    """
     clauses: list[str] = []
     if query.strip():
         if not _valid_text(query):
-            return "invalid query."
+            raise _invalid_text("query")
         text = _escape(query.strip())
         clauses.append(
             f'(product_description:"{text}" OR '
             f'reason_for_recall:"{text}" OR '
             f'recalling_firm:"{text}")'
         )
-    for field, value in (
-        ("product_description", product),
-        ("reason_for_recall", reason),
-        ("classification.exact", classification),
-        ("status.exact", status),
-        ("state.exact", state),
-        ("country.exact", country),
+    for name, field, value in (
+        ("product", "product_description", product),
+        ("reason", "reason_for_recall", reason),
+        ("classification", "classification.exact", classification),
+        ("status", "status.exact", status),
+        ("state", "state.exact", state),
+        ("country", "country.exact", country),
     ):
         value = value.strip()
         if not value:
             continue
         if not _valid_text(value):
-            return f"invalid {field.removesuffix('.exact')}."
+            raise _invalid_text(name)
         clauses.append(f'{field}:"{_escape(value)}"')
     return " AND ".join(clauses)
 
 
+def _invalid_text(name: str) -> ToolFailure:
+    return ToolFailure(
+        "validation_error",
+        f"invalid {name}; use 1-160 letters, digits, spaces and basic punctuation (,.'&()/%:+-)",
+    )
+
+
 def _date_filter(from_date: str, to_date: str) -> str:
+    """The report date range's clause; empty without dates.
+
+    Raises:
+        ToolFailure: validation_error for a malformed date or a range out of order.
+    """
     start = from_date.strip()
     end = to_date.strip()
     if not start and not end:
@@ -177,13 +215,11 @@ def _date_filter(from_date: str, to_date: str) -> str:
     start_date = _parse_date(start) if start else None
     end_date = _parse_date(end) if end else None
     if start and start_date is None:
-        return (
-            f"openFDA food recall search failed: invalid from_date {from_date!r}. Use YYYY-MM-DD."
-        )
+        raise ToolFailure("validation_error", f"invalid from_date {from_date!r}; use YYYY-MM-DD")
     if end and end_date is None:
-        return f"openFDA food recall search failed: invalid to_date {to_date!r}. Use YYYY-MM-DD."
+        raise ToolFailure("validation_error", f"invalid to_date {to_date!r}; use YYYY-MM-DD")
     if start_date and end_date and start_date > end_date:
-        return "openFDA food recall search failed: from_date must be before or equal to to_date."
+        raise ToolFailure("validation_error", "from_date must be before or equal to to_date")
     start_text = f"{start_date:%Y%m%d}" if start_date else "19000101"
     end_text = f"{end_date:%Y%m%d}" if end_date else "29991231"
     return f"report_date:[{start_text} TO {end_text}]"

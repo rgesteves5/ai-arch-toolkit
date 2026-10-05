@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import re
 from datetime import date
-from typing import Any
+from typing import Any, NoReturn
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
 _API = Api(
@@ -23,10 +24,7 @@ _TEXT_RE = re.compile(r"^[\w\s,.'()/%:+-]{1,180}$", re.UNICODE)
 @tool(capability="network")
 def eonet_categories() -> str:
     """List NASA EONET event categories."""
-    try:
-        return _API.get_json("categories", parse=_categories_text)
-    except HttpError as e:
-        return f"NASA EONET categories failed: {e}"
+    return _API.get_json("categories", parse=_categories_text)
 
 
 @tool(capability="network")
@@ -51,19 +49,16 @@ def eonet_events(
         start_date: Optional start date as YYYY-MM-DD.
         end_date: Optional end date as YYYY-MM-DD.
         max_results: Number of events to return (1-50). Defaults to 10.
+
+    Raises:
+        ToolFailure: validation_error when an option is invalid.
     """
-    validation = _validate_events(category, status, source, bbox, days, start_date, end_date)
-    if validation:
-        return f"NASA EONET events failed: {validation}"
+    _validate_events(category, status, source, bbox, days, start_date, end_date)
     params = {"limit": str(_bounded(max_results)), "status": status.strip().lower()}
     filters = {"category": category.strip(), "source": source.strip(), "bbox": bbox.strip()}
     filters.update(_period(days, start_date, end_date))
     params.update({key: value for key, value in filters.items() if value})
-
-    try:
-        return _API.get_json("events", params=params, parse=_events_text)
-    except HttpError as e:
-        return f"NASA EONET events failed: {e}"
+    return _API.get_json("events", params=params, parse=_events_text)
 
 
 @tool(capability="network")
@@ -72,21 +67,27 @@ def eonet_event(event_id: str) -> str:
 
     Args:
         event_id: EONET event ID, e.g. "EONET_12345".
+
+    Raises:
+        ToolFailure: validation_error when ``event_id`` is malformed; upstream when EONET
+            fails, its HTTP 500 saying the ID may be unknown (EONET sends it for one).
     """
-    if not _ID_RE.fullmatch(event_id.strip()):
-        return f"NASA EONET event failed: invalid event_id: {event_id!r}"
+    event_id = event_id.strip()
+    if not _ID_RE.fullmatch(event_id):
+        msg = f"invalid event_id {event_id!r}; an EONET event ID looks like EONET_12345."
+        raise ToolFailure("validation_error", msg)
     try:
-        return _API.get_json(
-            "events", event_id.strip(), parse=lambda data: _event_text(data, event_id.strip())
-        )
+        return _API.get_json("events", event_id, parse=lambda data: _event_text(data, event_id))
     except HttpError as e:
+        # EONET answers an ID it does not know with a 500 page (seen 2026-09-30), so the 500 may
+        # be either; it stays an upstream failure (a 500 never reads as not_found).
         if e.status == 500:
-            # EONET answers an ID it does not know with a 500 page (seen 2026-09-30).
-            return (
-                f"NASA EONET event failed: {e} (EONET answers this for an event ID it does not "
-                "know; eonet_events lists the current IDs)"
+            msg = (
+                f"{e} (NASA EONET also answers this for an event ID it does not know: check "
+                f"{event_id!r} with eonet_events, which lists the current IDs, or try again later)"
             )
-        return f"NASA EONET event failed: {e}"
+            raise ToolFailure("upstream", msg, retryable=True, details={"status": 500}) from e
+        raise
 
 
 def _period(days: int, start_date: str, end_date: str) -> dict[str, str]:
@@ -124,7 +125,8 @@ def _events_text(data: dict[str, Any]) -> str:
 
 def _event_text(data: dict[str, Any], event_id: str) -> str:
     if not _string(data.get("id")):
-        raise HttpError("could not parse API response: no event in the answer")
+        msg = f"NASA EONET answered without an event for {event_id!r}."
+        raise ToolFailure("upstream", msg)
     lines = [f"NASA EONET event {event_id}:"]
     lines.extend(_format_event(data, index=None, details=True))
     return "\n".join(lines)
@@ -176,26 +178,29 @@ def _validate_events(
     days: int,
     start_date: str,
     end_date: str,
-) -> str:
+) -> None:
     if category and not _ID_RE.fullmatch(category.strip()):
-        return "invalid category."
+        _invalid(f"invalid category {category!r}; eonet_categories lists the category IDs.")
     if source and not _ID_RE.fullmatch(source.strip()):
-        return "invalid source."
+        _invalid(f"invalid source {source!r}; pass an EONET source ID such as InciWeb.")
     if status.strip().lower() not in {"open", "closed", "all"}:
-        return "status must be open, closed, or all."
+        _invalid(f"status must be open, closed, or all, got {status!r}.")
     if days < 1:
-        return "days must be greater than or equal to 1."
+        _invalid(f"days must be greater than or equal to 1, got {days}.")
     if bbox.strip() and not _valid_bbox(bbox):
-        return "bbox must be west,south,east,north."
+        _invalid(f"bbox must be west,south,east,north in degrees, got {bbox!r}.")
     start = _parse_date(start_date.strip()) if start_date.strip() else None
     end = _parse_date(end_date.strip()) if end_date.strip() else None
     if start_date.strip() and start is None:
-        return "invalid start_date. Use YYYY-MM-DD."
+        _invalid(f"invalid start_date {start_date!r}; use YYYY-MM-DD.")
     if end_date.strip() and end is None:
-        return "invalid end_date. Use YYYY-MM-DD."
+        _invalid(f"invalid end_date {end_date!r}; use YYYY-MM-DD.")
     if start and end and start > end:
-        return "start_date must be before or equal to end_date."
-    return ""
+        _invalid("start_date must be before or equal to end_date.")
+
+
+def _invalid(message: str) -> NoReturn:
+    raise ToolFailure("validation_error", message)
 
 
 def _valid_bbox(value: str) -> bool:

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
 _API = Api(base="https://clinicaltrials.gov/api/v2", name="ClinicalTrials.gov")
@@ -67,12 +68,13 @@ def clinical_trials_search(
         phase: Optional phase, e.g. "phase3", "phase 2", or "NA".
         max_results: Number of studies to return (1-20). Defaults to 5.
         page_token: Optional next_page_token from a previous result page.
+
+    Raises:
+        ToolFailure: validation_error when no search term or page token is given.
     """
     if not any(value.strip() for value in (query, condition, intervention, location, page_token)):
-        return (
-            "ClinicalTrials.gov search failed: provide query, condition, "
-            "intervention, or location."
-        )
+        msg = "provide query, condition, intervention, or location, e.g. condition='asthma'."
+        raise ToolFailure("validation_error", msg)
 
     max_results = max(1, min(max_results, _MAX_RESULTS_LIMIT))
     params = {
@@ -90,10 +92,7 @@ def clinical_trials_search(
     }
     params.update({key: value for key, value in filters.items() if value})
 
-    try:
-        return _API.get_json("studies", params=params, parse=_studies_text)
-    except HttpError as e:
-        return f"ClinicalTrials.gov search failed: {e}"
+    return _API.get_json("studies", params=params, parse=_studies_text)
 
 
 @tool(capability="network")
@@ -102,20 +101,30 @@ def clinical_trial_study(nct_id: str) -> str:
 
     Args:
         nct_id: ClinicalTrials.gov identifier, e.g. "NCT04280705".
+
+    Raises:
+        ToolFailure: validation_error when the NCT ID is malformed; not_found when
+            ClinicalTrials.gov has no study with it.
     """
     normalized = nct_id.strip().upper()
     if not _NCT_ID_RE.fullmatch(normalized):
-        return f"ClinicalTrials.gov study lookup failed: invalid NCT ID: {nct_id!r}"
+        msg = f"invalid NCT ID {nct_id!r}; an NCT ID is NCT and 8 digits, e.g. NCT04280705."
+        raise ToolFailure("validation_error", msg)
 
+    not_found = ToolFailure(
+        "not_found",
+        f"no ClinicalTrials.gov study with NCT ID {normalized}; "
+        "search with clinical_trials_search.",
+    )
     try:
         trial = _API.get_json("studies", normalized, params={"format": "json"}, parse=_parse_trial)
     except HttpError as e:
         if e.status == 404:
-            return f"ClinicalTrials.gov study not found: {normalized}"
-        return f"ClinicalTrials.gov study lookup failed: {e}"
+            raise not_found from e
+        raise
 
     if trial is None:
-        return f"ClinicalTrials.gov study not found: {normalized}"
+        raise not_found
 
     return f"ClinicalTrials.gov study {normalized}:\n" + _format_trials(
         [trial],

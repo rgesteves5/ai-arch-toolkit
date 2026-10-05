@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit import tools
 from ai_arch_toolkit.toolkit.tools._http import Api
 from ai_arch_toolkit.toolkit.tools._mediawiki import (
@@ -23,6 +24,12 @@ from tests.toolkit.http_fakes import HTTP_OPEN, http_error, respond
 _WIKIBOOKS = "https://en.wikibooks.org/w/api.php"
 _WIKTIONARY = "https://en.wiktionary.org/w/api.php"
 _BOOK_PAGE = {"title": "Creative Writing/Novels/Editing", "api_url": _WIKIBOOKS}
+
+
+def _failure(fn, *args, **kwargs) -> ToolFailure:
+    with pytest.raises(ToolFailure) as caught:
+        fn(*args, **kwargs)
+    return caught.value
 
 
 def _params(mock_urlopen):
@@ -85,8 +92,22 @@ class TestMediaWiki:
 
     @patch(HTTP_OPEN)
     def test_invalid_options_do_not_call_api(self, mock_urlopen):
-        assert "invalid api_url" in mediawiki_search("x", api_url="http://example.com/api.php")
-        assert "invalid term" in wiktionary_entry("bad<>")
+        bad_url = _failure(mediawiki_search, "x", api_url="http://example.com/api.php")
+        bad_term = _failure(wiktionary_entry, "bad<>")
+        bad_language = _failure(wiktionary_entry, "apple", language="Fran<ais")
+        bad_offset = _failure(mediawiki_search, "apple", offset=-1)
+        not_api_php = _failure(mediawiki_page, "apple", api_url="https://en.wikipedia.org/w/")
+
+        assert bad_url.error.type == "validation_error"
+        assert "invalid api_url" in bad_url.error.message
+        assert "https://en.wikipedia.org/w/api.php" in bad_url.error.message
+        assert bad_term.error.type == "validation_error"
+        assert "invalid term" in bad_term.error.message
+        assert bad_language.error.type == "validation_error"
+        assert "invalid language" in bad_language.error.message
+        assert bad_offset.error.type == "validation_error"
+        assert "offset" in bad_offset.error.message
+        assert not_api_php.error.type == "validation_error"
         mock_urlopen.assert_not_called()
 
 
@@ -94,23 +115,47 @@ class TestApiErrors:
     """MediaWiki answers errors with HTTP 200 and an ``error`` object instead of the result."""
 
     @pytest.mark.parametrize(
-        ("fn", "args", "endpoint", "failure"),
+        ("fn", "args", "endpoint", "message"),
         [
-            (mediawiki_page, _BOOK_PAGE, _WIKIBOOKS, "MediaWiki page"),
-            (mediawiki_sections, _BOOK_PAGE, _WIKIBOOKS, "MediaWiki sections"),
-            (wiktionary_entry, {"term": "zzqqxxnotaword"}, _WIKTIONARY, "Wiktionary entry"),
+            (
+                mediawiki_page,
+                _BOOK_PAGE,
+                _WIKIBOOKS,
+                "en.wikibooks.org has no page titled 'Creative Writing/Novels/Editing'",
+            ),
+            (
+                mediawiki_sections,
+                _BOOK_PAGE,
+                _WIKIBOOKS,
+                "en.wikibooks.org has no page titled 'Creative Writing/Novels/Editing'",
+            ),
+            (
+                wiktionary_entry,
+                {"term": "zzqqxxnotaword"},
+                _WIKTIONARY,
+                "en.wiktionary.org has no page titled 'zzqqxxnotaword'",
+            ),
         ],
     )
     @patch(HTTP_OPEN)
-    def test_a_missing_page_fails_with_the_apis_code_and_info(
-        self, mock_urlopen, fn, args, endpoint, failure
-    ):
+    def test_a_missing_page_is_not_found(self, mock_urlopen, fn, args, endpoint, message):
         mock_urlopen.return_value = respond(_MISSING_TITLE)
 
-        result = fn(**args)
+        failure = _failure(fn, **args)
 
-        assert result == f"{failure} failed: missingtitle: The page you specified doesn't exist."
+        assert failure.error.type == "not_found"
+        assert not failure.error.retryable
+        assert failure.error.message == f"{message}; find the title with mediawiki_search"
         assert mock_urlopen.call_args.args[0].full_url.startswith(f"{endpoint}?")
+
+    @patch(HTTP_OPEN)
+    def test_another_error_the_api_reports_is_upstream(self, mock_urlopen):
+        mock_urlopen.return_value = respond(_api_error("readonly", "Read-only mode."))
+
+        failure = _failure(mediawiki_page, "apple")
+
+        assert failure.error.type == "upstream"
+        assert str(failure) == "readonly: Read-only mode."
 
     @patch(HTTP_OPEN)
     def test_a_search_the_api_refuses_fails_instead_of_finding_nothing(self, mock_urlopen):
@@ -122,28 +167,29 @@ class TestApiErrors:
             )
         )
 
-        result = mediawiki_search("apple", offset=99999)
+        failure = _failure(mediawiki_search, "apple", offset=99999)
 
-        assert result.startswith(
-            "MediaWiki search failed: cirrussearch-offset-too-large: Could not retrieve results."
+        assert failure.error.type == "upstream"
+        assert str(failure).startswith(
+            "cirrussearch-offset-too-large: Could not retrieve results."
         )
 
-    @pytest.mark.parametrize(
-        ("fn", "failure"),
-        [
-            (mediawiki_page, "MediaWiki page"),
-            (mediawiki_sections, "MediaWiki sections"),
-            (wiktionary_entry, "Wiktionary entry"),
-        ],
-    )
+    @patch(HTTP_OPEN)
+    def test_a_search_with_no_hits_is_an_answer(self, mock_urlopen):
+        mock_urlopen.return_value = respond({"query": {"search": []}})
+
+        assert mediawiki_search("zzqqxx") == "No MediaWiki pages found."
+
+    @pytest.mark.parametrize("fn", [mediawiki_page, mediawiki_sections, wiktionary_entry])
     @pytest.mark.parametrize("body", [{"batchcomplete": ""}, {"parse": None}, {"parse": []}])
     @patch(HTTP_OPEN)
-    def test_a_parse_answer_without_a_parse_object_fails(self, mock_urlopen, body, fn, failure):
+    def test_a_parse_answer_without_a_parse_object_fails(self, mock_urlopen, body, fn):
         mock_urlopen.return_value = respond(body)
 
-        assert fn("apple") == (
-            f'{failure} failed: could not parse API response: no "parse" object'
-        )
+        failure = _failure(fn, "apple")
+
+        assert failure.error.type == "upstream"
+        assert str(failure) == 'could not parse API response: no "parse" object'
 
     @patch(HTTP_OPEN)
     def test_a_page_without_sections_still_says_so(self, mock_urlopen):
@@ -155,7 +201,19 @@ class TestApiErrors:
     def test_a_status_error_keeps_its_own_message(self, mock_urlopen):
         mock_urlopen.side_effect = http_error(404, "Not Found")
 
-        assert mediawiki_page("apple") == "MediaWiki page failed: no matching records found."
+        failure = _failure(mediawiki_page, "apple")
+
+        assert failure.error.type == "upstream"
+        assert str(failure) == "no matching records found."
+
+    @patch(HTTP_OPEN)
+    def test_a_rate_limit_is_rate_limited(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(429, "Too Many Requests")
+
+        failure = _failure(mediawiki_search, "apple")
+
+        assert failure.error.type == "rate_limited"
+        assert failure.error.retryable
 
     @pytest.mark.parametrize(
         ("data", "error"),
@@ -190,7 +248,9 @@ class TestApiErrors:
 @patch(HTTP_OPEN)
 def test_mediawiki_rejects_untrusted_hosts(mock_urlopen, fn, url):
     mock_urlopen.return_value = respond({})
-    assert "invalid api_url" in fn("apple", api_url=url)
+    failure = _failure(fn, "apple", api_url=url)
+    assert failure.error.type == "validation_error"
+    assert "invalid api_url" in failure.error.message
     mock_urlopen.assert_not_called()
 
 
@@ -219,3 +279,13 @@ def test_every_api_on_a_mediawiki_endpoint_reads_its_error_object():
         "_wikipedia._API",
     }
     assert {name for name, api in apis.items() if api.body_error is not mediawiki_error} == set()
+
+
+@patch(HTTP_OPEN)
+def test_an_invalid_title_is_a_validation_error(mock_urlopen):
+    mock_urlopen.return_value = respond(_api_error("invalidtitle", 'Bad title "Talk:".'))
+
+    failure = _failure(mediawiki_page, "Talk:")
+
+    assert failure.error.type == "validation_error"
+    assert "not a valid page title" in failure.error.message

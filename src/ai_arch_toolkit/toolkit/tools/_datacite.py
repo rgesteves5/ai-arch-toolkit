@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
 _API = Api(base="https://api.datacite.org/dois", name="DataCite", timeout_s=15)
@@ -44,12 +45,17 @@ def datacite_search(
         resource_type: Optional resourceTypeGeneral filter, e.g. Dataset, Software, Text.
         max_results: Number of DOI records to return (1-20). Defaults to 5.
         page: One-based result page. Defaults to 1.
+
+    Raises:
+        ToolFailure: validation_error when the query is empty or the page is below 1.
     """
     query = query.strip()
     if not query:
-        return "DataCite search failed: query cannot be empty."
+        msg = "query cannot be empty; pass metadata search text such as a title or creator."
+        raise ToolFailure("validation_error", msg)
     if page < 1:
-        return "DataCite search failed: page must be greater than or equal to 1."
+        msg = f"page must be greater than or equal to 1, got {page}."
+        raise ToolFailure("validation_error", msg)
 
     params = {
         "query": query,
@@ -59,11 +65,7 @@ def datacite_search(
     if resource_type.strip():
         params["resource-type-id"] = resource_type.strip().lower()
 
-    try:
-        dois = _API.get_json(params=params, parse=_records)
-    except HttpError as e:
-        return f"DataCite search failed: {e}"
-
+    dois = _API.get_json(params=params, parse=_records)
     if not dois:
         return f"No DataCite DOI records found for: {query!r}"
 
@@ -76,20 +78,30 @@ def datacite_doi(doi: str) -> str:
 
     Args:
         doi: DOI string or DOI URL.
+
+    Raises:
+        ToolFailure: validation_error when the DOI is malformed; not_found when DataCite has no
+            record of it.
     """
     normalized = _normalize_doi(doi)
     if not normalized:
-        return f"DataCite DOI lookup failed: invalid DOI: {doi!r}"
+        msg = f"invalid DOI {doi!r}; a DOI looks like 10.1000/xyz."
+        raise ToolFailure("validation_error", msg)
 
+    not_found = ToolFailure(
+        "not_found",
+        f"no DataCite record of DOI {normalized}; search with datacite_search, "
+        "or look the DOI up with crossref_work.",
+    )
     try:
         record = _API.get_json(normalized, parse=_record)
     except HttpError as e:
         if e.status == 404:
-            return f"DataCite DOI not found: {normalized}"
-        return f"DataCite DOI lookup failed: {e}"
+            raise not_found from e
+        raise
 
     if record is None:
-        return f"DataCite DOI not found: {normalized}"
+        raise not_found
 
     return f"DataCite DOI {normalized}:\n" + _format_dois(
         [record],

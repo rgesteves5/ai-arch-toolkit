@@ -61,3 +61,16 @@ def _make_tool_call(name: str, input: dict) -> object:
     from ai_arch_toolkit.core._response import ToolCall
 
     return ToolCall(id=f"call_{name}", name=name, input=input)
+
+
+class TestMissingNodes:
+    """A node that does not exist is a typed failure, not a string (T01)."""
+
+    async def test_exploring_or_forgetting_a_missing_node_is_not_found(self):
+        tools = memory_tools(GraphStore(NetworkXBackend()))
+        for name in ("explore_memory", "forget_memory"):
+            result = await tools.async_execute(_make_tool_call(name, {"node_id": "nope"}))
+
+            assert not result.ok and result.error is not None
+            assert result.error.type == "not_found"
+            assert "nope" in result.error.message and "recall" in result.error.message

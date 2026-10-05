@@ -6,6 +6,9 @@ import urllib.error
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
+import pytest
+
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._nvd import nvd_cve, nvd_cve_search
 from tests.toolkit.http_fakes import HTTP_OPEN, respond
 
@@ -26,6 +29,18 @@ _CVE = {
         "references": {"referenceData": [{"url": "https://example.test/advisory"}]},
     }
 }
+
+
+def _failure(fn, *args, **kwargs) -> ToolFailure:
+    with pytest.raises(ToolFailure) as caught:
+        fn(*args, **kwargs)
+    return caught.value
+
+
+def _invalid(fn, *args, **kwargs) -> str:
+    failure = _failure(fn, *args, **kwargs)
+    assert failure.error.type == "validation_error"
+    return failure.error.message
 
 
 def _called_params(mock_urlopen) -> dict[str, list[str]]:
@@ -63,15 +78,29 @@ class TestNvdCveSearch:
 
     @patch(HTTP_OPEN)
     def test_invalid_options_do_not_call_api(self, mock_urlopen):
-        assert "provide query" in nvd_cve_search()
-        assert "invalid CVE ID" in nvd_cve_search(cve_id="CVE-bad")
-        assert "cvss_severity" in nvd_cve_search(cvss_severity="URGENT")
-        assert "start must" in nvd_cve_search(query="x", start=-1)
-        assert "provided together" in nvd_cve_search(query="x", pub_start_date="2024-01-01")
-        assert "invalid pub_start_date" in nvd_cve_search(
-            query="x", pub_start_date="01-01-2024", pub_end_date="2024-02-01"
+        assert "provide query" in _invalid(nvd_cve_search)
+        assert "invalid CVE ID" in _invalid(nvd_cve_search, cve_id="CVE-bad")
+        assert "cvss_severity" in _invalid(nvd_cve_search, cvss_severity="URGENT")
+        assert "start must" in _invalid(nvd_cve_search, query="x", start=-1)
+        assert "provided together" in _invalid(
+            nvd_cve_search, query="x", pub_start_date="2024-01-01"
+        )
+        assert "invalid pub_start_date" in _invalid(
+            nvd_cve_search, query="x", pub_start_date="01-01-2024", pub_end_date="2024-02-01"
+        )
+        assert "invalid pub_end_date" in _invalid(
+            nvd_cve_search, query="x", pub_start_date="2024-01-01", pub_end_date="2024/02/01"
+        )
+        assert "before or equal" in _invalid(
+            nvd_cve_search, query="x", pub_start_date="2024-02-01", pub_end_date="2024-01-01"
         )
         mock_urlopen.assert_not_called()
+
+    @patch(HTTP_OPEN)
+    def test_no_cves_is_an_answer(self, mock_urlopen):
+        mock_urlopen.return_value = respond({"vulnerabilities": []})
+
+        assert nvd_cve_search(query="zzqqxx") == "No NVD CVEs found."
 
     @patch(HTTP_OPEN)
     def test_rate_limited(self, mock_urlopen):
@@ -83,9 +112,11 @@ class TestNvdCveSearch:
             fp=None,
         )
 
-        result = nvd_cve_search(query="test")
+        failure = _failure(nvd_cve_search, query="test")
 
-        assert "rate limited" in result
+        assert failure.error.type == "rate_limited"
+        assert failure.error.retryable
+        assert "rate limited" in str(failure)
 
 
 class TestNvdCve:
@@ -101,7 +132,17 @@ class TestNvdCve:
 
     @patch(HTTP_OPEN)
     def test_invalid_cve_id(self, mock_urlopen):
-        result = nvd_cve("bad")
-
-        assert "invalid CVE ID" in result
+        assert "invalid CVE ID" in _invalid(nvd_cve, "bad")
+        assert "cannot be empty" in _invalid(nvd_cve, " ")
         mock_urlopen.assert_not_called()
+
+    @patch(HTTP_OPEN)
+    def test_an_unknown_cve_is_not_found(self, mock_urlopen):
+        mock_urlopen.return_value = respond({"totalResults": 0, "vulnerabilities": []})
+
+        failure = _failure(nvd_cve, "CVE-1999-99999")
+
+        assert failure.error.type == "not_found"
+        assert failure.error.message == (
+            "NVD has no CVE CVE-1999-99999; check the ID, or search by keyword with nvd_cve_search"
+        )

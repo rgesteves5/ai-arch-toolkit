@@ -7,7 +7,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from ai_arch_toolkit.core import tool
-from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
+from ai_arch_toolkit.core._tools._result import ToolFailure
+from ai_arch_toolkit.toolkit.tools._http import Api
 
 _API = Api(base="https://www.ebi.ac.uk/ols4/api/search", name="EMBL-EBI OLS", timeout_s=15)
 _MAX_RESULTS_LIMIT = 20
@@ -36,20 +37,22 @@ def foodon_search(query: str, max_results: int = 10, start: int = 0) -> str:
         query: Food concept search text, e.g. "apple", "yogurt", or "fermented food".
         max_results: Number of terms to return (1-20). Defaults to 10.
         start: Zero-based result offset. Defaults to 0.
+
+    Raises:
+        ToolFailure: validation_error when ``query`` is empty or ``start`` is negative.
     """
     query = query.strip()
     if not query:
-        return "FoodOn search failed: query cannot be empty."
+        msg = "query cannot be empty; pass a food concept, e.g. 'apple'."
+        raise ToolFailure("validation_error", msg)
     if start < 0:
-        return "FoodOn search failed: start must be greater than or equal to 0."
+        msg = f"start must be greater than or equal to 0, got {start}."
+        raise ToolFailure("validation_error", msg)
 
-    try:
-        return _API.get_json(
-            params=_search_params(query, max_results=max_results, start=start),
-            parse=lambda data: _search_text(data, query, start),
-        )
-    except HttpError as e:
-        return f"FoodOn search failed: {e}"
+    return _API.get_json(
+        params=_search_params(query, max_results=max_results, start=start),
+        parse=lambda data: _search_text(data, query, start),
+    )
 
 
 @tool(capability="network")
@@ -58,18 +61,20 @@ def foodon_term(term_id: str) -> str:
 
     Args:
         term_id: FoodOn OBO ID, e.g. "FOODON:00002473" or "FOODON_00002473".
+
+    Raises:
+        ToolFailure: validation_error when ``term_id`` is not an OBO ID; not_found when OLS has
+            no FoodOn term with that ID.
     """
     normalized = term_id.strip().replace("_", ":").upper()
     if not _TERM_RE.fullmatch(term_id.strip()):
-        return f"FoodOn term lookup failed: invalid term_id: {term_id!r}"
+        msg = f"invalid term_id {term_id!r}; a FoodOn term ID looks like FOODON:00002473."
+        raise ToolFailure("validation_error", msg)
 
-    try:
-        return _API.get_json(
-            params=_search_params(normalized, max_results=5, start=0),
-            parse=lambda data: _term_text(data, normalized),
-        )
-    except HttpError as e:
-        return f"FoodOn term lookup failed: {e}"
+    return _API.get_json(
+        params=_search_params(normalized, max_results=5, start=0),
+        parse=lambda data: _term_text(data, normalized),
+    )
 
 
 def _search_params(query: str, *, max_results: int, start: int) -> dict[str, str]:
@@ -95,7 +100,8 @@ def _search_text(data: dict[str, Any], query: str, start: int) -> str:
 def _term_text(data: dict[str, Any], normalized: str) -> str:
     terms = [term for term in _terms_from_data(data) if term.obo_id.upper() == normalized]
     if not terms:
-        return f"FoodOn term not found: {normalized}"
+        msg = f"no FoodOn term with ID {normalized}; search with foodon_search."
+        raise ToolFailure("not_found", msg)
     return f"FoodOn term {normalized}:\n" + _format_terms(
         [terms[0]],
         include_index=False,

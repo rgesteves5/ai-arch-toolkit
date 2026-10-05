@@ -2,7 +2,19 @@
 
 from __future__ import annotations
 
+import pytest
+
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._python import python_repl
+
+
+def _refusal(code: str) -> str:
+    """The message of the validation_error python_repl raises for ``code``."""
+    with pytest.raises(ToolFailure) as caught:
+        python_repl(code)
+    assert caught.value.error.type == "validation_error"
+    return caught.value.error.message
+
 
 # ---------------------------------------------------------------------------
 # Output capture — REPL-style: print + last expression
@@ -302,10 +314,10 @@ class TestControlFlow:
 
     def test_break_blocked(self):
         # break/continue are not in the whitelist
-        assert "Error:" in python_repl("for x in [1, 2, 3]:\n  break")
+        assert _refusal("for x in [1, 2, 3]:\n  break")
 
     def test_continue_blocked(self):
-        assert "Error:" in python_repl("for x in [1, 2, 3]:\n  continue")
+        assert _refusal("for x in [1, 2, 3]:\n  continue")
 
 
 # ---------------------------------------------------------------------------
@@ -478,83 +490,92 @@ class TestPythonReplErrorCapture:
         assert result.startswith("Error:")
 
     def test_blocked_function(self):
-        result = python_repl("eval('1')")
-        assert "Error:" in result
+        assert "Blocked function: eval" in _refusal("eval('1')")
+
+    def test_an_unknown_name_is_the_programs_error_not_a_refusal(self):
+        assert python_repl("undefined_name + 1") == "Error: Unknown name: undefined_name"
+
+    def test_a_refusal_says_what_the_sandbox_runs_and_keeps_the_output(self):
+        with pytest.raises(ToolFailure) as caught:
+            python_repl('print("before")\nwhile True: pass')
+
+        assert caught.value.error.type == "validation_error"
+        assert "Unsupported statement: While" in caught.value.error.message
+        assert "safe subset of Python" in caught.value.error.message
+        assert caught.value.error.details == {"output": "before"}
 
 
 class TestSecurityBoundary:
-    """Each of these must NOT execute — they should return an error string."""
+    """Each of these must NOT execute — the sandbox refuses them with a validation_error."""
 
     def test_import_blocked(self):
-        assert "Error:" in python_repl("import os")
+        assert _refusal("import os")
 
     def test_from_import_blocked(self):
-        assert "Error:" in python_repl("from os import system")
+        assert _refusal("from os import system")
 
     def test_dunder_class_blocked(self):
-        assert "Error:" in python_repl("().__class__")
+        assert _refusal("().__class__")
 
     def test_dunder_dict_blocked(self):
-        result = python_repl("().__dict__")
-        assert "Error:" in result
+        assert "Blocked attribute" in _refusal("().__dict__")
 
     def test_eval_blocked(self):
-        assert "Error:" in python_repl("eval('2+2')")
+        assert _refusal("eval('2+2')")
 
     def test_exec_blocked(self):
-        assert "Error:" in python_repl("exec('x=1')")
+        assert _refusal("exec('x=1')")
 
     def test_compile_blocked(self):
-        assert "Error:" in python_repl("compile('1', '<>', 'eval')")
+        assert _refusal("compile('1', '<>', 'eval')")
 
     def test_open_blocked(self):
-        assert "Error:" in python_repl("open('/etc/passwd')")
+        assert _refusal("open('/etc/passwd')")
 
     def test_dunder_import_blocked(self):
-        assert "Error:" in python_repl("__import__('os')")
+        assert _refusal("__import__('os')")
 
     def test_globals_blocked(self):
-        assert "Error:" in python_repl("globals()")
+        assert _refusal("globals()")
 
     def test_locals_blocked(self):
-        assert "Error:" in python_repl("locals()")
+        assert _refusal("locals()")
 
     def test_getattr_blocked(self):
-        assert "Error:" in python_repl("getattr([], 'append')")
+        assert _refusal("getattr([], 'append')")
 
     def test_setattr_blocked(self):
-        assert "Error:" in python_repl("setattr([], 'x', 1)")
+        assert _refusal("setattr([], 'x', 1)")
 
     def test_fstring_blocked(self):
-        assert "Error:" in python_repl('x = 1\nf"{x}"')
+        assert _refusal('x = 1\nf"{x}"')
 
     def test_walrus_blocked(self):
-        assert "Error:" in python_repl("(x := 5)")
+        assert _refusal("(x := 5)")
 
     def test_while_loop_blocked(self):
-        assert "Error:" in python_repl("while True: pass")
+        assert _refusal("while True: pass")
 
     def test_function_def_blocked(self):
-        assert "Error:" in python_repl("def f(): return 1")
+        assert _refusal("def f(): return 1")
 
     def test_class_def_blocked(self):
-        assert "Error:" in python_repl("class C: pass")
+        assert _refusal("class C: pass")
 
     def test_lambda_blocked(self):
         # Lambda is rejected (function definition)
-        assert "Error:" in python_repl("(lambda x: x)(1)")
+        assert _refusal("(lambda x: x)(1)")
 
     def test_star_args_blocked(self):
-        assert "Error:" in python_repl("f(*[1, 2, 3])")
+        assert "Starred" in _refusal("print(*[1, 2, 3])")
 
     def test_unknown_builtin_blocked(self):
         # print is allowed; vars() is not
-        assert "Error:" in python_repl("vars()")
+        assert _refusal("vars()")
 
     def test_attribute_chain_to_unsafe(self):
         # Try to reach through a safe attribute to an unsafe one
-        result = python_repl("''.__class__.__mro__")
-        assert "Error:" in result
+        assert "Blocked attribute" in _refusal("''.__class__.__mro__")
 
 
 class TestPythonReplSemantics:
@@ -563,13 +584,13 @@ class TestPythonReplSemantics:
         assert python_repl("1 or 1 / 0") == "1"
 
     def test_dict_unpacking_is_refused_not_misread(self):
-        assert "not supported" in python_repl("a = {'x': 1}\n{**a}")
+        assert "not supported" in _refusal("a = {'x': 1}\n{**a}")
 
     def test_keyword_unpacking_is_refused_not_dropped(self):
-        assert "not supported" in python_repl("d = {'sep': '-'}\nprint(1, 2, **d)")
+        assert "not supported" in _refusal("d = {'sep': '-'}\nprint(1, 2, **d)")
 
     def test_an_augmented_power_has_the_same_exponent_guard(self):
-        assert "Exponent too large" in python_repl("x = 2\nx **= 5000\nx")
+        assert "Exponent too large" in _refusal("x = 2\nx **= 5000\nx")
 
     def test_deleting_what_cannot_be_deleted_is_refused_not_ignored(self):
-        assert "Unsupported delete target" in python_repl("s = 'a'\ndel s.upper")
+        assert "Unsupported delete target" in _refusal("s = 'a'\ndel s.upper")

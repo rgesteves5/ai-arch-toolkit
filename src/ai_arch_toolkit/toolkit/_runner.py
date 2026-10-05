@@ -89,7 +89,11 @@ async def run_tools(
             result = await tools.async_execute(tc)
         else:
             result = await async_execute_tool(tc, tools, approval_handler=approval_handler)
-        results.append(tool_result(_format_result(result), tool_use_id=tc.id, name=tc.name))
+        results.append(
+            tool_result(
+                _format_result(result), tool_use_id=tc.id, name=tc.name, is_error=not result.ok
+            )
+        )
     return results
 
 
@@ -128,5 +132,9 @@ def run_tools_sync(
             result = tools.execute(tc)
         else:
             result = execute_tool(tc, tools, approval_handler=approval_handler)
-        results.append(tool_result(_format_result(result), tool_use_id=tc.id, name=tc.name))
+        results.append(
+            tool_result(
+                _format_result(result), tool_use_id=tc.id, name=tc.name, is_error=not result.ok
+            )
+        )
     return results

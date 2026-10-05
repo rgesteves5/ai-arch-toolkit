@@ -7,7 +7,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from ai_arch_toolkit.core import tool
-from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
+from ai_arch_toolkit.core._tools._result import ToolFailure
+from ai_arch_toolkit.toolkit.tools._http import Api
 
 # Nominatim's usage policy allows one request per second:
 # https://operations.osmfoundation.org/policies/nominatim/
@@ -58,16 +59,22 @@ def osm_search_place(
         layer: Optional layer filter: address, poi, railway, natural, manmade, or comma-separated.
         accept_language: Preferred result language. Defaults to "en".
         include_extra_tags: Include selected OSM extra tags when available. Defaults to False.
+
+    Raises:
+        ToolFailure: validation_error when the query is empty, a country code or a layer is
+            invalid.
     """
     query = query.strip()
     if not query:
-        return "OSM place search failed: query cannot be empty."
+        raise ToolFailure("validation_error", "query cannot be empty; give a place or address.")
     country_codes = country_codes.strip().lower()
     if country_codes and not _COUNTRY_CODES_RE.fullmatch(country_codes):
-        return "OSM place search failed: country_codes must be comma-separated 2-letter codes."
+        raise ToolFailure(
+            "validation_error",
+            f"invalid country_codes {country_codes!r}; give comma-separated ISO 3166-1 alpha-2 "
+            "codes, e.g. 'pt,es'.",
+        )
     parsed_layers = _parse_layers(layer)
-    if isinstance(parsed_layers, str):
-        return f"OSM place search failed: {parsed_layers}"
 
     params = {
         "format": "jsonv2",
@@ -82,10 +89,7 @@ def osm_search_place(
     if parsed_layers:
         params["layer"] = ",".join(parsed_layers)
 
-    try:
-        places = _NOMINATIM.get_json_list("search", params=params, parse=_places)
-    except HttpError as e:
-        return f"OSM place search failed: {e}"
+    places = _NOMINATIM.get_json_list("search", params=params, parse=_places)
     if not places:
         return f"No OSM places found for: {query!r}"
     return f"OSM places for {query!r}:\n" + _format_places(places)
@@ -109,32 +113,28 @@ def osm_reverse_geocode(
         layer: Layer filter: address, poi, railway, natural, manmade, or comma-separated.
         accept_language: Preferred result language. Defaults to "en".
         include_extra_tags: Include selected OSM extra tags when available. Defaults to False.
+
+    Raises:
+        ToolFailure: validation_error when the coordinates are out of range or a layer is invalid.
     """
-    validation = _validate_location(latitude, longitude)
-    if validation:
-        return f"OSM reverse geocode failed: {validation}"
+    _validate_location(latitude, longitude)
     zoom = max(3, min(zoom, 18))
     parsed_layers = _parse_layers(layer)
-    if isinstance(parsed_layers, str):
-        return f"OSM reverse geocode failed: {parsed_layers}"
 
-    try:
-        place = _NOMINATIM.get_json(
-            "reverse",
-            parse=_parse_place,
-            params={
-                "format": "jsonv2",
-                "lat": str(latitude),
-                "lon": str(longitude),
-                "zoom": str(zoom),
-                "addressdetails": "1",
-                "extratags": "1" if include_extra_tags else "0",
-                "accept-language": accept_language.strip() or "en",
-                "layer": ",".join(parsed_layers),
-            },
-        )
-    except HttpError as e:
-        return f"OSM reverse geocode failed: {e}"
+    place = _NOMINATIM.get_json(
+        "reverse",
+        parse=_parse_place,
+        params={
+            "format": "jsonv2",
+            "lat": str(latitude),
+            "lon": str(longitude),
+            "zoom": str(zoom),
+            "addressdetails": "1",
+            "extratags": "1" if include_extra_tags else "0",
+            "accept-language": accept_language.strip() or "en",
+            "layer": ",".join(parsed_layers),
+        },
+    )
     if place is None:
         return f"No OSM reverse geocode result for: {latitude}, {longitude}"
     return f"OSM reverse geocode for {latitude}, {longitude}:\n" + _format_places(
@@ -195,22 +195,26 @@ def _format_places(places: list[_OsmPlace], *, include_index: bool = True) -> st
     return "\n\n".join(blocks)
 
 
-def _parse_layers(value: str) -> tuple[str, ...] | str:
+def _parse_layers(value: str) -> tuple[str, ...]:
     layers = tuple(
         dict.fromkeys(item.strip().lower() for item in value.split(",") if item.strip())
     )
     invalid = [layer for layer in layers if layer not in _LAYERS]
     if invalid:
-        return f"invalid layer(s): {', '.join(invalid)}"
+        raise ToolFailure(
+            "validation_error",
+            f"invalid layer(s): {', '.join(invalid)}; use {', '.join(sorted(_LAYERS))}.",
+        )
     return layers
 
 
-def _validate_location(latitude: float, longitude: float) -> str:
+def _validate_location(latitude: float, longitude: float) -> None:
     if not -90 <= latitude <= 90:
-        return "latitude must be between -90 and 90."
+        raise ToolFailure("validation_error", f"latitude {latitude} must be between -90 and 90.")
     if not -180 <= longitude <= 180:
-        return "longitude must be between -180 and 180."
-    return ""
+        raise ToolFailure(
+            "validation_error", f"longitude {longitude} must be between -180 and 180."
+        )
 
 
 def _address_parts(value: Any) -> tuple[str, ...]:

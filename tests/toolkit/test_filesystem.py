@@ -10,7 +10,14 @@ from pathlib import Path
 import pytest
 
 from ai_arch_toolkit.core import ApprovalDecision, ApprovalRequest, ToolCall, ToolGroup
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._filesystem import list_directory, read_file, search_files
+
+
+def _failure(call) -> ToolFailure:
+    with pytest.raises(ToolFailure) as caught:
+        call()
+    return caught.value
 
 
 class TestReadFile:
@@ -29,12 +36,24 @@ class TestReadFile:
         assert "500 total lines" in result
 
     def test_file_not_found(self):
-        result = read_file("/nonexistent/path/file.txt")
-        assert "not found" in result.lower()
+        failure = _failure(lambda: read_file("/nonexistent/path/file.txt"))
+        assert failure.error.type == "not_found"
+        assert "/nonexistent/path/file.txt" in str(failure)
 
     def test_directory_path(self, tmp_path):
-        result = read_file(str(tmp_path))
-        assert "Not a file" in result
+        failure = _failure(lambda: read_file(str(tmp_path)))
+        assert failure.error.type == "validation_error"
+        assert "not a regular file" in str(failure)
+
+    def test_permission_denied_is_upstream(self, monkeypatch):
+        def deny(*args, **kwargs):
+            raise PermissionError(errno.EACCES, "Permission denied")
+
+        monkeypatch.setattr(Path, "stat", deny)
+
+        failure = _failure(lambda: read_file("locked.txt"))
+        assert failure.error.type == "upstream"
+        assert "permission denied" in str(failure)
 
 
 class TestListDirectory:
@@ -56,14 +75,18 @@ class TestListDirectory:
         assert "b.txt" not in result
 
     def test_nonexistent_dir(self):
-        result = list_directory("/nonexistent/dir")
-        assert "not found" in result.lower()
+        failure = _failure(lambda: list_directory("/nonexistent/dir"))
+        assert failure.error.type == "not_found"
 
     def test_not_a_directory(self, tmp_path):
         f = tmp_path / "file.txt"
         f.write_text("x")
-        result = list_directory(str(f))
-        assert "Not a directory" in result
+        failure = _failure(lambda: list_directory(str(f)))
+        assert failure.error.type == "validation_error"
+        assert "not a directory" in str(failure)
+
+    def test_no_entries_is_a_success(self, tmp_path):
+        assert list_directory(str(tmp_path), "*.py") == f"No entries matching '*.py' in {tmp_path}"
 
 
 class TestSearchFiles:
@@ -90,8 +113,15 @@ class TestSearchFiles:
         assert "Stopped at 5" in result
 
     def test_nonexistent_dir(self):
-        result = search_files("/nonexistent", "pattern")
-        assert "not found" in result.lower()
+        failure = _failure(lambda: search_files("/nonexistent", "pattern"))
+        assert failure.error.type == "not_found"
+
+    def test_a_file_is_not_a_directory(self, tmp_path):
+        f = tmp_path / "file.txt"
+        f.write_text("x")
+        failure = _failure(lambda: search_files(str(f), "x"))
+        assert failure.error.type == "validation_error"
+        assert "not a directory" in str(failure)
 
 
 class TestReadFileGovernance:
@@ -150,19 +180,37 @@ class TestBounds:
         assert len(result) < 1_000
         assert result.endswith("[Stopped at 1 results]")
 
-    def test_an_os_error_is_an_error_string(self, monkeypatch):
+    def test_a_malformed_path_is_a_validation_error(self, monkeypatch):
         def fail_stat(*args, **kwargs):
             raise OSError(errno.ENAMETOOLONG, "File name too long")
 
         monkeypatch.setattr(Path, "stat", fail_stat)
 
-        assert read_file("too-long").startswith("Cannot read")
-        assert list_directory("too-long").startswith("Cannot list")
-        assert search_files("too-long", "x").startswith("Cannot search")
+        for call, action in (
+            (lambda: read_file("too-long"), "cannot read"),
+            (lambda: list_directory("too-long"), "cannot list"),
+            (lambda: search_files("too-long", "x"), "cannot search"),
+        ):
+            failure = _failure(call)
+            assert failure.error.type == "validation_error"
+            assert str(failure).startswith(action)
+            assert "File name too long" in str(failure)
+
+    def test_another_os_error_is_upstream(self, monkeypatch):
+        def fail_stat(*args, **kwargs):
+            raise OSError(errno.EIO, "Input/output error")
+
+        monkeypatch.setattr(Path, "stat", fail_stat)
+
+        failure = _failure(lambda: read_file("disk.txt"))
+        assert failure.error.type == "upstream"
+        assert "Input/output error" in str(failure)
 
     @pytest.mark.parametrize("pattern", ["", "/etc/*"])
-    def test_an_unusable_pattern_is_an_error_string(self, tmp_path, pattern):
-        assert list_directory(str(tmp_path), pattern).startswith("Invalid pattern")
+    def test_an_unusable_pattern_is_a_validation_error(self, tmp_path, pattern):
+        failure = _failure(lambda: list_directory(str(tmp_path), pattern))
+        assert failure.error.type == "validation_error"
+        assert str(failure).startswith("invalid pattern")
 
 
 def test_search_skips_binary_files(tmp_path):

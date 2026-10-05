@@ -6,12 +6,21 @@ import urllib.error
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
+import pytest
+
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._wikidata import (
     wikidata_entity,
     wikidata_search,
     wikidata_sparql,
 )
-from tests.toolkit.http_fakes import HTTP_OPEN, respond
+from tests.toolkit.http_fakes import HTTP_OPEN, http_error, respond
+
+
+def _failure(call):
+    with pytest.raises(ToolFailure) as caught:
+        call()
+    return caught.value.error
 
 
 def _called_request(mock_urlopen):
@@ -53,19 +62,36 @@ class TestWikidataSearch:
         assert params["search"] == ["Douglas Adams"]
         assert params["limit"] == ["2"]
 
+    @pytest.mark.parametrize(
+        ("call", "words"),
+        [
+            (lambda: wikidata_search(""), "empty query"),
+            (lambda: wikidata_search("test", language="../en"), "invalid language '../en'"),
+            (lambda: wikidata_entity("Q42", language="../en"), "invalid language '../en'"),
+        ],
+    )
     @patch(HTTP_OPEN)
-    def test_invalid_options_do_not_call_api(self, mock_urlopen):
-        assert "query cannot be empty" in wikidata_search("")
-        assert "invalid language" in wikidata_search("test", language="../en")
+    def test_invalid_options_do_not_call_api(self, mock_urlopen, call, words):
+        error = _failure(call)
+
+        assert error.type == "validation_error"
+        assert words in error.message
         mock_urlopen.assert_not_called()
+
+    @patch(HTTP_OPEN)
+    def test_no_results_is_a_success(self, mock_urlopen):
+        mock_urlopen.return_value = respond({"search": []})
+
+        assert wikidata_search("zzzz") == "No Wikidata results for: 'zzzz'"
 
     @patch(HTTP_OPEN)
     def test_parse_failure(self, mock_urlopen):
         mock_urlopen.return_value = respond(b"not json")
 
-        result = wikidata_search("test")
+        error = _failure(lambda: wikidata_search("test"))
 
-        assert "could not parse" in result
+        assert error.type == "upstream"
+        assert "could not parse" in error.message
 
     @patch(HTTP_OPEN)
     def test_an_error_the_api_reports_is_the_tools_error(self, mock_urlopen):
@@ -81,11 +107,10 @@ class TestWikidataSearch:
             }
         )
 
-        result = wikidata_search("apple", language="xx")
+        error = _failure(lambda: wikidata_search("apple", language="xx"))
 
-        assert result == (
-            'Wikidata search failed: badvalue: Unrecognized value for parameter "language": xx.'
-        )
+        assert error.type == "upstream"
+        assert error.message == 'badvalue: Unrecognized value for parameter "language": xx.'
 
 
 class TestWikidataEntity:
@@ -124,10 +149,36 @@ class TestWikidataEntity:
 
     @patch(HTTP_OPEN)
     def test_invalid_qid(self, mock_urlopen):
-        result = wikidata_entity("P31")
+        error = _failure(lambda: wikidata_entity("P31"))
 
-        assert "invalid QID" in result
+        assert error.type == "validation_error"
+        assert "invalid QID 'P31'" in error.message
         mock_urlopen.assert_not_called()
+
+    @patch(HTTP_OPEN)
+    def test_a_missing_entity_is_not_found(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(404, "Not Found")
+
+        error = _failure(lambda: wikidata_entity("Q999999999999"))
+
+        assert error.type == "not_found"
+        assert "no entity Q999999999999" in error.message
+        assert "wikidata_search" in error.message
+
+    @patch(HTTP_OPEN)
+    def test_an_entity_marked_missing_is_not_found(self, mock_urlopen):
+        mock_urlopen.return_value = respond({"entities": {"Q1": {"id": "Q1", "missing": ""}}})
+
+        assert _failure(lambda: wikidata_entity("Q1")).type == "not_found"
+
+    @patch(HTTP_OPEN)
+    def test_other_statuses_stay_upstream(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(500, "Server Error")
+
+        error = _failure(lambda: wikidata_entity("Q42"))
+
+        assert error.type == "upstream"
+        assert error.retryable
 
 
 class TestWikidataSparql:
@@ -166,13 +217,37 @@ class TestWikidataSparql:
 
     @patch(HTTP_OPEN)
     def test_rejects_unsafe_query(self, mock_urlopen):
-        result = wikidata_sparql("DELETE WHERE { ?s ?p ?o }")
+        error = _failure(lambda: wikidata_sparql("DELETE WHERE { ?s ?p ?o }"))
 
-        assert "read-only" in result
+        assert error.type == "validation_error"
+        assert "read-only" in error.message
+        mock_urlopen.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("query", "words"), [("", "empty query"), ("DESCRIBE wd:Q42", "SELECT or ASK")]
+    )
+    @patch(HTTP_OPEN)
+    def test_rejects_other_invalid_queries(self, mock_urlopen, query, words):
+        error = _failure(lambda: wikidata_sparql(query))
+
+        assert error.type == "validation_error"
+        assert words in error.message
         mock_urlopen.assert_not_called()
 
     @patch(HTTP_OPEN)
-    def test_not_found(self, mock_urlopen):
+    def test_no_rows_is_a_success(self, mock_urlopen):
+        mock_urlopen.return_value = respond({"head": {"vars": ["x"]}, "results": {"bindings": []}})
+
+        assert wikidata_sparql("SELECT ?x WHERE { }") == "Wikidata SPARQL returned no rows."
+
+    @patch(HTTP_OPEN)
+    def test_an_unexpected_answer_is_upstream(self, mock_urlopen):
+        mock_urlopen.return_value = respond({"head": {}, "results": {"bindings": {}}})
+
+        assert _failure(lambda: wikidata_sparql("SELECT ?x WHERE { }")).type == "upstream"
+
+    @patch(HTTP_OPEN)
+    def test_rate_limited(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.HTTPError(
             url="https://query.wikidata.org/sparql",
             code=429,
@@ -181,9 +256,10 @@ class TestWikidataSparql:
             fp=None,
         )
 
-        result = wikidata_sparql("ASK { wd:Q42 wdt:P31 wd:Q5 . }")
+        error = _failure(lambda: wikidata_sparql("ASK { wd:Q42 wdt:P31 wd:Q5 . }"))
 
-        assert "rate limited by Wikidata Query Service (HTTP 429)" in result
+        assert error.type == "rate_limited"
+        assert "rate limited by Wikidata Query Service (HTTP 429)" in error.message
 
 
 @patch(HTTP_OPEN)

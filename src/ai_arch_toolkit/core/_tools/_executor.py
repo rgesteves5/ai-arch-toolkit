@@ -35,7 +35,7 @@ from ai_arch_toolkit.core._tools._governance import (
     ToolGate,
     default_redactor,
 )
-from ai_arch_toolkit.core._tools._result import ToolResult, _format_value, line_cut
+from ai_arch_toolkit.core._tools._result import ToolFailure, ToolResult, _format_value, line_cut
 from ai_arch_toolkit.core._tools._schema import callable_name, tool_schema
 from ai_arch_toolkit.core._tools._validation import (
     ArgumentError,
@@ -255,11 +255,16 @@ def _coerce_result(value: Any) -> ToolResult:
 def _result_from_exception(tool_name: str, exc: Exception, redactor: Redactor) -> ToolResult:
     """Convert an exception raised by a tool to a structured, redacted result.
 
-    Arguments were validated and bound before the call, so any exception here — ``TypeError``
-    included — comes from the tool itself. Exception text is *redacted* (not hidden): the agent
-    still sees useful messages like "backend down", but secret-shaped substrings are stripped.
+    A :class:`ToolFailure` keeps the type and ``retryable`` its tool gave; any other exception is
+    a ``runtime_error``. Arguments were validated and bound before the call, so any exception here
+    — ``TypeError`` included — comes from the tool itself. Exception text is *redacted* (not
+    hidden): the agent still sees useful messages like "backend down", but secret-shaped
+    substrings are stripped.
     """
     message = redactor.redact_text(str(exc))
+    if isinstance(exc, ToolFailure):  # the tool said what happened (D37, D42)
+        details = {**redactor.redact(exc.error.details), "tool_name": tool_name}
+        return ToolResult(ok=False, error=replace(exc.error, message=message, details=details))
     return ToolResult.failure(
         "runtime_error",
         message,

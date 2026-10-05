@@ -246,9 +246,17 @@ def _function_response(msg: dict[str, Any], call_ids: set[str]) -> types.Part:
         function_response=types.FunctionResponse(
             id=call_id if call_id in call_ids else None,
             name=name,
-            response=data if isinstance(data, dict) else {"result": data},
+            response=_response_object(data, failed=bool(msg.get("is_error"))),
         )
     )
+
+
+def _response_object(data: Any, *, failed: bool) -> dict[str, Any]:
+    """A tool's result as the response object: a failed call's under ``error``, the key the API
+    reads as "error details" (``google-genai``'s ``FunctionResponse.response``)."""
+    if failed:
+        return {"error": data}
+    return data if isinstance(data, dict) else {"result": data}
 
 
 def _messages_to_sdk(

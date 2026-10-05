@@ -2,15 +2,27 @@
 
 from __future__ import annotations
 
-import json
-from collections.abc import Callable
 from typing import Any
 
 from ai_arch_toolkit.core import tool
-from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
+from ai_arch_toolkit.core._tools._result import ToolFailure
+from ai_arch_toolkit.toolkit.tools._http import Api
+
+
+def _error_reason(answer: object) -> str | None:
+    """The ``reason`` Open-Meteo puts in a JSON error body; ``None`` when there is none.
+
+    An invalid parameter gets HTTP 400 and ``{"error": true, "reason": "..."}``
+    (https://open-meteo.com/en/docs/air-quality-api, "Errors").
+    """
+    return (_string(answer.get("reason")) or None) if isinstance(answer, dict) else None
+
 
 _API = Api(
-    base="https://air-quality-api.open-meteo.com/v1/air-quality", name="Open-Meteo", timeout_s=15
+    base="https://air-quality-api.open-meteo.com/v1/air-quality",
+    name="Open-Meteo",
+    timeout_s=15,
+    body_error=_error_reason,
 )
 _MAX_HOURS_LIMIT = 72
 _DEFAULT_VARIABLES = "european_aqi,us_aqi,pm10,pm2_5,ozone,nitrogen_dioxide"
@@ -75,13 +87,13 @@ def air_quality_current(
         longitude: Longitude in decimal degrees.
         variables: Comma-separated current variables. Defaults to common AQI and pollutant values.
         timezone: Timezone name or "auto". Defaults to "auto".
+
+    Raises:
+        ToolFailure: validation_error when the coordinates or the variables are invalid;
+            upstream when Open-Meteo fails or answers without the values.
     """
-    validation = _validate_location(latitude, longitude)
-    if validation:
-        return f"Air quality current failed: {validation}"
+    _validate_location(latitude, longitude)
     parsed = _parse_variables(variables)
-    if isinstance(parsed, str):
-        return f"Air quality current failed: {parsed}"
 
     params = {
         "latitude": str(latitude),
@@ -89,7 +101,7 @@ def air_quality_current(
         "current": ",".join(parsed),
         "timezone": timezone.strip() or "auto",
     }
-    return _fetch("Air quality current failed", params, lambda data: _current_text(data, parsed))
+    return _API.get_json(params=params, parse=lambda data: _current_text(data, parsed))
 
 
 @tool(capability="network")
@@ -112,13 +124,13 @@ def air_quality_forecast(
         past_days: Past forecast days to include (0-7). Defaults to 0.
         timezone: Timezone name or "auto". Defaults to "auto".
         max_hours: Maximum hourly rows to return (1-72). Defaults to 24.
+
+    Raises:
+        ToolFailure: validation_error when the coordinates or the variables are invalid;
+            upstream when Open-Meteo fails or answers without the values.
     """
-    validation = _validate_location(latitude, longitude)
-    if validation:
-        return f"Air quality forecast failed: {validation}"
+    _validate_location(latitude, longitude)
     parsed = _parse_variables(variables)
-    if isinstance(parsed, str):
-        return f"Air quality forecast failed: {parsed}"
 
     forecast_days = max(1, min(forecast_days, 7))
     past_days = max(0, min(past_days, 7))
@@ -132,60 +144,45 @@ def air_quality_forecast(
         "past_days": str(past_days),
         "timezone": timezone.strip() or "auto",
     }
-    return _fetch(
-        "Air quality forecast failed",
-        params,
-        lambda data: _forecast_text(data, parsed, max_hours),
-    )
-
-
-def _fetch(failure: str, params: dict[str, str], render: Callable[[dict[str, Any]], str]) -> str:
-    try:
-        return _API.get_json(params=params, parse=render)
-    except HttpError as e:
-        reason = _error_reason(e.body)
-        if e.status is not None and reason:
-            return f"{failure}: HTTP error {e.status}: {reason}"
-        return f"{failure}: {e}"
-
-
-def _error_reason(body: str) -> str:
-    """The ``reason`` Open-Meteo puts in a JSON error body; ``""`` when there is none."""
-    try:
-        payload = json.loads(body)
-    except (ValueError, RecursionError):
-        return ""
-    return _string(payload.get("reason")) if isinstance(payload, dict) else ""
+    return _API.get_json(params=params, parse=lambda data: _forecast_text(data, parsed, max_hours))
 
 
 def _current_text(data: dict[str, Any], variables: tuple[str, ...]) -> str:
     if not isinstance(data.get("current"), dict):
-        return "Air quality current failed: unexpected API response."
+        raise ToolFailure("upstream", "Open-Meteo answered without current values.")
     return _format_current(data, variables)
 
 
 def _forecast_text(data: dict[str, Any], variables: tuple[str, ...], max_hours: int) -> str:
     if not isinstance(data.get("hourly"), dict):
-        return "Air quality forecast failed: unexpected API response."
+        raise ToolFailure("upstream", "Open-Meteo answered without hourly values.")
     return _format_forecast(data, variables, max_hours)
 
 
-def _parse_variables(value: str) -> tuple[str, ...] | str:
+def _parse_variables(value: str) -> tuple[str, ...]:
     variables = tuple(dict.fromkeys(part.strip() for part in value.split(",") if part.strip()))
     if not variables:
-        return "variables cannot be empty."
+        msg = (
+            f"variables cannot be empty; pass comma-separated names, e.g. {_DEFAULT_VARIABLES!r}."
+        )
+        raise ToolFailure("validation_error", msg)
     invalid = [variable for variable in variables if variable not in _VALID_VARIABLES]
     if invalid:
-        return f"invalid variables: {', '.join(invalid)}"
+        msg = (
+            f"invalid variables: {', '.join(invalid)}; "
+            f"valid ones include {_DEFAULT_VARIABLES!r}, dust and uv_index."
+        )
+        raise ToolFailure("validation_error", msg)
     return variables
 
 
-def _validate_location(latitude: float, longitude: float) -> str:
+def _validate_location(latitude: float, longitude: float) -> None:
     if not -90 <= latitude <= 90:
-        return "latitude must be between -90 and 90."
+        msg = f"latitude must be between -90 and 90, got {latitude}."
+        raise ToolFailure("validation_error", msg)
     if not -180 <= longitude <= 180:
-        return "longitude must be between -180 and 180."
-    return ""
+        msg = f"longitude must be between -180 and 180, got {longitude}."
+        raise ToolFailure("validation_error", msg)
 
 
 def _format_current(data: dict[str, Any], variables: tuple[str, ...]) -> str:

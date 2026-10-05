@@ -8,6 +8,7 @@ import xml.etree.ElementTree as ET
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
 _RXNAV = Api(
@@ -37,22 +38,27 @@ def rxnorm_drug_search(name: str) -> str:
 
     Args:
         name: Drug name, brand, ingredient, or clinical drug text.
+
+    Raises:
+        ToolFailure: validation_error when ``name`` is empty, too long or has characters the
+            search does not take.
     """
     if not _valid_text(name):
-        return "RxNorm drug search failed: invalid name."
-    try:
-        return _RXNAV.get_json(
-            "drugs.json",
-            params={"name": name.strip()},
-            parse=lambda data: _concepts_text(
-                data.get("drugGroup", {}).get("conceptGroup", []),
-                header=f"RxNorm concepts for {name!r}:",
-                nothing="No RxNorm drug concepts found.",
-                limit=_MAX_LIMIT,
-            ),
+        raise ToolFailure(
+            "validation_error",
+            f"invalid name {name!r}; give 1-180 characters of a drug, brand or ingredient name, "
+            "e.g. 'ibuprofen'.",
         )
-    except HttpError as e:
-        return f"RxNorm drug search failed: {e}"
+    return _RXNAV.get_json(
+        "drugs.json",
+        params={"name": name.strip()},
+        parse=lambda data: _concepts_text(
+            data.get("drugGroup", {}).get("conceptGroup", []),
+            header=f"RxNorm concepts for {name!r}:",
+            nothing="No RxNorm drug concepts found.",
+            limit=_MAX_LIMIT,
+        ),
+    )
 
 
 @tool(capability="network")
@@ -61,19 +67,18 @@ def rxnorm_concept(rxcui: str) -> str:
 
     Args:
         rxcui: RxNorm concept unique identifier.
+
+    Raises:
+        ToolFailure: validation_error when ``rxcui`` is not 1-12 digits; not_found when RxNorm
+            has no concept with it.
     """
-    normalized = rxcui.strip()
-    if not _RXCUI_RE.fullmatch(normalized):
-        return f"RxNorm concept lookup failed: invalid rxcui: {rxcui!r}"
-    try:
-        return _RXNAV.get_json(
-            "rxcui",
-            normalized,
-            "properties.json",
-            parse=lambda data: _concept_text(data, normalized),
-        )
-    except HttpError as e:
-        return f"RxNorm concept lookup failed: {e}"
+    normalized = _rxcui(rxcui)
+    return _RXNAV.get_json(
+        "rxcui",
+        normalized,
+        "properties.json",
+        parse=lambda data: _concept_text(data, normalized),
+    )
 
 
 @tool(capability="network")
@@ -84,28 +89,31 @@ def rxnorm_related(rxcui: str, tty: str = "", max_results: int = 20) -> str:
         rxcui: RxNorm concept unique identifier.
         tty: Optional term type filter, e.g. "IN", "BN", "SCD", or "SBD".
         max_results: Number of related concepts to return (1-25). Defaults to 20.
+
+    Raises:
+        ToolFailure: validation_error when ``rxcui`` is not 1-12 digits or ``tty`` is not a
+            term type.
     """
-    normalized = rxcui.strip()
-    if not _RXCUI_RE.fullmatch(normalized):
-        return f"RxNorm related lookup failed: invalid rxcui: {rxcui!r}"
+    normalized = _rxcui(rxcui)
     if tty and not re.fullmatch(r"^[A-Za-z+]{1,80}$", tty.strip()):
-        return "RxNorm related lookup failed: invalid tty."
-    params = {"tty": tty.strip()} if tty.strip() else {}
-    try:
-        return _RXNAV.get_json(
-            "rxcui",
-            normalized,
-            "related.json",
-            params=params,
-            parse=lambda data: _concepts_text(
-                data.get("relatedGroup", {}).get("conceptGroup", []),
-                header=f"RxNorm related concepts for {normalized}:",
-                nothing=f"No RxNorm related concepts found for {normalized}.",
-                limit=_bounded(max_results),
-            ),
+        raise ToolFailure(
+            "validation_error",
+            f"invalid tty {tty!r}; give RxNorm term types such as 'IN', 'BN', 'SCD' or 'SBD', "
+            "joined with '+'.",
         )
-    except HttpError as e:
-        return f"RxNorm related lookup failed: {e}"
+    params = {"tty": tty.strip()} if tty.strip() else {}
+    return _RXNAV.get_json(
+        "rxcui",
+        normalized,
+        "related.json",
+        params=params,
+        parse=lambda data: _concepts_text(
+            data.get("relatedGroup", {}).get("conceptGroup", []),
+            header=f"RxNorm related concepts for {normalized}:",
+            nothing=f"No RxNorm related concepts found for {normalized}.",
+            limit=_bounded(max_results),
+        ),
+    )
 
 
 @tool(capability="network")
@@ -114,16 +122,14 @@ def rxnorm_ndcs(rxcui: str) -> str:
 
     Args:
         rxcui: RxNorm concept unique identifier.
+
+    Raises:
+        ToolFailure: validation_error when ``rxcui`` is not 1-12 digits.
     """
-    normalized = rxcui.strip()
-    if not _RXCUI_RE.fullmatch(normalized):
-        return f"RxNorm NDC lookup failed: invalid rxcui: {rxcui!r}"
-    try:
-        return _RXNAV.get_json(
-            "rxcui", normalized, "ndcs.json", parse=lambda data: _ndcs_text(data, normalized)
-        )
-    except HttpError as e:
-        return f"RxNorm NDC lookup failed: {e}"
+    normalized = _rxcui(rxcui)
+    return _RXNAV.get_json(
+        "rxcui", normalized, "ndcs.json", parse=lambda data: _ndcs_text(data, normalized)
+    )
 
 
 @tool(capability="network")
@@ -140,26 +146,35 @@ def dailymed_label_search(
         ndc: Optional NDC code query.
         max_results: Number of labels to return (1-25). Defaults to 10.
         page: One-based result page. Defaults to 1.
+
+    Raises:
+        ToolFailure: validation_error when neither ``drug_name`` nor ``ndc`` is given, one of
+            them is invalid, or ``page`` is below 1.
     """
     if not drug_name.strip() and not ndc.strip():
-        return "DailyMed label search failed: provide drug_name or ndc."
+        raise ToolFailure("validation_error", "nothing to search; provide drug_name or ndc.")
     if drug_name and not _valid_text(drug_name):
-        return "DailyMed label search failed: invalid drug_name."
+        raise ToolFailure(
+            "validation_error",
+            f"invalid drug_name {drug_name!r}; give 1-180 characters of a drug name.",
+        )
     if ndc and not _NDC_RE.fullmatch(ndc.strip()):
-        return "DailyMed label search failed: invalid ndc."
+        raise ToolFailure(
+            "validation_error",
+            f"invalid ndc {ndc!r}; an NDC is 4-20 digits and dashes, e.g. '0002-4462-30'.",
+        )
     if page < 1:
-        return "DailyMed label search failed: page must be greater than or equal to 1."
+        raise ToolFailure(
+            "validation_error", f"page must be greater than or equal to 1 (got {page})."
+        )
     params = {"page": str(page), "pagesize": str(_bounded(max_results))}
     if drug_name.strip():
         params["drug_name"] = drug_name.strip()
     if ndc.strip():
         params["ndc"] = ndc.strip()
-    try:
-        return _DAILYMED.get_json(
-            "spls.json", params=params, parse=lambda data: _labels_text(data, page)
-        )
-    except HttpError as e:
-        return f"DailyMed label search failed: {e}"
+    return _DAILYMED.get_json(
+        "spls.json", params=params, parse=lambda data: _labels_text(data, page)
+    )
 
 
 @tool(capability="network")
@@ -169,18 +184,32 @@ def dailymed_label(setid: str, max_sections: int = 12) -> str:
     Args:
         setid: DailyMed SPL set ID from dailymed_label_search.
         max_sections: Number of section titles to return (1-25). Defaults to 12.
+
+    Raises:
+        ToolFailure: validation_error when ``setid`` is not a DailyMed set ID.
     """
     normalized = setid.strip()
     if not _SETID_RE.fullmatch(normalized):
-        return f"DailyMed label lookup failed: invalid setid: {setid!r}"
-    try:
-        return _DAILYMED.get_text(
-            "spls",
-            f"{normalized}.xml",
-            parse=lambda xml_text: _label_text(xml_text, normalized, max_sections),
+        raise ToolFailure(
+            "validation_error",
+            f"invalid setid {setid!r}; a set ID is a UUID; find one with dailymed_label_search.",
         )
-    except HttpError as e:
-        return f"DailyMed label lookup failed: {e}"
+    return _DAILYMED.get_text(
+        "spls",
+        f"{normalized}.xml",
+        parse=lambda xml_text: _label_text(xml_text, normalized, max_sections),
+    )
+
+
+def _rxcui(rxcui: str) -> str:
+    """``rxcui`` stripped, or a validation_error when it is not an RxCUI."""
+    normalized = rxcui.strip()
+    if not _RXCUI_RE.fullmatch(normalized):
+        raise ToolFailure(
+            "validation_error",
+            f"invalid rxcui {rxcui!r}; an RxCUI is 1-12 digits; find one with rxnorm_drug_search.",
+        )
+    return normalized
 
 
 def _concepts_text(groups: Any, *, header: str, nothing: str, limit: int) -> str:
@@ -209,7 +238,9 @@ def _concepts(groups: Any) -> list[tuple[Any, dict[str, Any]]]:
 def _concept_text(data: dict[str, Any], rxcui: str) -> str:
     props = data.get("properties", {})
     if not isinstance(props, dict) or not props:
-        return f"RxNorm concept not found: {rxcui}"
+        raise ToolFailure(
+            "not_found", f"no RxNorm concept with RxCUI {rxcui}; search with rxnorm_drug_search."
+        )
     lines = [f"RxNorm concept {rxcui}:"]
     lines.append(_string(props.get("name")) or "(no name)")
     lines.append(

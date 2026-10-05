@@ -6,7 +6,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from ai_arch_toolkit.core import tool
-from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
+from ai_arch_toolkit.core._tools._result import ToolFailure
+from ai_arch_toolkit.toolkit.tools._http import Api
 from ai_arch_toolkit.toolkit.tools._mediawiki import mediawiki_error
 
 _API = Api(base="https://en.wikipedia.org/w/api.php", name="Wikipedia", body_error=mediawiki_error)
@@ -20,7 +21,12 @@ def wikipedia_search(query: str, results: int = 3) -> str:
     Args:
         query: The search query.
         results: Number of results to return (1-10). Defaults to 3.
+
+    Raises:
+        ToolFailure: validation_error when the query is empty.
     """
+    if not query.strip():
+        raise ToolFailure("validation_error", "query cannot be empty; say what to search for")
     results = max(1, min(results, 10))
     params = {
         "action": "query",
@@ -30,10 +36,7 @@ def wikipedia_search(query: str, results: int = 3) -> str:
         "format": "json",
         "utf8": "1",
     }
-    try:
-        return _API.get_json(params=params, parse=lambda data: _search_text(data, query))
-    except HttpError as e:
-        return f"Wikipedia search failed: {e}"
+    return _API.get_json(params=params, parse=lambda data: _search_text(data, query))
 
 
 @tool(capability="network")
@@ -43,6 +46,10 @@ def wikipedia_article(title: str, max_chars: int = 4000) -> str:
     Args:
         title: Exact article title, e.g. "Python (programming language)".
         max_chars: Maximum characters to return (1-100000). Defaults to 4000.
+
+    Raises:
+        ToolFailure: validation_error when the title cannot name a page; not_found when there is
+            no article with that title.
     """
     max_chars = max(1, min(max_chars, _MAX_CHARS_LIMIT))
     params = {
@@ -54,12 +61,7 @@ def wikipedia_article(title: str, max_chars: int = 4000) -> str:
         "format": "json",
         "utf8": "1",
     }
-    try:
-        return _API.get_json(
-            params=params, parse=lambda data: _article_text(data, title, max_chars)
-        )
-    except HttpError as e:
-        return f"Wikipedia API failed: {e}"
+    return _API.get_json(params=params, parse=lambda data: _article_text(data, title, max_chars))
 
 
 @tool(capability="network")
@@ -71,6 +73,9 @@ def wikipedia_related(title: str, limit: int = 5) -> str:
     Args:
         title: Exact article title, e.g. "Python (programming language)".
         limit: Number of related pages to return (1-20). Defaults to 5.
+
+    Raises:
+        ToolFailure: validation_error when the title cannot name a page.
     """
     limit = max(1, min(limit, 20))
     params = {
@@ -83,12 +88,7 @@ def wikipedia_related(title: str, limit: int = 5) -> str:
         "format": "json",
         "utf8": "1",
     }
-    try:
-        related = _API.get_json(
-            params=params, parse=lambda data: _related_text(data, title, limit)
-        )
-    except HttpError as e:
-        return f"Wikipedia related lookup failed: {e}"
+    related = _API.get_json(params=params, parse=lambda data: _related_text(data, title, limit))
     if isinstance(related, str):
         return related
     return f"{related.why}; searching instead.\n" + wikipedia_search(title, results=limit)
@@ -113,19 +113,26 @@ def _page(data: dict[str, Any]) -> dict[str, Any] | None:
 
     A title that cannot name a page comes back flagged ``invalid``, with its ``invalidreason``
     (https://www.mediawiki.org/wiki/API:Query#Example_3:_Missing_and_invalid_titles): that is
-    the tool's error, not a page without text.
+    the tool's error (validation_error), not a page without text.
     """
     page = next(iter(data.get("query", {}).get("pages", {}).values()), None)
     if page is not None and "invalid" in page:
         reason = page.get("invalidreason")
-        raise HttpError(f"invalid title: {reason}" if reason else "invalid title")
+        raise ToolFailure(
+            "validation_error",
+            (f"invalid title: {str(reason).rstrip('.')}" if reason else "invalid title")
+            + "; give an article title, e.g. from wikipedia_search",
+        )
     return page
 
 
 def _article_text(data: dict[str, Any], title: str, max_chars: int) -> str:
     page = _page(data)
     if page is None or "missing" in page:
-        return f"Article not found: {title!r}"
+        raise ToolFailure(
+            "not_found",
+            f"no Wikipedia article titled {title!r}; find the exact title with wikipedia_search",
+        )
     extract = page.get("extract", "")
     if not extract:
         return f"No extract available for: {title!r}"

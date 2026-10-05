@@ -6,7 +6,8 @@ import re
 from typing import Any
 
 from ai_arch_toolkit.core import tool
-from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
+from ai_arch_toolkit.core._tools._result import ToolFailure
+from ai_arch_toolkit.toolkit.tools._http import Api
 
 _API = Api(
     base="https://ghoapi.azureedge.net/api",
@@ -19,6 +20,7 @@ _MAX_LIMIT = 100
 _CODE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,120}$")
 _TEXT_RE = re.compile(r"^[\w\s,.'()/%:+-]{1,180}$", re.UNICODE)
 _YEAR_RE = re.compile(r"^\d{4}$")
+_TEXT_HINT = "use 1-180 letters, digits, spaces and ,.'()/%:+-"
 
 
 @tool(capability="network")
@@ -29,11 +31,13 @@ def who_indicators(query: str = "", max_results: int = 25, skip: int = 0) -> str
         query: Optional text filter across indicator code and name.
         max_results: Number of indicators to return (1-100). Defaults to 25.
         skip: Number of matching indicators to skip. Defaults to 0.
+
+    Raises:
+        ToolFailure: validation_error when the query or ``skip`` is invalid.
     """
     if query and not _valid_text(query):
-        return "WHO GHO indicators failed: invalid query."
-    if skip < 0:
-        return "WHO GHO indicators failed: skip must be greater than or equal to 0."
+        raise ToolFailure("validation_error", f"invalid query {query!r}; {_TEXT_HINT}")
+    _check_skip(skip)
     params = {"$top": str(_bounded(max_results)), "$skip": str(skip)}
     if query.strip():
         escaped = query.strip().replace("'", "''")
@@ -41,12 +45,9 @@ def who_indicators(query: str = "", max_results: int = 25, skip: int = 0) -> str
             f"contains(tolower(IndicatorName),'{escaped.lower()}') "
             f"or contains(tolower(IndicatorCode),'{escaped.lower()}')"
         )
-    try:
-        return _API.get_json(
-            "Indicator", params=params, parse=lambda data: _indicators_text(data, skip)
-        )
-    except HttpError as e:
-        return f"WHO GHO indicators failed: {e}"
+    return _API.get_json(
+        "Indicator", params=params, parse=lambda data: _indicators_text(data, skip)
+    )
 
 
 @tool(capability="network")
@@ -55,18 +56,17 @@ def who_indicator(indicator_code: str) -> str:
 
     Args:
         indicator_code: WHO GHO indicator code, e.g. "WHOSIS_000001".
+
+    Raises:
+        ToolFailure: validation_error when the code is malformed; not_found when WHO GHO has no
+            indicator with that code.
     """
-    code = indicator_code.strip()
-    if not _CODE_RE.fullmatch(code):
-        return f"WHO GHO indicator failed: invalid indicator_code: {indicator_code!r}"
+    code = _indicator_code(indicator_code)
     escaped_code = code.replace("'", "''")
     params = {"$filter": f"IndicatorCode eq '{escaped_code}'", "$top": "1"}
-    try:
-        return _API.get_json(
-            "Indicator", params=params, parse=lambda data: _indicator_text(data, code)
-        )
-    except HttpError as e:
-        return f"WHO GHO indicator failed: {e}"
+    return _API.get_json(
+        "Indicator", params=params, parse=lambda data: _indicator_text(data, code)
+    )
 
 
 @tool(capability="network")
@@ -89,40 +89,54 @@ def who_series(
         dim1: Optional first-dimension code filter, e.g. sex or age code.
         max_results: Number of observations to return (1-100). Defaults to 25.
         skip: Number of observations to skip. Defaults to 0.
+
+    Raises:
+        ToolFailure: validation_error when the code, the country, a year, ``dim1`` or ``skip`` is
+            invalid.
     """
-    code = indicator_code.strip()
-    if not _CODE_RE.fullmatch(code):
-        return f"WHO GHO series failed: invalid indicator_code: {indicator_code!r}"
-    problem = _series_problem(country, from_year, to_year, dim1, skip)
-    if problem:
-        return f"WHO GHO series failed: {problem}"
+    code = _indicator_code(indicator_code)
+    _check_series(country, from_year, to_year, dim1, skip)
 
     params = {"$top": str(_bounded(max_results)), "$skip": str(skip)}
     series_filter = _series_filter(country, from_year, to_year, dim1)
     if series_filter:
         params["$filter"] = series_filter
-    try:
-        return _API.get_json(
-            code, params=params, parse=lambda data: _series_text(data, code, skip)
+    return _API.get_json(code, params=params, parse=lambda data: _series_text(data, code, skip))
+
+
+def _indicator_code(indicator_code: str) -> str:
+    """The stripped code; a malformed one raises ``ToolFailure`` (validation_error)."""
+    code = indicator_code.strip()
+    if not _CODE_RE.fullmatch(code):
+        raise ToolFailure(
+            "validation_error",
+            f"invalid indicator_code {indicator_code!r}; a WHO GHO code looks like "
+            "WHOSIS_000001 (find one with who_indicators)",
         )
-    except HttpError as e:
-        return f"WHO GHO series failed: {e}"
+    return code
 
 
-def _series_problem(country: str, from_year: str, to_year: str, dim1: str, skip: int) -> str:
-    if country and not re.fullmatch(r"^[A-Za-z]{3}$", country.strip()):
-        return "invalid country. Use ISO3."
-    if from_year and not _YEAR_RE.fullmatch(from_year.strip()):
-        return "invalid from_year."
-    if to_year and not _YEAR_RE.fullmatch(to_year.strip()):
-        return "invalid to_year."
-    if from_year and to_year and int(from_year) > int(to_year):
-        return "from_year must be before or equal to to_year."
-    if dim1 and not _CODE_RE.fullmatch(dim1.strip()):
-        return "invalid dim1."
+def _check_skip(skip: int) -> None:
     if skip < 0:
-        return "skip must be greater than or equal to 0."
-    return ""
+        raise ToolFailure("validation_error", f"invalid skip {skip}; use 0 or more")
+
+
+def _check_series(country: str, from_year: str, to_year: str, dim1: str, skip: int) -> None:
+    """Raises ``ToolFailure`` (validation_error) for the first invalid series filter."""
+    problem = ""
+    if country and not re.fullmatch(r"^[A-Za-z]{3}$", country.strip()):
+        problem = f"invalid country {country!r}; use an ISO3 code such as PRT"
+    elif from_year and not _YEAR_RE.fullmatch(from_year.strip()):
+        problem = f"invalid from_year {from_year!r}; use YYYY"
+    elif to_year and not _YEAR_RE.fullmatch(to_year.strip()):
+        problem = f"invalid to_year {to_year!r}; use YYYY"
+    elif from_year and to_year and int(from_year) > int(to_year):
+        problem = f"from_year {from_year} is after to_year {to_year}; swap them"
+    elif dim1 and not _CODE_RE.fullmatch(dim1.strip()):
+        problem = f"invalid dim1 {dim1!r}; use a dimension code such as SEX_MLE"
+    if problem:
+        raise ToolFailure("validation_error", problem)
+    _check_skip(skip)
 
 
 def _series_filter(country: str, from_year: str, to_year: str, dim1: str) -> str:
@@ -153,7 +167,9 @@ def _indicators_text(data: dict[str, Any], skip: int) -> str:
 def _indicator_text(data: dict[str, Any], code: str) -> str:
     items = _values(data)
     if not items:
-        return f"WHO GHO indicator not found: {code}"
+        raise ToolFailure(
+            "not_found", f"WHO GHO has no indicator {code}; search for one with who_indicators"
+        )
     item = items[0]
     return "\n".join(
         [

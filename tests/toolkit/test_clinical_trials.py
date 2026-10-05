@@ -6,11 +6,14 @@ import urllib.error
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
+import pytest
+
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._clinical_trials import (
     clinical_trial_study,
     clinical_trials_search,
 )
-from tests.toolkit.http_fakes import HTTP_OPEN, respond
+from tests.toolkit.http_fakes import HTTP_OPEN, http_error, respond
 
 _STUDY = {
     "protocolSection": {
@@ -130,26 +133,33 @@ class TestClinicalTrialsSearch:
 
     @patch(HTTP_OPEN)
     def test_requires_query_or_page_token(self, mock_urlopen):
-        result = clinical_trials_search()
+        with pytest.raises(ToolFailure) as caught:
+            clinical_trials_search()
 
-        assert "provide query" in result
+        assert caught.value.error.type == "validation_error"
+        assert "provide query" in caught.value.error.message
         mock_urlopen.assert_not_called()
 
     @patch(HTTP_OPEN)
     def test_api_failure(self, mock_urlopen):
         mock_urlopen.side_effect = TimeoutError()
 
-        result = clinical_trials_search("test")
+        with pytest.raises(ToolFailure) as caught:
+            clinical_trials_search("test")
 
-        assert "timed out" in result.lower()
+        assert caught.value.error.type == "upstream"
+        assert caught.value.error.retryable
+        assert "timed out" in caught.value.error.message.lower()
 
     @patch(HTTP_OPEN)
     def test_parse_failure(self, mock_urlopen):
         mock_urlopen.return_value = respond("not json")
 
-        result = clinical_trials_search("test")
+        with pytest.raises(ToolFailure) as caught:
+            clinical_trials_search("test")
 
-        assert "could not parse" in result
+        assert caught.value.error.type == "upstream"
+        assert "could not parse" in caught.value.error.message
 
 
 class TestClinicalTrialStudy:
@@ -169,9 +179,11 @@ class TestClinicalTrialStudy:
 
     @patch(HTTP_OPEN)
     def test_invalid_nct_id(self, mock_urlopen):
-        result = clinical_trial_study("bad")
+        with pytest.raises(ToolFailure) as caught:
+            clinical_trial_study("bad")
 
-        assert "invalid NCT ID" in result
+        assert caught.value.error.type == "validation_error"
+        assert "invalid NCT ID" in caught.value.error.message
         mock_urlopen.assert_not_called()
 
     @patch(HTTP_OPEN)
@@ -184,6 +196,28 @@ class TestClinicalTrialStudy:
             fp=None,
         )
 
-        result = clinical_trial_study("NCT00000000")
+        with pytest.raises(ToolFailure) as caught:
+            clinical_trial_study("NCT00000000")
 
-        assert "not found" in result.lower()
+        assert caught.value.error.type == "not_found"
+        assert "no ClinicalTrials.gov study with NCT ID NCT00000000" in caught.value.error.message
+        assert "clinical_trials_search" in caught.value.error.message
+
+    @patch(HTTP_OPEN)
+    def test_a_study_without_protocol_is_not_found(self, mock_urlopen):
+        mock_urlopen.return_value = respond({"hasResults": False})
+
+        with pytest.raises(ToolFailure) as caught:
+            clinical_trial_study("NCT00000000")
+
+        assert caught.value.error.type == "not_found"
+
+    @patch(HTTP_OPEN)
+    def test_other_statuses_stay_upstream(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(503, "Service Unavailable")
+
+        with pytest.raises(ToolFailure) as caught:
+            clinical_trial_study("NCT04280705")
+
+        assert caught.value.error.type == "upstream"
+        assert caught.value.error.retryable

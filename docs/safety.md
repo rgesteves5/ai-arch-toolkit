@@ -83,6 +83,9 @@ The executor draws the `type` of its own failures from a fixed set:
 
 - **Governance blocks** — `"dangerous_tool_blocked"`, `"approval_denied"`, `"max_calls_exceeded"`. A budget denial is not among them: it is raised, not returned (see [Cumulative budgets](#cumulative-budgets)).
 - **Resolution / execution** — `"unknown_tool"` (no matching function), `"validation_error"` (arguments that don't fit the tool's schema or signature — see [Argument validation](#argument-validation)), `"runtime_error"` (any exception raised by the tool itself, `TypeError` included; `retryable=True`), `"timeout"` (the tool did not finish within its `timeout_s`; `retryable=True`).
+- **The tool's own** — a tool that cannot answer raises `ToolFailure(type, message, retryable=..., details=...)`, and the result carries its type: `"not_found"`, `"validation_error"` (the same type as a schema failure: for the agent, the same matter), `"upstream"` or `"rate_limited"`. The toolkit's tools all do; the HTTP door's failures are `rate_limited` for a 429 and `upstream` otherwise, retryable for a 5xx, a timeout or a network error. The executor never repeats a call by itself.
+
+`run_tools()` and the ReAct flow send a failed call's result back with `is_error`: the Anthropic adapter passes it as the `tool_result` block's `is_error`, the Gemini adapter puts the result under the `error` key of the function response, and the other providers read the `Tool error [type]: …` text.
 
 Construct results directly when writing custom executors:
 
@@ -93,7 +96,7 @@ ToolResult.success(value, metadata=None)
 ToolResult.failure("network_error", "backend unreachable", retryable=True)
 ```
 
-> Exceptions raised inside a tool are caught and wrapped into a `ToolResult.failure(...)` with the message **redacted** (not hidden): the agent sees `"connection failed"`, never `connection_string=postgres://user:pw@host`.
+> Exceptions raised inside a tool, a `ToolFailure` included, are caught and wrapped into a failed `ToolResult` with the message **redacted** (not hidden): the agent sees `"connection failed"`, never `connection_string=postgres://user:pw@host`.
 
 ### Argument validation
 

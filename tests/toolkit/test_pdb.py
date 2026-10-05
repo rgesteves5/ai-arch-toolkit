@@ -5,13 +5,16 @@ from __future__ import annotations
 import json
 from unittest.mock import patch
 
+import pytest
+
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._pdb import (
     pdb_chemical_component,
     pdb_entry,
     pdb_ligands,
     pdb_search,
 )
-from tests.toolkit.http_fakes import HTTP_OPEN, respond
+from tests.toolkit.http_fakes import HTTP_OPEN, http_error, respond
 
 
 class TestPdb:
@@ -66,9 +69,30 @@ class TestPdb:
 
     @patch(HTTP_OPEN)
     def test_invalid_options_do_not_call_api(self, mock_urlopen):
-        assert "invalid pdb_id" in pdb_entry("bad")
-        assert "invalid component_id" in pdb_chemical_component("bad/id")
+        for call, arg, words in (
+            (pdb_entry, "bad", "invalid pdb_id"),
+            (pdb_ligands, "bad", "invalid pdb_id"),
+            (pdb_chemical_component, "bad/id", "invalid component_id"),
+            (pdb_search, "", "invalid query"),
+        ):
+            with pytest.raises(ToolFailure) as caught:
+                call(arg)
+            assert caught.value.error.type == "validation_error"
+            assert words in caught.value.error.message
+        with pytest.raises(ToolFailure) as caught:
+            pdb_search("hemoglobin", start=-1)
+        assert caught.value.error.type == "validation_error"
         mock_urlopen.assert_not_called()
+
+    @patch(HTTP_OPEN)
+    def test_a_failed_request_raises_the_sources_error(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(503, "Service Unavailable")
+
+        with pytest.raises(ToolFailure) as caught:
+            pdb_entry("1A3N")
+
+        assert caught.value.error.type == "upstream"
+        assert caught.value.error.retryable
 
 
 @patch(HTTP_OPEN)

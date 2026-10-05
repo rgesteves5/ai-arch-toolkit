@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import os
+import subprocess
+from unittest.mock import patch
 
+import pytest
+
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._shell import run_command
 
 
@@ -35,8 +40,22 @@ class TestRunCommand:
 
 
 class TestArguments:
-    def test_a_command_with_a_null_byte_is_an_error_string(self):
-        assert run_command("echo a\x00b").startswith("Failed to execute")
+    def test_a_command_with_a_null_byte_is_a_validation_error(self):
+        with pytest.raises(ToolFailure) as caught:
+            run_command("echo a\x00b")
+
+        assert caught.value.error.type == "validation_error"
+        assert "null byte" in caught.value.error.message
+
+    def test_a_shell_that_cannot_start_is_an_upstream_failure(self):
+        with (
+            patch.object(subprocess, "run", side_effect=OSError("no /bin/sh")),
+            pytest.raises(ToolFailure) as caught,
+        ):
+            run_command("true")
+
+        assert caught.value.error.type == "upstream"
+        assert "no /bin/sh" in caught.value.error.message
 
     def test_timeout_and_max_output_are_clamped(self):
         assert run_command("echo hello", timeout=-1) == "hello\n"
@@ -64,11 +83,13 @@ class TestWorkingDirectory:
 
         assert run_command("ls", cwd="~") == "marker.txt\n"
 
-    def test_a_cwd_that_is_not_a_folder_is_an_error_string(self, tmp_path):
+    def test_a_cwd_that_is_not_a_folder_is_a_validation_error(self, tmp_path):
         missing = tmp_path / "missing"
         a_file = tmp_path / "file.txt"
         a_file.write_text("x")
 
-        assert run_command("true", cwd=str(missing)) == f"Not a directory: {missing}"
-        assert run_command("true", cwd=str(a_file)) == f"Not a directory: {a_file}"
-        assert run_command("true", cwd="~no_such_user_g26") == "Not a directory: ~no_such_user_g26"
+        for cwd in (str(missing), str(a_file), "~no_such_user_g26"):
+            with pytest.raises(ToolFailure) as caught:
+                run_command("true", cwd=cwd)
+            assert caught.value.error.type == "validation_error"
+            assert f"cwd {cwd!r} is not a directory" in caught.value.error.message

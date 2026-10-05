@@ -336,13 +336,27 @@ def _assistant(msg: dict[str, Any]) -> MessageParam:
     return {"role": "assistant", "content": blocks}
 
 
+def _tool_result_block(msg: dict[str, Any]) -> ToolResultBlockParam:
+    """A tool result, marked ``is_error`` when its call failed."""
+    block: ToolResultBlockParam = {
+        "type": "tool_result",
+        "tool_use_id": msg["tool_use_id"],
+        "content": msg.get("content", ""),
+    }
+    if msg.get("is_error"):
+        block["is_error"] = True
+    return block
+
+
 def _messages_to_sdk(
     messages: list[dict[str, Any]],
 ) -> tuple[SystemParam | None, list[MessageParam]]:
     """The system prompt, and the messages.
 
     ``tool_use_id`` marks a tool result: every result of a turn goes back in one user message, in
-    call order (https://platform.claude.com/docs/en/agents-and-tools/tool-use/parallel-tool-use).
+    call order (https://platform.claude.com/docs/en/agents-and-tools/tool-use/parallel-tool-use),
+    a failed call's with ``is_error``
+    (https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls).
     The system prompt is one string, or text blocks when a ``cache()`` part asks for a cache
     marker.
     """
@@ -351,10 +365,7 @@ def _messages_to_sdk(
     results: list[ToolResultBlockParam] = []
     for msg in messages:
         if msg.get("tool_use_id"):
-            content = msg.get("content", "")
-            results.append(
-                {"type": "tool_result", "tool_use_id": msg["tool_use_id"], "content": content}
-            )
+            results.append(_tool_result_block(msg))
             continue
         if results:
             wire.append({"role": "user", "content": results})

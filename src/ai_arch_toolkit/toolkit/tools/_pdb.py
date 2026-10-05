@@ -6,7 +6,8 @@ import re
 from typing import Any
 
 from ai_arch_toolkit.core import tool
-from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
+from ai_arch_toolkit.core._tools._result import ToolFailure
+from ai_arch_toolkit.toolkit.tools._http import Api
 
 _DATA = Api(
     base="https://data.rcsb.org/rest/v1/core",
@@ -34,11 +35,21 @@ def pdb_search(query: str, max_results: int = 10, start: int = 0) -> str:
         query: Text query, e.g. protein name, organism, ligand, or method.
         max_results: Number of PDB entries to return (1-25). Defaults to 10.
         start: Zero-based result offset. Defaults to 0.
+
+    Raises:
+        ToolFailure: validation_error when the query is empty, too long or has characters the
+            search does not take, or ``start`` is negative.
     """
     if not _valid_text(query):
-        return "RCSB PDB search failed: invalid query."
+        raise ToolFailure(
+            "validation_error",
+            f"invalid query {query!r}; give 1-180 characters of words, digits and basic "
+            "punctuation, e.g. 'hemoglobin human'.",
+        )
     if start < 0:
-        return "RCSB PDB search failed: start must be greater than or equal to 0."
+        raise ToolFailure(
+            "validation_error", f"start must be greater than or equal to 0 (got {start})."
+        )
     # "text" searches one attribute and needs its name; free text is "full_text":
     # https://search.rcsb.org/#search-services
     payload = {
@@ -50,14 +61,11 @@ def pdb_search(query: str, max_results: int = 10, start: int = 0) -> str:
         "return_type": "entry",
         "request_options": {"paginate": {"start": start, "rows": _bounded(max_results)}},
     }
-    try:
-        # A query that matches nothing is answered 204 No Content:
-        # https://search.rcsb.org/#empty-results
-        return _SEARCH.post_json(
-            payload=payload, parse=lambda data: _search_text(data, query, start), allow_empty=True
-        )
-    except HttpError as e:
-        return f"RCSB PDB search failed: {e}"
+    # A query that matches nothing is answered 204 No Content:
+    # https://search.rcsb.org/#empty-results
+    return _SEARCH.post_json(
+        payload=payload, parse=lambda data: _search_text(data, query, start), allow_empty=True
+    )
 
 
 @tool(capability="network")
@@ -66,16 +74,12 @@ def pdb_entry(pdb_id: str) -> str:
 
     Args:
         pdb_id: Four-character PDB ID, e.g. "1A3N".
+
+    Raises:
+        ToolFailure: validation_error when ``pdb_id`` is not four letters or digits.
     """
-    normalized = pdb_id.strip().upper()
-    if not _PDB_ID_RE.fullmatch(normalized):
-        return f"RCSB PDB entry lookup failed: invalid pdb_id: {pdb_id!r}"
-    try:
-        return _DATA.get_json(
-            "entry", normalized, parse=lambda data: _entry_text(data, normalized)
-        )
-    except HttpError as e:
-        return f"RCSB PDB entry lookup failed: {e}"
+    normalized = _pdb_id(pdb_id)
+    return _DATA.get_json("entry", normalized, parse=lambda data: _entry_text(data, normalized))
 
 
 @tool(capability="network")
@@ -84,19 +88,16 @@ def pdb_ligands(pdb_id: str) -> str:
 
     Args:
         pdb_id: Four-character PDB ID, e.g. "1A3N".
-    """
-    normalized = pdb_id.strip().upper()
-    if not _PDB_ID_RE.fullmatch(normalized):
-        return f"RCSB PDB ligands failed: invalid pdb_id: {pdb_id!r}"
-    try:
-        ids = _DATA.get_json("entry", normalized, parse=_nonpolymer_ids)
-        ligands = [
-            _DATA.get_json("nonpolymer_entity", normalized, entity_id, parse=_ligand)
-            for entity_id in ids
-        ]
-    except HttpError as e:
-        return f"RCSB PDB ligands failed: {e}"
 
+    Raises:
+        ToolFailure: validation_error when ``pdb_id`` is not four letters or digits.
+    """
+    normalized = _pdb_id(pdb_id)
+    ids = _DATA.get_json("entry", normalized, parse=_nonpolymer_ids)
+    ligands = [
+        _DATA.get_json("nonpolymer_entity", normalized, entity_id, parse=_ligand)
+        for entity_id in ids
+    ]
     if not ligands:
         return f"No RCSB PDB ligands found for {normalized}."
     lines = [f"RCSB PDB ligands for {normalized}:"]
@@ -110,16 +111,33 @@ def pdb_chemical_component(component_id: str) -> str:
 
     Args:
         component_id: Chemical component ID, e.g. "ATP", "HEM", or "NAG".
+
+    Raises:
+        ToolFailure: validation_error when ``component_id`` is not 1-12 letters, digits, ``_``
+            or ``-``.
     """
     normalized = component_id.strip().upper()
     if not _CHEM_ID_RE.fullmatch(normalized):
-        return f"RCSB PDB chemical component failed: invalid component_id: {component_id!r}"
-    try:
-        return _DATA.get_json(
-            "chemcomp", normalized, parse=lambda data: _component_text(data, normalized)
+        raise ToolFailure(
+            "validation_error",
+            f"invalid component_id {component_id!r}; a chemical component ID is 1-12 letters "
+            "or digits, e.g. 'ATP' or 'HEM'.",
         )
-    except HttpError as e:
-        return f"RCSB PDB chemical component failed: {e}"
+    return _DATA.get_json(
+        "chemcomp", normalized, parse=lambda data: _component_text(data, normalized)
+    )
+
+
+def _pdb_id(pdb_id: str) -> str:
+    """``pdb_id`` upper-cased, or a validation_error when it is not a PDB ID."""
+    normalized = pdb_id.strip().upper()
+    if not _PDB_ID_RE.fullmatch(normalized):
+        raise ToolFailure(
+            "validation_error",
+            f"invalid pdb_id {pdb_id!r}; a PDB ID is four letters or digits, e.g. '1A3N'; "
+            "find one with pdb_search.",
+        )
+    return normalized
 
 
 def _search_text(data: dict[str, Any], query: str, start: int) -> str:

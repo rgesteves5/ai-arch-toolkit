@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._overpass import overpass_pois, overpass_query
 from tests.toolkit.http_fakes import HTTP_OPEN, respond
 
@@ -41,13 +44,22 @@ class TestOverpass:
         timeout = 'runtime error: Query timed out in "query" at line 1 after 4 seconds.'
         mock_urlopen.return_value = respond({**_DATA, "remark": timeout})
 
-        assert overpass_query("[out:json][timeout:1];node[amenity];out;") == (
-            f"Overpass query failed: {timeout}"
-        )
+        with pytest.raises(ToolFailure) as caught:
+            overpass_query("[out:json][timeout:1];node[amenity];out;")
+        assert caught.value.error.type == "upstream"
+        assert caught.value.error.message == timeout
+
         mock_urlopen.return_value = respond({"elements": [], "remark": timeout})
-        assert overpass_pois("amenity", latitude=38.7, longitude=-9.1) == (
-            f"Overpass POI search failed: {timeout}"
-        )
+        with pytest.raises(ToolFailure) as caught:
+            overpass_pois("amenity", latitude=38.7, longitude=-9.1)
+        assert caught.value.error.type == "upstream"
+        assert caught.value.error.message == timeout
+
+    @patch(HTTP_OPEN)
+    def test_no_element_is_a_success(self, mock_urlopen):
+        mock_urlopen.return_value = respond({"elements": []})
+
+        assert overpass_query("[out:json];node(1);out;") == "No Overpass elements found."
 
     @patch(HTTP_OPEN)
     def test_another_remark_is_a_note(self, mock_urlopen):
@@ -57,7 +69,13 @@ class TestOverpass:
 
     @patch(HTTP_OPEN)
     def test_invalid_options_do_not_call_api(self, mock_urlopen):
-        assert "include [out:json]" in overpass_query("node;")
-        assert "provide bbox" in overpass_pois("amenity", "cafe")
-        assert "invalid tag_key" in overpass_pois("bad key")
+        for call, args, words in (
+            (overpass_query, ("node;",), "[out:json]"),
+            (overpass_pois, ("amenity", "cafe"), "provide bbox"),
+            (overpass_pois, ("bad key",), "invalid tag_key"),
+        ):
+            with pytest.raises(ToolFailure) as caught:
+                call(*args)
+            assert caught.value.error.type == "validation_error"
+            assert words in caught.value.error.message
         mock_urlopen.assert_not_called()

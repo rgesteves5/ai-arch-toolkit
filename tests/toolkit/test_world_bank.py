@@ -8,6 +8,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._world_bank import (
     world_bank_compare,
     world_bank_countries,
@@ -17,7 +18,20 @@ from ai_arch_toolkit.toolkit.tools._world_bank import (
     world_bank_sources,
     world_bank_topics,
 )
-from tests.toolkit.http_fakes import HTTP_OPEN, respond
+from tests.toolkit.http_fakes import HTTP_OPEN, http_error, respond
+
+
+def _failure(call):
+    with pytest.raises(ToolFailure) as caught:
+        call()
+    return caught.value.error
+
+
+def _refused(call, words):
+    error = _failure(call)
+    assert error.type == "validation_error"
+    assert words in error.message
+
 
 _TOPIC = {
     "id": "3",
@@ -144,9 +158,9 @@ class TestWorldBankCatalog:
 
     @patch(HTTP_OPEN)
     def test_invalid_catalog_options_do_not_call_api(self, mock_urlopen):
-        assert "page must" in world_bank_topics(page=0)
-        assert "page must" in world_bank_sources(page=0)
-        assert "page must" in world_bank_countries(page=0)
+        _refused(lambda: world_bank_topics(page=0), "invalid page 0")
+        _refused(lambda: world_bank_sources(page=0), "invalid page 0")
+        _refused(lambda: world_bank_countries(page=0), "invalid page 0")
         mock_urlopen.assert_not_called()
 
 
@@ -202,10 +216,36 @@ class TestWorldBankIndicators:
 
     @patch(HTTP_OPEN)
     def test_invalid_indicator_options_do_not_call_api(self, mock_urlopen):
-        assert "page must" in world_bank_indicators(page=0)
-        assert "scan_pages must" in world_bank_indicators(scan_pages=0)
-        assert "invalid indicator ID" in world_bank_indicator("bad/id")
+        _refused(lambda: world_bank_indicators(page=0), "invalid page 0")
+        _refused(lambda: world_bank_indicators(scan_pages=0), "invalid scan_pages 0")
+        _refused(lambda: world_bank_indicator("bad/id"), "invalid indicator ID 'bad/id'")
         mock_urlopen.assert_not_called()
+
+    @patch(HTTP_OPEN)
+    def test_an_indicator_the_api_does_not_list_is_not_found(self, mock_urlopen):
+        mock_urlopen.return_value = respond(_payload([]))
+
+        error = _failure(lambda: world_bank_indicator("NO.SUCH"))
+
+        assert error.type == "not_found"
+        assert "no indicator NO.SUCH" in error.message
+        assert "world_bank_indicators" in error.message
+
+    @patch(HTTP_OPEN)
+    def test_a_404_indicator_is_not_found_and_other_statuses_stay_upstream(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(404, "Not Found")
+        assert _failure(lambda: world_bank_indicator("NO.SUCH")).type == "not_found"
+
+        mock_urlopen.side_effect = http_error(502, "Bad Gateway")
+        error = _failure(lambda: world_bank_indicator("NO.SUCH"))
+        assert error.type == "upstream"
+        assert error.retryable
+
+    @patch(HTTP_OPEN)
+    def test_no_matches_is_a_success(self, mock_urlopen):
+        mock_urlopen.return_value = respond(_payload([]))
+
+        assert world_bank_indicators(topic="3") == "No World Bank indicators found."
 
 
 class TestWorldBankSeries:
@@ -241,16 +281,21 @@ class TestWorldBankSeries:
 
     @patch(HTTP_OPEN)
     def test_invalid_series_options_do_not_call_api(self, mock_urlopen):
-        assert "invalid country code" in world_bank_series("bad/code", "SP.POP.TOTL")
-        assert "invalid indicator ID" in world_bank_series("PRT", "bad/id")
-        assert "invalid start_year" in world_bank_series("PRT", "SP.POP.TOTL", "20")
-        assert "start_year must" in world_bank_series("PRT", "SP.POP.TOTL", "2024", "2020")
-        assert "provide at least one country" in world_bank_compare("SP.POP.TOTL", "")
-        assert "at most 10 countries" in world_bank_compare(
-            "SP.POP.TOTL",
-            "A,B,C,D,E,F,G,H,I,J,K",
+        _refused(lambda: world_bank_series("bad/code", "SP.POP.TOTL"), "invalid country code")
+        _refused(lambda: world_bank_series("PRT", "bad/id"), "invalid indicator ID")
+        _refused(lambda: world_bank_series("PRT", "SP.POP.TOTL", "20"), "invalid start_year")
+        _refused(
+            lambda: world_bank_series("PRT", "SP.POP.TOTL", "2024", "2020"),
+            "start_year 2024 is after end_year 2020",
         )
-        assert "invalid year" in world_bank_compare("SP.POP.TOTL", "PRT", year="23")
+        _refused(lambda: world_bank_series("PRT", "SP.POP.TOTL", page=0), "invalid page 0")
+        _refused(lambda: world_bank_compare("bad/id", "PRT"), "invalid indicator ID")
+        _refused(lambda: world_bank_compare("SP.POP.TOTL", ""), "no valid country code")
+        _refused(
+            lambda: world_bank_compare("SP.POP.TOTL", "A,B,C,D,E,F,G,H,I,J,K"),
+            "compare at most 10 per call",
+        )
+        _refused(lambda: world_bank_compare("SP.POP.TOTL", "PRT", year="23"), "invalid year '23'")
         mock_urlopen.assert_not_called()
 
     @patch(HTTP_OPEN)
@@ -262,11 +307,24 @@ class TestWorldBankSeries:
             hdrs=None,
             fp=None,
         )
-        assert "rate limited" in world_bank_topics()
+        error = _failure(world_bank_topics)
+        assert error.type == "rate_limited"
+        assert "rate limited" in error.message
 
         mock_urlopen.side_effect = None
         mock_urlopen.return_value = respond("not json")
-        assert "could not parse" in world_bank_topics()
+        error = _failure(world_bank_topics)
+        assert error.type == "upstream"
+        assert "could not parse" in error.message
+
+    @patch(HTTP_OPEN)
+    def test_an_unexpected_shape_is_upstream(self, mock_urlopen):
+        mock_urlopen.return_value = respond([{"page": 1}])
+
+        error = _failure(world_bank_topics)
+
+        assert error.type == "upstream"
+        assert "unexpected World Bank response shape" in error.message
 
 
 # What the API answers, with HTTP 200, for an indicator or source ID it does not know
@@ -285,25 +343,26 @@ _INVALID_VALUE = [
 
 
 @pytest.mark.parametrize(
-    ("call", "failure"),
+    "call",
     [
-        (lambda: world_bank_series("PRT", "NOT.AN.INDICATOR"), "World Bank series failed"),
-        (lambda: world_bank_compare("NOT.AN.INDICATOR", "PRT,ESP"), "World Bank compare failed"),
-        (lambda: world_bank_indicator("NOT.AN.INDICATOR"), "World Bank indicator lookup failed"),
-        (lambda: world_bank_indicators(source="99999"), "World Bank indicators failed"),
-        (lambda: world_bank_indicators(query="gdp", scan_pages=2), "World Bank indicators failed"),
-        (world_bank_topics, "World Bank topics failed"),
-        (world_bank_sources, "World Bank sources failed"),
-        (world_bank_countries, "World Bank countries failed"),
+        lambda: world_bank_series("PRT", "NOT.AN.INDICATOR"),
+        lambda: world_bank_compare("NOT.AN.INDICATOR", "PRT,ESP"),
+        lambda: world_bank_indicator("NOT.AN.INDICATOR"),
+        lambda: world_bank_indicators(source="99999"),
+        lambda: world_bank_indicators(query="gdp", scan_pages=2),
+        world_bank_topics,
+        world_bank_sources,
+        world_bank_countries,
     ],
 )
 @patch(HTTP_OPEN)
-def test_an_error_the_api_reports_is_the_tools_error_not_an_empty_page(
-    mock_urlopen, call, failure
-):
+def test_an_error_the_api_reports_is_the_tools_error_not_an_empty_page(mock_urlopen, call):
     mock_urlopen.return_value = respond(_INVALID_VALUE)
 
-    assert call() == f"{failure}: Invalid value: The provided parameter value is not valid"
+    error = _failure(call)
+
+    assert error.type == "upstream"
+    assert error.message == "Invalid value: The provided parameter value is not valid"
     assert mock_urlopen.call_count == 1
 
 
@@ -320,6 +379,6 @@ def test_every_message_the_api_reports_is_kept(mock_urlopen):
         ]
     )
 
-    assert world_bank_series("PRT", "SP.POP.TOTL") == (
-        "World Bank series failed: Invalid value: Bad country; Invalid format: Bad indicator"
+    assert _failure(lambda: world_bank_series("PRT", "SP.POP.TOTL")).message == (
+        "Invalid value: Bad country; Invalid format: Bad indicator"
     )

@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
+
+type ToolFailureType = Literal["not_found", "validation_error", "upstream", "rate_limited"]
+"""What a tool that could not answer says happened (D37, D42): what it was asked for does not
+exist, an argument is wrong, the source failed, or the source is rate limiting."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +31,42 @@ class ToolError:
             "safe_to_show": self.safe_to_show,
             "details": self.details,
         }
+
+
+class ToolFailure(Exception):
+    """Raised by a tool that could not answer; the executor returns it as a failed result.
+
+    ``message`` says why, in the source's words, and what to do next ("... does not exist; search
+    with wiki_search"). Zero results is not a failure: a tool says so in a successful answer.
+
+    Attributes:
+        error: The :class:`ToolError` the executor puts in ``ToolResult.error`` (its message
+            redacted).
+    """
+
+    def __init__(
+        self,
+        type: ToolFailureType,
+        message: str,
+        *,
+        retryable: bool = False,
+        details: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.error = ToolError(
+            type=type, message=message, retryable=retryable, details=dict(details or {})
+        )
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        # Pickled and copied by its error and attributes, whatever a subclass's signature.
+        return (_restored_failure, (type(self), self.error), self.__dict__)
+
+
+def _restored_failure(cls: type[ToolFailure], error: ToolError) -> ToolFailure:
+    failure = cls.__new__(cls)
+    Exception.__init__(failure, error.message)
+    failure.error = error
+    return failure
 
 
 @dataclass(frozen=True, slots=True)

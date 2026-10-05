@@ -6,7 +6,8 @@ import re
 from typing import Any
 
 from ai_arch_toolkit.core import tool
-from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
+from ai_arch_toolkit.core._tools._result import ToolFailure
+from ai_arch_toolkit.toolkit.tools._http import Api
 
 
 def _runtime_error(data: object) -> str | None:
@@ -40,15 +41,24 @@ def overpass_query(query: str, max_results: int = 25) -> str:
     Args:
         query: Complete Overpass QL query. It should include output format and timeout.
         max_results: Number of elements to return (1-50). Defaults to 25.
+
+    Raises:
+        ToolFailure: validation_error when the query is empty, too long, or has no output
+            format; upstream when Overpass reports a runtime error (a timeout, out of memory).
     """
     if not query.strip() or len(query) > 4000:
-        return "Overpass query failed: query must be 1-4000 characters."
+        raise ToolFailure(
+            "validation_error", f"query must be 1-4000 characters (got {len(query)})."
+        )
     if "[out:" not in query or "out" not in query:
-        return "Overpass query failed: include [out:json] and an out statement."
+        raise ToolFailure(
+            "validation_error",
+            "the query has no output format; start it with [out:json] and end it with an out "
+            "statement, e.g. '[out:json][timeout:25];node[amenity=cafe](38,-10,39,-9);out;'.",
+        )
     return _run(
         query,
         max_results,
-        failure="Overpass query failed",
         label="Overpass elements",
         nothing="No Overpass elements found.",
     )
@@ -74,14 +84,22 @@ def overpass_pois(
         longitude: Optional center longitude for radius search.
         radius_m: Radius in meters when latitude/longitude are provided. Defaults to 1000.
         max_results: Number of elements to return (1-50). Defaults to 25.
+
+    Raises:
+        ToolFailure: validation_error when the tag or the area is invalid or missing; upstream
+            when Overpass reports a runtime error (a timeout, out of memory).
     """
     if not _TAG_RE.fullmatch(tag_key.strip()):
-        return "Overpass POI search failed: invalid tag_key."
+        raise ToolFailure(
+            "validation_error",
+            f"invalid tag_key {tag_key!r}; give an OSM tag key such as 'amenity' or 'shop'.",
+        )
     if tag_value and not _VALUE_RE.fullmatch(tag_value.strip()):
-        return "Overpass POI search failed: invalid tag_value."
+        raise ToolFailure(
+            "validation_error",
+            f"invalid tag_value {tag_value!r}; give a plain OSM tag value such as 'cafe'.",
+        )
     area = _area_clause(bbox, latitude, longitude, radius_m)
-    if area.startswith("error:"):
-        return f"Overpass POI search failed: {area.removeprefix('error:')}"
     tag = (
         f'["{tag_key.strip()}"="{tag_value.strip()}"]'
         if tag_value.strip()
@@ -100,20 +118,16 @@ def overpass_pois(
     return _run(
         query,
         max_results,
-        failure="Overpass POI search failed",
         label="Overpass POIs",
         nothing="No Overpass POIs found.",
     )
 
 
-def _run(query: str, max_results: int, *, failure: str, label: str, nothing: str) -> str:
-    try:
-        return _API.post_form(
-            form={"data": query},
-            parse=lambda data: _summary(data, max_results, label=label, nothing=nothing),
-        )
-    except HttpError as e:
-        return f"{failure}: {e}"
+def _run(query: str, max_results: int, *, label: str, nothing: str) -> str:
+    return _API.post_form(
+        form={"data": query},
+        parse=lambda data: _summary(data, max_results, label=label, nothing=nothing),
+    )
 
 
 def _summary(data: dict[str, Any], max_results: int, *, label: str, nothing: str) -> str:
@@ -133,20 +147,37 @@ def _area_clause(
     if bbox.strip():
         parts = [part.strip() for part in bbox.split(",")]
         if len(parts) != 4:
-            return "error:bbox must be south,west,north,east."
+            raise ToolFailure(
+                "validation_error",
+                f"invalid bbox {bbox!r}; give south,west,north,east, e.g. '38.6,-9.3,38.8,-9.0'.",
+            )
         try:
             south, west, north, east = [float(part) for part in parts]
         except ValueError:
-            return "error:bbox values must be numeric."
+            raise ToolFailure(
+                "validation_error", f"invalid bbox {bbox!r}; its four values must be numbers."
+            ) from None
         if not (-90 <= south <= north <= 90 and -180 <= west <= east <= 180):
-            return "error:invalid bbox coordinate order or range."
+            raise ToolFailure(
+                "validation_error",
+                f"invalid bbox {bbox!r}; need -90 <= south <= north <= 90 and "
+                "-180 <= west <= east <= 180.",
+            )
         return f"({south},{west},{north},{east})"
     if latitude is None or longitude is None:
-        return "error:provide bbox or latitude/longitude."
+        raise ToolFailure(
+            "validation_error", "no area to search; provide bbox or latitude and longitude."
+        )
     if not -90 <= latitude <= 90 or not -180 <= longitude <= 180:
-        return "error:invalid latitude/longitude."
+        raise ToolFailure(
+            "validation_error",
+            f"invalid coordinates {latitude}, {longitude}; latitude must be between -90 and 90 "
+            "and longitude between -180 and 180.",
+        )
     if radius_m <= 0 or radius_m > 50000:
-        return "error:radius_m must be between 1 and 50000."
+        raise ToolFailure(
+            "validation_error", f"radius_m must be between 1 and 50000 (got {radius_m})."
+        )
     return f"(around:{radius_m},{latitude},{longitude})"
 
 

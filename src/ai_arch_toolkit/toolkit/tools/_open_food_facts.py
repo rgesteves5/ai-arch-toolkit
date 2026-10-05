@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
 _STATUS_MESSAGES = {
@@ -91,18 +92,13 @@ def open_food_facts_product(barcode: str) -> str:
 
     Args:
         barcode: Product barcode / GTIN.
+
+    Raises:
+        ToolFailure: validation_error when ``barcode`` is not a barcode; not_found when Open
+            Food Facts has no product with it.
     """
-    normalized = _normalize_barcode(barcode)
-    if not normalized:
-        return f"Open Food Facts product lookup failed: invalid barcode: {barcode!r}"
-
-    try:
-        product = _fetch_product(normalized)
-    except HttpError as e:
-        return f"Open Food Facts product lookup failed: {e}"
-
-    if product is None:
-        return f"Open Food Facts product not found: {normalized}"
+    normalized = _barcode(barcode)
+    product = _fetch_product(normalized)
     return f"Open Food Facts product {normalized}:\n" + _format_products(
         [product],
         include_index=False,
@@ -130,9 +126,15 @@ def open_food_facts_search(
         label: Optional label tag/name filter, e.g. "organic".
         max_results: Number of products to return (1-20). Defaults to 5.
         page: One-based result page. Defaults to 1.
+
+    Raises:
+        ToolFailure: validation_error when ``page`` is below 1, no filter is given, or a filter
+            has characters it cannot take.
     """
     if page < 1:
-        return "Open Food Facts search failed: page must be greater than or equal to 1."
+        raise ToolFailure(
+            "validation_error", f"page must be greater than or equal to 1, not {page}"
+        )
     filters = {
         "product_name": product_name.strip(),
         "brands_tags": brand.strip(),
@@ -141,13 +143,17 @@ def open_food_facts_search(
         "labels_tags_en": label.strip(),
     }
     if not any(filters.values()):
-        return (
-            "Open Food Facts search failed: provide product_name, brand, category, "
-            "country, or label."
+        raise ToolFailure(
+            "validation_error",
+            "no filter given; provide product_name, brand, category, country, or label",
         )
     invalid = [name for name, value in filters.items() if value and not _valid_filter(value)]
     if invalid:
-        return f"Open Food Facts search failed: invalid filter value for {', '.join(invalid)}."
+        raise ToolFailure(
+            "validation_error",
+            f"invalid filter value for {', '.join(invalid)}; use 1-120 letters, digits, spaces "
+            "and basic punctuation (,.'&()/%+-)",
+        )
 
     params = {
         "fields": ",".join(_FIELDS),
@@ -156,12 +162,7 @@ def open_food_facts_search(
     }
     params.update({key: value for key, value in filters.items() if value})
 
-    try:
-        return _SEARCH.get_json(
-            "search", params=params, parse=lambda data: _search_text(data, page)
-        )
-    except HttpError as e:
-        return f"Open Food Facts search failed: {e}"
+    return _SEARCH.get_json("search", params=params, parse=lambda data: _search_text(data, page))
 
 
 @tool(capability="network")
@@ -170,18 +171,13 @@ def open_food_facts_nutrition(barcode: str) -> str:
 
     Args:
         barcode: Product barcode / GTIN.
+
+    Raises:
+        ToolFailure: validation_error when ``barcode`` is not a barcode; not_found when Open
+            Food Facts has no product with it.
     """
-    normalized = _normalize_barcode(barcode)
-    if not normalized:
-        return f"Open Food Facts nutrition lookup failed: invalid barcode: {barcode!r}"
-
-    try:
-        product = _fetch_product(normalized)
-    except HttpError as e:
-        return f"Open Food Facts nutrition lookup failed: {e}"
-
-    if product is None:
-        return f"Open Food Facts product not found: {normalized}"
+    normalized = _barcode(barcode)
+    product = _fetch_product(normalized)
     return f"Open Food Facts nutrition {normalized}:\n" + _format_nutrition(product)
 
 
@@ -191,25 +187,30 @@ def open_food_facts_compare(barcodes: str) -> str:
 
     Args:
         barcodes: Comma-separated product barcodes / GTINs. At most 5 products.
+
+    Raises:
+        ToolFailure: validation_error when the list is empty, longer than 5, or holds something
+            that is not a barcode; not_found when Open Food Facts has none of the products (a
+            missing one among found ones is named in the answer).
     """
     parsed = _parse_barcode_list(barcodes)
-    if isinstance(parsed, str):
-        return f"Open Food Facts comparison failed: {parsed}"
 
     products: list[_OpenFoodFactsProduct] = []
     missing: list[str] = []
-    try:
-        for barcode in parsed:
-            product = _fetch_product(barcode)
-            if product is None:
-                missing.append(barcode)
-            else:
-                products.append(product)
-    except HttpError as e:
-        return f"Open Food Facts comparison failed: {e}"
+    for barcode in parsed:
+        try:
+            products.append(_fetch_product(barcode))
+        except ToolFailure as e:  # a missing product is listed; any other failure stops
+            if e.error.type != "not_found":
+                raise
+            missing.append(barcode)
 
     if not products:
-        return "Open Food Facts comparison failed: no products found."
+        raise ToolFailure(
+            "not_found",
+            f"Open Food Facts has none of the products {', '.join(missing)}; check the barcodes "
+            "or find products with open_food_facts_search",
+        )
     lines = ["Open Food Facts comparison:"]
     for index, product in enumerate(products, start=1):
         lines.append(_format_compare_row(index, product))
@@ -218,11 +219,28 @@ def open_food_facts_compare(barcodes: str) -> str:
     return "\n".join(lines)
 
 
-def _fetch_product(barcode: str) -> _OpenFoodFactsProduct | None:
-    """The product with ``barcode``, or ``None`` when Open Food Facts has none."""
-    return _PRODUCTS.get_json(
-        "product", f"{barcode}.json", params={"fields": ",".join(_FIELDS)}, parse=_product
+def _fetch_product(barcode: str) -> _OpenFoodFactsProduct:
+    """The product with ``barcode``.
+
+    Raises:
+        ToolFailure: not_found when Open Food Facts has no product with ``barcode``.
+    """
+    missing = ToolFailure(
+        "not_found",
+        f"Open Food Facts has no product with barcode {barcode}; find products with "
+        "open_food_facts_search",
     )
+    try:
+        product = _PRODUCTS.get_json(
+            "product", f"{barcode}.json", params={"fields": ",".join(_FIELDS)}, parse=_product
+        )
+    except HttpError as e:  # API v2 answers an unknown barcode with a 404 as well as status 0
+        if e.status == 404:
+            raise missing from e
+        raise
+    if product is None:
+        raise missing
+    return product
 
 
 def _product(data: dict[str, Any]) -> _OpenFoodFactsProduct | None:
@@ -404,18 +422,18 @@ def _nutrient_map(product: _OpenFoodFactsProduct) -> dict[str, str]:
     return result
 
 
-def _parse_barcode_list(value: str) -> tuple[str, ...] | str:
-    barcodes: list[str] = []
-    for raw in value.replace(";", ",").split(","):
-        barcode = _normalize_barcode(raw)
-        if not barcode:
-            return f"invalid barcode in list: {raw.strip()!r}"
-        barcodes.append(barcode)
-    barcodes = list(dict.fromkeys(barcodes))
-    if not barcodes:
-        return "provide at least one barcode."
+def _parse_barcode_list(value: str) -> tuple[str, ...]:
+    """The distinct barcodes of a comma-separated list.
+
+    Raises:
+        ToolFailure: validation_error for an invalid barcode, or more than 5 of them.
+    """
+    barcodes = list(dict.fromkeys(_barcode(raw) for raw in value.replace(";", ",").split(",")))
     if len(barcodes) > 5:
-        return "at most 5 barcodes are allowed."
+        raise ToolFailure(
+            "validation_error",
+            f"{len(barcodes)} barcodes given, at most 5 are allowed; compare them in groups",
+        )
     return tuple(barcodes)
 
 
@@ -451,10 +469,17 @@ def _clean_tag(value: Any) -> str:
     return text.replace("-", " ")
 
 
-def _normalize_barcode(value: str) -> str:
+def _barcode(value: str) -> str:
+    """``value``'s digits.
+
+    Raises:
+        ToolFailure: validation_error unless they are a barcode (4-32 digits).
+    """
     barcode = re.sub(r"\D", "", value.strip())
     if not _BARCODE_RE.fullmatch(barcode):
-        return ""
+        raise ToolFailure(
+            "validation_error", f"invalid barcode {value.strip()!r}; a barcode has 4-32 digits"
+        )
     return barcode
 
 

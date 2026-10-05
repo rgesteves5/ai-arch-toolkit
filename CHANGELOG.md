@@ -34,6 +34,11 @@ flows, manifests) needs these changes; each one is detailed below.
   delivered, as text does: in `stream_events()` and in an iterated flow, an answer of tool calls
   only that fails after its first piece is no longer retried or passed to the fallback.
 - **Tools.**
+  - A toolkit tool that cannot answer raises `ToolFailure` (T01, D42) instead of returning an
+    error string: called through `run_tools()`, a `ToolGroup` or `execute_tool()` it gives
+    `ToolResult(ok=False)` with `error.type` in `not_found`, `validation_error`, `upstream`,
+    `rate_limited`. Code that calls a tool function directly catches `ToolFailure`; code that
+    looked for "failed:" in a returned string reads `result.ok` and `result.error.type`.
   - `csv_read` is in `toolkit.tools.dangerous` and needs approval.
   - Every tool call has a 120-second deadline and a 200,000-character output cap: set
     `timeout_s`/`max_output_chars` (or `None`) on a tool that needs more.
@@ -69,6 +74,13 @@ flows, manifests) needs these changes; each one is detailed below.
   - `select` or `serialize_as` on an inline template.
 
 ### Added
+- **Typed tool failures** (T01, D37, D42): `ToolFailure(type, message, *, retryable=False,
+  details=None)` and `ToolFailureType`, public in `ai_arch_toolkit` and `ai_arch_toolkit.core`. A
+  tool raises it when it cannot answer; the executor returns `ToolResult(ok=False)` with its type,
+  its `retryable` and its redacted message, and meters the call as an unbilled failure.
+  `tool_result()` takes `is_error=`, which `run_tools()`/`run_tools_sync()` and the ReAct flow set
+  for a failed call: Anthropic receives it as the `tool_result` block's `is_error`, Gemini the
+  result under the function response's `error` key.
 - **A strict budget reserves an image by its model, quality and size** (G-40, D61): each image
   adapter gives the most image output tokens one image of the request costs, from its provider's
   published counts (`BaseProvider.image_token_bound`, carried to the meter as
@@ -328,6 +340,11 @@ flows, manifests) needs these changes; each one is detailed below.
   [docs/agents.md](docs/agents.md#file-backed-agent-manifests).
 
 ### Changed
+- **Breaking:** every toolkit tool fails by raising `ToolFailure`, never by returning an error
+  string (T01): an unknown page, record or identifier is `not_found`, a bad argument
+  `validation_error`, a source that fails or explains an error `upstream`, a 429 `rate_limited`.
+  The HTTP door's `HttpError` is a `ToolFailure` (retryable for a 429, a 5xx, a timeout or a
+  network error). Zero results is still a successful answer that says so.
 - **An image model without published counts holds 24,000 image output tokens per image** in a
   strict budget and as a failure's worst case (D61), up from 16,000, which did not cover the
   dearest published image (23,719 tokens, gpt-image-2 at `high` and 2880x2880). So does a

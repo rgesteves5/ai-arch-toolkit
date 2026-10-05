@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._math import math_eval, unit_convert
 
 
@@ -40,20 +41,18 @@ class TestMathEval:
         assert math_eval("sqrt(abs(-16))") == "4"
 
     def test_division_by_zero(self):
-        result = math_eval("1 / 0")
-        assert "Error" in result
+        message = _refused(math_eval, "1 / 0")
+        assert "division by zero" in message
 
     def test_syntax_error(self):
-        result = math_eval("2 +* 3")
-        assert "Error" in result
+        _refused(math_eval, "2 +* 3")
 
     def test_unknown_function(self):
-        result = math_eval("evil(42)")
-        assert "Error" in result
+        message = _refused(math_eval, "evil(42)")
+        assert "unknown function 'evil'" in message
 
     def test_no_builtins_access(self):
-        result = math_eval("__import__('os')")
-        assert "Error" in result
+        _refused(math_eval, "__import__('os')")
 
 
 class TestUnitConvert:
@@ -94,8 +93,11 @@ class TestUnitConvert:
         assert "62" in result
 
     def test_incompatible_units(self):
-        result = unit_convert(1, "km", "kg")
-        assert "Cannot convert" in result
+        message = _refused(unit_convert, 1, "km", "kg")
+        assert "cannot convert from 'km' to 'kg'" in message
+
+    def test_unknown_unit(self):
+        _refused(unit_convert, 1, "furlong", "m")
 
     def test_aliases(self):
         r1 = unit_convert(1, "kilometer", "mile")
@@ -107,16 +109,25 @@ class TestUnitConvert:
 
 class TestMathGuards:
     def test_a_long_expression_is_refused(self):
-        assert math_eval("1+" * 600 + "1") == "Error: expression longer than 1000 characters"
+        message = _refused(math_eval, "1+" * 600 + "1")
+        assert "expression longer than 1000 characters" in message
 
     @pytest.mark.parametrize("expression", ["factorial(3000)", "10**4000 * 10**4000", "7**9000"])
     def test_a_result_too_large_to_print_is_refused_before_it_is_computed(self, expression):
-        assert math_eval(expression).startswith("Error: result too large")
+        assert "result too large" in _refused(math_eval, expression)
 
     def test_deep_nesting_is_an_error(self):
-        assert math_eval("-" * 999 + "1").startswith("Error")
+        _refused(math_eval, "-" * 999 + "1")
 
     def test_large_but_printable_results_still_work(self):
         assert math_eval("2**1000") == str(2**1000)
         assert math_eval("factorial(100)").startswith("93326215443944")
         assert math_eval("pow(3, 10**50, 7)") == str(pow(3, 10**50, 7))
+
+
+def _refused(tool, *args) -> str:
+    """The message of the validation_error the tool raises for ``args``."""
+    with pytest.raises(ToolFailure) as caught:
+        tool(*args)
+    assert caught.value.error.type == "validation_error"
+    return caught.value.error.message

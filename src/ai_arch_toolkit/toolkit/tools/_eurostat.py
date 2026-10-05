@@ -6,7 +6,8 @@ import re
 from typing import Any
 
 from ai_arch_toolkit.core import tool
-from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
+from ai_arch_toolkit.core._tools._result import ToolFailure
+from ai_arch_toolkit.toolkit.tools._http import Api
 
 
 def _eurostat_error(answer: object) -> str | None:
@@ -55,17 +56,23 @@ def eurostat_dataset_search(query: str, max_results: int = 10, offset: int = 0) 
         query: Dataset ID or title search text.
         max_results: Number of datasets to return (1-50). Defaults to 10.
         offset: Zero-based offset in matching local results. Defaults to 0.
+
+    Raises:
+        ToolFailure: validation_error when ``query`` is empty or has unsupported characters, or
+            ``offset`` is negative.
     """
     if not _valid_text(query):
-        return "Eurostat dataset search failed: invalid query."
-    if offset < 0:
-        return "Eurostat dataset search failed: offset must be greater than or equal to 0."
-    try:
-        return _DATAFLOWS.get_json(
-            parse=lambda data: _dataset_search_text(data, query, offset, max_results)
+        msg = (
+            f"invalid query {query!r}; pass 1-180 characters of words, digits and basic "
+            "punctuation, e.g. 'population'."
         )
-    except HttpError as e:
-        return f"Eurostat dataset search failed: {e}"
+        raise ToolFailure("validation_error", msg)
+    if offset < 0:
+        msg = f"offset must be greater than or equal to 0, got {offset}."
+        raise ToolFailure("validation_error", msg)
+    return _DATAFLOWS.get_json(
+        parse=lambda data: _dataset_search_text(data, query, offset, max_results)
+    )
 
 
 @tool(capability="network")
@@ -74,18 +81,16 @@ def eurostat_dataset(dataset_id: str) -> str:
 
     Args:
         dataset_id: Eurostat dataset/dataflow ID, e.g. "TPS00001".
+
+    Raises:
+        ToolFailure: validation_error when ``dataset_id`` is malformed.
     """
-    dataset = dataset_id.strip().upper()
-    if not _DATASET_RE.fullmatch(dataset):
-        return f"Eurostat dataset lookup failed: invalid dataset_id: {dataset_id!r}"
-    try:
-        return _DATA.get_json(
-            dataset,
-            params={"lastTimePeriod": "1"},
-            parse=lambda data: _dataset_text(data, dataset),
-        )
-    except HttpError as e:
-        return f"Eurostat dataset lookup failed: {e}"
+    dataset = _dataset_id(dataset_id)
+    return _DATA.get_json(
+        dataset,
+        params={"lastTimePeriod": "1"},
+        parse=lambda data: _dataset_text(data, dataset),
+    )
 
 
 @tool(capability="network")
@@ -95,18 +100,16 @@ def eurostat_dimensions(dataset_id: str, max_values: int = 20) -> str:
     Args:
         dataset_id: Eurostat dataset/dataflow ID, e.g. "TPS00001".
         max_values: Number of category values to show per dimension (1-50). Defaults to 20.
+
+    Raises:
+        ToolFailure: validation_error when ``dataset_id`` is malformed.
     """
-    dataset = dataset_id.strip().upper()
-    if not _DATASET_RE.fullmatch(dataset):
-        return f"Eurostat dimensions failed: invalid dataset_id: {dataset_id!r}"
-    try:
-        return _DATA.get_json(
-            dataset,
-            params={"lastTimePeriod": "1"},
-            parse=lambda data: _dimensions_text(data, dataset, max_values),
-        )
-    except HttpError as e:
-        return f"Eurostat dimensions failed: {e}"
+    dataset = _dataset_id(dataset_id)
+    return _DATA.get_json(
+        dataset,
+        params={"lastTimePeriod": "1"},
+        parse=lambda data: _dimensions_text(data, dataset, max_values),
+    )
 
 
 @tool(capability="network")
@@ -123,20 +126,15 @@ def eurostat_series(
         filters: Comma-separated dimension filters, e.g. "geo=PT,unit=NR".
         last_time_periods: Number of latest time periods to request when no time filter is given.
         max_points: Number of observations to return (1-50). Defaults to 25.
+
+    Raises:
+        ToolFailure: validation_error when ``dataset_id`` or ``filters`` is malformed.
     """
-    dataset = dataset_id.strip().upper()
-    if not _DATASET_RE.fullmatch(dataset):
-        return f"Eurostat series failed: invalid dataset_id: {dataset_id!r}"
-    parsed = _parse_filters(filters)
-    if isinstance(parsed, str):
-        return f"Eurostat series failed: {parsed}"
-    params = _with_last_periods(parsed, last_time_periods)
-    try:
-        return _DATA.get_json(
-            dataset, params=params, parse=lambda data: _series_text(data, dataset, max_points)
-        )
-    except HttpError as e:
-        return f"Eurostat series failed: {e}"
+    dataset = _dataset_id(dataset_id)
+    params = _with_last_periods(_parse_filters(filters), last_time_periods)
+    return _DATA.get_json(
+        dataset, params=params, parse=lambda data: _series_text(data, dataset, max_points)
+    )
 
 
 @tool(capability="network")
@@ -153,30 +151,42 @@ def eurostat_compare(
         geo_codes: Comma-separated geo codes, e.g. "PT,ES,FR".
         filters: Additional comma-separated dimension filters except geo.
         last_time_periods: Number of latest time periods to request. Defaults to 1.
+
+    Raises:
+        ToolFailure: validation_error when ``geo_codes``, ``filters`` or ``dataset_id`` is
+            malformed, or ``filters`` names geo.
     """
     geos = [geo.strip().upper() for geo in geo_codes.split(",") if geo.strip()]
     if not geos or len(geos) > 10:
-        return "Eurostat compare failed: provide 1-10 comma-separated geo_codes."
-    if any(not _CODE_RE.fullmatch(geo) for geo in geos):
-        return "Eurostat compare failed: invalid geo code."
+        msg = f"provide 1-10 comma-separated geo_codes, e.g. 'PT,ES,FR'; got {len(geos)}."
+        raise ToolFailure("validation_error", msg)
+    invalid = [geo for geo in geos if not _CODE_RE.fullmatch(geo)]
+    if invalid:
+        msg = f"invalid geo code {invalid[0]!r}; use Eurostat geo codes such as PT or EU27_2020."
+        raise ToolFailure("validation_error", msg)
     parsed = _parse_filters(filters)
-    if isinstance(parsed, str):
-        return f"Eurostat compare failed: {parsed}"
     if "geo" in {key.lower() for key in parsed}:
-        return "Eurostat compare failed: provide geo filters via geo_codes, not filters."
-    dataset = dataset_id.strip().upper()
-    if not _DATASET_RE.fullmatch(dataset):
-        return f"Eurostat compare failed: invalid dataset_id: {dataset_id!r}"
+        msg = "provide geo filters via geo_codes, not filters."
+        raise ToolFailure("validation_error", msg)
+    dataset = _dataset_id(dataset_id)
 
-    try:
-        rows = _compare_rows(dataset, geos, parsed, last_time_periods)
-    except HttpError as e:
-        return f"Eurostat compare failed: {e}"
+    rows = _compare_rows(dataset, geos, parsed, last_time_periods)
     if not rows:
         return f"No Eurostat comparison observations found for {dataset}."
     lines = [f"Eurostat comparison {dataset}:"]
     lines.extend(f"{index}. {row}" for index, row in enumerate(rows, start=1))
     return "\n".join(lines)
+
+
+def _dataset_id(dataset_id: str) -> str:
+    dataset = dataset_id.strip().upper()
+    if not _DATASET_RE.fullmatch(dataset):
+        msg = (
+            f"invalid dataset_id {dataset_id!r}; a Eurostat dataset ID looks like TPS00001 "
+            "(eurostat_dataset_search finds them)."
+        )
+        raise ToolFailure("validation_error", msg)
+    return dataset
 
 
 def _with_last_periods(params: dict[str, str], last_time_periods: int) -> dict[str, str]:
@@ -377,7 +387,7 @@ def _decode_index(flat_index: int, sizes: list[int]) -> list[int]:
     return list(reversed(coords))
 
 
-def _parse_filters(filters: str) -> dict[str, str] | str:
+def _parse_filters(filters: str) -> dict[str, str]:
     out: dict[str, str] = {}
     if not filters.strip():
         return out
@@ -386,12 +396,17 @@ def _parse_filters(filters: str) -> dict[str, str] | str:
         if not item:
             continue
         if "=" not in item:
-            return f"invalid filter {item!r}; use key=value."
+            raise ToolFailure("validation_error", f"invalid filter {item!r}; use key=value.")
         key, value = [part.strip() for part in item.split("=", 1)]
         if not _CODE_RE.fullmatch(key):
-            return f"invalid filter dimension {key!r}."
+            msg = f"invalid filter dimension {key!r}; eurostat_dimensions lists the dimensions."
+            raise ToolFailure("validation_error", msg)
         if not value or any(not _CODE_RE.fullmatch(part.strip()) for part in value.split("+")):
-            return f"invalid filter value for {key!r}."
+            msg = (
+                f"invalid filter value for {key!r}; use codes joined by '+', e.g. {key}=PT+ES "
+                "(eurostat_dimensions lists the codes)."
+            )
+            raise ToolFailure("validation_error", msg)
         out[key] = value
     return out
 

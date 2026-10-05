@@ -6,12 +6,19 @@ from unittest.mock import patch
 
 import pytest
 
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._wikipedia import (
     wikipedia_article,
     wikipedia_related,
     wikipedia_search,
 )
 from tests.toolkit.http_fakes import HTTP_OPEN, respond
+
+
+def _failure(call):
+    with pytest.raises(ToolFailure) as caught:
+        call()
+    return caught.value.error
 
 
 class TestWikipediaSearch:
@@ -41,8 +48,11 @@ class TestWikipediaSearch:
     @patch(HTTP_OPEN)
     def test_api_failure(self, mock_urlopen):
         mock_urlopen.side_effect = TimeoutError()
-        result = wikipedia_search("test")
-        assert "failed" in result.lower()
+
+        error = _failure(lambda: wikipedia_search("test"))
+
+        assert error.type == "upstream"
+        assert error.retryable
 
 
 class TestWikipediaArticle:
@@ -60,8 +70,19 @@ class TestWikipediaArticle:
         mock_urlopen.return_value = respond(
             {"query": {"pages": {"-1": {"title": "Xyz", "missing": ""}}}}
         )
-        result = wikipedia_article("Xyz")
-        assert "not found" in result.lower()
+
+        error = _failure(lambda: wikipedia_article("Xyz"))
+
+        assert error.type == "not_found"
+        assert error.message == (
+            "no Wikipedia article titled 'Xyz'; find the exact title with wikipedia_search"
+        )
+
+    @patch(HTTP_OPEN)
+    def test_a_page_without_an_extract_is_a_success(self, mock_urlopen):
+        mock_urlopen.return_value = respond({"query": {"pages": {"1": {"title": "Xyz"}}}})
+
+        assert wikipedia_article("Xyz") == "No extract available for: 'Xyz'"
 
     @patch(HTTP_OPEN)
     def test_truncation(self, mock_urlopen):
@@ -112,24 +133,17 @@ _RATELIMITED = {
 }
 
 
-@pytest.mark.parametrize(
-    ("fn", "failure"),
-    [
-        (wikipedia_search, "Wikipedia search failed"),
-        (wikipedia_article, "Wikipedia API failed"),
-        (wikipedia_related, "Wikipedia related lookup failed"),
-    ],
-)
+@pytest.mark.parametrize("fn", [wikipedia_search, wikipedia_article, wikipedia_related])
 @patch(HTTP_OPEN)
-def test_an_error_the_api_reports_is_the_tools_error(mock_urlopen, fn, failure):
+def test_an_error_the_api_reports_is_the_tools_error(mock_urlopen, fn):
     # MediaWiki sends it with HTTP 200; wikipedia_related does not fall back to a search.
     mock_urlopen.return_value = respond(_RATELIMITED)
 
-    result = fn("Python")
+    error = _failure(lambda: fn("Python"))
 
-    assert result == (
-        f"{failure}: ratelimited: You've exceeded your rate limit. Please wait some time and try "
-        "again."
+    assert error.type == "upstream"
+    assert error.message == (
+        "ratelimited: You've exceeded your rate limit. Please wait some time and try again."
     )
     assert mock_urlopen.call_count == 1
 
@@ -148,23 +162,19 @@ _INVALID_TITLE = {
 }
 
 
-@pytest.mark.parametrize(
-    ("fn", "failure"),
-    [
-        (wikipedia_article, "Wikipedia API failed"),
-        (wikipedia_related, "Wikipedia related lookup failed"),
-    ],
-)
+@pytest.mark.parametrize("fn", [wikipedia_article, wikipedia_related])
 @patch(HTTP_OPEN)
-def test_an_invalid_title_is_the_tools_error_with_the_apis_reason(mock_urlopen, fn, failure):
+def test_an_invalid_title_is_the_tools_error_with_the_apis_reason(mock_urlopen, fn):
     # As answered live (2026-09-29): wikipedia_article said "No extract available", and
     # wikipedia_related searched for the title instead.
     mock_urlopen.return_value = respond(_INVALID_TITLE)
 
-    result = fn("a[b")
+    error = _failure(lambda: fn("a[b"))
 
-    assert result == (
-        f'{failure}: invalid title: The requested page title contains invalid characters: "[".'
+    assert error.type == "validation_error"
+    assert error.message == (
+        'invalid title: The requested page title contains invalid characters: "["; '
+        "give an article title, e.g. from wikipedia_search"
     )
     assert mock_urlopen.call_count == 1
 
@@ -173,7 +183,10 @@ def test_an_invalid_title_is_the_tools_error_with_the_apis_reason(mock_urlopen, 
 def test_an_invalid_title_without_a_reason_still_says_so(mock_urlopen):
     mock_urlopen.return_value = respond({"query": {"pages": {"-1": {"invalid": ""}}}})
 
-    assert wikipedia_article("Talk:") == "Wikipedia API failed: invalid title"
+    error = _failure(lambda: wikipedia_article("Talk:"))
+
+    assert error.type == "validation_error"
+    assert error.message.startswith("invalid title; ")
 
 
 @patch(HTTP_OPEN)
@@ -181,18 +194,19 @@ def test_an_answer_without_pages_is_not_found(mock_urlopen):
     # An interwiki title, like "fr:Paris", comes back with no pages.
     mock_urlopen.return_value = respond({"query": {"interwiki": [{"title": "fr:Paris"}]}})
 
-    assert wikipedia_article("fr:Paris") == "Article not found: 'fr:Paris'"
+    error = _failure(lambda: wikipedia_article("fr:Paris"))
+
+    assert error.type == "not_found"
+    assert "'fr:Paris'" in error.message
 
 
 @patch(HTTP_OPEN)
-def test_an_empty_search_reports_the_missing_parameter(mock_urlopen):
-    mock_urlopen.return_value = respond(
-        {"error": {"code": "missingparam", "info": 'The "srsearch" parameter must be set.'}}
-    )
+def test_an_empty_search_is_refused_before_the_request(mock_urlopen):
+    error = _failure(lambda: wikipedia_search("  "))
 
-    assert wikipedia_search("") == (
-        'Wikipedia search failed: missingparam: The "srsearch" parameter must be set.'
-    )
+    assert error.type == "validation_error"
+    assert "query cannot be empty" in error.message
+    mock_urlopen.assert_not_called()
 
 
 @patch(HTTP_OPEN)

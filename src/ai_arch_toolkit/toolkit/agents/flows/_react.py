@@ -136,7 +136,12 @@ def react_flow(
             for tc, result in zip(response.tool_calls, checked, strict=True):
                 structured_results.append(result)
                 tool_result_dicts.append(
-                    tool_result(result.to_model_text(), tool_use_id=tc.id, name=tc.name)
+                    tool_result(
+                        result.to_model_text(),
+                        tool_use_id=tc.id,
+                        name=tc.name,
+                        is_error=not result.ok,
+                    )
                 )
         else:
             for tc in response.tool_calls:
@@ -155,7 +160,12 @@ def react_flow(
                     result = ToolResult.success(result)
                 structured_results.append(result)
                 tool_result_dicts.append(
-                    tool_result(result.to_model_text(), tool_use_id=tc.id, name=tc.name)
+                    tool_result(
+                        result.to_model_text(),
+                        tool_use_id=tc.id,
+                        name=tc.name,
+                        is_error=not result.ok,
+                    )
                 )
 
         updated_messages = [*messages, response.to_message(), *tool_result_dicts]

@@ -6,6 +6,9 @@ import urllib.error
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
+import pytest
+
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._foodon import foodon_search, foodon_term
 from tests.toolkit.http_fakes import HTTP_OPEN, respond
 
@@ -22,6 +25,12 @@ _TERM = {
 
 def _payload(docs):
     return {"response": {"docs": docs, "numFound": len(docs), "start": 0}}
+
+
+def _failure(call) -> ToolFailure:
+    with pytest.raises(ToolFailure) as caught:
+        call()
+    return caught.value
 
 
 def _called_request(mock_urlopen):
@@ -55,9 +64,20 @@ class TestFoodOnSearch:
 
     @patch(HTTP_OPEN)
     def test_invalid_search_options_do_not_call_api(self, mock_urlopen):
-        assert "query cannot be empty" in foodon_search("")
-        assert "start must" in foodon_search("apple", start=-1)
+        for call, words in (
+            (lambda: foodon_search(""), "query cannot be empty"),
+            (lambda: foodon_search("apple", start=-1), "start must"),
+        ):
+            failure = _failure(call)
+            assert failure.error.type == "validation_error"
+            assert words in str(failure)
         mock_urlopen.assert_not_called()
+
+    @patch(HTTP_OPEN)
+    def test_no_terms_is_a_success(self, mock_urlopen):
+        mock_urlopen.return_value = respond(_payload([]))
+
+        assert foodon_search("zzz") == "No FoodOn terms found for: 'zzz'"
 
 
 class TestFoodOnTerm:
@@ -73,8 +93,20 @@ class TestFoodOnTerm:
         assert _called_params(mock_urlopen)["q"] == ["FOODON:00002473"]
 
     @patch(HTTP_OPEN)
+    def test_an_unknown_term_is_not_found(self, mock_urlopen):
+        mock_urlopen.return_value = respond(_payload([]))
+
+        failure = _failure(lambda: foodon_term("FOODON:09999999"))
+
+        assert failure.error.type == "not_found"
+        assert "FOODON:09999999" in str(failure)
+        assert "foodon_search" in str(failure)
+
+    @patch(HTTP_OPEN)
     def test_invalid_term_and_errors(self, mock_urlopen):
-        assert "invalid term_id" in foodon_term("bad")
+        failure = _failure(lambda: foodon_term("bad"))
+        assert failure.error.type == "validation_error"
+        assert "invalid term_id" in str(failure)
         mock_urlopen.assert_not_called()
 
         mock_urlopen.side_effect = urllib.error.HTTPError(
@@ -84,8 +116,12 @@ class TestFoodOnTerm:
             hdrs=None,
             fp=None,
         )
-        assert "rate limited" in foodon_search("apple")
+        failure = _failure(lambda: foodon_search("apple"))
+        assert failure.error.type == "rate_limited"
+        assert "rate limited" in str(failure)
 
         mock_urlopen.side_effect = None
         mock_urlopen.return_value = respond("not json")
-        assert "could not parse" in foodon_search("apple")
+        failure = _failure(lambda: foodon_search("apple"))
+        assert failure.error.type == "upstream"
+        assert "could not parse" in str(failure)

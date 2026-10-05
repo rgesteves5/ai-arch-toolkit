@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any, overload
 
 from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
 
@@ -128,15 +129,14 @@ def world_bank_topics(max_results: int = 50, page: int = 1) -> str:
     Args:
         max_results: Number of topics to return (1-100). Defaults to 50.
         page: One-based result page. Defaults to 1.
+
+    Raises:
+        ToolFailure: validation_error when ``page`` is below 1.
     """
-    if page < 1:
-        return "World Bank topics failed: page must be greater than or equal to 1."
+    _check_page(page)
 
     params = {"page": str(page), "per_page": str(_bounded(max_results))}
-    try:
-        return _API.get_json_list("topic", params=params, parse=_topics_text)
-    except HttpError as e:
-        return f"World Bank topics failed: {e}"
+    return _API.get_json_list("topic", params=params, parse=_topics_text)
 
 
 @tool(capability="network")
@@ -146,15 +146,14 @@ def world_bank_sources(max_results: int = 50, page: int = 1) -> str:
     Args:
         max_results: Number of sources to return (1-100). Defaults to 50.
         page: One-based result page. Defaults to 1.
+
+    Raises:
+        ToolFailure: validation_error when ``page`` is below 1.
     """
-    if page < 1:
-        return "World Bank sources failed: page must be greater than or equal to 1."
+    _check_page(page)
 
     params = {"page": str(page), "per_page": str(_bounded(max_results))}
-    try:
-        return _API.get_json_list("source", params=params, parse=_sources_text)
-    except HttpError as e:
-        return f"World Bank sources failed: {e}"
+    return _API.get_json_list("source", params=params, parse=_sources_text)
 
 
 @tool(capability="network")
@@ -175,9 +174,11 @@ def world_bank_countries(
         lending_type: Optional official lending type ID filter, e.g. "IBD".
         max_results: Number of countries/aggregates to return (1-100). Defaults to 50.
         page: One-based result page. Defaults to 1.
+
+    Raises:
+        ToolFailure: validation_error when ``page`` is below 1.
     """
-    if page < 1:
-        return "World Bank countries failed: page must be greater than or equal to 1."
+    _check_page(page)
 
     max_results = _bounded(max_results)
     filters = (
@@ -191,14 +192,11 @@ def world_bank_countries(
         "page": "1" if filtered else str(page),
         "per_page": str(_COUNTRIES_PAGE_SIZE if filtered else max_results),
     }
-    try:
-        return _API.get_json_list(
-            "country",
-            params=params,
-            parse=lambda payload: _countries_text(payload, filters, page, max_results),
-        )
-    except HttpError as e:
-        return f"World Bank countries failed: {e}"
+    return _API.get_json_list(
+        "country",
+        params=params,
+        parse=lambda payload: _countries_text(payload, filters, page, max_results),
+    )
 
 
 @tool(capability="network")
@@ -219,11 +217,13 @@ def world_bank_indicators(
         max_results: Number of indicators to return (1-100). Defaults to 20.
         page: One-based page to browse, or first page to scan when query is provided.
         scan_pages: Number of catalog pages to scan for query matches (1-30). Defaults to 10.
+
+    Raises:
+        ToolFailure: validation_error when ``page`` or ``scan_pages`` is below 1.
     """
-    if page < 1:
-        return "World Bank indicators failed: page must be greater than or equal to 1."
+    _check_page(page)
     if scan_pages < 1:
-        return "World Bank indicators failed: scan_pages must be greater than or equal to 1."
+        raise ToolFailure("validation_error", f"invalid scan_pages {scan_pages}; use 1 to 30")
 
     max_results = _bounded(max_results)
     query = query.strip()
@@ -231,12 +231,9 @@ def world_bank_indicators(
     source = source.strip()
     scan_pages = min(scan_pages, _INDICATOR_SCAN_PAGES_LIMIT)
 
-    try:
-        if query:
-            return _search_indicators(query, topic, source, page, scan_pages, max_results)
-        return _browse_indicators(topic, source, page, max_results)
-    except HttpError as e:
-        return f"World Bank indicators failed: {e}"
+    if query:
+        return _search_indicators(query, topic, source, page, scan_pages, max_results)
+    return _browse_indicators(topic, source, page, max_results)
 
 
 @tool(capability="network")
@@ -245,10 +242,12 @@ def world_bank_indicator(indicator: str) -> str:
 
     Args:
         indicator: World Bank indicator ID, e.g. "SP.POP.TOTL".
+
+    Raises:
+        ToolFailure: validation_error when the indicator ID is malformed; not_found when the World
+            Bank has no indicator with that ID.
     """
-    indicator = indicator.strip()
-    if not _valid_indicator_id(indicator):
-        return f"World Bank indicator lookup failed: invalid indicator ID: {indicator!r}"
+    indicator = _indicator_id(indicator)
 
     try:
         return _API.get_json_list(
@@ -256,8 +255,8 @@ def world_bank_indicator(indicator: str) -> str:
         )
     except HttpError as e:
         if e.status == 404:
-            return f"World Bank indicator not found: {indicator}"
-        return f"World Bank indicator lookup failed: {e}"
+            raise _no_indicator(indicator) from e
+        raise
 
 
 @tool(capability="network")
@@ -278,23 +277,22 @@ def world_bank_series(
         end_year: Optional last year as YYYY.
         max_results: Number of observations to return (1-100). Defaults to 100.
         page: One-based result page. Defaults to 1.
+
+    Raises:
+        ToolFailure: validation_error when the country code, the indicator ID, a year or ``page``
+            is invalid.
     """
-    validation = _validate_series_inputs(country, indicator, start_year, end_year, page)
-    if validation:
-        return f"World Bank series failed: {validation}"
+    _check_series_inputs(country, indicator, start_year, end_year, page)
 
     params = _series_params(start_year, end_year, page, _bounded(max_results))
-    try:
-        return _API.get_json_list(
-            "country",
-            country.strip(),
-            "indicator",
-            indicator.strip(),
-            params=params,
-            parse=_series_text,
-        )
-    except HttpError as e:
-        return f"World Bank series failed: {e}"
+    return _API.get_json_list(
+        "country",
+        country.strip(),
+        "indicator",
+        indicator.strip(),
+        params=params,
+        parse=_series_text,
+    )
 
 
 @tool(capability="network")
@@ -315,51 +313,55 @@ def world_bank_compare(
         start_year: Optional first year as YYYY.
         end_year: Optional last year as YYYY.
         max_points: Maximum observations to return (1-300). Defaults to 100.
+
+    Raises:
+        ToolFailure: validation_error when the indicator ID, the country list or a year is
+            invalid.
     """
-    indicator = indicator.strip()
-    if not _valid_indicator_id(indicator):
-        return f"World Bank compare failed: invalid indicator ID: {indicator!r}"
+    indicator = _indicator_id(indicator)
 
     country_codes = _parse_country_list(countries)
     if not country_codes:
-        return "World Bank compare failed: provide at least one country code."
+        raise ToolFailure(
+            "validation_error",
+            f"no valid country code in {countries!r}; give codes such as 'PRT,ESP,DEU'",
+        )
     if len(country_codes) > _COMPARE_COUNTRIES_LIMIT:
-        return (
-            f"World Bank compare failed: at most {_COMPARE_COUNTRIES_LIMIT} countries are allowed."
+        raise ToolFailure(
+            "validation_error",
+            f"{len(country_codes)} countries given; compare at most {_COMPARE_COUNTRIES_LIMIT} "
+            "per call",
         )
 
     if year.strip():
         if not _valid_year(year):
-            return f"World Bank compare failed: invalid year: {year!r}. Use YYYY."
+            raise ToolFailure("validation_error", f"invalid year {year!r}; use YYYY")
         start_year = year.strip()
         end_year = year.strip()
-    validation = _validate_year_range(start_year, end_year)
-    if validation:
-        return f"World Bank compare failed: {validation}"
+    _check_year_range(start_year, end_year)
 
     max_points = max(1, min(max_points, _COMPARE_POINTS_LIMIT))
     params = _series_params(start_year, end_year, 1, max_points)
-    try:
-        return _API.get_json_list(
-            "country",
-            ";".join(country_codes),
-            "indicator",
-            indicator,
-            params=params,
-            parse=_compare_text,
-        )
-    except HttpError as e:
-        return f"World Bank compare failed: {e}"
+    return _API.get_json_list(
+        "country",
+        ";".join(country_codes),
+        "indicator",
+        indicator,
+        params=params,
+        parse=_compare_text,
+    )
 
 
 def _page(payload: list[Any]) -> tuple[dict[str, Any], list[Any]]:
-    """A World Bank answer's ``[metadata, items]``; any other shape raises ``HttpError``.
+    """A World Bank answer's ``[metadata, items]``; any other shape raises ``ToolFailure``.
 
     An error message never reaches here: ``_API`` raises it first (``_api_message``).
     """
     if len(payload) >= 2:
         return _dict(payload[0]), payload[1] if isinstance(payload[1], list) else []
-    raise HttpError("could not parse API response: unexpected World Bank response shape")
+    raise ToolFailure(
+        "upstream", "could not parse API response: unexpected World Bank response shape"
+    )
 
 
 def _parse_items[T](items: list[Any], parse_item: Callable[[dict[str, Any]], T | None]) -> list[T]:
@@ -443,7 +445,7 @@ def _indicator_text(payload: list[Any], indicator: str) -> str:
     _metadata, items = _page(payload)
     indicators = _parse_items(items, _parse_indicator)
     if not indicators:
-        return f"World Bank indicator not found: {indicator}"
+        raise _no_indicator(indicator)
     return f"World Bank indicator {indicators[0].id}:\n" + _format_indicators(
         [indicators[0]],
         include_index=False,
@@ -841,32 +843,62 @@ def _parse_country_list(countries: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(codes))
 
 
-def _validate_series_inputs(
+def _check_series_inputs(
     country: str,
     indicator: str,
     start_year: str,
     end_year: str,
     page: int,
-) -> str:
-    if page < 1:
-        return "page must be greater than or equal to 1."
+) -> None:
+    """Raises ``ToolFailure`` (validation_error) for the first invalid series input."""
+    _check_page(page)
     if not _valid_country(country):
-        return f"invalid country code: {country!r}"
-    if not _valid_indicator_id(indicator.strip()):
-        return f"invalid indicator ID: {indicator!r}"
-    return _validate_year_range(start_year, end_year)
+        raise ToolFailure(
+            "validation_error",
+            f"invalid country code {country!r}; use a code such as 'PRT', 'US', 'WLD' or 'all' "
+            "(find one with world_bank_countries)",
+        )
+    _indicator_id(indicator)
+    _check_year_range(start_year, end_year)
 
 
-def _validate_year_range(start_year: str, end_year: str) -> str:
+def _check_page(page: int) -> None:
+    if page < 1:
+        raise ToolFailure("validation_error", f"invalid page {page}; pages start at 1")
+
+
+def _indicator_id(indicator: str) -> str:
+    """The stripped indicator ID; a malformed one raises ``ToolFailure`` (validation_error)."""
+    stripped = indicator.strip()
+    if not _valid_indicator_id(stripped):
+        raise ToolFailure(
+            "validation_error",
+            f"invalid indicator ID {indicator!r}; an ID looks like SP.POP.TOTL "
+            "(find one with world_bank_indicators)",
+        )
+    return stripped
+
+
+def _no_indicator(indicator: str) -> ToolFailure:
+    return ToolFailure(
+        "not_found",
+        f"the World Bank has no indicator {indicator}; search for one with world_bank_indicators",
+    )
+
+
+def _check_year_range(start_year: str, end_year: str) -> None:
+    """Raises ``ToolFailure`` (validation_error) for a malformed year or a reversed range."""
     start = start_year.strip()
     end = end_year.strip()
+    problem = ""
     if start and not _valid_year(start):
-        return f"invalid start_year: {start_year!r}. Use YYYY."
-    if end and not _valid_year(end):
-        return f"invalid end_year: {end_year!r}. Use YYYY."
-    if start and end and int(start) > int(end):
-        return "start_year must be before or equal to end_year."
-    return ""
+        problem = f"invalid start_year {start_year!r}; use YYYY"
+    elif end and not _valid_year(end):
+        problem = f"invalid end_year {end_year!r}; use YYYY"
+    elif start and end and int(start) > int(end):
+        problem = f"start_year {start} is after end_year {end}; swap them"
+    if problem:
+        raise ToolFailure("validation_error", problem)
 
 
 def _valid_year(value: str) -> bool:

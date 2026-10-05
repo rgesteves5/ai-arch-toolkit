@@ -7,6 +7,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._eurostat import (
     eurostat_compare,
     eurostat_dataset,
@@ -58,6 +59,12 @@ _DATASET = {
 }
 
 
+def _failure(call) -> ToolFailure:
+    with pytest.raises(ToolFailure) as caught:
+        call()
+    return caught.value
+
+
 def _params(mock_urlopen):
     return parse_qs(urlparse(mock_urlopen.call_args.args[0].full_url).query)
 
@@ -95,11 +102,36 @@ class TestEurostat:
 
         assert "Eurostat comparison TPS00001:" in result
         assert "geo=PT" in result
-        assert "invalid dataset_id" in eurostat_dataset("bad/id")
+
+    @patch(HTTP_OPEN)
+    def test_no_datasets_is_a_success(self, mock_urlopen):
+        mock_urlopen.return_value = respond(_DATAFLOW)
+
+        assert eurostat_dataset_search("zzzz") == "No Eurostat datasets found."
+
+    @pytest.mark.parametrize(
+        ("call", "words"),
+        [
+            (lambda: eurostat_dataset("bad/id"), "invalid dataset_id"),
+            (lambda: eurostat_dataset_search(""), "invalid query"),
+            (lambda: eurostat_dataset_search("population", offset=-1), "offset must"),
+            (lambda: eurostat_series("TPS00001", filters="geo"), "use key=value"),
+            (lambda: eurostat_series("TPS00001", filters="geo=P T"), "invalid filter value"),
+            (lambda: eurostat_compare("TPS00001", ""), "1-10 comma-separated geo_codes"),
+            (lambda: eurostat_compare("TPS00001", "P T"), "invalid geo code"),
+            (lambda: eurostat_compare("TPS00001", "PT", filters="geo=ES"), "via geo_codes"),
+        ],
+    )
+    @patch(HTTP_OPEN)
+    def test_invalid_arguments_do_not_call_api(self, mock_urlopen, call, words):
+        failure = _failure(call)
+
+        assert failure.error.type == "validation_error"
+        assert words in str(failure)
+        mock_urlopen.assert_not_called()
 
 
-# As both APIs answered live (2026-09-30); they read as "no matching records found." and
-# "HTTP error 413: Request Entity Too Large".
+# As both APIs answered live (2026-09-30).
 _NOT_DISSEMINATED = (
     b'{ "error": [{"status": 404,"id": 100,"label": "ERR_NOT_FOUND_4: NOT_A_DATASET '
     b'(DATA_FLOW:ALL,1.0) is not available for dissemination."}]}'
@@ -111,19 +143,23 @@ _ASYNCHRONOUS = (
 
 
 @pytest.mark.parametrize(
-    ("call", "failure"),
+    "call",
     [
-        (lambda: eurostat_dataset("NOT_A_DATASET"), "Eurostat dataset lookup failed"),
-        (lambda: eurostat_dimensions("NOT_A_DATASET"), "Eurostat dimensions failed"),
-        (lambda: eurostat_series("NOT_A_DATASET"), "Eurostat series failed"),
+        lambda: eurostat_dataset("NOT_A_DATASET"),
+        lambda: eurostat_dimensions("NOT_A_DATASET"),
+        lambda: eurostat_series("NOT_A_DATASET"),
     ],
 )
 @patch(HTTP_OPEN)
-def test_a_dataset_eurostat_does_not_have_is_explained(mock_urlopen, call, failure):
+def test_a_dataset_eurostat_does_not_have_is_explained(mock_urlopen, call):
     mock_urlopen.side_effect = http_error(404, "Not Found", body=_NOT_DISSEMINATED)
 
-    assert call() == (
-        f"{failure}: HTTP error 404: ERR_NOT_FOUND_4: NOT_A_DATASET (DATA_FLOW:ALL,1.0) is not "
+    failure = _failure(call)
+
+    # The 404 stays upstream until T02 declares it per endpoint.
+    assert failure.error.type == "upstream"
+    assert str(failure) == (
+        "HTTP error 404: ERR_NOT_FOUND_4: NOT_A_DATASET (DATA_FLOW:ALL,1.0) is not "
         "available for dissemination."
     )
 
@@ -132,7 +168,20 @@ def test_a_dataset_eurostat_does_not_have_is_explained(mock_urlopen, call, failu
 def test_a_request_eurostat_would_only_serve_later_says_so(mock_urlopen):
     mock_urlopen.side_effect = http_error(413, "Request Entity Too Large", body=_ASYNCHRONOUS)
 
-    assert eurostat_series("nama_10_gdp", filters="geo=ZZ") == (
-        "Eurostat series failed: HTTP error 413: ASYNCHRONOUS_RESPONSE. Your request will be "
+    failure = _failure(lambda: eurostat_series("nama_10_gdp", filters="geo=ZZ"))
+
+    assert failure.error.type == "upstream"
+    assert str(failure) == (
+        "HTTP error 413: ASYNCHRONOUS_RESPONSE. Your request will be "
         "treated asynchronously. Please try again later."
     )
+
+
+@patch(HTTP_OPEN)
+def test_a_rate_limit_is_rate_limited(mock_urlopen):
+    mock_urlopen.side_effect = http_error(429, "Too Many Requests")
+
+    failure = _failure(lambda: eurostat_compare("TPS00001", "PT,ES"))
+
+    assert failure.error.type == "rate_limited"
+    assert failure.error.retryable

@@ -7,6 +7,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._geo import (
     country_info,
     distance_between,
@@ -17,6 +18,12 @@ from ai_arch_toolkit.toolkit.tools._geo import (
 )
 from ai_arch_toolkit.toolkit.tools._osm import osm_search_place
 from tests.toolkit.http_fakes import HTTP_OPEN, respond
+
+
+def _failure(call) -> ToolFailure:
+    with pytest.raises(ToolFailure) as caught:
+        call()
+    return caught.value
 
 
 class TestGeocode:
@@ -70,8 +77,10 @@ class TestGeocode:
     @patch(HTTP_OPEN)
     def test_api_failure(self, mock_urlopen):
         mock_urlopen.side_effect = TimeoutError()
-        result = geocode("Tokyo")
-        assert "failed" in result.lower()
+        failure = _failure(lambda: geocode("Tokyo"))
+        assert failure.error.type == "upstream"
+        assert failure.error.retryable
+        assert "timed out" in str(failure)
 
 
 class TestIpLookup:
@@ -106,7 +115,8 @@ class TestIpLookup:
     def test_the_lookup_goes_over_https_to_ipwhois(self, mock_urlopen):
         mock_urlopen.return_value = respond({"success": False, "message": "x"})
 
-        ip_lookup("2001:4860:4860::8888")
+        with pytest.raises(ToolFailure):
+            ip_lookup("2001:4860:4860::8888")
 
         url = mock_urlopen.call_args.args[0].full_url
         assert url == "https://ipwho.is/2001:4860:4860::8888"
@@ -114,14 +124,15 @@ class TestIpLookup:
     @patch(HTTP_OPEN)
     def test_failed_status(self, mock_urlopen):
         mock_urlopen.return_value = respond({"success": False, "message": "Reserved range"})
-        result = ip_lookup("10.0.0.1")
-        assert result == "IP lookup failed: Reserved range"
+        failure = _failure(lambda: ip_lookup("10.0.0.1"))
+        assert failure.error.type == "upstream"
+        assert str(failure) == "ipwho.is could not look up 10.0.0.1: Reserved range."
 
     @patch(HTTP_OPEN)
     def test_api_error(self, mock_urlopen):
         mock_urlopen.side_effect = TimeoutError()
-        result = ip_lookup("8.8.8.8")
-        assert "failed" in result.lower()
+        failure = _failure(lambda: ip_lookup("8.8.8.8"))
+        assert failure.error.type == "upstream"
 
 
 class TestReverseGeocode:
@@ -143,8 +154,17 @@ class TestReverseGeocode:
         assert "Country: Japan" in result
 
     def test_invalid_coordinates(self):
-        result = reverse_geocode(100.0, 10.0)
-        assert "out of range" in result.lower()
+        failure = _failure(lambda: reverse_geocode(100.0, 10.0))
+        assert failure.error.type == "validation_error"
+        assert "latitude out of range" in str(failure)
+
+    @patch(HTTP_OPEN)
+    def test_a_place_with_no_address_is_a_success(self, mock_urlopen):
+        mock_urlopen.return_value = respond({"error": "Unable to geocode"})
+        assert (
+            reverse_geocode(0.0, -30.0)
+            == "No reverse geocoding result for coordinates: 0.0, -30.0"
+        )
 
 
 class TestTimezoneLookup:
@@ -163,8 +183,13 @@ class TestTimezoneLookup:
     @patch(HTTP_OPEN)
     def test_api_error(self, mock_urlopen):
         mock_urlopen.side_effect = TimeoutError()
-        result = timezone_lookup(35.6762, 139.6503)
-        assert "failed" in result.lower()
+        failure = _failure(lambda: timezone_lookup(35.6762, 139.6503))
+        assert failure.error.type == "upstream"
+
+    def test_invalid_coordinates(self):
+        failure = _failure(lambda: timezone_lookup(10.0, 200.0))
+        assert failure.error.type == "validation_error"
+        assert "longitude out of range" in str(failure)
 
 
 class TestDistanceBetween:
@@ -179,8 +204,14 @@ class TestDistanceBetween:
         assert result.endswith(" mi")
 
     def test_invalid_unit(self):
-        result = distance_between(0.0, 0.0, 0.0, 1.0, unit="meters")
-        assert "Invalid unit" in result
+        failure = _failure(lambda: distance_between(0.0, 0.0, 0.0, 1.0, unit="meters"))
+        assert failure.error.type == "validation_error"
+        assert "invalid unit" in str(failure)
+
+    def test_invalid_coordinates_say_which_end(self):
+        failure = _failure(lambda: distance_between(0.0, 0.0, 91.0, 1.0))
+        assert failure.error.type == "validation_error"
+        assert str(failure).startswith("end latitude out of range")
 
 
 def _fact(qid, prop, value, *, label=None, extra=None):
@@ -267,25 +298,32 @@ class TestCountryInfo:
     def test_an_empty_search_asks_no_query(self, mock_urlopen):
         mock_urlopen.return_value = respond({"search": []})
 
-        assert country_info("Xyzland") == "Country not found: 'Xyzland'"
+        failure = _failure(lambda: country_info("Xyzland"))
+        assert failure.error.type == "not_found"
+        assert "'Xyzland'" in str(failure)
         assert mock_urlopen.call_count == 1
 
     @patch(HTTP_OPEN)
     def test_no_country_among_the_matches(self, mock_urlopen):
         mock_urlopen.side_effect = [respond({"search": [{"id": "Q1"}]}), _sparql([])]
 
-        assert country_info("Xyzland") == "Country not found: 'Xyzland'"
+        failure = _failure(lambda: country_info("Xyzland"))
+        assert failure.error.type == "not_found"
 
     @patch(HTTP_OPEN)
     def test_an_invalid_name_asks_nothing(self, mock_urlopen):
-        assert country_info('Japan" } DELETE') == "Country info failed: invalid name."
-        assert country_info("") == "Country info failed: invalid name."
+        for name in ('Japan" } DELETE', ""):
+            failure = _failure(lambda name=name: country_info(name))
+            assert failure.error.type == "validation_error"
+            assert "invalid name" in str(failure)
         mock_urlopen.assert_not_called()
 
     @patch(HTTP_OPEN)
     def test_api_error(self, mock_urlopen):
         mock_urlopen.side_effect = TimeoutError()
-        assert country_info("Japan") == "Country info failed: request timed out."
+        failure = _failure(lambda: country_info("Japan"))
+        assert failure.error.type == "upstream"
+        assert str(failure) == "request timed out."
 
     @patch(HTTP_OPEN)
     def test_an_error_the_search_api_reports_is_not_a_missing_country(self, mock_urlopen):
@@ -293,9 +331,9 @@ class TestCountryInfo:
             {"error": {"code": "ratelimited", "info": "You've exceeded your rate limit."}}
         )
 
-        assert country_info("Japan") == (
-            "Country info failed: ratelimited: You've exceeded your rate limit."
-        )
+        failure = _failure(lambda: country_info("Japan"))
+        assert failure.error.type != "not_found"
+        assert str(failure) == "ratelimited: You've exceeded your rate limit."
         assert mock_urlopen.call_count == 1
 
     @patch(HTTP_OPEN)
@@ -303,15 +341,18 @@ class TestCountryInfo:
         bad_row = _fact("Q17", "population", "many")
         mock_urlopen.side_effect = [respond({"search": [{"id": "Q17"}]}), _sparql([bad_row])]
 
-        assert country_info("Japan").startswith("Country info failed: could not parse")
+        failure = _failure(lambda: country_info("Japan"))
+        assert failure.error.type == "upstream"
+        assert str(failure).startswith("could not parse")
 
 
 @pytest.mark.parametrize("ip", ["", "a b?c", "not-an-ip"])
 @patch(HTTP_OPEN)
 def test_ip_lookup_rejects_invalid_ip_before_request(mock_urlopen, ip):
     mock_urlopen.return_value = respond({"status": "success"})
-    result = ip_lookup(ip)
-    assert "IP lookup failed" in result
+    failure = _failure(lambda: ip_lookup(ip))
+    assert failure.error.type == "validation_error"
+    assert "invalid IP address" in str(failure)
     mock_urlopen.assert_not_called()
 
 

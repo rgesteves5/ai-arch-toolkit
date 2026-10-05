@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from typing import Any
+from typing import Any, NoReturn
 
 from ai_arch_toolkit.core import tool
-from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
+from ai_arch_toolkit.core._tools._result import ToolFailure
+from ai_arch_toolkit.toolkit.tools._http import Api
 
 _API = Api(
     base="https://api.gbif.org/v1",
@@ -19,6 +20,9 @@ _MAX_LIMIT = 50
 _TEXT_RE = re.compile(r"^[\w\s,.'()/-]{1,160}$", re.UNICODE)
 _KEY_RE = re.compile(r"^\d+$")
 _CODE_RE = re.compile(r"^[A-Za-z_ -]{0,80}$")
+_TEXT_HINT = "pass 1-160 characters of letters, digits and basic punctuation"
+_RANK_HINT = "pass a rank name such as SPECIES, GENUS or FAMILY."
+_KEY_HINT = "a GBIF taxon key is a number; gbif_species_match finds it."
 
 
 @tool(capability="network")
@@ -29,25 +33,25 @@ def gbif_species_match(name: str, rank: str = "", kingdom: str = "") -> str:
         name: Scientific or common taxon name to resolve.
         rank: Optional taxonomic rank hint, e.g. "species" or "genus".
         kingdom: Optional kingdom hint, e.g. "Animalia" or "Plantae".
+
+    Raises:
+        ToolFailure: validation_error when ``name``, ``rank`` or ``kingdom`` is malformed.
     """
     if not _valid_text(name):
-        return "GBIF species match failed: invalid name."
+        _invalid(f"invalid name {name!r}; {_TEXT_HINT}, e.g. 'Puma concolor'.")
     if rank and not _CODE_RE.fullmatch(rank):
-        return "GBIF species match failed: invalid rank."
+        _invalid(f"invalid rank {rank!r}; {_RANK_HINT}")
     if kingdom and not _valid_text(kingdom):
-        return "GBIF species match failed: invalid kingdom."
+        _invalid(f"invalid kingdom {kingdom!r}; pass a kingdom name, e.g. 'Animalia'.")
 
     params = {"name": name.strip()}
     if rank.strip():
         params["rank"] = rank.strip().upper()
     if kingdom.strip():
         params["kingdom"] = kingdom.strip()
-    try:
-        return _API.get_json(
-            "species", "match", params=params, parse=lambda data: _match_text(data, name)
-        )
-    except HttpError as e:
-        return f"GBIF species match failed: {e}"
+    return _API.get_json(
+        "species", "match", params=params, parse=lambda data: _match_text(data, name)
+    )
 
 
 @tool(capability="network")
@@ -66,15 +70,19 @@ def gbif_species_search(
         highertaxon_key: Optional parent taxon key filter.
         max_results: Number of taxa to return (1-50). Defaults to 10.
         offset: Zero-based result offset. Defaults to 0.
+
+    Raises:
+        ToolFailure: validation_error when ``query``, ``rank`` or ``highertaxon_key`` is
+            malformed, or ``offset`` is negative.
     """
     if not _valid_text(query):
-        return "GBIF species search failed: invalid query."
+        _invalid(f"invalid query {query!r}; {_TEXT_HINT}, e.g. 'Puma'.")
     if offset < 0:
-        return "GBIF species search failed: offset must be greater than or equal to 0."
+        _invalid(f"offset must be greater than or equal to 0, got {offset}.")
     if rank and not _CODE_RE.fullmatch(rank):
-        return "GBIF species search failed: invalid rank."
+        _invalid(f"invalid rank {rank!r}; {_RANK_HINT}")
     if highertaxon_key and not _KEY_RE.fullmatch(highertaxon_key.strip()):
-        return "GBIF species search failed: invalid highertaxon_key."
+        _invalid(f"invalid highertaxon_key {highertaxon_key!r}; {_KEY_HINT}")
 
     params = {
         "q": query.strip(),
@@ -86,15 +94,12 @@ def gbif_species_search(
     if highertaxon_key.strip():
         params["highertaxonKey"] = highertaxon_key.strip()
     header = f"GBIF taxa for {query!r}"
-    try:
-        return _API.get_json(
-            "species",
-            "search",
-            params=params,
-            parse=lambda data: _page(data, header, offset, "No GBIF taxa found.", _format_taxon),
-        )
-    except HttpError as e:
-        return f"GBIF species search failed: {e}"
+    return _API.get_json(
+        "species",
+        "search",
+        params=params,
+        parse=lambda data: _page(data, header, offset, "No GBIF taxa found.", _format_taxon),
+    )
 
 
 @tool(capability="network")
@@ -103,18 +108,18 @@ def gbif_species(taxon_key: str) -> str:
 
     Args:
         taxon_key: GBIF taxon key, usually from gbif_species_match or gbif_species_search.
+
+    Raises:
+        ToolFailure: validation_error when ``taxon_key`` is not a number.
     """
     key = taxon_key.strip()
     if not _KEY_RE.fullmatch(key):
-        return f"GBIF species lookup failed: invalid taxon_key: {taxon_key!r}"
-    try:
-        return _API.get_json(
-            "species",
-            key,
-            parse=lambda data: "\n".join([f"GBIF taxon {key}:", *_format_taxon(data, index=None)]),
-        )
-    except HttpError as e:
-        return f"GBIF species lookup failed: {e}"
+        _invalid(f"invalid taxon_key {taxon_key!r}; {_KEY_HINT}")
+    return _API.get_json(
+        "species",
+        key,
+        parse=lambda data: "\n".join([f"GBIF taxon {key}:", *_format_taxon(data, index=None)]),
+    )
 
 
 @tool(capability="network")
@@ -135,17 +140,21 @@ def gbif_occurrence_search(
         has_coordinate: Whether to restrict to georeferenced records. Defaults to True.
         max_results: Number of occurrences to return (1-50). Defaults to 10.
         offset: Zero-based result offset. Defaults to 0.
+
+    Raises:
+        ToolFailure: validation_error when an option is malformed or none of ``taxon_key``,
+            ``country`` and ``year`` is given.
     """
     if offset < 0:
-        return "GBIF occurrence search failed: offset must be greater than or equal to 0."
+        _invalid(f"offset must be greater than or equal to 0, got {offset}.")
     if taxon_key and not _KEY_RE.fullmatch(taxon_key.strip()):
-        return "GBIF occurrence search failed: invalid taxon_key."
+        _invalid(f"invalid taxon_key {taxon_key!r}; {_KEY_HINT}")
     if country and not re.fullmatch(r"^[A-Za-z]{2}$", country.strip()):
-        return "GBIF occurrence search failed: invalid country code."
+        _invalid(f"invalid country code {country!r}; use ISO 3166-1 alpha-2, e.g. 'PT'.")
     if year and not re.fullmatch(r"^\d{4}(,\d{4})?$", year.strip()):
-        return "GBIF occurrence search failed: invalid year."
+        _invalid(f"invalid year {year!r}; use YYYY or YYYY,YYYY, e.g. '2020,2024'.")
     if not any((taxon_key.strip(), country.strip(), year.strip())):
-        return "GBIF occurrence search failed: provide taxon_key, country, or year."
+        _invalid("provide taxon_key, country, or year to narrow the occurrences.")
 
     params = {
         "limit": str(_bounded(max_results)),
@@ -158,17 +167,14 @@ def gbif_occurrence_search(
         "year": year.strip(),
     }
     params.update({key: value for key, value in filters.items() if value})
-    try:
-        return _API.get_json(
-            "occurrence",
-            "search",
-            params=params,
-            parse=lambda data: _page(
-                data, "GBIF occurrences", offset, "No GBIF occurrences found.", _format_occurrence
-            ),
-        )
-    except HttpError as e:
-        return f"GBIF occurrence search failed: {e}"
+    return _API.get_json(
+        "occurrence",
+        "search",
+        params=params,
+        parse=lambda data: _page(
+            data, "GBIF occurrences", offset, "No GBIF occurrences found.", _format_occurrence
+        ),
+    )
 
 
 def _match_text(data: dict[str, Any], name: str) -> str:
@@ -266,6 +272,10 @@ def _coords(item: dict[str, Any]) -> str:
     lat = _string(item.get("decimalLatitude"))
     lon = _string(item.get("decimalLongitude"))
     return f"{lat}, {lon}" if lat and lon else ""
+
+
+def _invalid(message: str) -> NoReturn:
+    raise ToolFailure("validation_error", message)
 
 
 def _valid_text(value: str) -> bool:
