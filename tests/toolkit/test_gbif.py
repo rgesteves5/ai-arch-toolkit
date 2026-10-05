@@ -119,3 +119,30 @@ class TestGbif:
 
         assert failure.error.type == "upstream"
         assert failure.error.retryable
+
+    @patch(HTTP_OPEN)
+    def test_an_unknown_taxon_key_is_not_found(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(404, "Not Found")
+
+        failure = _failure(lambda: gbif_species("999999999"))
+
+        assert failure.error.type == "not_found"
+        assert not failure.error.retryable
+        assert str(failure) == "GBIF has no taxon 999999999; find its key with gbif_species_match"
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            lambda: gbif_species_match("Puma concolor"),
+            lambda: gbif_species_search("Puma"),
+            lambda: gbif_occurrence_search(country="PT"),
+        ],
+    )
+    @patch(HTTP_OPEN)
+    def test_a_404_on_a_search_is_an_endpoint_not_found(self, mock_urlopen, call):
+        mock_urlopen.side_effect = http_error(404, "Not Found")
+
+        failure = _failure(call)
+
+        assert failure.error.type == "upstream"
+        assert str(failure) == "GBIF: endpoint not found (HTTP 404); the API may have changed"

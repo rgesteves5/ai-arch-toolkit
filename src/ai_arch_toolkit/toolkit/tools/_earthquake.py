@@ -14,7 +14,6 @@ _API = Api(
     base="https://earthquake.usgs.gov/fdsnws/event/1",
     name="USGS",
     timeout_s=15,
-    status_messages={404: "no matching records found."},
 )
 _MAX_LIMIT = 50
 _EVENT_RE = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
@@ -80,8 +79,8 @@ def earthquake_event(event_id: str) -> str:
         event_id: USGS event ID, e.g. "us7000m9gq".
 
     Raises:
-        ToolFailure: validation_error when the ID is malformed; not_found when USGS answers
-            with no event.
+        ToolFailure: validation_error when the ID is malformed; not_found when USGS has no
+            event with it.
     """
     if not _EVENT_RE.fullmatch(event_id.strip()):
         msg = (
@@ -90,7 +89,12 @@ def earthquake_event(event_id: str) -> str:
         )
         raise ToolFailure("validation_error", msg)
     params = {"format": "geojson", "eventid": event_id.strip()}
-    return _API.get_json("query", params=params, parse=lambda data: _event_text(data, event_id))
+    return _API.get_json(
+        "query",
+        params=params,
+        parse=lambda data: _event_text(data, event_id),
+        missing=_no_event(event_id),
+    )
 
 
 @tool(capability="network")
@@ -138,11 +142,14 @@ def _events_text(data: dict[str, Any], offset: int) -> str:
 
 def _event_text(data: dict[str, Any], event_id: str) -> str:
     if not data:
-        msg = f"USGS has no earthquake with ID {event_id.strip()}; search with earthquake_search."
-        raise ToolFailure("not_found", msg)
+        raise ToolFailure("not_found", _no_event(event_id))
     lines = [f"USGS earthquake {event_id.strip()}:"]
     lines.extend(_format_event(data, index=None, details=True))
     return "\n".join(lines)
+
+
+def _no_event(event_id: str) -> str:
+    return f"USGS has no earthquake with ID {event_id.strip()}; search with earthquake_search."
 
 
 def _count_text(text: str) -> str:

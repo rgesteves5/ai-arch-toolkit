@@ -332,8 +332,21 @@ class TestCountryInfo:
         )
 
         failure = _failure(lambda: country_info("Japan"))
-        assert failure.error.type != "not_found"
-        assert str(failure) == "ratelimited: You've exceeded your rate limit."
+        assert failure.error.type == "rate_limited"
+        assert failure.error.retryable
+        assert str(failure) == (
+            "the wiki asked to slow down (ratelimited: You've exceeded your rate limit); "
+            "try again later"
+        )
+        assert mock_urlopen.call_count == 1
+
+    @patch(HTTP_OPEN)
+    def test_another_error_the_search_api_reports_is_upstream(self, mock_urlopen):
+        mock_urlopen.return_value = respond({"error": {"code": "readonly", "info": "Read-only."}})
+
+        failure = _failure(lambda: country_info("Japan"))
+        assert failure.error.type == "upstream"
+        assert str(failure) == "readonly: Read-only."
         assert mock_urlopen.call_count == 1
 
     @patch(HTTP_OPEN)

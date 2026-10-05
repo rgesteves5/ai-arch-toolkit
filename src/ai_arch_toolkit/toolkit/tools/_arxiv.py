@@ -9,26 +9,43 @@ from datetime import date
 
 from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
-from ai_arch_toolkit.toolkit.tools._http import Api
+from ai_arch_toolkit.toolkit.tools._http import Api, Reply
 
 
-def _feed_error(answer: object) -> str | None:
+def _feed_error(reply: Reply) -> ToolFailure | str | None:
     """The error an arXiv feed reports; ``None`` for a feed of papers.
 
     The API answers a request it cannot run with a feed whose one entry is the error
     (https://info.arxiv.org/help/api/user-manual.html#34-errors), with HTTP 400 (seen
-    2026-09-30).
+    2026-09-30): a request it could not read, a ``validation_error``. An error feed with any
+    other status is the source failing, in its words.
     """
-    if not isinstance(answer, str):
+    if not isinstance(reply.body, str):
         return None
     try:
-        entries = ET.fromstring(answer).findall(f"{_ATOM}entry")
+        entries = ET.fromstring(reply.body).findall(f"{_ATOM}entry")
     except ET.ParseError:
         return None
-    return next((error for entry in entries if (error := _entry_error(entry))), None)
+    error = next((error for entry in entries if (error := _entry_error(entry))), None)
+    if error is None:
+        return None
+    return _rejected(error) if reply.status == 400 else error
 
 
-_API = Api(base="https://export.arxiv.org/api/query", name="arXiv", body_error=_feed_error)
+def _rejected(error: str) -> ToolFailure:
+    """The failure of a request arXiv refused, with its reason.
+
+    Every error the user manual lists is about the request (a malformed ID, a bad offset or
+    count, a query it cannot read), so the caller's arguments are what to fix.
+    """
+    msg = (
+        f"arXiv rejected the request: {error}; check the ID or the query syntax "
+        "(https://info.arxiv.org/help/api/user-manual.html#query_details)."
+    )
+    return ToolFailure("validation_error", msg)
+
+
+_API = Api(base="https://export.arxiv.org/api/query", name="arXiv", error_reader=_feed_error)
 _MAX_RESULTS_LIMIT = 20
 _SUMMARY_MAX_CHARS = 700
 _VALID_CATEGORIES = re.compile(r"^[A-Za-z0-9.-]+$")
@@ -95,8 +112,8 @@ def arxiv_search(
         to_date: Optional submitted date upper bound as YYYY-MM-DD.
 
     Raises:
-        ToolFailure: validation_error when an argument is invalid; upstream when arXiv reports
-            an error.
+        ToolFailure: validation_error when an argument is invalid or arXiv rejects the query;
+            upstream when arXiv fails.
     """
     query = query.strip()
     if not query:
@@ -135,8 +152,8 @@ def arxiv_paper(arxiv_id: str) -> str:
         arxiv_id: arXiv identifier, e.g. "1706.03762", "1706.03762v1", or an arXiv URL.
 
     Raises:
-        ToolFailure: validation_error when the ID is malformed; not_found when arXiv has no
-            paper with it; upstream when arXiv reports an error.
+        ToolFailure: validation_error when the ID is malformed (here or by arXiv); not_found
+            when arXiv has no paper with it; upstream when arXiv fails.
     """
     paper_id = _normalize_arxiv_id(arxiv_id)
     if not paper_id:
@@ -234,7 +251,7 @@ def _parse_atom(xml_text: str) -> list[_ArxivPaper]:
     papers: list[_ArxivPaper] = []
     for entry in root.findall(f"{_ATOM}entry"):
         if error := _entry_error(entry):
-            raise ToolFailure("upstream", f"arXiv reported: {error}")
+            raise _rejected(error)
         entry_id = _text(entry, "id")
         paper_id = _id_from_abs_url(entry_id)
         abs_url = _normalize_abs_url(entry_id, paper_id)

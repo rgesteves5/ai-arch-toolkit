@@ -98,11 +98,15 @@ docstrings/comments, and when to use classes vs functions — see
    from type hints + Google-style docstring.
 3. Stdlib only. Reach the network only through `toolkit/tools/_http.py`: declare an `Api` for
    the service's HTTPS origin and read each response inside `parse=`, so a malformed answer
-   becomes the tool's failure. If the service explains errors in the body, in a success or
-   an error status, give its `Api` a `body_error=` that reads them, so no `parse` takes an error
-   for an empty result and the model reads the service's own words; every `Api` on a MediaWiki
-   `api.php` uses `mediawiki_error` (a test checks). A call to a service that answers "nothing
-   found" with `204 No Content` or an empty body passes `allow_empty=True`. `_weather.py` and
+   becomes the tool's failure. If the service explains errors in its answers (a JSON success or
+   any error status: its status, headers or body), give its `Api` an `error_reader=`: it takes the
+   `Reply` and returns `None`, the error in the service's words, or a typed `ToolFailure` when
+   the service says what happened (a missing page is `not_found`), so no `parse` takes an error
+   for an empty result; every `Api` on a MediaWiki `api.php` uses `mediawiki_error` (a test
+   checks). A call that asks for one resource (a page, an entry, a DOI) passes `missing="…"`, the
+   `not_found` message of its 404; any other 404 means the endpoint moved. A call to a service
+   that answers "nothing found" with `204 No Content` or an empty body passes
+   `allow_empty=True`, one that answers it with a 404 `empty_on_404=True`. `_weather.py` and
    `_mediawiki.py` are the templates; an architecture test refuses `urllib.request`,
    `urllib.error`, `http.client`, `socket` and `ssl` anywhere else in the package (`nanope/`
    aside).

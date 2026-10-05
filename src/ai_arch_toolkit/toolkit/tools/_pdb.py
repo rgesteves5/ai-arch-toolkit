@@ -9,18 +9,11 @@ from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._http import Api
 
-_DATA = Api(
-    base="https://data.rcsb.org/rest/v1/core",
-    name="RCSB PDB",
-    timeout_s=20,
-    status_messages={404: "no matching records found."},
-)
-_SEARCH = Api(
-    base="https://search.rcsb.org/rcsbsearch/v2/query",
-    name="RCSB PDB",
-    timeout_s=20,
-    status_messages={404: "no matching records found."},
-)
+# The Data API answers a record it does not have with a 404, so each of its calls declares the
+# record it asks for (``missing=``); both APIs give their errors' text in ``message``, which the
+# door quotes (https://data.rcsb.org/redoc/index.html, https://search.rcsb.org/#return-codes).
+_DATA = Api(base="https://data.rcsb.org/rest/v1/core", name="RCSB PDB", timeout_s=20)
+_SEARCH = Api(base="https://search.rcsb.org/rcsbsearch/v2/query", name="RCSB PDB", timeout_s=20)
 _MAX_LIMIT = 25
 _PDB_ID_RE = re.compile(r"^[A-Za-z0-9]{4}$")
 _CHEM_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,12}$")
@@ -76,10 +69,16 @@ def pdb_entry(pdb_id: str) -> str:
         pdb_id: Four-character PDB ID, e.g. "1A3N".
 
     Raises:
-        ToolFailure: validation_error when ``pdb_id`` is not four letters or digits.
+        ToolFailure: validation_error when ``pdb_id`` is not four letters or digits; not_found
+            when the PDB has no entry with it.
     """
     normalized = _pdb_id(pdb_id)
-    return _DATA.get_json("entry", normalized, parse=lambda data: _entry_text(data, normalized))
+    return _DATA.get_json(
+        "entry",
+        normalized,
+        parse=lambda data: _entry_text(data, normalized),
+        missing=_no_entry(normalized),
+    )
 
 
 @tool(capability="network")
@@ -90,12 +89,22 @@ def pdb_ligands(pdb_id: str) -> str:
         pdb_id: Four-character PDB ID, e.g. "1A3N".
 
     Raises:
-        ToolFailure: validation_error when ``pdb_id`` is not four letters or digits.
+        ToolFailure: validation_error when ``pdb_id`` is not four letters or digits; not_found
+            when the PDB has no entry with it, or no record of a ligand the entry lists.
     """
     normalized = _pdb_id(pdb_id)
-    ids = _DATA.get_json("entry", normalized, parse=_nonpolymer_ids)
+    ids = _DATA.get_json("entry", normalized, parse=_nonpolymer_ids, missing=_no_entry(normalized))
     ligands = [
-        _DATA.get_json("nonpolymer_entity", normalized, entity_id, parse=_ligand)
+        _DATA.get_json(
+            "nonpolymer_entity",
+            normalized,
+            entity_id,
+            parse=_ligand,
+            missing=(
+                f"RCSB PDB entry {normalized} lists nonpolymer entity {entity_id} but has no "
+                f"record of it; see the entry with pdb_entry"
+            ),
+        )
         for entity_id in ids
     ]
     if not ligands:
@@ -114,7 +123,7 @@ def pdb_chemical_component(component_id: str) -> str:
 
     Raises:
         ToolFailure: validation_error when ``component_id`` is not 1-12 letters, digits, ``_``
-            or ``-``.
+            or ``-``; not_found when the PDB has no chemical component with it.
     """
     normalized = component_id.strip().upper()
     if not _CHEM_ID_RE.fullmatch(normalized):
@@ -124,8 +133,18 @@ def pdb_chemical_component(component_id: str) -> str:
             "or digits, e.g. 'ATP' or 'HEM'.",
         )
     return _DATA.get_json(
-        "chemcomp", normalized, parse=lambda data: _component_text(data, normalized)
+        "chemcomp",
+        normalized,
+        parse=lambda data: _component_text(data, normalized),
+        missing=(
+            f"RCSB PDB has no chemical component {normalized}; pdb_ligands lists the component "
+            "IDs of an entry"
+        ),
     )
+
+
+def _no_entry(pdb_id: str) -> str:
+    return f"RCSB PDB has no entry {pdb_id}; find entries with pdb_search"
 
 
 def _pdb_id(pdb_id: str) -> str:

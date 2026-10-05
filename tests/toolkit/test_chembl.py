@@ -116,3 +116,44 @@ class TestChembl:
 
         assert caught.value.error.type == "upstream"
         assert caught.value.error.retryable
+
+    @pytest.mark.parametrize(
+        ("call", "words"),
+        [
+            (
+                lambda: chembl_molecule("CHEMBL999999999"),
+                "no ChEMBL molecule with ID CHEMBL999999999",
+            ),
+            (lambda: chembl_target("CHEMBL25"), "no ChEMBL target with ID CHEMBL25"),
+        ],
+    )
+    @patch(HTTP_OPEN)
+    def test_unknown_id_is_not_found(self, mock_urlopen, call, words):
+        mock_urlopen.side_effect = http_error(404, "Not Found")
+
+        with pytest.raises(ToolFailure) as caught:
+            call()
+
+        assert caught.value.error.type == "not_found"
+        assert not caught.value.error.retryable
+        assert words in caught.value.error.message
+        assert "_search" in caught.value.error.message
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            lambda: chembl_molecule_search("aspirin"),
+            lambda: chembl_target_search("EGFR"),
+            lambda: chembl_activity_search(molecule_chembl_id="CHEMBL25"),
+        ],
+    )
+    @patch(HTTP_OPEN)
+    def test_404_on_a_search_is_endpoint_not_found(self, mock_urlopen, call):
+        # It read as "no matching records found." (upstream), like an empty search.
+        mock_urlopen.side_effect = http_error(404, "Not Found")
+
+        with pytest.raises(ToolFailure) as caught:
+            call()
+
+        assert caught.value.error.type == "upstream"
+        assert "ChEMBL: endpoint not found (HTTP 404)" in caught.value.error.message

@@ -10,7 +10,9 @@ from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._http import Api
 from ai_arch_toolkit.toolkit.tools._mediawiki import mediawiki_error
 
-_API = Api(base="https://en.wikipedia.org/w/api.php", name="Wikipedia", body_error=mediawiki_error)
+_API = Api(
+    base="https://en.wikipedia.org/w/api.php", name="Wikipedia", error_reader=mediawiki_error
+)
 _MAX_CHARS_LIMIT = 100_000
 
 

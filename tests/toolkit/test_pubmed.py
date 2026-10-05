@@ -9,7 +9,7 @@ import pytest
 
 from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._pubmed import pubmed_article, pubmed_search
-from tests.toolkit.http_fakes import HTTP_OPEN, respond
+from tests.toolkit.http_fakes import HTTP_OPEN, http_error, respond
 
 _ESEARCH_RESULT = {"esearchresult": {"idlist": ["26017442"]}}
 _EMPTY_SEARCH_RESULT = {"esearchresult": {"idlist": []}}
@@ -215,6 +215,26 @@ class TestPubmedSearch:
             "request. Details: Empty Term in the request"
         )
         assert mock_urlopen.call_count == 1
+
+    @patch(HTTP_OPEN)
+    def test_a_404_on_the_search_is_an_endpoint_not_found(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(404, "Not Found")
+
+        error = _failure(pubmed_search, "test")
+
+        assert error.type == "upstream"
+        assert "NCBI E-utilities: endpoint not found (HTTP 404)" in error.message
+
+    @patch(HTTP_OPEN)
+    def test_ncbi_s_rate_limit_keeps_its_words(self, mock_urlopen):
+        body = b'{"error":"API rate limit exceeded","api-key":"1.2.3.4","count":"4","limit":"3"}'
+        mock_urlopen.side_effect = http_error(429, "Too Many Requests", body=body)
+
+        error = _failure(pubmed_search, "test")
+
+        assert error.type == "rate_limited"
+        assert error.retryable
+        assert "API rate limit exceeded" in error.message
 
     @patch(HTTP_OPEN)
     def test_a_query_that_matches_nothing_is_no_error(self, mock_urlopen):

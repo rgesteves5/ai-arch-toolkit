@@ -13,7 +13,7 @@ from ai_arch_toolkit.toolkit.tools._openfda_food import (
     openfda_food_recall,
     openfda_food_recall_search,
 )
-from tests.toolkit.http_fakes import HTTP_OPEN, respond
+from tests.toolkit.http_fakes import HTTP_OPEN, http_error, respond
 
 
 def _failure(fn, *args, **kwargs) -> ToolFailure:
@@ -30,13 +30,8 @@ def _invalid(fn, *args, **kwargs) -> str:
 
 def _not_found() -> urllib.error.HTTPError:
     """openFDA's answer to a search that matches nothing."""
-    return urllib.error.HTTPError(
-        url="https://api.fda.gov/food/enforcement.json",
-        code=404,
-        msg="Not Found",
-        hdrs=None,
-        fp=None,
-    )
+    body = b'{"error": {"code": "NOT_FOUND", "message": "No matches found!"}}'
+    return http_error(404, "Not Found", body=body)
 
 
 _RECALL = {
@@ -135,6 +130,17 @@ class TestOpenFdaFoodRecallSearch:
         server = _failure(openfda_food_recall_search, query="x")
         assert server.error.type == "upstream"
         assert server.error.retryable
+
+    @patch(HTTP_OPEN)
+    def test_a_bad_request_carries_openfda_s_words(self, mock_urlopen):
+        body = b'{"error": {"code": "BAD_REQUEST", "message": "Invalid date format"}}'
+        mock_urlopen.side_effect = http_error(400, "Bad Request", body=body)
+
+        failure = _failure(openfda_food_recall_search, query="x")
+
+        assert failure.error.type == "upstream"
+        assert not failure.error.retryable
+        assert "Invalid date format" in failure.error.message
 
 
 class TestOpenFdaFoodRecall:

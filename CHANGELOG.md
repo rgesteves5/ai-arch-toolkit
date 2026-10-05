@@ -345,6 +345,20 @@ flows, manifests) needs these changes; each one is detailed below.
   `validation_error`, a source that fails or explains an error `upstream`, a 429 `rate_limited`.
   The HTTP door's `HttpError` is a `ToolFailure` (retryable for a 429, a 5xx, a timeout or a
   network error). Zero results is still a successful answer that says so.
+- **A network tool's failure says what its source said** (T02, D38). A 404 is `not_found` only
+  where the tool asks for one resource (a page, an entry, a DOI, a taxon); anywhere else it reads
+  "endpoint not found (HTTP 404); the API may have changed", where twelve sources used to answer
+  "no matching records found." for any 404, a moved endpoint included. Where the source says what
+  happened, the failure has that type: a missing MediaWiki page or an inactive UniProt entry is
+  `not_found`, an invalid title or a malformed query `validation_error`, MediaWiki's `ratelimited`
+  and `maxlag` and Open Food Facts' 503 `rate_limited`. An error status carries the source's own
+  text (a JSON `message`, `error` or `detail`, a header such as NVD's `message`, or the start of a
+  text body) in place of the status's reason, and a missing mandatory key is a
+  `validation_error`. A source that says in its answer that it is rate limited rests its host as a
+  429 does, and a call in that rest reads "X asked to slow down: try again in N s." (no "(HTTP
+  429)", since no request went out). Internally, the HTTP door's `Api` takes one `error_reader=`
+  in place of `body_error=` and `status_messages=`, and each call declares `missing=` or
+  `empty_on_404=`.
 - **An image model without published counts holds 24,000 image output tokens per image** in a
   strict budget and as a failure's worst case (D61), up from 16,000, which did not cover the
   dearest published image (23,719 tokens, gpt-image-2 at `high` and 2880x2880). So does a

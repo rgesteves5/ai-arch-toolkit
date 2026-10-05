@@ -7,27 +7,30 @@ from typing import Any
 
 from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
-from ai_arch_toolkit.toolkit.tools._http import Api
+from ai_arch_toolkit.toolkit.tools._http import Api, Reply
 
 
-def _uniprot_error(answer: object) -> str | None:
+def _uniprot_error(reply: Reply) -> ToolFailure | str | None:
     """The error a UniProt answer explains; ``None`` for a result.
 
     A request UniProt refuses says why in ``messages``, with the error status
-    (https://www.uniprot.org/help/rest-api-headers).
+    (https://www.uniprot.org/help/rest-api-headers): the source's words. An inactive accession
+    is ``not_found`` (:func:`_inactive`).
     """
+    answer = reply.body
     messages = answer.get("messages") if isinstance(answer, dict) else None
-    if isinstance(messages, list) and messages:
-        return "; ".join(_string(message) for message in messages)
-    return _inactive(answer)
+    said = "; ".join(filter(None, map(_string, messages))) if isinstance(messages, list) else ""
+    return said or _inactive(answer)
 
 
-def _inactive(answer: object) -> str | None:
-    """Why an accession has no entry, when UniProt says it is inactive; ``None`` otherwise.
+def _inactive(answer: object) -> ToolFailure | None:
+    """``not_found`` for an accession UniProt says is inactive, naming where it went; ``None``
+    otherwise.
 
     An accession merged, demerged or deleted (https://www.uniprot.org/help/deleted_accessions)
     still answers HTTP 200: ``{"entryType": "Inactive", "inactiveReason": {...}}`` (seen
-    2026-09-30), which read as an entry with no name, features or cross-references.
+    2026-09-30), which read as an entry with no name, features or cross-references. It has no
+    entry as asked: a merged one lives on under the accessions it names.
     """
     if not isinstance(answer, dict) or answer.get("entryType") != "Inactive":
         return None
@@ -37,18 +40,24 @@ def _inactive(answer: object) -> str | None:
     kind = _string(reason.get("inactiveReasonType")).lower()
     targets = reason.get("mergeDemergeTo")
     if kind and isinstance(targets, list) and targets:
-        return f"{accession} is inactive: {kind} into {', '.join(map(_string, targets))}"
+        into = [_string(target) for target in targets]
+        which = into[0] if len(into) == 1 else "one of them"
+        msg = (
+            f"{accession} is inactive: {kind} into {', '.join(into)}; "
+            f"look up {which} with uniprot_entry"
+        )
+        return ToolFailure("not_found", msg)
     why = _string(reason.get("deletedReason"))
     detail = (f": {kind}" if kind else "") + (f" ({why})" if why else "")
-    return f"{accession} is inactive{detail}"
+    msg = f"{accession} is inactive{detail}; search for the protein with uniprot_search"
+    return ToolFailure("not_found", msg)
 
 
 _API = Api(
     base="https://rest.uniprot.org/uniprotkb",
     name="UniProt",
     timeout_s=20,
-    status_messages={404: "no matching records found."},
-    body_error=_uniprot_error,
+    error_reader=_uniprot_error,
 )
 _MAX_LIMIT = 25
 _TEXT_RE = re.compile(r"^[\w\s,.'()/%:+-]{1,180}$", re.UNICODE)
@@ -108,11 +117,15 @@ def uniprot_entry(accession: str) -> str:
         accession: UniProt accession, e.g. "P01308".
 
     Raises:
-        ToolFailure: validation_error when the accession is malformed.
+        ToolFailure: validation_error when the accession is malformed; not_found when UniProt has
+            no entry for it, or the accession is inactive (merged or deleted).
     """
     normalized = _accession(accession)
     return _API.get_json(
-        normalized, params={"format": "json"}, parse=lambda data: _entry_text(data, normalized)
+        normalized,
+        params={"format": "json"},
+        parse=lambda data: _entry_text(data, normalized),
+        missing=_missing(normalized),
     )
 
 
@@ -126,7 +139,9 @@ def uniprot_features(accession: str, feature_type: str = "", max_results: int = 
         max_results: Number of features to return (1-25). Defaults to 20.
 
     Raises:
-        ToolFailure: validation_error when the accession or the feature type is malformed.
+        ToolFailure: validation_error when the accession or the feature type is malformed;
+            not_found when UniProt has no entry for it, or the accession is inactive (merged or
+            deleted).
     """
     normalized = _accession(accession)
     if feature_type and not _valid_text(feature_type):
@@ -137,6 +152,7 @@ def uniprot_features(accession: str, feature_type: str = "", max_results: int = 
         normalized,
         params={"format": "json"},
         parse=lambda data: _features_text(data, normalized, feature_type, max_results),
+        missing=_missing(normalized),
     )
 
 
@@ -149,10 +165,10 @@ def uniprot_sequence(accession: str) -> str:
 
     Raises:
         ToolFailure: validation_error when the accession is malformed; not_found when UniProt
-            returns no sequence for it.
+            has no entry or no sequence for it.
     """
     normalized = _accession(accession)
-    fasta = _API.get_text(f"{normalized}.fasta", parse=str.strip)
+    fasta = _API.get_text(f"{normalized}.fasta", parse=str.strip, missing=_missing(normalized))
     if not fasta:
         msg = f"UniProt has no sequence for {normalized}; check the entry with uniprot_entry"
         raise ToolFailure("not_found", msg)
@@ -169,7 +185,9 @@ def uniprot_crossrefs(accession: str, database: str = "", max_results: int = 25)
         max_results: Number of cross-references to return (1-25). Defaults to 25.
 
     Raises:
-        ToolFailure: validation_error when the accession or the database is malformed.
+        ToolFailure: validation_error when the accession or the database is malformed;
+            not_found when UniProt has no entry for it, or the accession is inactive (merged or
+            deleted).
     """
     normalized = _accession(accession)
     if database and not _valid_text(database):
@@ -178,6 +196,7 @@ def uniprot_crossrefs(accession: str, database: str = "", max_results: int = 25)
         normalized,
         params={"format": "json"},
         parse=lambda data: _crossrefs_text(data, normalized, database, max_results),
+        missing=_missing(normalized),
     )
 
 
@@ -191,6 +210,11 @@ def _accession(accession: str) -> str:
             "(find one with uniprot_search)",
         )
     return normalized
+
+
+def _missing(accession: str) -> str:
+    """The not_found message for an accession UniProt has no entry for (its 404)."""
+    return f"UniProt has no entry {accession}; find one with uniprot_search"
 
 
 def _search_query(query: str, organism: str, reviewed: str) -> str:

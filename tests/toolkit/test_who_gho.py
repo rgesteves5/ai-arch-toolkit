@@ -114,3 +114,29 @@ class TestWhoGho:
 
         assert caught.value.error.type == "upstream"
         assert caught.value.error.retryable
+
+    @patch(HTTP_OPEN)
+    def test_a_404_on_an_indicators_series_is_not_found(self, mock_urlopen):
+        # Each indicator is an entity set of its own (/api/{code}).
+        mock_urlopen.side_effect = http_error(404, "Not Found")
+
+        with pytest.raises(ToolFailure) as caught:
+            who_series("NOPE_1")
+
+        assert caught.value.error.type == "not_found"
+        assert caught.value.error.message == (
+            "WHO GHO has no indicator NOPE_1; search for one with who_indicators"
+        )
+
+    @pytest.mark.parametrize(
+        "call", [lambda: who_indicators("life"), lambda: who_indicator("WHOSIS_000001")]
+    )
+    @patch(HTTP_OPEN)
+    def test_a_404_on_the_indicator_collection_is_an_endpoint_that_moved(self, mock_urlopen, call):
+        mock_urlopen.side_effect = http_error(404, "Not Found")
+
+        with pytest.raises(ToolFailure) as caught:
+            call()
+
+        assert caught.value.error.type == "upstream"
+        assert caught.value.error.message.startswith("WHO GHO: endpoint not found (HTTP 404)")

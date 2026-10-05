@@ -14,7 +14,6 @@ _API = Api(
     name="WHO GHO",
     timeout_s=20,
     query_safe="'() ,",
-    status_messages={404: "no matching records found."},
 )
 _MAX_LIMIT = 100
 _CODE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,120}$")
@@ -92,7 +91,7 @@ def who_series(
 
     Raises:
         ToolFailure: validation_error when the code, the country, a year, ``dim1`` or ``skip`` is
-            invalid.
+            invalid; not_found when WHO GHO has no indicator with that code.
     """
     code = _indicator_code(indicator_code)
     _check_series(country, from_year, to_year, dim1, skip)
@@ -101,7 +100,13 @@ def who_series(
     series_filter = _series_filter(country, from_year, to_year, dim1)
     if series_filter:
         params["$filter"] = series_filter
-    return _API.get_json(code, params=params, parse=lambda data: _series_text(data, code, skip))
+    # Each indicator is an OData entity set of its own, /api/{code}: a 404 is an unknown code.
+    return _API.get_json(
+        code,
+        params=params,
+        parse=lambda data: _series_text(data, code, skip),
+        missing=_no_indicator(code),
+    )
 
 
 def _indicator_code(indicator_code: str) -> str:
@@ -114,6 +119,10 @@ def _indicator_code(indicator_code: str) -> str:
             "WHOSIS_000001 (find one with who_indicators)",
         )
     return code
+
+
+def _no_indicator(code: str) -> str:
+    return f"WHO GHO has no indicator {code}; search for one with who_indicators"
 
 
 def _check_skip(skip: int) -> None:
@@ -167,9 +176,7 @@ def _indicators_text(data: dict[str, Any], skip: int) -> str:
 def _indicator_text(data: dict[str, Any], code: str) -> str:
     items = _values(data)
     if not items:
-        raise ToolFailure(
-            "not_found", f"WHO GHO has no indicator {code}; search for one with who_indicators"
-        )
+        raise ToolFailure("not_found", _no_indicator(code))
     item = items[0]
     return "\n".join(
         [

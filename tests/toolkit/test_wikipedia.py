@@ -12,7 +12,7 @@ from ai_arch_toolkit.toolkit.tools._wikipedia import (
     wikipedia_related,
     wikipedia_search,
 )
-from tests.toolkit.http_fakes import HTTP_OPEN, respond
+from tests.toolkit.http_fakes import HTTP_OPEN, http_error, respond
 
 
 def _failure(call):
@@ -135,17 +135,44 @@ _RATELIMITED = {
 
 @pytest.mark.parametrize("fn", [wikipedia_search, wikipedia_article, wikipedia_related])
 @patch(HTTP_OPEN)
-def test_an_error_the_api_reports_is_the_tools_error(mock_urlopen, fn):
+def test_a_rate_limit_the_api_reports_is_rate_limited(mock_urlopen, fn):
     # MediaWiki sends it with HTTP 200; wikipedia_related does not fall back to a search.
     mock_urlopen.return_value = respond(_RATELIMITED)
 
     error = _failure(lambda: fn("Python"))
 
-    assert error.type == "upstream"
+    assert error.type == "rate_limited"
+    assert error.retryable
     assert error.message == (
-        "ratelimited: You've exceeded your rate limit. Please wait some time and try again."
+        "the wiki asked to slow down (ratelimited: You've exceeded your rate limit. Please wait "
+        "some time and try again); try again later"
     )
     assert mock_urlopen.call_count == 1
+
+
+@pytest.mark.parametrize("fn", [wikipedia_search, wikipedia_article, wikipedia_related])
+@patch(HTTP_OPEN)
+def test_another_error_the_api_reports_is_upstream_in_its_words(mock_urlopen, fn):
+    mock_urlopen.return_value = respond({"error": {"code": "readonly", "info": "Read-only."}})
+
+    error = _failure(lambda: fn("Python"))
+
+    assert error.type == "upstream"
+    assert not error.retryable
+    assert error.message == "readonly: Read-only."
+    assert mock_urlopen.call_count == 1
+
+
+@pytest.mark.parametrize("fn", [wikipedia_search, wikipedia_article])
+@patch(HTTP_OPEN)
+def test_a_404_is_an_endpoint_not_found(mock_urlopen, fn):
+    # A missing article comes back flagged "missing" in a 200: a 404 means api.php moved.
+    mock_urlopen.side_effect = http_error(404, "Not Found")
+
+    error = _failure(lambda: fn("Python"))
+
+    assert error.type == "upstream"
+    assert error.message.startswith("Wikipedia: endpoint not found (HTTP 404)")
 
 
 _INVALID_TITLE = {

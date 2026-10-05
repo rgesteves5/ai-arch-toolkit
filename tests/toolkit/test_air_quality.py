@@ -110,16 +110,51 @@ class TestAirQualityForecast:
         assert params["past_days"] == ["7"]
 
     @patch(HTTP_OPEN)
-    def test_api_error_body(self, mock_urlopen):
+    def test_rejected_parameter_is_validation_error(self, mock_urlopen):
         mock_urlopen.side_effect = http_error(
-            400, "Bad Request", body=b'{"error": true, "reason": "invalid variable"}'
+            400, "Bad Request", body=b'{"error": true, "reason": "Invalid timezone"}'
+        )
+
+        with pytest.raises(ToolFailure) as caught:
+            air_quality_forecast(0, 0, timezone="Mars/Olympus")
+
+        assert caught.value.error.type == "validation_error"
+        assert not caught.value.error.retryable
+        assert "Open-Meteo rejected the request: Invalid timezone" in caught.value.error.message
+        assert "'auto'" in caught.value.error.message
+
+    @patch(HTTP_OPEN)
+    def test_server_error_reason_is_retryable_upstream(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(
+            500, "Internal Server Error", body=b'{"error": true, "reason": "backend down"}'
         )
 
         with pytest.raises(ToolFailure) as caught:
             air_quality_forecast(0, 0)
 
         assert caught.value.error.type == "upstream"
-        assert "HTTP error 400: invalid variable" in caught.value.error.message
+        assert caught.value.error.retryable
+        assert "HTTP error 500: backend down" in caught.value.error.message
+
+    @patch(HTTP_OPEN)
+    def test_error_reported_in_a_success_is_upstream(self, mock_urlopen):
+        mock_urlopen.return_value = respond({"error": True, "reason": "data unavailable"})
+
+        with pytest.raises(ToolFailure) as caught:
+            air_quality_current(0, 0)
+
+        assert caught.value.error.type == "upstream"
+        assert caught.value.error.message == "data unavailable"
+
+    @patch(HTTP_OPEN)
+    def test_404_is_endpoint_not_found(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(404, "Not Found")
+
+        with pytest.raises(ToolFailure) as caught:
+            air_quality_current(0, 0)
+
+        assert caught.value.error.type == "upstream"
+        assert "Open-Meteo: endpoint not found (HTTP 404)" in caught.value.error.message
 
     @patch(HTTP_OPEN)
     def test_rate_limited(self, mock_urlopen):

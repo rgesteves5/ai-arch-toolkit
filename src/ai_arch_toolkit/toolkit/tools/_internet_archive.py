@@ -8,22 +8,23 @@ from typing import Any
 
 from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
-from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
+from ai_arch_toolkit.toolkit.tools._http import Api, Reply
 
 
-def _api_error(data: object) -> str | None:
-    """The error an Internet Archive answer reports in ``error``; ``None`` for a result.
+def _api_error(reply: Reply) -> str | None:
+    """The error an Internet Archive answer reports in ``error``, in its words; ``None`` for a
+    result.
 
     Both APIs answer an error with a human-readable ``error`` instead of the result: the metadata
     API (https://archive.org/developers/md-read.html), and the advanced search, with HTTP 200
-    (seen 2026-09-29).
+    (seen 2026-09-29). Neither says what kind of error it is, so the text is the failure.
     """
-    error = data.get("error") if isinstance(data, dict) else None
+    error = reply.body.get("error") if isinstance(reply.body, dict) else None
     return " ".join(str(error).split()) if error else None
 
 
 _API = Api(
-    base="https://archive.org", name="Internet Archive", timeout_s=15, body_error=_api_error
+    base="https://archive.org", name="Internet Archive", timeout_s=15, error_reader=_api_error
 )
 _MAX_RESULTS_LIMIT = 20
 _DESCRIPTION_MAX_CHARS = 1000
@@ -130,12 +131,9 @@ def internet_archive_item(identifier: str) -> str:
         f"no Internet Archive item {normalized!r}; find its identifier with "
         "internet_archive_search"
     )
-    try:
-        item = _API.get_json("metadata", normalized, parse=_parse_metadata_item)
-    except HttpError as e:
-        if e.status == 404:
-            raise ToolFailure("not_found", missing) from e
-        raise
+    # An unknown identifier is an empty object with HTTP 200 (``_parse_metadata_item``); a 404
+    # says the same.
+    item = _API.get_json("metadata", normalized, parse=_parse_metadata_item, missing=missing)
     if item is None:
         raise ToolFailure("not_found", missing)
 

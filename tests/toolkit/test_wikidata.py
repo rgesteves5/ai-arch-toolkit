@@ -112,6 +112,27 @@ class TestWikidataSearch:
         assert error.type == "upstream"
         assert error.message == 'badvalue: Unrecognized value for parameter "language": xx.'
 
+    @patch(HTTP_OPEN)
+    def test_a_rate_limit_the_api_reports_is_rate_limited(self, mock_urlopen):
+        mock_urlopen.return_value = respond(
+            {"error": {"code": "maxlag", "info": "Waiting for 10.64.0.1: 7 seconds lagged."}}
+        )
+
+        error = _failure(lambda: wikidata_search("apple"))
+
+        assert error.type == "rate_limited"
+        assert error.retryable
+        assert "maxlag: Waiting for 10.64.0.1: 7 seconds lagged" in error.message
+
+    @patch(HTTP_OPEN)
+    def test_a_404_on_the_search_is_an_endpoint_not_found(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(404, "Not Found")
+
+        error = _failure(lambda: wikidata_search("apple"))
+
+        assert error.type == "upstream"
+        assert error.message.startswith("Wikidata: endpoint not found (HTTP 404)")
+
 
 class TestWikidataEntity:
     @patch(HTTP_OPEN)
@@ -162,8 +183,10 @@ class TestWikidataEntity:
         error = _failure(lambda: wikidata_entity("Q999999999999"))
 
         assert error.type == "not_found"
-        assert "no entity Q999999999999" in error.message
-        assert "wikidata_search" in error.message
+        assert not error.retryable
+        assert error.message == (
+            "Wikidata has no entity Q999999999999; search for it with wikidata_search"
+        )
 
     @patch(HTTP_OPEN)
     def test_an_entity_marked_missing_is_not_found(self, mock_urlopen):
@@ -260,6 +283,21 @@ class TestWikidataSparql:
 
         assert error.type == "rate_limited"
         assert "rate limited by Wikidata Query Service (HTTP 429)" in error.message
+
+    @patch(HTTP_OPEN)
+    def test_a_query_the_service_rejects_says_why(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(
+            400,
+            "Bad Request",
+            body=b"SPARQL-QUERY: queryStr=SELECT ?x WHERE {\nMalformedQueryException: "
+            b'Encountered "<EOF>"',
+        )
+
+        error = _failure(lambda: wikidata_sparql("SELECT ?x WHERE {"))
+
+        assert error.type == "upstream"
+        assert not error.retryable
+        assert "MalformedQueryException" in error.message
 
 
 @patch(HTTP_OPEN)

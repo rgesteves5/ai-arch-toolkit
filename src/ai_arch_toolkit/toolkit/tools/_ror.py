@@ -7,13 +7,31 @@ from typing import Any
 
 from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
-from ai_arch_toolkit.toolkit.tools._http import Api
+from ai_arch_toolkit.toolkit.tools._http import Api, Reply
+
+
+def _ror_error(reply: Reply) -> ToolFailure | str | None:
+    """The error a ROR answer reports, from its ``errors`` list; ``None`` without one.
+
+    ROR explains a refused request in ``{"errors": ["..."]}`` (https://ror.readme.io/v2/docs/
+    rest-api), a list the door's generic reading does not take. A 400 is a parameter ROR does not
+    accept (the query, or a filter built from ``country`` or ``org_type``): ``validation_error``.
+    """
+    if reply.status < 400 or not isinstance(reply.body, dict):
+        return None
+    errors = reply.body.get("errors")
+    said = "; ".join(" ".join(str(e).split()) for e in errors) if isinstance(errors, list) else ""
+    if not said:
+        return None
+    if reply.status == 400:
+        return ToolFailure(
+            "validation_error", f"ROR refused the request: {said}; correct that parameter"
+        )
+    return said
+
 
 _API = Api(
-    base="https://api.ror.org/v2/organizations",
-    name="ROR",
-    timeout_s=20,
-    status_messages={404: "no matching records found."},
+    base="https://api.ror.org/v2/organizations", name="ROR", timeout_s=20, error_reader=_ror_error
 )
 _MAX_LIMIT = 20
 _TEXT_RE = re.compile(r"^[\w\s,.'()/%:+-]{1,180}$", re.UNICODE)
@@ -38,8 +56,8 @@ def ror_search(
         page: One-based result page. Defaults to 1.
 
     Raises:
-        ToolFailure: validation_error when the query, ``country`` or ``org_type`` is invalid,
-            or ``page`` is below 1.
+        ToolFailure: validation_error when the query, ``country`` or ``org_type`` is invalid
+            (here or for ROR), or ``page`` is below 1.
     """
     if not _valid_text(query):
         raise ToolFailure(
@@ -82,7 +100,8 @@ def ror_organization(ror_id: str) -> str:
         ror_id: ROR ID or URL, e.g. "https://ror.org/01c27hj86".
 
     Raises:
-        ToolFailure: validation_error when ``ror_id`` is not a ROR ID.
+        ToolFailure: validation_error when ``ror_id`` is not a ROR ID; not_found when ROR has
+            no organization with it.
     """
     normalized = _normalize_ror_id(ror_id)
     if not normalized:
@@ -96,6 +115,7 @@ def ror_organization(ror_id: str) -> str:
         parse=lambda data: "\n".join(
             [f"ROR organization {normalized}:", *_format_org(data, index=None, details=True)]
         ),
+        missing=f"ROR has no organization {normalized}; find organizations with ror_search",
     )
 
 

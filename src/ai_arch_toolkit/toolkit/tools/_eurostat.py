@@ -7,23 +7,35 @@ from typing import Any
 
 from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
-from ai_arch_toolkit.toolkit.tools._http import Api
+from ai_arch_toolkit.toolkit.tools._http import Api, Reply
 
 
-def _eurostat_error(answer: object) -> str | None:
+def _eurostat_error(reply: Reply) -> ToolFailure | str | None:
     """The error a Eurostat answer explains: ``{"error": [{"status", "id", "label"}]}``.
 
     Both APIs send it with the error status (seen 2026-09-30): 404 for a dataset they do not
-    disseminate, 413 for a request they would only serve asynchronously.
+    disseminate (the dataset calls declare it ``missing``), 413 ``ASYNCHRONOUS_RESPONSE`` for a
+    request they will only serve later, which is worth a retry. Any other error is the labels.
     """
-    errors = answer.get("error") if isinstance(answer, dict) else None
+    errors = reply.body.get("error") if isinstance(reply.body, dict) else None
     errors = [errors] if isinstance(errors, dict) else errors
     if not isinstance(errors, list):
         return None
     labels = [_string(item.get("label")) for item in errors if isinstance(item, dict)]
-    return "; ".join(label for label in labels if label) or None
+    said = "; ".join(label for label in labels if label)
+    if not said:
+        return None
+    if reply.status == _ASYNCHRONOUS:
+        return ToolFailure(
+            "upstream",
+            f"{said.rstrip('.')}; try again in a few minutes, or narrow the request with filters",
+            retryable=True,
+        )
+    return said
 
 
+# The status of a request Eurostat treats asynchronously: the answer is ready later.
+_ASYNCHRONOUS = 413
 # Stubs are each dataset's ID and title, about 1.5 MB; the full catalogue is 20 MB, nine tenths of
 # it annotations. eurostat_dataset reads one dataset's details.
 _DATAFLOWS = Api(
@@ -31,16 +43,14 @@ _DATAFLOWS = Api(
     name="Eurostat",
     timeout_s=30,
     params={"format": "JSON", "lang": "en", "detail": "allstubs"},
-    status_messages={404: "no matching records found."},
-    body_error=_eurostat_error,
+    error_reader=_eurostat_error,
 )
 _DATA = Api(
     base="https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data",
     name="Eurostat",
     timeout_s=30,
     params={"format": "JSON", "lang": "en"},
-    status_messages={404: "no matching records found."},
-    body_error=_eurostat_error,
+    error_reader=_eurostat_error,
 )
 _MAX_LIMIT = 50
 _DATASET_RE = re.compile(r"^[A-Za-z0-9_]{2,60}$")
@@ -83,13 +93,15 @@ def eurostat_dataset(dataset_id: str) -> str:
         dataset_id: Eurostat dataset/dataflow ID, e.g. "TPS00001".
 
     Raises:
-        ToolFailure: validation_error when ``dataset_id`` is malformed.
+        ToolFailure: validation_error when ``dataset_id`` is malformed; not_found when Eurostat
+            does not disseminate that dataset.
     """
     dataset = _dataset_id(dataset_id)
     return _DATA.get_json(
         dataset,
         params={"lastTimePeriod": "1"},
         parse=lambda data: _dataset_text(data, dataset),
+        missing=_missing(dataset),
     )
 
 
@@ -102,13 +114,15 @@ def eurostat_dimensions(dataset_id: str, max_values: int = 20) -> str:
         max_values: Number of category values to show per dimension (1-50). Defaults to 20.
 
     Raises:
-        ToolFailure: validation_error when ``dataset_id`` is malformed.
+        ToolFailure: validation_error when ``dataset_id`` is malformed; not_found when Eurostat
+            does not disseminate that dataset.
     """
     dataset = _dataset_id(dataset_id)
     return _DATA.get_json(
         dataset,
         params={"lastTimePeriod": "1"},
         parse=lambda data: _dimensions_text(data, dataset, max_values),
+        missing=_missing(dataset),
     )
 
 
@@ -128,12 +142,17 @@ def eurostat_series(
         max_points: Number of observations to return (1-50). Defaults to 25.
 
     Raises:
-        ToolFailure: validation_error when ``dataset_id`` or ``filters`` is malformed.
+        ToolFailure: validation_error when ``dataset_id`` or ``filters`` is malformed;
+            not_found when Eurostat has no data for the filters or does not disseminate that
+            dataset (its 404 does not say which).
     """
     dataset = _dataset_id(dataset_id)
     params = _with_last_periods(_parse_filters(filters), last_time_periods)
     return _DATA.get_json(
-        dataset, params=params, parse=lambda data: _series_text(data, dataset, max_points)
+        dataset,
+        params=params,
+        parse=lambda data: _series_text(data, dataset, max_points),
+        missing=_missing(dataset, filtered=True),
     )
 
 
@@ -154,7 +173,8 @@ def eurostat_compare(
 
     Raises:
         ToolFailure: validation_error when ``geo_codes``, ``filters`` or ``dataset_id`` is
-            malformed, or ``filters`` names geo.
+            malformed, or ``filters`` names geo; not_found when Eurostat has no data for the
+            codes or does not disseminate that dataset (its 404 does not say which).
     """
     geos = [geo.strip().upper() for geo in geo_codes.split(",") if geo.strip()]
     if not geos or len(geos) > 10:
@@ -189,6 +209,20 @@ def _dataset_id(dataset_id: str) -> str:
     return dataset
 
 
+def _missing(dataset: str, *, filtered: bool = False) -> str:
+    """What a 404 of a dataset call means: Eurostat does not disseminate that dataset, or, for a
+    call with filters, that it has no data for them (its 404 does not say which)."""
+    if filtered:
+        return (
+            f"Eurostat has no data for dataset {dataset} with these filters, or no such dataset; "
+            "check the codes with eurostat_dimensions, or find the ID with eurostat_dataset_search"
+        )
+    return (
+        f"Eurostat has no dataset {dataset} to disseminate; find its ID with "
+        "eurostat_dataset_search"
+    )
+
+
 def _with_last_periods(params: dict[str, str], last_time_periods: int) -> dict[str, str]:
     if not any(key.lower() == "time" for key in params):
         params["lastTimePeriod"] = str(max(1, min(last_time_periods, 20)))
@@ -208,6 +242,7 @@ def _compare_rows(
                 parse=lambda data: [
                     _point_text(point) for point in _observations(data)[:last_time_periods]
                 ],
+                missing=_missing(dataset, filtered=True),
             )
         )
     return rows

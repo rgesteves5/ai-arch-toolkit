@@ -10,16 +10,19 @@ from typing import Any
 
 from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
-from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
+from ai_arch_toolkit.toolkit.tools._http import Api, HttpError, Reply
 
 
-def _esearch_error(data: object) -> str | None:
+def _esearch_error(reply: Reply) -> str | None:
     """The error an ESearch answer reports in place of a result; ``None`` for a result.
 
     ESearch answers ``ERROR`` instead of the count and ids
     (https://eutils.ncbi.nlm.nih.gov/eutils/dtd/20060628/esearch.dtd), with HTTP 200 (seen
     2026-09-29). A query that matches nothing is a result, with notes under ``warninglist``.
+    The error does not say whose fault it is (a malformed term or a backend that failed), so it
+    stays in ESearch's words, ``upstream``. Any other error status keeps the door's reading.
     """
+    data = reply.body
     result = data.get("esearchresult") if isinstance(data, dict) else None
     error = result.get("ERROR") if isinstance(result, dict) else None
     return _clean_text(str(error)) if error else None
@@ -31,7 +34,7 @@ _EUTILS = Api(
     name="NCBI E-utilities",
     min_interval_s=0.34,
     params={"tool": "ai_arch_toolkit"},
-    body_error=_esearch_error,
+    error_reader=_esearch_error,
 )
 _MAX_RESULTS_LIMIT = 20
 _ABSTRACT_MAX_CHARS = 900

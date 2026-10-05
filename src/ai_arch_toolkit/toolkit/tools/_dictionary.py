@@ -6,7 +6,7 @@ from typing import Any
 
 from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
-from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
+from ai_arch_toolkit.toolkit.tools._http import Api
 
 _API = Api(base="https://api.dictionaryapi.dev/api/v2/entries/en", name="Free Dictionary API")
 
@@ -24,16 +24,13 @@ def define_word(word: str) -> str:
     """
     if not word.strip():
         raise ToolFailure("validation_error", "word cannot be empty; pass an English word.")
-    try:
-        return _API.get_json_list(word, parse=lambda data: _definition_text(data, word))
-    except HttpError as e:
-        if e.status == 404:
-            msg = (
-                f"the Free Dictionary API has no entry for {word!r}; check the spelling, "
-                "or look it up with wiktionary_entry."
-            )
-            raise ToolFailure("not_found", msg) from e
-        raise
+    missing = (
+        f"the Free Dictionary API has no entry for {word!r}; check the spelling, "
+        "or look it up with wiktionary_entry."
+    )
+    return _API.get_json_list(
+        word, parse=lambda data: _definition_text(data, word), missing=missing
+    )
 
 
 def _definition_text(data: list[Any], word: str) -> str:

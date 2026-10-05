@@ -6,23 +6,35 @@ from typing import Any
 
 from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
-from ai_arch_toolkit.toolkit.tools._http import Api
+from ai_arch_toolkit.toolkit.tools._http import Api, Reply
 
 
-def _error_reason(answer: object) -> str | None:
-    """The ``reason`` Open-Meteo puts in a JSON error body; ``None`` when there is none.
+def _error_reason(reply: Reply) -> ToolFailure | str | None:
+    """The error Open-Meteo reports in a JSON body; ``None`` when there is none.
 
     An invalid parameter gets HTTP 400 and ``{"error": true, "reason": "..."}``
-    (https://open-meteo.com/en/docs/air-quality-api, "Errors").
+    (https://open-meteo.com/en/docs/air-quality-api, "Errors"): the request's arguments were
+    rejected, a ``validation_error``. Any other answer carrying a ``reason`` is the source
+    failing, in its words.
     """
-    return (_string(answer.get("reason")) or None) if isinstance(answer, dict) else None
+    body = reply.body
+    reason = _string(body.get("reason")) if isinstance(body, dict) else ""
+    if not reason:
+        return None
+    if reply.status == 400:
+        msg = (
+            f"Open-Meteo rejected the request: {reason}; check the coordinates, the variables "
+            "and the timezone (an IANA name such as 'Europe/Lisbon', or 'auto')."
+        )
+        return ToolFailure("validation_error", msg)
+    return reason
 
 
 _API = Api(
     base="https://air-quality-api.open-meteo.com/v1/air-quality",
     name="Open-Meteo",
     timeout_s=15,
-    body_error=_error_reason,
+    error_reader=_error_reason,
 )
 _MAX_HOURS_LIMIT = 72
 _DEFAULT_VARIABLES = "european_aqi,us_aqi,pm10,pm2_5,ozone,nitrogen_dioxide"
@@ -89,8 +101,9 @@ def air_quality_current(
         timezone: Timezone name or "auto". Defaults to "auto".
 
     Raises:
-        ToolFailure: validation_error when the coordinates or the variables are invalid;
-            upstream when Open-Meteo fails or answers without the values.
+        ToolFailure: validation_error when the coordinates, the variables or the timezone are
+            invalid (Open-Meteo rejects the request); upstream when Open-Meteo fails or answers
+            without the values.
     """
     _validate_location(latitude, longitude)
     parsed = _parse_variables(variables)
@@ -126,8 +139,9 @@ def air_quality_forecast(
         max_hours: Maximum hourly rows to return (1-72). Defaults to 24.
 
     Raises:
-        ToolFailure: validation_error when the coordinates or the variables are invalid;
-            upstream when Open-Meteo fails or answers without the values.
+        ToolFailure: validation_error when the coordinates, the variables or the timezone are
+            invalid (Open-Meteo rejects the request); upstream when Open-Meteo fails or answers
+            without the values.
     """
     _validate_location(latitude, longitude)
     parsed = _parse_variables(variables)

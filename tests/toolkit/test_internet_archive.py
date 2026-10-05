@@ -13,7 +13,7 @@ from ai_arch_toolkit.toolkit.tools._internet_archive import (
     internet_archive_item,
     internet_archive_search,
 )
-from tests.toolkit.http_fakes import HTTP_OPEN, respond
+from tests.toolkit.http_fakes import HTTP_OPEN, http_error, respond
 
 
 def _failure(fn, *args, **kwargs) -> ToolFailure:
@@ -38,6 +38,29 @@ class TestInternetArchiveSearch:
 
         assert failure.error.type == "upstream"
         assert str(failure) == 'a group is empty (near char ")" at position 10)'
+
+    @patch(HTTP_OPEN)
+    def test_an_error_status_says_what_the_search_said(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(
+            400, "Bad Request", body=b'{"error": "rows must be a number"}'
+        )
+
+        failure = _failure(internet_archive_search, "apple")
+
+        assert failure.error.type == "upstream"
+        assert not failure.error.retryable
+        assert str(failure) == "HTTP error 400: rows must be a number"
+
+    @patch(HTTP_OPEN)
+    def test_a_404_on_the_search_is_an_endpoint_not_found(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(404, "Not Found")
+
+        failure = _failure(internet_archive_search, "apple")
+
+        assert failure.error.type == "upstream"
+        assert str(failure) == (
+            "Internet Archive: endpoint not found (HTTP 404); the API may have changed"
+        )
 
     @patch(HTTP_OPEN)
     def test_no_items_is_an_answer(self, mock_urlopen):
@@ -150,6 +173,7 @@ class TestInternetArchiveItem:
         failure = _failure(internet_archive_item, "missing")
 
         assert failure.error.type == "not_found"
+        assert not failure.error.retryable
         assert failure.error.message == (
             "no Internet Archive item 'missing'; find its identifier with internet_archive_search"
         )

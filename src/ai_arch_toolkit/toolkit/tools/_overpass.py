@@ -2,32 +2,65 @@
 
 from __future__ import annotations
 
+import html
 import re
 from typing import Any
 
 from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
-from ai_arch_toolkit.toolkit.tools._http import Api
+from ai_arch_toolkit.toolkit.tools._http import Api, Reply
+
+# Overpass explains a failed request in an HTML page, one "<strong>Error</strong>: ..." paragraph
+# per error (https://dev.overpass-api.de/overpass-doc/en/preface/commons.html): a 400 for a query
+# it cannot parse ("line 1: parse error: ..."), a 429 or 504 for a quota or load it cannot serve.
+_PAGE_ERROR_RE = re.compile(r"<strong[^>]*>\s*Error\s*</strong>\s*:?(.*?)</p>", re.DOTALL)
+_TAG_MARKUP_RE = re.compile(r"<[^>]+>")
 
 
-def _runtime_error(data: object) -> str | None:
-    """The error an Overpass answer reports in its ``remark``; ``None`` for a result.
+def _overpass_error(reply: Reply) -> ToolFailure | str | None:
+    """The error an Overpass answer reports; ``None`` for a result.
 
     A query that fails while running, on a timeout or out of memory
     (https://wiki.openstreetmap.org/wiki/Overpass_API/Overpass_QL), still answers HTTP 200: the
     elements found so far and a ``remark`` that starts "runtime error" (seen 2026-09-29). Other
-    remarks are notes.
+    remarks are notes. An error status's page says what went wrong: a 400 is a query Overpass
+    could not read (``validation_error``); any other status keeps the page's words, typed by it.
     """
-    remark = _string(data.get("remark")) if isinstance(data, dict) else ""
-    return remark if remark.startswith("runtime error") else None
+    body = reply.body
+    if isinstance(body, dict):
+        remark = _string(body.get("remark"))
+        if remark.startswith("runtime error"):
+            said = remark.rstrip(".")
+            return f"{said}; narrow the query (a smaller area, fewer elements)"
+        return None
+    errors = _page_errors(body) if isinstance(body, str) else ""
+    if reply.status == 400 and errors:
+        return ToolFailure(
+            "validation_error",
+            f"Overpass could not read the query (HTTP 400): {errors}; correct the Overpass QL "
+            "(overpass_query) or the tag and area (overpass_pois)",
+        )
+    if errors:
+        return errors
+    if reply.status == 504:
+        return "Overpass is overloaded or the query timed out; retry later or narrow the query"
+    return None
+
+
+def _page_errors(page: str) -> str:
+    """The text of the error paragraphs of an Overpass HTML page, joined; empty without any."""
+    found = (
+        _string(html.unescape(_TAG_MARKUP_RE.sub("", match)))
+        for match in _PAGE_ERROR_RE.findall(page)
+    )
+    return "; ".join(error for error in found if error)
 
 
 _API = Api(
     base="https://overpass-api.de/api/interpreter",
     name="Overpass",
     timeout_s=35,
-    status_messages={504: "Overpass query timed out upstream (HTTP 504)."},
-    body_error=_runtime_error,
+    error_reader=_overpass_error,
 )
 _MAX_LIMIT = 50
 _TAG_RE = re.compile(r"^[A-Za-z0-9_:-]{1,80}$")
@@ -43,8 +76,9 @@ def overpass_query(query: str, max_results: int = 25) -> str:
         max_results: Number of elements to return (1-50). Defaults to 25.
 
     Raises:
-        ToolFailure: validation_error when the query is empty, too long, or has no output
-            format; upstream when Overpass reports a runtime error (a timeout, out of memory).
+        ToolFailure: validation_error when the query is empty, too long, has no output format,
+            or Overpass cannot read it (HTTP 400); upstream when Overpass reports a runtime
+            error (a timeout, out of memory).
     """
     if not query.strip() or len(query) > 4000:
         raise ToolFailure(

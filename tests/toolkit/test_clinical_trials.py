@@ -152,6 +152,16 @@ class TestClinicalTrialsSearch:
         assert "timed out" in caught.value.error.message.lower()
 
     @patch(HTTP_OPEN)
+    def test_404_is_endpoint_not_found(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(404, "Not Found")
+
+        with pytest.raises(ToolFailure) as caught:
+            clinical_trials_search("test")
+
+        assert caught.value.error.type == "upstream"
+        assert "ClinicalTrials.gov: endpoint not found (HTTP 404)" in caught.value.error.message
+
+    @patch(HTTP_OPEN)
     def test_parse_failure(self, mock_urlopen):
         mock_urlopen.return_value = respond("not json")
 

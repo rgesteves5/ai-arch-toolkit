@@ -15,7 +15,7 @@ from typing import Any
 
 from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
-from ai_arch_toolkit.toolkit.tools._http import Api
+from ai_arch_toolkit.toolkit.tools._http import Api, Reply
 
 _MAX_RESULTS = 20
 _SNIPPET_CHARS = 500
@@ -25,15 +25,60 @@ _TIME_RANGES = ("day", "week", "month", "year")
 _FRESHNESS = ("pd", "pw", "pm", "py")
 
 
-def _error_detail(answer: object) -> str | None:
-    """The error Brave or Tavily explains in an error body, in its own words."""
-    if not isinstance(answer, dict):
+def _error_detail(reply: Reply) -> str | None:
+    """The error Brave or Tavily explains in an error body, in its own words; a 429 is left to
+    the door's rate-limit message, which says when to try again."""
+    answer = reply.body
+    if reply.status == 429 or not isinstance(answer, dict):
         return None
     error = answer.get("error") or answer.get("detail")
     if isinstance(error, dict):
-        text = error.get("detail") or error.get("error") or error.get("message")
-        return str(text) if text else None
-    return str(error) if isinstance(error, str) and error else None
+        error = error.get("detail") or error.get("error") or error.get("message")
+    if not isinstance(error, str):
+        return None
+    return " ".join(error.split()) or None
+
+
+def _refused_key(service: str, env: str, url: str, reply: Reply) -> ToolFailure:
+    """A key the service refused: not retryable until someone sets a valid one."""
+    said = _error_detail(reply)
+    msg = (
+        f"{service} rejected the key in {env} (HTTP {reply.status})"
+        + (f": {said.rstrip('.')}" if said else "")
+        + f"; set a valid key in {env} (get one: {url})."
+    )
+    return ToolFailure("upstream", msg, retryable=False)
+
+
+def _brave_error(reply: Reply) -> ToolFailure | str | None:
+    """Brave's errors: 401 and 403 refuse the key; any other, in Brave's words."""
+    if reply.status in (401, 403):
+        return _refused_key(
+            "Brave", "BRAVE_SEARCH_API_KEY", "https://brave.com/search/api/", reply
+        )
+    return _error_detail(reply)
+
+
+def _tavily_error(reply: Reply) -> ToolFailure | str | None:
+    """Tavily's errors (https://docs.tavily.com/documentation/api-reference/endpoint/search):
+    401 refuses the key; 432 and 433 are the plan's and the pay-as-you-go usage limits, which
+    stand until the account changes, so they are ``rate_limited`` but not retryable; any other,
+    in Tavily's words."""
+    if reply.status == 401:
+        return _refused_key("Tavily", "TAVILY_API_KEY", "https://app.tavily.com", reply)
+    limits = {
+        432: "the search exceeds your Tavily plan's usage limit (HTTP 432)",
+        433: "the search exceeds your Tavily pay-as-you-go limit (HTTP 433)",
+    }
+    if (limit := limits.get(reply.status)) is not None:
+        said = _error_detail(reply)
+        msg = (
+            limit
+            + (f": {said.rstrip('.')}" if said else "")
+            + "; raise it at https://app.tavily.com."
+        )
+        return ToolFailure("rate_limited", msg, retryable=False)
+    return _error_detail(reply)
 
 
 # Brave Search API: GET /res/v1/web/search, the key in X-Subscription-Token, up to 20 results
@@ -46,11 +91,7 @@ _BRAVE = Api(
     key_url="https://brave.com/search/api/",
     key_required=True,
     billed_as="brave_search",
-    status_messages={
-        401: "Brave rejected the key in BRAVE_SEARCH_API_KEY (HTTP 401).",
-        403: "Brave rejected the key in BRAVE_SEARCH_API_KEY (HTTP 403).",
-    },
-    body_error=_error_detail,
+    error_reader=_brave_error,
 )
 
 
@@ -72,12 +113,7 @@ _TAVILY = Api(
     key_required=True,
     billed_as="tavily_search",
     bill_units=_tavily_credits,
-    status_messages={
-        401: "Tavily rejected the key in TAVILY_API_KEY (HTTP 401).",
-        432: "the search exceeds your Tavily plan's limit (HTTP 432).",
-        433: "the search exceeds your Tavily plan's limit for pay-as-you-go (HTTP 433).",
-    },
-    body_error=_error_detail,
+    error_reader=_tavily_error,
 )
 
 
@@ -148,8 +184,8 @@ def brave_search(query: str, max_results: int = 10, country: str = "", freshness
         freshness: Optional age limit: "pd" (a day), "pw" (a week), "pm" (a month), "py" (a year).
 
     Raises:
-        ToolFailure: validation_error when the query is empty or the freshness is unknown;
-            upstream when the key is missing or Brave refuses it.
+        ToolFailure: validation_error when the query is empty, the freshness is unknown or
+            BRAVE_SEARCH_API_KEY is not set; upstream (not retryable) when Brave refuses the key.
     """
     query = query.strip()
     if not query:
@@ -186,8 +222,9 @@ def tavily_search(
         include_answer: Whether Tavily also writes a short answer from the results.
 
     Raises:
-        ToolFailure: validation_error when the query is empty, or the topic or the time range is
-            unknown; upstream when the key is missing or Tavily refuses it.
+        ToolFailure: validation_error when the query is empty, the topic or the time range is
+            unknown, or TAVILY_API_KEY is not set; upstream (not retryable) when Tavily refuses
+            the key; rate_limited (not retryable) when the search exceeds the plan's limit.
     """
     query = query.strip()
     if not query:

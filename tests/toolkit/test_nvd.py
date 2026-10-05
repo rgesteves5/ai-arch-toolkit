@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import email.message
+import io
 import urllib.error
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
@@ -10,7 +12,7 @@ import pytest
 
 from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._nvd import nvd_cve, nvd_cve_search
-from tests.toolkit.http_fakes import HTTP_OPEN, respond
+from tests.toolkit.http_fakes import HTTP_OPEN, http_error, respond
 
 _CVE = {
     "cve": {
@@ -117,6 +119,52 @@ class TestNvdCveSearch:
         assert failure.error.type == "rate_limited"
         assert failure.error.retryable
         assert "rate limited" in str(failure)
+
+
+def _refused(message: str) -> urllib.error.HTTPError:
+    """A 404 that says why in its ``message`` header, as NVD refuses a request."""
+    headers = email.message.Message()
+    headers["message"] = message
+    return urllib.error.HTTPError(
+        "https://services.nvd.nist.gov/rest/json/cves/2.0", 404, "", headers, io.BytesIO()
+    )
+
+
+class TestNvdErrors:
+    @patch(HTTP_OPEN)
+    def test_a_refused_request_says_why_from_the_message_header(self, mock_urlopen):
+        reason = "The publication date range must not exceed 120 consecutive days."
+        mock_urlopen.side_effect = _refused(reason)
+
+        failure = _failure(
+            nvd_cve_search,
+            query="log4j",
+            pub_start_date="2021-01-01",
+            pub_end_date="2021-12-31",
+        )
+
+        assert failure.error.type == "validation_error"
+        assert not failure.error.retryable
+        assert (
+            failure.error.message == f"NVD refused the request: {reason}; correct that parameter"
+        )
+
+    @patch(HTTP_OPEN)
+    def test_a_404_without_a_reason_is_an_endpoint_that_moved(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(404, "Not Found")
+
+        failure = _failure(nvd_cve_search, query="log4j")
+
+        assert failure.error.type == "upstream"
+        assert failure.error.message.startswith("NVD: endpoint not found (HTTP 404)")
+
+    @patch(HTTP_OPEN)
+    def test_a_message_header_on_a_success_is_not_an_error(self, mock_urlopen):
+        answer = respond({"vulnerabilities": [_CVE]})
+        answer.headers["message"] = "informational"
+        mock_urlopen.return_value = answer
+
+        assert nvd_cve("CVE-2021-44228").startswith("NVD CVE CVE-2021-44228:")
 
 
 class TestNvdCve:

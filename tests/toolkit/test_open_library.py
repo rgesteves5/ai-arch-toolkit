@@ -14,7 +14,7 @@ from ai_arch_toolkit.toolkit.tools._open_library import (
     open_library_search,
     open_library_work,
 )
-from tests.toolkit.http_fakes import HTTP_OPEN, respond
+from tests.toolkit.http_fakes import HTTP_OPEN, http_error, respond
 
 
 def _failure(fn, *args, **kwargs) -> ToolFailure:
@@ -145,6 +145,15 @@ class TestOpenLibrarySearch:
 
         assert open_library_search("zzqqxx") == "No Open Library results found."
 
+    @patch(HTTP_OPEN)
+    def test_a_404_on_the_search_is_an_endpoint_not_found(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(404, "Not Found")
+
+        failure = _failure(open_library_search, "test")
+
+        assert failure.error.type == "upstream"
+        assert "Open Library: endpoint not found (HTTP 404)" in failure.error.message
+
 
 class TestOpenLibraryWork:
     @patch(HTTP_OPEN)
@@ -230,6 +239,18 @@ class TestOpenLibraryIsbn:
 
         assert failure.error.type == "not_found"
         assert "no edition with ISBN 9780140328721" in failure.error.message
+
+    @patch(HTTP_OPEN)
+    def test_a_404_for_an_isbn_is_not_found(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(404, "Not Found", body=b'{"error": "notfound"}')
+
+        failure = _failure(open_library_isbn, "9780140328721")
+
+        assert failure.error.type == "not_found"
+        assert failure.error.message == (
+            "Open Library has no edition with ISBN 9780140328721; find books with "
+            "open_library_search"
+        )
 
 
 # Records as Open Library answered them live, with HTTP 200 (2026-09-30).

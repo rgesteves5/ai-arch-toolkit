@@ -10,12 +10,7 @@ from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._http import Api
 
-_API = Api(
-    base="https://api.gbif.org/v1",
-    name="GBIF",
-    timeout_s=15,
-    status_messages={404: "no matching records found."},
-)
+_API = Api(base="https://api.gbif.org/v1", name="GBIF", timeout_s=15)
 _MAX_LIMIT = 50
 _TEXT_RE = re.compile(r"^[\w\s,.'()/-]{1,160}$", re.UNICODE)
 _KEY_RE = re.compile(r"^\d+$")
@@ -110,7 +105,8 @@ def gbif_species(taxon_key: str) -> str:
         taxon_key: GBIF taxon key, usually from gbif_species_match or gbif_species_search.
 
     Raises:
-        ToolFailure: validation_error when ``taxon_key`` is not a number.
+        ToolFailure: validation_error when ``taxon_key`` is not a number; not_found when GBIF
+            has no taxon with that key.
     """
     key = taxon_key.strip()
     if not _KEY_RE.fullmatch(key):
@@ -119,6 +115,7 @@ def gbif_species(taxon_key: str) -> str:
         "species",
         key,
         parse=lambda data: "\n".join([f"GBIF taxon {key}:", *_format_taxon(data, index=None)]),
+        missing=f"GBIF has no taxon {key}; find its key with gbif_species_match",
     )
 
 

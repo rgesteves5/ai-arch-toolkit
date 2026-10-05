@@ -234,7 +234,11 @@ class TestWorldBankIndicators:
     @patch(HTTP_OPEN)
     def test_a_404_indicator_is_not_found_and_other_statuses_stay_upstream(self, mock_urlopen):
         mock_urlopen.side_effect = http_error(404, "Not Found")
-        assert _failure(lambda: world_bank_indicator("NO.SUCH")).type == "not_found"
+        error = _failure(lambda: world_bank_indicator("NO.SUCH"))
+        assert error.type == "not_found"
+        assert error.message == (
+            "the World Bank has no indicator NO.SUCH; search for one with world_bank_indicators"
+        )
 
         mock_urlopen.side_effect = http_error(502, "Bad Gateway")
         error = _failure(lambda: world_bank_indicator("NO.SUCH"))
@@ -347,7 +351,6 @@ _INVALID_VALUE = [
     [
         lambda: world_bank_series("PRT", "NOT.AN.INDICATOR"),
         lambda: world_bank_compare("NOT.AN.INDICATOR", "PRT,ESP"),
-        lambda: world_bank_indicator("NOT.AN.INDICATOR"),
         lambda: world_bank_indicators(source="99999"),
         lambda: world_bank_indicators(query="gdp", scan_pages=2),
         world_bank_topics,
@@ -382,3 +385,43 @@ def test_every_message_the_api_reports_is_kept(mock_urlopen):
     assert _failure(lambda: world_bank_series("PRT", "SP.POP.TOTL")).message == (
         "Invalid value: Bad country; Invalid format: Bad indicator"
     )
+
+
+@patch(HTTP_OPEN)
+def test_an_indicator_lookup_the_api_calls_an_invalid_value_is_not_found(mock_urlopen):
+    # Error 120 is the World Bank's answer, with HTTP 200, for an indicator ID it does not know.
+    mock_urlopen.return_value = respond(_INVALID_VALUE)
+
+    error = _failure(lambda: world_bank_indicator("NOT.AN.INDICATOR"))
+
+    assert error.type == "not_found"
+    assert error.message == (
+        "the World Bank has no indicator NOT.AN.INDICATOR; "
+        "search for one with world_bank_indicators"
+    )
+
+
+@patch(HTTP_OPEN)
+def test_another_error_on_an_indicator_lookup_stays_the_sources_words(mock_urlopen):
+    mock_urlopen.return_value = respond(
+        [{"message": [{"id": "150", "key": "Language with ID", "value": "is not supported"}]}]
+    )
+
+    error = _failure(lambda: world_bank_indicator("SP.POP.TOTL"))
+
+    assert error.type == "upstream"
+    assert error.message == "Language with ID: is not supported"
+
+
+@pytest.mark.parametrize(
+    "call",
+    [world_bank_topics, lambda: world_bank_series("PRT", "SP.POP.TOTL")],
+)
+@patch(HTTP_OPEN)
+def test_a_404_on_a_list_is_an_endpoint_that_moved(mock_urlopen, call):
+    mock_urlopen.side_effect = http_error(404, "Not Found")
+
+    error = _failure(call)
+
+    assert error.type == "upstream"
+    assert error.message.startswith("World Bank: endpoint not found (HTTP 404)")

@@ -24,7 +24,7 @@ import urllib.request
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from email.message import Message
-from typing import IO, Any, Protocol
+from typing import IO, Any, Protocol, cast
 
 from ai_arch_toolkit.core._tools._billing import bill
 from ai_arch_toolkit.core._tools._result import ToolFailure, ToolFailureType
@@ -47,6 +47,7 @@ _WEB_SCHEMES = frozenset({"http", "https"})
 _DOT_SEGMENTS = frozenset({"", ".", ".."})
 _CHUNK_BYTES = 64 * 1024
 _ERROR_BODY_CHARS = 2000
+_SOURCE_TEXT_CHARS = 300  # of a source's own error text, without a reader
 
 
 class HttpError(ToolFailure):
@@ -59,7 +60,7 @@ class HttpError(ToolFailure):
 
     Attributes:
         status: The HTTP status of an error response; ``None`` when no response arrived, or when
-            the API reported the error inside a successful one (``Api.body_error``).
+            the API reported the error inside a successful one (``Api.error_reader``).
         body: The start of an error response's body, for APIs that explain errors there.
         retry_after_s: The seconds an error response's ``Retry-After`` asked to wait, if it did.
     """
@@ -89,6 +90,26 @@ class HttpError(ToolFailure):
         self.status = status
         self.body = body
         self.retry_after_s = retry_after_s
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Reply:
+    """What an API answered, for its ``error_reader``.
+
+    Attributes:
+        status: The HTTP status.
+        headers: The headers, by lower-case name.
+        body: The decoded JSON, or the text when it is not JSON (the start of an error's body).
+    """
+
+    status: int
+    headers: Mapping[str, str]
+    body: object
+
+
+type ErrorReader = Callable[[Reply], ToolFailure | str | None]
+"""Reads the error an answer reports (D38): ``None`` for none, the source's words as text (typed
+by the status), or a typed :class:`ToolFailure` when the source says what happened."""
 
 
 class _Response(Protocol):
@@ -269,7 +290,26 @@ def _error_body(error: urllib.error.HTTPError) -> str:
         return ""
     finally:
         error.close()
-    return raw.decode("utf-8", errors="replace")[:_ERROR_BODY_CHARS]
+    return raw.decode("utf-8", errors="replace")
+
+
+def _source_text(body: str) -> str | None:
+    """The error text a body gives without a reader of its own: the ``message``, ``error`` or
+    ``detail`` of a JSON object (text, or an object's ``message``), or the start of a text body
+    that is not an HTML page."""
+    value = _decoded(body)
+    if isinstance(value, dict):
+        for key in ("message", "error", "detail"):
+            field_value = value.get(key)
+            if isinstance(field_value, dict):
+                field_value = field_value.get("message")
+            if isinstance(field_value, str) and field_value.strip():
+                return " ".join(field_value.split())[:_SOURCE_TEXT_CHARS]
+        return None
+    text = " ".join(body.split())
+    if not text or text.startswith(("<", "{", "[")) or isinstance(value, list | int | float):
+        return None  # a page, JSON cut short, or JSON with no message
+    return text[:_SOURCE_TEXT_CHARS]
 
 
 def _body(response: _Response, deadline: float, max_bytes: int) -> tuple[bytes, bool]:
@@ -296,11 +336,12 @@ def _fetch(
     *,
     timeout_s: float,
     max_bytes: int,
-    describe: Callable[[int, str, str], str],
-) -> tuple[int, bytes, str, bool]:
-    """Send ``request`` and read its body: ``(status, body, charset, complete)``, or ``HttpError``.
+    failure: Callable[[Reply, str], HttpError],
+) -> tuple[int, bytes, str, bool, Mapping[str, str]]:
+    """Send ``request`` and read its body: ``(status, body, charset, complete, headers)``.
 
-    ``describe(status, reason, body)`` words the error of a response with an error status.
+    ``failure(reply, reason)`` builds the error of a response with an error status, from its
+    status, headers and the start of its body (decoded when it is JSON) and the status's reason.
     """
     deadline = time.monotonic() + timeout_s
     try:
@@ -309,13 +350,14 @@ def _fetch(
             status = response.status
             body, complete = _body(response, deadline, max_bytes)
             charset = response.headers.get_content_charset() or "utf-8"
+            headers = _header_map(response.headers)
         finally:
             response.close()
     except urllib.error.HTTPError as error:
-        status, body = error.code, _error_body(error)
-        message = describe(status, str(error.reason), body)
-        wait = _retry_after(error.headers)
-        raise HttpError(message, status=status, body=body, retry_after_s=wait) from error
+        reply = Reply(
+            status=error.code, headers=_header_map(error.headers), body=_error_body(error)
+        )
+        raise failure(reply, str(error.reason)) from error
     except _Redirected as refused:
         target = refused.target
         raise HttpError(f"refused a redirect to {target} (only same-host HTTPS)") from refused
@@ -331,12 +373,17 @@ def _fetch(
     except (OSError, http.client.HTTPException) as error:
         reason = str(error) or type(error).__name__
         raise HttpError(f"network error: {reason}", retryable=True) from error
-    return status, body, charset, complete
+    return status, body, charset, complete, headers
 
 
-def _retry_after(headers: Message | None) -> float | None:
+def _header_map(headers: Message | None) -> Mapping[str, str]:
+    """The headers by lower-case name (the last value of a repeated one)."""
+    return {name.lower(): value for name, value in (headers or Message()).items()}
+
+
+def _retry_after_value(value: str | None) -> float | None:
     """The seconds a ``Retry-After`` header asks to wait: a number, or an HTTP date."""
-    value = (headers.get("Retry-After") if headers is not None else None) or ""
+    value = value or ""
     try:
         return max(0.0, float(value))
     except ValueError:
@@ -415,17 +462,36 @@ def _array(value: object) -> list[Any]:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class _Ask:
+    """What one request declares about its answers (see :class:`Api`)."""
+
+    missing: str | None = None
+    empty: object | None = None
+    allow_empty: bool = False
+    empty_on_404: bool = False
+    body: tuple[bytes, str] | None = None
+
+
+class _EmptyNotFound(Exception):
+    """A 404 the request declared empty: nothing found."""
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class Api:
     """One upstream HTTPS API: requests go to its host and under its base path, nowhere else.
 
     Every request takes the function that reads its answer (``parse``), and whatever that
     function raises on a shape it did not expect becomes an ``HttpError``: no raw response leaves
     this module unguarded, so a tool cannot crash on a body it did not foresee. An API that
-    explains its errors in the body declares how to read them (``body_error``), so no ``parse``
-    mistakes an error for an empty result and no explanation is lost. A request to a source that
-    answers "nothing found" with ``204 No Content`` or an empty body says so (``allow_empty``),
-    and ``parse`` reads such an answer as an empty object (or array); anywhere else it is a parse
-    error.
+    explains its errors declares how to read them (``error_reader``, D38), so no ``parse``
+    mistakes an error for an empty result and no explanation is lost; without one, an error
+    status's message carries the source's own error text.
+
+    Each request says what its answers mean. ``missing=`` declares that it asks for one resource:
+    a 404 is then ``not_found``, with that message; without it, a 404 is an ``upstream`` "endpoint
+    not found". A source that answers "nothing found" with ``204 No Content`` or an empty body
+    is declared with ``allow_empty`` (``parse`` reads an empty object or array), one that answers
+    it with a 404 with ``empty_on_404``; anywhere else such an answer is a failure.
 
     Attributes:
         base: ``https://host/path`` without credentials, port, query, fragment or final slash.
@@ -446,13 +512,13 @@ class Api:
         params: Query parameters sent with every request.
         segment_safe: Characters left raw in path segments.
         query_safe: Characters left raw in the query string.
-        status_messages: The text shown for particular HTTP statuses.
-        body_error: For an API that explains its errors in the body: reads an answer and
-            returns the error it reports, as the text shown to the model, or ``None`` when it
-            reports none. It reads the decoded JSON, or the start of a body that is not JSON. On
-            a success, the JSON requests raise that text as an ``HttpError`` before ``parse``
-            runs, and a body that is not JSON and reports no error is a parse error. On an error
-            status, of any request, the text takes the place of the status's reason.
+        error_reader: For an API that explains its errors: reads a :class:`Reply` and returns
+            the error it reports (an :data:`ErrorReader`). It reads every answer of the JSON
+            requests, before ``parse``, and the error statuses of any request. A reader that trips
+            on a success's JSON is a parse error (an answer of a shape nobody expected); one that
+            trips on any other body, or returns empty text, explains nothing.
+        caller_base: ``base`` came from the tool's caller (:meth:`within`): an undeclared 404
+            there is the caller's URL, a ``validation_error``, not an endpoint that moved.
     """
 
     base: str
@@ -463,8 +529,7 @@ class Api:
     params: Mapping[str, str] = field(default_factory=dict)
     segment_safe: str = ""
     query_safe: str = ""
-    status_messages: Mapping[int, str] = field(default_factory=dict)
-    body_error: Callable[[object], str | None] | None = None
+    error_reader: ErrorReader | None = None
     cooldown_s: float = 0.0
     key_env: str | None = None
     key_header: str = "x-api-key"
@@ -473,6 +538,7 @@ class Api:
     key_required: bool = False
     billed_as: str | None = None
     bill_units: Callable[[str], int] | None = None
+    caller_base: bool = False
 
     def __post_init__(self) -> None:
         if not _plain_base(self.base):
@@ -487,8 +553,7 @@ class Api:
         *,
         name: str,
         timeout_s: float = 10.0,
-        status_messages: Mapping[int, str] | None = None,
-        body_error: Callable[[object], str | None] | None = None,
+        error_reader: ErrorReader | None = None,
     ) -> Api:
         """An ``Api`` at ``url``, a URL that came from outside the module.
 
@@ -504,11 +569,7 @@ class Api:
             msg = f"URL not allowed: {url!r} (https://host/path only)"
             raise HttpError(msg, kind="validation_error")
         return cls(
-            base=url,
-            name=name,
-            timeout_s=timeout_s,
-            status_messages=status_messages or {},
-            body_error=body_error,
+            base=url, name=name, timeout_s=timeout_s, error_reader=error_reader, caller_base=True
         )
 
     @property
@@ -521,28 +582,36 @@ class Api:
         *segments: str,
         parse: Callable[[dict[str, Any]], T],
         params: Params | None = None,
+        missing: str | None = None,
         allow_empty: bool = False,
+        empty_on_404: bool = False,
     ) -> T:
         """GET a JSON object from ``base/segment/...`` and read it with ``parse``."""
-        empty = {} if allow_empty else None
-        return _parsed(parse, _object(self._json_answer(segments, params, empty=empty)))
+        ask = _Ask(missing=missing, empty={}, allow_empty=allow_empty, empty_on_404=empty_on_404)
+        return _parsed(parse, _object(self._json_answer(segments, params, ask)))
 
     def get_json_list[T](
         self,
         *segments: str,
         parse: Callable[[list[Any]], T],
         params: Params | None = None,
+        missing: str | None = None,
         allow_empty: bool = False,
+        empty_on_404: bool = False,
     ) -> T:
         """GET a JSON array from ``base/segment/...`` and read it with ``parse``."""
-        empty = [] if allow_empty else None
-        return _parsed(parse, _array(self._json_answer(segments, params, empty=empty)))
+        ask = _Ask(missing=missing, empty=[], allow_empty=allow_empty, empty_on_404=empty_on_404)
+        return _parsed(parse, _array(self._json_answer(segments, params, ask)))
 
     def get_text[T](
-        self, *segments: str, parse: Callable[[str], T], params: Params | None = None
+        self,
+        *segments: str,
+        parse: Callable[[str], T],
+        params: Params | None = None,
+        missing: str | None = None,
     ) -> T:
         """GET a text body (XML, FASTA, a count) and read it with ``parse``."""
-        _, text = self._send(segments, params)
+        _, text, _ = self._send(segments, params, _Ask(missing=missing))
         return _parsed(parse, text)
 
     def post_json[T](
@@ -554,8 +623,8 @@ class Api:
     ) -> T:
         """POST a JSON payload and read the JSON object back with ``parse``."""
         body = (json.dumps(payload).encode(), "application/json")
-        empty = {} if allow_empty else None
-        return _parsed(parse, _object(self._json_answer(segments, None, body, empty=empty)))
+        ask = _Ask(empty={}, allow_empty=allow_empty, body=body)
+        return _parsed(parse, _object(self._json_answer(segments, None, ask)))
 
     def post_form[T](
         self,
@@ -566,46 +635,82 @@ class Api:
     ) -> T:
         """POST a form and read the JSON object back with ``parse``."""
         body = (urllib.parse.urlencode(form).encode(), "application/x-www-form-urlencoded")
-        empty = {} if allow_empty else None
-        return _parsed(parse, _object(self._json_answer(segments, None, body, empty=empty)))
+        ask = _Ask(empty={}, allow_empty=allow_empty, body=body)
+        return _parsed(parse, _object(self._json_answer(segments, None, ask)))
 
-    def _json_answer(
-        self,
-        segments: tuple[str, ...],
-        params: Params | None,
-        body: tuple[bytes, str] | None = None,
-        *,
-        empty: object | None,
-    ) -> object:
-        """The decoded JSON answer, unless it reports an error (``body_error``).
+    def _json_answer(self, segments: tuple[str, ...], params: Params | None, ask: _Ask) -> object:
+        """The decoded JSON answer, unless it reports an error (``error_reader``).
 
-        ``empty`` is what an answer with nothing in it (``204 No Content``, an empty body) stands
-        for, when the request allows one.
+        ``ask.empty`` is what an answer with nothing in it stands for where the request declares
+        one: ``204 No Content`` or an empty body (``allow_empty``), a 404 (``empty_on_404``).
         """
-        status, text = self._send(segments, params, body)
-        if empty is not None and (status == http.HTTPStatus.NO_CONTENT or not text.strip()):
-            return empty
+        status, text, headers = self._send(segments, params, ask)
+        if (ask.empty_on_404 and status == http.HTTPStatus.NOT_FOUND) or (
+            ask.allow_empty and (status == http.HTTPStatus.NO_CONTENT or not text.strip())
+        ):
+            return ask.empty
         try:
             value = _json(text)
         except HttpError as not_json:
-            if error := self._reported(text[:_ERROR_BODY_CHARS]):
-                raise HttpError(error) from not_json
+            reply = Reply(status=status, headers=headers, body=text[:_ERROR_BODY_CHARS])
+            if (error := self._read(reply)) is not None:
+                raise self._reported(error, reply) from not_json
             raise
-        if error := self._reported(value):
-            raise HttpError(error)
+        reply = Reply(status=status, headers=headers, body=value)
+        # A reader that trips on a success's JSON is a parse error: nobody expected that shape.
+        reported = None if self.error_reader is None else _parsed(self.error_reader, reply)
+        if reported is not None and (not isinstance(reported, str) or reported.strip()):
+            raise self._reported(reported, reply)
         return value
 
-    def _reported(self, answer: object) -> str | None:
-        """The error ``answer`` reports, read by ``body_error``; ``None`` when it reports none."""
-        return None if self.body_error is None else _parsed(self.body_error, answer)
+    def _read(self, reply: Reply) -> ToolFailure | str | None:
+        """The error ``reply`` reports, read by ``error_reader``; a reader that trips on the body,
+        or says nothing, reports none (the status or the parse error still says what happened)."""
+        if self.error_reader is None:
+            return None
+        try:
+            error = self.error_reader(reply)
+        except _SHAPE_ERRORS:
+            return None
+        return None if isinstance(error, str) and not error.strip() else error
+
+    def _reported(self, error: ToolFailure | str, reply: Reply) -> HttpError:
+        """The failure a success reports (``error_reader``): its type, and the rest it asks for.
+
+        A source that says it is rate limited in a success rests its host as a 429 does.
+        """
+        failure = self._failure(error, reply, _retry_after_value(reply.headers.get("retry-after")))
+        self._cool(failure)
+        return failure
+
+    def _failure(
+        self, error: ToolFailure | str, reply: Reply, retry_after_s: float | None = None
+    ) -> HttpError:
+        """The ``HttpError`` for an error the reader reported: its type, or the status's."""
+        status = reply.status if reply.status >= 400 else None
+        body = reply.body if isinstance(reply.body, str) else ""
+        if isinstance(error, str):
+            return HttpError(error, status=status, body=body, retry_after_s=retry_after_s)
+        return HttpError(
+            error.error.message,
+            status=status,
+            body=body,
+            retry_after_s=retry_after_s,
+            kind=cast("ToolFailureType", error.error.type),
+            retryable=error.error.retryable,
+        )
+
+    def _cool(self, failure: HttpError) -> None:
+        """After a 429, or a source's own word that it is rate limited, the host rests for the
+        ``Retry-After`` or ``cooldown_s`` (D53)."""
+        limited = failure.status == 429 or failure.error.type == "rate_limited"
+        if limited and (wait := failure.retry_after_s or self.cooldown_s) > 0:
+            _THROTTLE.cool(self.host, wait)
 
     def _send(
-        self,
-        segments: tuple[str, ...],
-        params: Params | None,
-        body: tuple[bytes, str] | None = None,
-    ) -> tuple[int, str]:
-        """Send one request: its answer's status and text."""
+        self, segments: tuple[str, ...], params: Params | None, ask: _Ask
+    ) -> tuple[int, str, Mapping[str, str]]:
+        """Send one request: its answer's status, text and headers."""
         path = "".join(f"/{_segment(segment, self.segment_safe)}" for segment in segments)
         query = urllib.parse.urlencode(
             {**self.params, **(params or {})}, doseq=True, safe=self.query_safe
@@ -615,26 +720,27 @@ class Api:
             headers[self.key_header] = f"{self.key_prefix}{key}"
         elif self.key_required and self.key_env:
             where = f" (get one: {self.key_url})" if self.key_url else ""
-            raise HttpError(f"no key: set {self.key_env}{where}.")
+            raise HttpError(f"no key: set {self.key_env}{where}.", kind="validation_error")
         data = None
-        if body is not None:
-            data, headers["Content-Type"] = body
+        if ask.body is not None:
+            data, headers["Content-Type"] = ask.body
         url = f"{self.base}{path}?{query}" if query else f"{self.base}{path}"
         request = urllib.request.Request(url, data=data, headers=headers)
         if (rest := _THROTTLE.resting(self.host)) > 0:
-            msg = f"{self.name} asked to slow down (HTTP 429): try again in {math.ceil(rest)} s."
-            raise HttpError(msg, status=429)
+            msg = f"{self.name} asked to slow down: try again in {math.ceil(rest)} s."
+            raise HttpError(msg, kind="rate_limited", retryable=True, retry_after_s=rest)
         _THROTTLE.wait(self.host, self.min_interval_s)
         try:
-            status, raw, charset, complete = _fetch(
+            status, raw, charset, complete, answer_headers = _fetch(
                 request,
                 timeout_s=self.timeout_s,
                 max_bytes=self.max_bytes,
-                describe=self._describe,
+                failure=lambda reply, reason: self._status_failure(reply, reason, ask),
             )
+        except _EmptyNotFound:
+            return http.HTTPStatus.NOT_FOUND, "", {}
         except HttpError as error:
-            if error.status == 429 and (wait := error.retry_after_s or self.cooldown_s) > 0:
-                _THROTTLE.cool(self.host, wait)
+            self._cool(error)
             raise
         finally:
             _THROTTLE.done(self.host, self.min_interval_s)
@@ -643,7 +749,7 @@ class Api:
         text = _text(raw, charset)
         if self.billed_as is not None:
             bill(self.billed_as, self._units(text))
-        return status, text
+        return status, text, answer_headers
 
     def _units(self, text: str) -> int:
         """The units an accepted request was billed: what the answer says, or one."""
@@ -655,15 +761,50 @@ class Api:
             return 1
         return max(units, 0)
 
-    def _describe(self, status: int, reason: str, body: str) -> str:
-        """The error of an error status: in the API's words when its body gives them."""
-        if explained := self._explained(body):
-            return _status_text(status, explained)
-        if status in self.status_messages:
-            return self.status_messages[status]
-        if status == 429:
-            return f"rate limited by {self.name} (HTTP 429). Try again later.{self._key_hint()}"
-        return _status_text(status, reason)
+    def _status_failure(self, reply: Reply, reason: str, ask: _Ask) -> HttpError:
+        """The failure of an error status, by what the request declared and the source says.
+
+        A 404 is ``not_found`` for a request that asks for a resource (``missing``), an empty
+        answer for one that declares it (``empty_on_404``), and otherwise an endpoint that is not
+        there. A typed failure from the reader is the answer; its text, or else the source's own
+        error text, is what the source said, in the status's sentence.
+        """
+        status = reply.status
+        full = reply.body if isinstance(reply.body, str) else ""
+        body = full[:_ERROR_BODY_CHARS]
+        retry_after = _retry_after_value(reply.headers.get("retry-after"))
+        if status == http.HTTPStatus.NOT_FOUND and ask.missing is not None:
+            return HttpError(ask.missing, status=status, body=body, kind="not_found")
+        if status == http.HTTPStatus.NOT_FOUND and ask.empty_on_404:
+            raise _EmptyNotFound
+        decoded = Reply(status=status, headers=reply.headers, body=_decoded(full))
+        error = self._read(decoded)
+        if isinstance(error, ToolFailure):
+            return self._failure(error, decoded, retry_after)
+        source = error or _source_text(full)
+        if status == http.HTTPStatus.TOO_MANY_REQUESTS:
+            said = f" {self.name} said: {source}" if source else ""
+            msg = f"rate limited by {self.name} (HTTP 429). Try again later.{said}"
+            return HttpError(
+                msg + self._key_hint(), status=status, body=body, retry_after_s=retry_after
+            )
+        if status == http.HTTPStatus.NOT_FOUND and self.caller_base:
+            msg = f"nothing answers at {self.base} (HTTP 404); check the URL"
+            return HttpError(
+                f"{msg}: {source}" if source else msg,
+                status=status,
+                body=body,
+                kind="validation_error",
+            )
+        if status == http.HTTPStatus.NOT_FOUND:
+            msg = f"{self.name}: endpoint not found (HTTP 404); the API may have changed"
+            return HttpError(f"{msg}: {source}" if source else msg, status=status, body=body)
+        return HttpError(
+            _status_text(status, source or reason),
+            status=status,
+            body=body,
+            retry_after_s=retry_after,
+        )
 
     def _key(self) -> str:
         """The API's optional key, from its environment variable; empty without one."""
@@ -675,18 +816,6 @@ class Api:
             return ""
         where = f" (a free key: {self.key_url})" if self.key_url else ""
         return f" Set {self.key_env} to send a key of your own{where}."
-
-    def _explained(self, body: str) -> str | None:
-        """The error an error status's body reports (``body_error``), or ``None``.
-
-        A reader that trips on the body explains nothing: the status still says what happened.
-        """
-        if self.body_error is None or not body.strip():
-            return None
-        try:
-            return self.body_error(_decoded(body))
-        except _SHAPE_ERRORS:
-            return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -710,10 +839,15 @@ def fetch_page(url: str, *, max_bytes: int, timeout_s: float = 10.0) -> Page:
         msg = f"Invalid URL: {url!r}. Use an http:// or https:// URL without credentials."
         raise HttpError(msg, kind="validation_error")
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    _, raw, charset, complete = _fetch(
+    _, raw, charset, complete, _ = _fetch(
         request,
         timeout_s=timeout_s,
         max_bytes=max_bytes,
-        describe=lambda status, reason, _body: _status_text(status, reason),
+        failure=lambda reply, reason: HttpError(
+            _status_text(reply.status, reason),
+            status=reply.status,
+            body=reply.body[:_ERROR_BODY_CHARS] if isinstance(reply.body, str) else "",
+            retry_after_s=_retry_after_value(reply.headers.get("retry-after")),
+        ),
     )
     return Page(_text(raw, charset), complete)

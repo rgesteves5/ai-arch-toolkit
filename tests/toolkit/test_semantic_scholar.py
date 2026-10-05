@@ -14,7 +14,7 @@ from ai_arch_toolkit.toolkit.tools._semantic_scholar import (
     semantic_scholar_paper,
     semantic_scholar_search,
 )
-from tests.toolkit.http_fakes import HTTP_OPEN, respond
+from tests.toolkit.http_fakes import HTTP_OPEN, http_error, respond
 
 
 def _failure(call, *args, **kwargs) -> ToolError:
@@ -186,6 +186,25 @@ class TestSemanticScholarSearch:
         assert mock_urlopen.call_args.args[0].get_header("X-api-key") is None
 
     @patch(HTTP_OPEN)
+    def test_a_404_on_the_search_is_an_endpoint_that_moved_not_an_empty_result(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(404, "Not Found")
+
+        error = _failure(semantic_scholar_search, "test")
+
+        assert error.type == "upstream"
+        assert error.message.startswith("Semantic Scholar: endpoint not found (HTTP 404)")
+
+    @patch(HTTP_OPEN)
+    def test_a_refused_request_keeps_the_sources_words(self, mock_urlopen):
+        body = b'{"error": "Unrecognized or unsupported fields: [nope]"}'
+        mock_urlopen.side_effect = http_error(400, "Bad Request", body=body)
+
+        error = _failure(semantic_scholar_search, "test")
+
+        assert error.type == "upstream"
+        assert error.message == "HTTP error 400: Unrecognized or unsupported fields: [nope]"
+
+    @patch(HTTP_OPEN)
     def test_parse_failure(self, mock_urlopen):
         mock_urlopen.return_value = respond("not json")
 
@@ -246,8 +265,10 @@ class TestSemanticScholarPaper:
         error = _failure(semantic_scholar_paper, "missing")
 
         assert error.type == "not_found"
-        assert "no Semantic Scholar paper with ID missing" in error.message
-        assert "semantic_scholar_search" in error.message
+        assert error.message == (
+            "no Semantic Scholar paper with ID missing; search with semantic_scholar_search."
+        )
+        assert not error.retryable
 
     @patch(HTTP_OPEN)
     def test_another_error_status_stays_the_sources_failure(self, mock_urlopen):
@@ -308,4 +329,9 @@ class TestSemanticScholarCitations:
             fp=None,
         )
 
-        assert _failure(semantic_scholar_citations, "missing").type == "not_found"
+        error = _failure(semantic_scholar_citations, "missing")
+
+        assert error.type == "not_found"
+        assert error.message == (
+            "no Semantic Scholar paper with ID missing; search with semantic_scholar_search."
+        )

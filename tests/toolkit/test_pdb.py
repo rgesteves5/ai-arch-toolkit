@@ -101,3 +101,67 @@ def test_a_search_without_hits_is_no_entries_not_a_parse_error(mock_urlopen):
     mock_urlopen.return_value = respond(b"", content_type="application/json", status=204)
 
     assert pdb_search("zzqqxxyyvvww") == "No RCSB PDB entries found for 'zzqqxxyyvvww'."
+
+
+def _failure(fn, *args) -> ToolFailure:
+    with pytest.raises(ToolFailure) as caught:
+        fn(*args)
+    return caught.value
+
+
+_NO_ENTRY = b'{"status": 404, "message": "No data found for entry with ID: 9ZZZ"}'
+
+
+@pytest.mark.parametrize("tool", [pdb_entry, pdb_ligands])
+@patch(HTTP_OPEN)
+def test_an_unknown_entry_is_not_found(mock_urlopen, tool):
+    mock_urlopen.side_effect = http_error(404, "Not Found", body=_NO_ENTRY)
+
+    failure = _failure(tool, "9zzz")
+
+    assert failure.error.type == "not_found"
+    assert failure.error.message == "RCSB PDB has no entry 9ZZZ; find entries with pdb_search"
+
+
+@patch(HTTP_OPEN)
+def test_a_listed_ligand_without_a_record_is_not_found(mock_urlopen):
+    entry = {"rcsb_entry_container_identifiers": {"non_polymer_entity_ids": ["3"]}}
+    mock_urlopen.side_effect = [respond(entry), http_error(404, "Not Found")]
+
+    failure = _failure(pdb_ligands, "1A3N")
+
+    assert failure.error.type == "not_found"
+    assert "lists nonpolymer entity 3 but has no record of it" in failure.error.message
+
+
+@patch(HTTP_OPEN)
+def test_an_unknown_component_is_not_found(mock_urlopen):
+    mock_urlopen.side_effect = http_error(404, "Not Found")
+
+    failure = _failure(pdb_chemical_component, "zzz")
+
+    assert failure.error.type == "not_found"
+    assert failure.error.message == (
+        "RCSB PDB has no chemical component ZZZ; pdb_ligands lists the component IDs of an entry"
+    )
+
+
+@patch(HTTP_OPEN)
+def test_a_404_on_the_search_is_an_endpoint_not_found(mock_urlopen):
+    mock_urlopen.side_effect = http_error(404, "Not Found")
+
+    failure = _failure(pdb_search, "hemoglobin")
+
+    assert failure.error.type == "upstream"
+    assert "RCSB PDB: endpoint not found (HTTP 404)" in failure.error.message
+
+
+@patch(HTTP_OPEN)
+def test_a_bad_search_carries_rcsb_s_words(mock_urlopen):
+    body = b'{"status": 400, "message": "JSON schema validation failed for query"}'
+    mock_urlopen.side_effect = http_error(400, "Bad Request", body=body)
+
+    failure = _failure(pdb_search, "hemoglobin")
+
+    assert failure.error.type == "upstream"
+    assert "JSON schema validation failed for query" in failure.error.message

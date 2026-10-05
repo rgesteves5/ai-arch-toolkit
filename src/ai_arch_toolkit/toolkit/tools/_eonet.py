@@ -14,7 +14,6 @@ _API = Api(
     base="https://eonet.gsfc.nasa.gov/api/v3",
     name="NASA EONET",
     timeout_s=20,
-    status_messages={404: "no matching records found."},
 )
 _MAX_LIMIT = 50
 _ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
@@ -69,15 +68,21 @@ def eonet_event(event_id: str) -> str:
         event_id: EONET event ID, e.g. "EONET_12345".
 
     Raises:
-        ToolFailure: validation_error when ``event_id`` is malformed; upstream when EONET
-            fails, its HTTP 500 saying the ID may be unknown (EONET sends it for one).
+        ToolFailure: validation_error when ``event_id`` is malformed; not_found when EONET
+            answers that it has no event with it (HTTP 404); upstream when EONET fails, its
+            HTTP 500 saying the ID may be unknown (EONET sends it for one).
     """
     event_id = event_id.strip()
     if not _ID_RE.fullmatch(event_id):
         msg = f"invalid event_id {event_id!r}; an EONET event ID looks like EONET_12345."
         raise ToolFailure("validation_error", msg)
+    missing = (
+        f"NASA EONET has no event with ID {event_id!r}; list the current IDs with eonet_events."
+    )
     try:
-        return _API.get_json("events", event_id, parse=lambda data: _event_text(data, event_id))
+        return _API.get_json(
+            "events", event_id, parse=lambda data: _event_text(data, event_id), missing=missing
+        )
     except HttpError as e:
         # EONET answers an ID it does not know with a 500 page (seen 2026-09-30), so the 500 may
         # be either; it stays an upstream failure (a 500 never reads as not_found).

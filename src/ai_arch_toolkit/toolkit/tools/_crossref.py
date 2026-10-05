@@ -10,7 +10,7 @@ from typing import Any
 
 from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
-from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
+from ai_arch_toolkit.toolkit.tools._http import Api
 
 _API = Api(base="https://api.crossref.org/works", name="Crossref")
 _MAX_RESULTS_LIMIT = 20
@@ -102,17 +102,10 @@ def crossref_work(doi: str) -> str:
         msg = f"invalid DOI {doi!r}; a DOI looks like 10.1000/xyz."
         raise ToolFailure("validation_error", msg)
 
-    not_found = ToolFailure(
-        "not_found", f"no Crossref work with DOI {normalized}; search with crossref_search."
-    )
-    try:
-        work = _API.get_json(normalized, parse=_work)
-    except HttpError as e:
-        if e.status == 404:
-            raise not_found from e
-        raise
+    missing = f"no Crossref work with DOI {normalized}; search with crossref_search."
+    work = _API.get_json(normalized, parse=_work, missing=missing)
     if work is None:
-        raise not_found
+        raise ToolFailure("not_found", missing)
     return f"Crossref work {normalized}:\n" + _format_works(
         [work],
         include_index=False,

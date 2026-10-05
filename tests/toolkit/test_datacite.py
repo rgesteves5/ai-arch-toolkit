@@ -77,6 +77,16 @@ class TestDataCiteSearch:
         assert words in caught.value.error.message
         mock_urlopen.assert_not_called()
 
+    @patch(HTTP_OPEN)
+    def test_404_is_endpoint_not_found(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(404, "Not Found")
+
+        with pytest.raises(ToolFailure) as caught:
+            datacite_search("test")
+
+        assert caught.value.error.type == "upstream"
+        assert "DataCite: endpoint not found (HTTP 404)" in caught.value.error.message
+
 
 class TestDataCiteDoi:
     @patch(HTTP_OPEN)

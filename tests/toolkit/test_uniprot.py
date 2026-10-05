@@ -101,15 +101,31 @@ class TestUniProt:
 
         assert uniprot_search("zzzz") == "No UniProt proteins found."
 
+    @pytest.mark.parametrize(
+        "fn", [uniprot_entry, uniprot_features, uniprot_crossrefs, uniprot_sequence]
+    )
     @patch(HTTP_OPEN)
-    def test_a_missing_accession_is_an_upstream_failure(self, mock_urlopen):
+    def test_a_404_on_an_accession_is_not_found(self, mock_urlopen, fn):
         mock_urlopen.side_effect = http_error(404, "Not Found")
 
         with pytest.raises(ToolFailure) as caught:
-            uniprot_entry("Q00000")
+            fn("Q00000")
+
+        assert caught.value.error.type == "not_found"
+        assert caught.value.error.message == (
+            "UniProt has no entry Q00000; find one with uniprot_search"
+        )
+
+    @patch(HTTP_OPEN)
+    def test_a_404_on_the_search_is_an_endpoint_that_moved_not_no_results(self, mock_urlopen):
+        # The defect of uniprot_search before 2026-09-28 read as "no matching records found".
+        mock_urlopen.side_effect = http_error(404, "Not Found")
+
+        with pytest.raises(ToolFailure) as caught:
+            uniprot_search("insulin")
 
         assert caught.value.error.type == "upstream"
-        assert "no matching records found" in caught.value.error.message
+        assert caught.value.error.message.startswith("UniProt: endpoint not found (HTTP 404)")
 
     @patch(HTTP_OPEN)
     def test_rate_limiting_is_typed(self, mock_urlopen):
@@ -153,8 +169,27 @@ def test_an_inactive_accession_says_where_it_went(mock_urlopen, fn):
     with pytest.raises(ToolFailure) as caught:
         fn("P00001")
 
-    assert caught.value.error.type == "upstream"
-    assert caught.value.error.message == "P00001 is inactive: demerged into P99999, P99998"
+    assert caught.value.error.type == "not_found"
+    assert caught.value.error.message == (
+        "P00001 is inactive: demerged into P99999, P99998; look up one of them with uniprot_entry"
+    )
+
+
+@patch(HTTP_OPEN)
+def test_a_merged_accession_names_the_one_to_look_up(mock_urlopen):
+    merged = {
+        **_DEMERGED,
+        "inactiveReason": {"inactiveReasonType": "MERGED", "mergeDemergeTo": ["P99999"]},
+    }
+    mock_urlopen.return_value = respond(merged)
+
+    with pytest.raises(ToolFailure) as caught:
+        uniprot_entry("P00001")
+
+    assert caught.value.error.type == "not_found"
+    assert caught.value.error.message == (
+        "P00001 is inactive: merged into P99999; look up P99999 with uniprot_entry"
+    )
 
 
 @patch(HTTP_OPEN)
@@ -164,9 +199,10 @@ def test_a_deleted_accession_says_why(mock_urlopen):
     with pytest.raises(ToolFailure) as caught:
         uniprot_entry("A0A008APQ8")
 
-    assert caught.value.error.type == "upstream"
+    assert caught.value.error.type == "not_found"
     assert caught.value.error.message == (
-        "A0A008APQ8 is inactive: deleted (Not part of a reference proteome)"
+        "A0A008APQ8 is inactive: deleted (Not part of a reference proteome); "
+        "search for the protein with uniprot_search"
     )
 
 

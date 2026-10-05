@@ -26,7 +26,7 @@ import pytest
 
 from ai_arch_toolkit.core import ToolFailure
 from ai_arch_toolkit.toolkit.tools import _http
-from ai_arch_toolkit.toolkit.tools._http import Api, HttpError, fetch_page
+from ai_arch_toolkit.toolkit.tools._http import Api, HttpError, Reply, fetch_page
 
 type Route = tuple[int, dict[str, str], bytes | io.RawIOBase]  # status, headers, body
 
@@ -345,17 +345,6 @@ class TestErrors:
         with pytest.raises(HttpError, match=r"^rate limited by Example \(HTTP 429\)"):
             API.get_json("x", parse=dict)
 
-    def test_declared_status_messages_win(self, web: _Transport) -> None:
-        api = Api(
-            base="https://api.example.org/v1",
-            name="Example",
-            status_messages={404: "no matching records found."},
-        )
-        web.add("https://api.example.org/v1/x", b"", status=404)
-
-        with pytest.raises(HttpError, match=r"^no matching records found\.$"):
-            api.get_json("x", parse=dict)
-
     @pytest.mark.parametrize(
         ("error", "message"),
         [
@@ -380,26 +369,27 @@ class TestErrors:
         assert caught.value.status is None
 
 
-def _reported(data: object) -> str | None:
+def _reported(reply: Reply) -> str | None:
     """The example API's own error: ``{"error": text}``, or ``[{"error": text}]``."""
+    data = reply.body
     first = data[0] if isinstance(data, list) and data else data
     return first.get("error") if isinstance(first, dict) else None
 
 
-REPORTING = Api(base="https://api.example.org/v1", name="Example", body_error=_reported)
+REPORTING = Api(base="https://api.example.org/v1", name="Example", error_reader=_reported)
 
 
 def _refuse(data: object) -> None:
     raise AssertionError(f"parse ran on {data!r}")
 
 
-def _said(answer: object) -> str | None:
+def _said(reply: Reply) -> str | None:
     """An API's error sent as text in place of the JSON."""
-    return answer.strip() if isinstance(answer, str) else None
+    return reply.body.strip() if isinstance(reply.body, str) else None
 
 
-def _length(answer: object) -> str | None:
-    return f"{len(answer)} characters" if isinstance(answer, str) else None
+def _length(reply: Reply) -> str | None:
+    return f"{len(reply.body)} characters" if isinstance(reply.body, str) else None
 
 
 _HTML = {"Content-Type": "text/html; charset=utf-8"}
@@ -458,7 +448,7 @@ class TestBodyErrors:
         self, web: _Transport, method: str, kwargs: dict[str, Any]
     ) -> None:
         # Some APIs send an error as text in place of the JSON, with a success status.
-        api = Api(base="https://api.example.org/v1", name="Example", body_error=_said)
+        api = Api(base="https://api.example.org/v1", name="Example", error_reader=_said)
         web.add("https://api.example.org/v1/x", "Query too short.\n", **_HTML)
 
         with pytest.raises(HttpError) as caught:
@@ -478,17 +468,17 @@ class TestBodyErrors:
     def test_the_reader_gets_only_the_start_of_a_body_that_is_not_json(
         self, web: _Transport
     ) -> None:
-        api = Api(base="https://api.example.org/v1", name="Example", body_error=_length)
+        api = Api(base="https://api.example.org/v1", name="Example", error_reader=_length)
         web.add("https://api.example.org/v1/x", "x" * 100_000, **_HTML)
 
         with pytest.raises(HttpError, match=rf"^{_http._ERROR_BODY_CHARS} characters$"):
             api.get_json("x", parse=_refuse)
 
     def test_a_reader_that_trips_on_the_shape_is_a_parse_error(self, web: _Transport) -> None:
-        def strict(data: Any) -> str | None:
-            return data["error"]
+        def strict(reply: Reply) -> str | None:
+            return reply.body["error"]  # type: ignore[index]
 
-        api = Api(base="https://api.example.org/v1", name="Example", body_error=strict)
+        api = Api(base="https://api.example.org/v1", name="Example", error_reader=strict)
         web.add("https://api.example.org/v1/x", {"items": []})
 
         with pytest.raises(HttpError, match="could not parse API response: KeyError"):
@@ -499,10 +489,10 @@ class TestBodyErrors:
             "https://en.wikipedia.org/w/api.php",
             {"wikipedia.org"},
             name="MediaWiki",
-            body_error=_reported,
+            error_reader=_reported,
         )
 
-        assert api.body_error is _reported
+        assert api.error_reader is _reported
 
 
 class TestRedirects:
@@ -681,31 +671,48 @@ class TestNoContent:
 
 
 class TestErrorBodies:
-    """The ``body_error`` that reads a success also explains an error status in the API's words."""
+    """The ``error_reader`` that reads a success also explains an error status in the API's
+    words; without one, the source's own error text does."""
 
     @pytest.mark.parametrize("method", ["get_json", "get_json_list", "get_text"])
     def test_an_error_status_is_explained_in_the_apis_words(
         self, web: _Transport, method: str
     ) -> None:
-        web.add("https://api.example.org/v1/x", {"error": "no such dataset"}, status=404)
+        web.add("https://api.example.org/v1/x", {"error": "no such dataset"}, status=400)
 
         with pytest.raises(HttpError) as caught:
             getattr(REPORTING, method)("x", parse=_refuse)
 
-        assert str(caught.value) == "HTTP error 404: no such dataset"
-        assert caught.value.status == 404
+        assert str(caught.value) == "HTTP error 400: no such dataset"
+        assert caught.value.status == 400
         assert json.loads(caught.value.body) == {"error": "no such dataset"}
 
-    def test_the_apis_words_come_before_a_status_message(self, web: _Transport) -> None:
+    def test_a_readers_words_join_the_sentence_of_an_undeclared_404(self, web: _Transport) -> None:
         web.add("https://api.example.org/v1/x", {"error": "no such dataset"}, status=404)
 
-        with pytest.raises(HttpError, match=r"^HTTP error 404: no such dataset$"):
-            _STATUS_MESSAGES.get_json("x", parse=_refuse)
+        with pytest.raises(HttpError) as caught:
+            REPORTING.get_json("x", parse=_refuse)
+
+        assert str(caught.value) == (
+            "Example: endpoint not found (HTTP 404); the API may have changed: no such dataset"
+        )
+        assert caught.value.error.type == "upstream"
+
+    def test_a_readers_words_join_the_sentence_of_a_429(self, web: _Transport) -> None:
+        web.add("https://api.example.org/v1/x", {"error": "slow down"}, status=429)
+
+        with pytest.raises(HttpError) as caught:
+            REPORTING.get_json("x", parse=_refuse)
+
+        assert str(caught.value).startswith(
+            "rate limited by Example (HTTP 429). Try again later. Example said: slow down"
+        )
+        assert caught.value.error.type == "rate_limited"
 
     @pytest.mark.parametrize(
         ("status", "message"),
         [
-            (404, "no matching records found."),
+            (404, "Example: endpoint not found (HTTP 404); the API may have changed"),
             (429, "rate limited by Example (HTTP 429). Try again later."),
             (500, "HTTP error 500: Internal Server Error"),
         ],
@@ -716,29 +723,138 @@ class TestErrorBodies:
         web.add("https://api.example.org/v1/x", "<html>Server Error</html>", status=status)
 
         with pytest.raises(HttpError) as caught:
-            _STATUS_MESSAGES.get_json("x", parse=_refuse)
+            API.get_json("x", parse=_refuse)
 
         assert str(caught.value) == message
 
     def test_a_reader_that_trips_on_an_error_body_keeps_the_status_text(
         self, web: _Transport
     ) -> None:
-        def strict(data: Any) -> str | None:
-            return data["error"]
+        def strict(reply: Reply) -> str | None:
+            return reply.body["error"]  # type: ignore[index]
 
-        api = Api(base="https://api.example.org/v1", name="Example", body_error=strict)
+        api = Api(base="https://api.example.org/v1", name="Example", error_reader=strict)
         web.add("https://api.example.org/v1/x", {"items": []}, status=500)
 
         with pytest.raises(HttpError, match=r"^HTTP error 500: Internal Server Error$"):
             api.get_json("x", parse=_refuse)
 
 
-_STATUS_MESSAGES = Api(
-    base="https://api.example.org/v1",
-    name="Example",
-    status_messages={404: "no matching records found."},
-    body_error=_reported,
-)
+class TestDeclaredAnswers:
+    """D38: each request says what a 404 means; a reader can give a failure its type."""
+
+    @pytest.mark.parametrize("method", ["get_json", "get_json_list", "get_text"])
+    def test_a_404_on_a_resource_is_not_found_with_the_declared_message(
+        self, web: _Transport, method: str
+    ) -> None:
+        web.add("https://api.example.org/v1/x", {"error": "gone"}, status=404)
+
+        with pytest.raises(HttpError) as caught:
+            getattr(API, method)("x", parse=_refuse, missing="no x; search with x_search")
+
+        assert (caught.value.error.type, str(caught.value)) == (
+            "not_found",
+            "no x; search with x_search",
+        )
+        assert caught.value.status == 404
+
+    def test_a_404_elsewhere_is_an_endpoint_that_is_not_there(self, web: _Transport) -> None:
+        web.add("https://api.example.org/v1/x", {"message": "Unknown route"}, status=404)
+
+        with pytest.raises(HttpError) as caught:
+            API.get_json("x", parse=_refuse)
+
+        assert caught.value.error.type == "upstream"
+        assert str(caught.value) == (
+            "Example: endpoint not found (HTTP 404); the API may have changed: Unknown route"
+        )
+
+    @pytest.mark.parametrize(("method", "empty"), [("get_json", {}), ("get_json_list", [])])
+    def test_a_404_declared_empty_reaches_parse_as_nothing(
+        self, web: _Transport, method: str, empty: object
+    ) -> None:
+        web.add("https://api.example.org/v1/x", {"error": {"code": "NOT_FOUND"}}, status=404)
+
+        assert getattr(API, method)("x", parse=lambda data: data, empty_on_404=True) == empty
+
+    def test_the_declaration_wins_over_the_reader(self, web: _Transport) -> None:
+        web.add("https://api.example.org/v1/x", {"error": "no such dataset"}, status=404)
+
+        with pytest.raises(HttpError) as caught:
+            REPORTING.get_json("x", parse=_refuse, missing="no dataset x")
+
+        assert (caught.value.error.type, str(caught.value)) == ("not_found", "no dataset x")
+
+    @pytest.mark.parametrize("status", [200, 400])
+    def test_a_reader_can_type_the_failure(self, web: _Transport, status: int) -> None:
+        def typed(reply: Reply) -> ToolFailure | None:
+            if isinstance(reply.body, dict) and reply.body.get("inactive"):
+                return ToolFailure("not_found", "the entry was merged into Y; read Y")
+            return None
+
+        api = Api(base="https://api.example.org/v1", name="Example", error_reader=typed)
+        web.add("https://api.example.org/v1/x", {"inactive": True}, status=status)
+
+        with pytest.raises(HttpError) as caught:
+            api.get_json("x", parse=_refuse)
+
+        assert caught.value.error.type == "not_found"
+        assert str(caught.value) == "the entry was merged into Y; read Y"
+
+    def test_a_reader_sees_the_headers(self, web: _Transport) -> None:
+        def header(reply: Reply) -> str | None:
+            return reply.headers.get("message")
+
+        api = Api(base="https://api.example.org/v1", name="Example", error_reader=header)
+        web.add("https://api.example.org/v1/x", b"", status=400, message="Range over 120 days")
+
+        with pytest.raises(HttpError, match=r"^HTTP error 400: Range over 120 days$"):
+            api.get_json("x", parse=_refuse)
+
+    @pytest.mark.parametrize(
+        ("body", "said"),
+        [
+            ({"message": "bad parameter q"}, "bad parameter q"),
+            ({"error": {"code": 7, "message": "bad parameter q"}}, "bad parameter q"),
+            ({"detail": "bad parameter q"}, "bad parameter q"),
+            ("bad parameter q\n", "bad parameter q"),
+        ],
+    )
+    def test_without_a_reader_an_error_status_carries_the_sources_text(
+        self, web: _Transport, body: object, said: str
+    ) -> None:
+        web.add("https://api.example.org/v1/x", body, status=400)
+
+        with pytest.raises(HttpError) as caught:
+            API.get_json("x", parse=_refuse)
+
+        assert str(caught.value) == f"HTTP error 400: {said}"
+
+    def test_a_429_carries_the_sources_text(self, web: _Transport) -> None:
+        web.add("https://api.example.org/v1/x", {"message": "quota spent"}, status=429)
+
+        with pytest.raises(HttpError) as caught:
+            API.get_json("x", parse=_refuse)
+
+        assert caught.value.error.type == "rate_limited"
+        assert str(caught.value).endswith("Example said: quota spent")
+
+    def test_a_required_key_left_unset_is_a_validation_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("EXAMPLE_KEY", raising=False)
+        api = Api(
+            base="https://api.example.org/v1",
+            name="Example",
+            key_env="EXAMPLE_KEY",
+            key_required=True,
+        )
+
+        with pytest.raises(HttpError) as caught:
+            api.get_json("x", parse=_refuse)
+
+        assert caught.value.error.type == "validation_error"
+        assert "EXAMPLE_KEY" in str(caught.value)
 
 
 # --- D51: TLS with the system's certificate store, when truststore is installed ------------------
@@ -886,8 +1002,9 @@ class TestRest:
         clock[0] += 20
         with pytest.raises(HttpError) as resting:
             COOLED.get_json("x", parse=dict)
-        assert str(resting.value) == "Example asked to slow down (HTTP 429): try again in 40 s."
-        assert resting.value.status == 429
+        assert str(resting.value) == "Example asked to slow down: try again in 40 s."
+        assert resting.value.error.type == "rate_limited"
+        assert resting.value.status is None  # no response arrived
         assert len(web.seen) == 1  # the request did not go out
 
         clock[0] += 41
@@ -939,6 +1056,135 @@ class TestRest:
 
 
 # --- D56: a request its service accepted is billed ---------------------------------------------
+
+
+def _slow_down(reply: Reply) -> ToolFailure | None:
+    """A source that says in its answer, whatever the status, that it is rate limited."""
+    if isinstance(reply.body, dict) and reply.body.get("error") == "slow down":
+        return ToolFailure("rate_limited", "the source is rate limited", retryable=True)
+    return None
+
+
+SLOWED = Api(base="https://api.example.org/v1", name="Example", error_reader=_slow_down)
+
+
+class TestReaderEdges:
+    """What the review of T02 found: the rest a typed failure asks for, empty readers, long
+    bodies, and the empty answers each request declares."""
+
+    @pytest.fixture
+    def clock(self, monkeypatch: pytest.MonkeyPatch) -> list[float]:
+        now = [1000.0]
+        monkeypatch.setattr(
+            _http, "_THROTTLE", _http._Throttle(sleep=lambda _s: None, clock=lambda: now[0])
+        )
+        return now
+
+    @pytest.mark.parametrize("status", [200, 503])
+    def test_a_typed_rate_limit_keeps_its_retry_after_and_rests_the_host(
+        self, web: _Transport, clock: list[float], status: int
+    ) -> None:
+        web.add(
+            "https://api.example.org/v1/x",
+            {"error": "slow down"},
+            status=status,
+            **{"Retry-After": "30"},
+        )
+
+        with pytest.raises(HttpError) as caught:
+            SLOWED.get_json("x", parse=_refuse)
+
+        assert caught.value.error.type == "rate_limited"
+        assert caught.value.error.details["retry_after_s"] == 30
+        with pytest.raises(HttpError, match=r"^Example asked to slow down: try again in 30 s\.$"):
+            SLOWED.get_json("x", parse=_refuse)
+        assert len(web.seen) == 1
+
+    def test_a_429_the_reader_types_still_rests_the_host(
+        self, web: _Transport, clock: list[float]
+    ) -> None:
+        web.add("https://api.example.org/v1/x", {"error": "slow down"}, status=429)
+        cooled = Api(
+            base="https://api.example.org/v1",
+            name="Example",
+            error_reader=_slow_down,
+            cooldown_s=60.0,
+        )
+
+        with pytest.raises(HttpError, match="the source is rate limited"):
+            cooled.get_json("x", parse=_refuse)
+        with pytest.raises(HttpError, match="asked to slow down"):
+            cooled.get_json("x", parse=_refuse)
+
+    def test_a_success_with_an_error_header_is_a_failure(self, web: _Transport) -> None:
+        def header(reply: Reply) -> str | None:
+            return reply.headers.get("x-error")
+
+        api = Api(base="https://api.example.org/v1", name="Example", error_reader=header)
+        web.add("https://api.example.org/v1/x", {"results": []}, **{"X-Error": "quota spent"})
+
+        with pytest.raises(HttpError, match=r"^quota spent$") as caught:
+            api.get_json("x", parse=_refuse)
+        assert caught.value.status is None  # reported inside a success
+
+    def test_a_reader_that_says_nothing_explains_nothing(self, web: _Transport) -> None:
+        def blank(_reply: Reply) -> str:
+            return "  "
+
+        api = Api(base="https://api.example.org/v1", name="Example", error_reader=blank)
+        web.add("https://api.example.org/v1/x", {"ok": True})
+        assert api.get_json("x", parse=dict) == {"ok": True}
+
+        web.add("https://api.example.org/v1/x", {"message": "bad q"}, status=400)
+        with pytest.raises(HttpError, match=r"^HTTP error 400: bad q$"):
+            api.get_json("x", parse=_refuse)
+
+    def test_a_long_json_error_body_is_still_read(self, web: _Transport) -> None:
+        web.add(
+            "https://api.example.org/v1/x",
+            {"message": "bad q", "trace": "x" * 5000},
+            status=400,
+        )
+
+        with pytest.raises(HttpError) as caught:
+            API.get_json("x", parse=_refuse)
+
+        assert str(caught.value) == "HTTP error 400: bad q"
+        assert len(caught.value.body) == _http._ERROR_BODY_CHARS
+
+    def test_json_cut_short_is_not_quoted_as_the_sources_words(self) -> None:
+        assert _http._source_text('{"message": "bad q", "trace": "xx') is None
+
+    @pytest.mark.parametrize("body", [b"", b"  "])
+    def test_empty_on_404_does_not_make_an_empty_success_nothing(
+        self, web: _Transport, body: bytes
+    ) -> None:
+        web.add("https://api.example.org/v1/x", body)
+
+        with pytest.raises(HttpError, match="could not parse API response"):
+            API.get_json("x", parse=_refuse, empty_on_404=True)
+
+    def test_a_204_is_nothing_only_where_allowed(self, web: _Transport) -> None:
+        web.add("https://api.example.org/v1/x", b"", status=204)
+        with pytest.raises(HttpError, match="could not parse API response"):
+            API.get_json("x", parse=_refuse, empty_on_404=True)
+
+        web.add("https://api.example.org/v1/x", b"", status=204)
+        assert API.get_json("x", parse=lambda data: data, allow_empty=True) == {}
+
+    def test_a_404_at_a_url_from_the_caller_is_the_callers_to_fix(self, web: _Transport) -> None:
+        api = Api.within("https://api.example.org/v1", ["example.org"], name="Example")
+        web.add("https://api.example.org/v1/x", {"message": "Unknown route"}, status=404)
+
+        with pytest.raises(HttpError) as caught:
+            api.get_json("x", parse=_refuse)
+
+        assert caught.value.error.type == "validation_error"
+        assert str(caught.value) == (
+            "nothing answers at https://api.example.org/v1 (HTTP 404); check the URL: "
+            "Unknown route"
+        )
+
 
 BILLED = Api(base="https://api.example.org/v1", name="Example", billed_as="example_search")
 

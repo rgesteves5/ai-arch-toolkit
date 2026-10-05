@@ -8,7 +8,7 @@ from typing import Any
 
 from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
-from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
+from ai_arch_toolkit.toolkit.tools._http import Api
 
 _API = Api(base="https://clinicaltrials.gov/api/v2", name="ClinicalTrials.gov")
 _MAX_RESULTS_LIMIT = 20
@@ -111,20 +111,15 @@ def clinical_trial_study(nct_id: str) -> str:
         msg = f"invalid NCT ID {nct_id!r}; an NCT ID is NCT and 8 digits, e.g. NCT04280705."
         raise ToolFailure("validation_error", msg)
 
-    not_found = ToolFailure(
-        "not_found",
+    missing = (
         f"no ClinicalTrials.gov study with NCT ID {normalized}; "
-        "search with clinical_trials_search.",
+        "search with clinical_trials_search."
     )
-    try:
-        trial = _API.get_json("studies", normalized, params={"format": "json"}, parse=_parse_trial)
-    except HttpError as e:
-        if e.status == 404:
-            raise not_found from e
-        raise
-
+    trial = _API.get_json(
+        "studies", normalized, params={"format": "json"}, parse=_parse_trial, missing=missing
+    )
     if trial is None:
-        raise not_found
+        raise ToolFailure("not_found", missing)
 
     return f"ClinicalTrials.gov study {normalized}:\n" + _format_trials(
         [trial],

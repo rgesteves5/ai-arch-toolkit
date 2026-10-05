@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, overload
 
 from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
-from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
+from ai_arch_toolkit.toolkit.tools._http import Api, Reply
 
 
-def _api_message(payload: object) -> str | None:
-    """The error a World Bank answer reports, as ``key: value``; ``None`` for a result.
+def _messages(payload: object) -> list[dict[str, Any]] | None:
+    """The messages a World Bank error answer carries; ``None`` for a result.
 
     The API sends its errors
     (https://datahelpdesk.worldbank.org/knowledgebase/articles/898620-api-error-codes) as
@@ -23,12 +23,34 @@ def _api_message(payload: object) -> str | None:
     messages = first.get("message") if isinstance(first, dict) else None
     if not isinstance(messages, list):
         return None
+    return [item for item in messages if isinstance(item, dict)]
+
+
+def _api_message(reply: Reply) -> str | None:
+    """The error a World Bank answer reports, as ``key: value`` in the source's words; ``None``
+    for a result."""
+    messages = _messages(reply.body)
+    if messages is None:
+        return None
     reported = [
         ": ".join(text for text in (_string(item.get("key")), _string(item.get("value"))) if text)
         for item in messages
-        if isinstance(item, dict)
     ]
     return "; ".join(text for text in reported if text) or "unknown error"
+
+
+def _indicator_error(indicator: str) -> Callable[[Reply], ToolFailure | str | None]:
+    """The reader of an indicator lookup: error 120 ("Invalid value"), the only parameter
+    being the indicator ID, is an indicator the World Bank does not have (``not_found``);
+    any other error stays the source's words (:func:`_api_message`)."""
+
+    def read(reply: Reply) -> ToolFailure | str | None:
+        messages = _messages(reply.body)
+        if messages and all(_string(item.get("id")) == "120" for item in messages):
+            return ToolFailure("not_found", _no_indicator(indicator))
+        return _api_message(reply)
+
+    return read
 
 
 # Country lists travel as one path segment, the codes joined by ";".
@@ -38,7 +60,7 @@ _API = Api(
     timeout_s=15,
     params={"format": "json"},
     segment_safe=";",
-    body_error=_api_message,
+    error_reader=_api_message,
 )
 _MAX_RESULTS_LIMIT = 100
 _INDICATOR_SEARCH_PAGE_SIZE = 1000
@@ -249,14 +271,13 @@ def world_bank_indicator(indicator: str) -> str:
     """
     indicator = _indicator_id(indicator)
 
-    try:
-        return _API.get_json_list(
-            "indicator", indicator, parse=lambda payload: _indicator_text(payload, indicator)
-        )
-    except HttpError as e:
-        if e.status == 404:
-            raise _no_indicator(indicator) from e
-        raise
+    api = replace(_API, error_reader=_indicator_error(indicator))
+    return api.get_json_list(
+        "indicator",
+        indicator,
+        parse=lambda payload: _indicator_text(payload, indicator),
+        missing=_no_indicator(indicator),
+    )
 
 
 @tool(capability="network")
@@ -355,7 +376,7 @@ def world_bank_compare(
 def _page(payload: list[Any]) -> tuple[dict[str, Any], list[Any]]:
     """A World Bank answer's ``[metadata, items]``; any other shape raises ``ToolFailure``.
 
-    An error message never reaches here: ``_API`` raises it first (``_api_message``).
+    An error message never reaches here: ``_API``'s reader raises it first (``_api_message``).
     """
     if len(payload) >= 2:
         return _dict(payload[0]), payload[1] if isinstance(payload[1], list) else []
@@ -445,7 +466,7 @@ def _indicator_text(payload: list[Any], indicator: str) -> str:
     _metadata, items = _page(payload)
     indicators = _parse_items(items, _parse_indicator)
     if not indicators:
-        raise _no_indicator(indicator)
+        raise ToolFailure("not_found", _no_indicator(indicator))
     return f"World Bank indicator {indicators[0].id}:\n" + _format_indicators(
         [indicators[0]],
         include_index=False,
@@ -879,10 +900,10 @@ def _indicator_id(indicator: str) -> str:
     return stripped
 
 
-def _no_indicator(indicator: str) -> ToolFailure:
-    return ToolFailure(
-        "not_found",
-        f"the World Bank has no indicator {indicator}; search for one with world_bank_indicators",
+def _no_indicator(indicator: str) -> str:
+    """The not_found message for an indicator ID the World Bank does not have."""
+    return (
+        f"the World Bank has no indicator {indicator}; search for one with world_bank_indicators"
     )
 
 

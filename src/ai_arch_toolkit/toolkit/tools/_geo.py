@@ -27,7 +27,7 @@ _WIKIDATA = Api(
     base="https://www.wikidata.org/w/api.php",
     name="Wikidata",
     timeout_s=15,
-    body_error=mediawiki_error,
+    error_reader=mediawiki_error,
 )
 _WIKIDATA_SPARQL = Api(
     base="https://query.wikidata.org/sparql", name="Wikidata Query Service", timeout_s=15

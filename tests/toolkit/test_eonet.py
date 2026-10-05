@@ -116,3 +116,29 @@ def test_an_answer_without_an_event_is_not_a_blank_event(mock_urlopen):
 
     assert caught.value.error.type == "upstream"
     assert "without an event" in str(caught.value)
+
+
+@patch(HTTP_OPEN)
+def test_a_404_for_an_event_is_not_found(mock_urlopen):
+    mock_urlopen.side_effect = http_error(404, "Not Found")
+
+    with pytest.raises(ToolFailure) as caught:
+        eonet_event("EONET_0")
+
+    assert caught.value.error.type == "not_found"
+    assert caught.value.error.message == (
+        "NASA EONET has no event with ID 'EONET_0'; list the current IDs with eonet_events."
+    )
+
+
+@pytest.mark.parametrize("call", [eonet_categories, eonet_events])
+@patch(HTTP_OPEN)
+def test_a_404_on_a_list_is_endpoint_not_found(mock_urlopen, call):
+    # It read as "no matching records found." (upstream), like an empty list.
+    mock_urlopen.side_effect = http_error(404, "Not Found")
+
+    with pytest.raises(ToolFailure) as caught:
+        call()
+
+    assert caught.value.error.type == "upstream"
+    assert "NASA EONET: endpoint not found (HTTP 404)" in caught.value.error.message

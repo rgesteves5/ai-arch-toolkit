@@ -170,9 +170,24 @@ class TestOpenFoodFactsCompare:
 
     @patch(HTTP_OPEN)
     def test_a_404_for_one_product_is_not_found(self, mock_urlopen):
-        mock_urlopen.side_effect = http_error(404, "Not Found")
+        mock_urlopen.side_effect = http_error(404, "Not Found", body=b'{"status": 0}')
 
-        assert _failure(open_food_facts_product, "12345678").error.type == "not_found"
+        failure = _failure(open_food_facts_product, "12345678")
+
+        assert failure.error.type == "not_found"
+        assert failure.error.message == (
+            "Open Food Facts has no product with barcode 12345678; find products with "
+            "open_food_facts_search"
+        )
+
+    @patch(HTTP_OPEN)
+    def test_a_503_on_a_product_is_the_rate_limit(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(503, "Service Unavailable")
+
+        failure = _failure(open_food_facts_product, "12345678")
+
+        assert failure.error.type == "rate_limited"
+        assert failure.error.retryable
 
     @patch(HTTP_OPEN)
     def test_invalid_compare_options_do_not_call_api(self, mock_urlopen):
@@ -269,12 +284,32 @@ class TestOpenFoodFactsSearch:
         )
 
         unavailable = _failure(open_food_facts_search, product_name="test")
-        assert unavailable.error.type == "upstream"
+        assert unavailable.error.type == "rate_limited"
         assert unavailable.error.retryable
-        assert "global rate limit" in str(unavailable)
+        assert unavailable.error.message == (
+            "Open Food Facts global rate limit reached (HTTP 503); try again in a minute."
+        )
 
         mock_urlopen.side_effect = None
         mock_urlopen.return_value = respond("not json")
         not_json = _failure(open_food_facts_search, product_name="test")
         assert not_json.error.type == "upstream"
         assert "could not parse" in str(not_json)
+
+    @patch(HTTP_OPEN)
+    def test_another_server_error_is_upstream(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(502, "Bad Gateway")
+
+        failure = _failure(open_food_facts_search, product_name="test")
+
+        assert failure.error.type == "upstream"
+        assert failure.error.retryable
+
+    @patch(HTTP_OPEN)
+    def test_a_404_on_the_search_is_an_endpoint_not_found(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(404, "Not Found")
+
+        failure = _failure(open_food_facts_search, product_name="test")
+
+        assert failure.error.type == "upstream"
+        assert "endpoint not found (HTTP 404)" in failure.error.message

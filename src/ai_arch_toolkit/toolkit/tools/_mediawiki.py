@@ -9,32 +9,55 @@ from typing import Any
 
 from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
-from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
+from ai_arch_toolkit.toolkit.tools._http import Api, Reply
 
 
-def mediawiki_error(data: object) -> str | None:
-    """The error a MediaWiki API answer reports, as ``code: info``; ``None`` for a result.
+def mediawiki_error(reply: Reply) -> ToolFailure | str | None:
+    """The error a MediaWiki API answer reports; ``None`` for a result.
 
-    MediaWiki answers errors with an ``error`` object in place of the result, usually with HTTP
-    200 (https://www.mediawiki.org/wiki/API:Errors_and_warnings), so every ``Api`` on an
-    ``api.php`` declares this as its ``body_error``.
+    MediaWiki answers errors with an ``error`` object (``code`` and ``info``) in place of the
+    result, usually with HTTP 200, and names the code in the ``MediaWiki-API-Error`` header
+    (https://www.mediawiki.org/wiki/API:Errors_and_warnings), so every ``Api`` on an ``api.php``
+    declares this as its ``error_reader``. The codes that say what happened are typed:
+    ``missingtitle`` is ``not_found`` and ``invalidtitle`` a ``validation_error``
+    (https://www.mediawiki.org/wiki/API:Parse), ``ratelimited`` and ``maxlag`` are
+    ``rate_limited`` and worth a retry (https://www.mediawiki.org/wiki/Manual:Maxlag_parameter);
+    any other code is the source's words, ``code: info``.
     """
-    error = data.get("error") if isinstance(data, dict) else None
-    if not isinstance(error, dict):
+    error = reply.body.get("error") if isinstance(reply.body, dict) else None
+    if isinstance(error, dict):
+        code, info = _string(error.get("code")), _string(error.get("info"))
+    elif header := _string(reply.headers.get("mediawiki-api-error")):
+        code, info = header, ""
+    else:
         return None
-    reported = (_string(error.get("code")), _string(error.get("info")))
-    return ": ".join(text for text in reported if text) or "unknown error"
+    said = ": ".join(text for text in (code, info) if text) or "unknown error"
+    brief = said.rstrip(".")
+    if code == "missingtitle":
+        return ToolFailure(
+            "not_found", f"no such page ({brief}); find the exact title with the wiki's search"
+        )
+    if code == "invalidtitle":
+        return ToolFailure(
+            "validation_error",
+            f"not a valid page title ({brief}); give a title as the wiki's search returns it",
+        )
+    if code in _RATE_LIMITED:
+        return ToolFailure(
+            "rate_limited",
+            f"the wiki asked to slow down ({brief}); try again later",
+            retryable=True,
+        )
+    return said
 
+
+# The codes of a wiki that asks callers to wait: a user's action limit, or replication lag.
+_RATE_LIMITED = frozenset({"ratelimited", "maxlag"})
 
 _DEFAULT_API = "https://en.wiktionary.org/w/api.php"
 _TIMEOUT_S = 15
-_STATUS_MESSAGES = {404: "no matching records found."}
 _WIKTIONARY = Api(
-    base=_DEFAULT_API,
-    name="MediaWiki",
-    timeout_s=_TIMEOUT_S,
-    status_messages=_STATUS_MESSAGES,
-    body_error=mediawiki_error,
+    base=_DEFAULT_API, name="MediaWiki", timeout_s=_TIMEOUT_S, error_reader=mediawiki_error
 )
 _MAX_LIMIT = 25
 _TEXT_RE = re.compile(r"^[\w\s,.'()/%:+-]{1,180}$", re.UNICODE)
@@ -170,16 +193,17 @@ def _api(api_url: str) -> Api:
         f"invalid api_url {api_url!r}; use a Wikimedia wiki's https://…/api.php, "
         "e.g. https://en.wikipedia.org/w/api.php"
     )
+    if api_url.strip() == _DEFAULT_API:  # the module's own: a 404 there is an endpoint that moved
+        return _WIKTIONARY
     try:
         api = Api.within(
             api_url.strip(),
             _DOMAINS,
             name="MediaWiki",
             timeout_s=_TIMEOUT_S,
-            status_messages=_STATUS_MESSAGES,
-            body_error=mediawiki_error,
+            error_reader=mediawiki_error,
         )
-    except HttpError as e:
+    except ToolFailure as e:  # a host or URL the door refuses
         raise ToolFailure("validation_error", invalid) from e
     if not api.base.endswith("api.php"):
         raise ToolFailure("validation_error", invalid)
@@ -190,19 +214,16 @@ def _parsed_page(api: Api, title: str, props: str, parse: Callable[[dict[str, An
     """``action=parse`` of ``title``, read with ``parse``.
 
     Raises:
-        ToolFailure: not_found when the wiki reports the page missing (``missingtitle``,
-            https://www.mediawiki.org/wiki/API:Parse), validation_error when it reports the title
-            invalid (``invalidtitle``); the request's own failures otherwise.
+        ToolFailure: not_found when the wiki reports the page missing (``missingtitle``, typed by
+            ``mediawiki_error``), with the host and the title; validation_error when it reports
+            the title invalid (``invalidtitle``); the request's own failures otherwise.
     """
     try:
         return api.get_json(params=_parse_params(title, props), parse=parse)
-    except HttpError as e:
-        if e.status is None and str(e).startswith("missingtitle"):
+    except ToolFailure as e:
+        if e.error.type == "not_found":  # no other not_found reaches here: no missing= is sent
             msg = f"{api.host} has no page titled {title!r}; find the title with mediawiki_search"
             raise ToolFailure("not_found", msg) from e
-        if e.status is None and str(e).startswith("invalidtitle"):
-            msg = f"{title!r} is not a valid page title on {api.host}: {e}"
-            raise ToolFailure("validation_error", msg) from e
         raise
 
 
@@ -222,7 +243,7 @@ def _parse_params(title: str, props: str) -> dict[str, str]:
 def _parse_result(data: dict[str, Any]) -> dict[str, Any]:
     """The ``parse`` object of an ``action=parse`` answer.
 
-    An error answer never gets here (``mediawiki_error`` raised it first), so an answer without a
+    An error answer never gets here (``mediawiki_error`` read it first), so an answer without a
     ``parse`` object has an unexpected shape.
     """
     parse = data.get("parse")

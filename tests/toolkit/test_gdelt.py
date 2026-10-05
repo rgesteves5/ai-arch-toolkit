@@ -87,7 +87,10 @@ class TestGdeltNewsSearch:
 
         assert failure.error.type == "rate_limited"
         assert failure.error.retryable
-        assert str(failure) == "HTTP error 429: Please limit requests to one every 5 seconds."
+        assert str(failure) == (
+            "rate limited by GDELT (HTTP 429). Try again later. GDELT said: Please limit "
+            "requests to one every 5 seconds."
+        )
 
     @patch(HTTP_OPEN)
     def test_after_a_429_gdelt_rests_and_the_next_call_says_when(self, mock_urlopen):
@@ -99,7 +102,7 @@ class TestGdeltNewsSearch:
         failure = _failure(lambda: gdelt_timeline("test"))
 
         assert failure.error.type == "rate_limited"
-        assert str(failure).startswith("GDELT asked to slow down (HTTP 429)")
+        assert str(failure).startswith("GDELT asked to slow down: ")
         assert "try again in 60 s." in str(failure)
         assert mock_urlopen.call_count == 1  # the second call did not go out
 
@@ -170,7 +173,7 @@ class TestGdeltTimeline:
     ],
 )
 @patch(HTTP_OPEN)
-def test_a_request_gdelt_cannot_run_is_the_tools_error(mock_urlopen, call, message):
+def test_a_request_gdelt_cannot_run_is_a_validation_error(mock_urlopen, call, message):
     # As answered live (2026-09-29): HTTP 200, text in place of the JSON, which read as a parse
     # error.
     mock_urlopen.return_value = respond(
@@ -179,8 +182,9 @@ def test_a_request_gdelt_cannot_run_is_the_tools_error(mock_urlopen, call, messa
 
     failure = _failure(call)
 
-    assert failure.error.type == "upstream"
-    assert str(failure) == message
+    assert failure.error.type == "validation_error"
+    assert not failure.error.retryable
+    assert str(failure) == f"{message.rstrip('.')}; change the query or its options"
 
 
 @pytest.mark.parametrize("body", [b"", b" \n"])
@@ -213,3 +217,16 @@ def test_an_error_page_is_not_a_message(mock_urlopen):
     assert failure.error.type == "upstream"
     assert failure.error.retryable
     assert str(failure) == "HTTP error 500: Internal Server Error"
+
+
+@patch(HTTP_OPEN)
+def test_a_404_is_an_endpoint_not_found(mock_urlopen):
+    mock_urlopen.side_effect = http_error(404, "Not Found", body=b"Not Found")
+
+    failure = _failure(lambda: gdelt_news_search("climate"))
+
+    assert failure.error.type == "upstream"
+    assert not failure.error.retryable
+    assert str(failure) == (
+        "GDELT: endpoint not found (HTTP 404); the API may have changed: Not Found"
+    )

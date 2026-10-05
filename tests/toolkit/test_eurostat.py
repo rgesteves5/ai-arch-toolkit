@@ -147,34 +147,93 @@ _ASYNCHRONOUS = (
     [
         lambda: eurostat_dataset("NOT_A_DATASET"),
         lambda: eurostat_dimensions("NOT_A_DATASET"),
-        lambda: eurostat_series("NOT_A_DATASET"),
     ],
 )
 @patch(HTTP_OPEN)
-def test_a_dataset_eurostat_does_not_have_is_explained(mock_urlopen, call):
+def test_a_dataset_eurostat_does_not_have_is_not_found(mock_urlopen, call):
     mock_urlopen.side_effect = http_error(404, "Not Found", body=_NOT_DISSEMINATED)
 
     failure = _failure(call)
 
-    # The 404 stays upstream until T02 declares it per endpoint.
-    assert failure.error.type == "upstream"
+    assert failure.error.type == "not_found"
+    assert not failure.error.retryable
     assert str(failure) == (
-        "HTTP error 404: ERR_NOT_FOUND_4: NOT_A_DATASET (DATA_FLOW:ALL,1.0) is not "
-        "available for dissemination."
+        "Eurostat has no dataset NOT_A_DATASET to disseminate; find its ID with "
+        "eurostat_dataset_search"
+    )
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: eurostat_series("NOT_A_DATASET", filters="geo=XX"),
+        lambda: eurostat_compare("NOT_A_DATASET", "XX"),
+    ],
+)
+@patch(HTTP_OPEN)
+def test_a_404_with_filters_names_both_causes(mock_urlopen, call):
+    # The 404 does not say whether the dataset or the filters' data is missing.
+    mock_urlopen.side_effect = http_error(404, "Not Found", body=_NOT_DISSEMINATED)
+
+    failure = _failure(call)
+
+    assert failure.error.type == "not_found"
+    assert str(failure) == (
+        "Eurostat has no data for dataset NOT_A_DATASET with these filters, or no such dataset; "
+        "check the codes with eurostat_dimensions, or find the ID with eurostat_dataset_search"
     )
 
 
 @patch(HTTP_OPEN)
-def test_a_request_eurostat_would_only_serve_later_says_so(mock_urlopen):
+def test_a_404_on_the_catalogue_says_what_eurostat_said(mock_urlopen):
+    mock_urlopen.side_effect = http_error(404, "Not Found", body=_NOT_DISSEMINATED)
+
+    failure = _failure(lambda: eurostat_dataset_search("population"))
+
+    assert failure.error.type == "upstream"
+    assert str(failure) == (
+        "Eurostat: endpoint not found (HTTP 404); the API may have changed: ERR_NOT_FOUND_4: "
+        "NOT_A_DATASET (DATA_FLOW:ALL,1.0) is not available for dissemination."
+    )
+
+
+@patch(HTTP_OPEN)
+def test_a_404_on_the_catalogue_without_an_explanation_is_an_endpoint_not_found(mock_urlopen):
+    mock_urlopen.side_effect = http_error(404, "Not Found")
+
+    failure = _failure(lambda: eurostat_dataset_search("population"))
+
+    assert failure.error.type == "upstream"
+    assert str(failure) == "Eurostat: endpoint not found (HTTP 404); the API may have changed"
+
+
+@patch(HTTP_OPEN)
+def test_a_request_eurostat_would_only_serve_later_is_worth_a_retry(mock_urlopen):
     mock_urlopen.side_effect = http_error(413, "Request Entity Too Large", body=_ASYNCHRONOUS)
 
     failure = _failure(lambda: eurostat_series("nama_10_gdp", filters="geo=ZZ"))
 
     assert failure.error.type == "upstream"
+    assert failure.error.retryable
     assert str(failure) == (
-        "HTTP error 413: ASYNCHRONOUS_RESPONSE. Your request will be "
-        "treated asynchronously. Please try again later."
+        "ASYNCHRONOUS_RESPONSE. Your request will be treated asynchronously. Please try again "
+        "later; try again in a few minutes, or narrow the request with filters"
     )
+
+
+@patch(HTTP_OPEN)
+def test_another_error_eurostat_explains_is_upstream_in_its_words(mock_urlopen):
+    mock_urlopen.side_effect = http_error(
+        400,
+        "Bad Request",
+        body=b'{"error": {"status": 400, "id": 400, "label": "ERR_NONEXISTING_DIMENSION"}}',
+    )
+
+    failure = _failure(lambda: eurostat_series("TPS00001", filters="zz=1"))
+
+    assert failure.error.type == "upstream"
+    assert not failure.error.retryable
+    assert str(failure) == "HTTP error 400: ERR_NONEXISTING_DIMENSION"
 
 
 @patch(HTTP_OPEN)

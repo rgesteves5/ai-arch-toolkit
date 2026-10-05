@@ -9,14 +9,14 @@ from typing import Any
 
 from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
-from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
+from ai_arch_toolkit.toolkit.tools._http import Api
 from ai_arch_toolkit.toolkit.tools._mediawiki import mediawiki_error
 
 _API = Api(
     base="https://www.wikidata.org/w/api.php",
     name="Wikidata",
     timeout_s=15,
-    body_error=mediawiki_error,
+    error_reader=mediawiki_error,
 )
 _ENTITY_DATA = Api(
     base="https://www.wikidata.org/wiki/Special:EntityData", name="Wikidata", timeout_s=15
@@ -112,19 +112,14 @@ def wikidata_entity(qid: str, language: str = "en") -> str:
         )
     language = _language(language)
 
-    missing = ToolFailure(
-        "not_found", f"Wikidata has no entity {normalized}; search for it with wikidata_search"
+    missing = f"Wikidata has no entity {normalized}; search for it with wikidata_search"
+    entity = _ENTITY_DATA.get_json(
+        f"{normalized}.json",
+        parse=lambda data: _entity(data, normalized, language),
+        missing=missing,
     )
-    try:
-        entity = _ENTITY_DATA.get_json(
-            f"{normalized}.json", parse=lambda data: _entity(data, normalized, language)
-        )
-    except HttpError as e:
-        if e.status == 404:
-            raise missing from e
-        raise
     if entity is None:
-        raise missing
+        raise ToolFailure("not_found", missing)
 
     merged = f" (redirects to {entity.qid})" if entity.qid != normalized else ""
     return f"Wikidata entity {normalized}{merged}:\n" + _format_entity(entity)

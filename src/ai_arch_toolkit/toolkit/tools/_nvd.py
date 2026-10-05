@@ -9,7 +9,27 @@ from typing import Any
 
 from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
-from ai_arch_toolkit.toolkit.tools._http import Api
+from ai_arch_toolkit.toolkit.tools._http import Api, Reply
+
+
+def _nvd_error(reply: Reply) -> ToolFailure | str | None:
+    """The reason NVD gives for a request it refuses, in its ``message`` response header; ``None``
+    without one.
+
+    NVD refuses a bad parameter (a publication date range over 120 days, for one) with a 404 that
+    says why there (https://nvd.nist.gov/developers/vulnerabilities;
+    ``docs/internal/tools-contract-plan.md``): a 400 or 404 with a reason is the request's fault.
+    Its rate limit and a refused key (403, 429) keep the door's reading, in NVD's words.
+    """
+    if reply.status < 400:
+        return None
+    reason = " ".join(reply.headers.get("message", "").split())
+    if not reason or reply.status not in (400, 404):
+        return reason or None
+    return ToolFailure(
+        "validation_error", f"NVD refused the request: {reason}; correct that parameter"
+    )
+
 
 # Spaced for NVD's rate limit on requests without an API key.
 _API = Api(
@@ -17,6 +37,7 @@ _API = Api(
     name="NVD",
     timeout_s=15,
     min_interval_s=6.1,
+    error_reader=_nvd_error,
 )
 _MAX_RESULTS_LIMIT = 20
 _CVE_ID_RE = re.compile(r"^CVE-\d{4}-\d{4,}$", re.IGNORECASE)
@@ -65,7 +86,8 @@ def nvd_cve_search(
         pub_end_date: Optional publication date upper bound as YYYY-MM-DD.
 
     Raises:
-        ToolFailure: validation_error when an argument is invalid or no filter is given.
+        ToolFailure: validation_error when an argument is invalid, no filter is given, or NVD
+            refuses a parameter (a publication date range over 120 days, for one).
     """
     if start < 0:
         raise ToolFailure(

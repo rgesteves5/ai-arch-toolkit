@@ -8,19 +8,25 @@ from typing import Any
 
 from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
-from ai_arch_toolkit.toolkit.tools._http import Api
+from ai_arch_toolkit.toolkit.tools._http import Api, Reply
 
 
-def _query_error(answer: object) -> str | None:
+def _query_error(reply: Reply) -> ToolFailure | None:
     """The error GDELT sends in place of the JSON; ``None`` for a result.
 
     GDELT answers a request it cannot run with a line of text instead of JSON, still with HTTP
     200 (seen 2026-09-29: "Your query was too short or too long.", "Invalid/Unsupported
-    Country."), and explains a 429 the same way. Text that starts like JSON is a broken answer,
-    and markup is a page, not a message.
+    Country."): the request is at fault, a ``validation_error``. It explains an error status (a
+    429) the same way, and the door reads that text itself. Text that starts like JSON is a
+    broken answer, and markup is a page, not a message.
     """
-    message = " ".join(answer.split()) if isinstance(answer, str) else ""
-    return message if message and not message.startswith(("{", "[", "<")) else None
+    body = reply.body
+    message = " ".join(body.split()) if isinstance(body, str) else ""
+    if reply.status >= 400 or not message or message.startswith(("{", "[", "<")):
+        return None
+    return ToolFailure(
+        "validation_error", f"{message.rstrip('.')}; change the query or its options"
+    )
 
 
 # At most one request every 5 seconds, with a margin: GDELT answers faster callers with a 429.
@@ -33,7 +39,7 @@ _API = Api(
     timeout_s=15,
     min_interval_s=5.1,
     cooldown_s=60.0,
-    body_error=_query_error,
+    error_reader=_query_error,
 )
 _MAX_RESULTS_LIMIT = 20
 _TIMESPAN_RE = re.compile(r"^\d+[mhdw]$", re.IGNORECASE)
@@ -82,8 +88,8 @@ def gdelt_news_search(
         sort: Sort mode: hybrid, date, or tone.
 
     Raises:
-        ToolFailure: validation_error when ``query`` is empty or ``timespan`` or ``sort`` is
-            invalid.
+        ToolFailure: validation_error when ``query`` is empty, ``timespan`` or ``sort`` is
+            invalid, or GDELT cannot run the query.
     """
     query = _query(query)
     timespan = _timespan(timespan, "7d")
@@ -113,7 +119,8 @@ def gdelt_timeline(query: str, timespan: str = "30d") -> str:
         timespan: Recent time window, e.g. "24h", "30d", or "12w".
 
     Raises:
-        ToolFailure: validation_error when ``query`` is empty or ``timespan`` is invalid.
+        ToolFailure: validation_error when ``query`` is empty, ``timespan`` is invalid, or
+            GDELT cannot run the query.
     """
     query = _query(query)
     timespan = _timespan(timespan, "30d")

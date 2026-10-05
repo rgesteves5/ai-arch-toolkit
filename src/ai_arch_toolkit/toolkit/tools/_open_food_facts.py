@@ -8,25 +8,35 @@ from typing import Any
 
 from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
-from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
+from ai_arch_toolkit.toolkit.tools._http import Api, Reply
 
-_STATUS_MESSAGES = {
-    503: "Open Food Facts global rate limit reached (HTTP 503). Try again later.",
-}
+
+def _rate_limit(reply: Reply) -> ToolFailure | None:
+    """Open Food Facts answers a caller over its global rate limit with a 503, not a 429
+    (rate limits: https://openfoodfacts.github.io/openfoodfacts-server/api/#rate-limits)."""
+    if reply.status != 503:
+        return None
+    return ToolFailure(
+        "rate_limited",
+        "Open Food Facts global rate limit reached (HTTP 503); try again in a minute.",
+        retryable=True,
+    )
+
+
 # Product reads and searches are spaced apart on separate clocks, each at its own interval.
 _PRODUCTS = Api(
     base="https://world.openfoodfacts.org/api/v2",
     name="Open Food Facts",
     timeout_s=15,
     min_interval_s=4.1,
-    status_messages=_STATUS_MESSAGES,
+    error_reader=_rate_limit,
 )
 _SEARCH = Api(
     base="https://world.openfoodfacts.org/api/v2",
     name="Open Food Facts",
     timeout_s=15,
     min_interval_s=6.1,
-    status_messages=_STATUS_MESSAGES,
+    error_reader=_rate_limit,
 )
 _MAX_RESULTS_LIMIT = 20
 _BARCODE_RE = re.compile(r"^\d{4,32}$")
@@ -225,21 +235,20 @@ def _fetch_product(barcode: str) -> _OpenFoodFactsProduct:
     Raises:
         ToolFailure: not_found when Open Food Facts has no product with ``barcode``.
     """
-    missing = ToolFailure(
-        "not_found",
+    missing = (
         f"Open Food Facts has no product with barcode {barcode}; find products with "
-        "open_food_facts_search",
+        "open_food_facts_search"
     )
-    try:
-        product = _PRODUCTS.get_json(
-            "product", f"{barcode}.json", params={"fields": ",".join(_FIELDS)}, parse=_product
-        )
-    except HttpError as e:  # API v2 answers an unknown barcode with a 404 as well as status 0
-        if e.status == 404:
-            raise missing from e
-        raise
+    # API v2 answers an unknown barcode with a 404 as well as with status 0.
+    product = _PRODUCTS.get_json(
+        "product",
+        f"{barcode}.json",
+        params={"fields": ",".join(_FIELDS)},
+        parse=_product,
+        missing=missing,
+    )
     if product is None:
-        raise missing
+        raise ToolFailure("not_found", missing)
     return product
 
 

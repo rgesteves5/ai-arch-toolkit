@@ -8,7 +8,7 @@ from typing import Any
 
 from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
-from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
+from ai_arch_toolkit.toolkit.tools._http import Api
 
 # Without a key, every caller shares one limit, spent on 2026-10-04 (a 429 at the first request);
 # a free key gives its holder 1 request per second, in the x-api-key header
@@ -167,17 +167,15 @@ def semantic_scholar_paper(paper_id: str) -> str:
             Semantic Scholar has no paper with it.
     """
     normalized = _paper_id(paper_id)
-    not_found = _not_found(normalized)
-    try:
-        paper = _API.get_json(
-            "paper", normalized, params={"fields": _PAPER_FIELDS}, parse=_parse_paper
-        )
-    except HttpError as e:
-        if e.status == 404:
-            raise not_found from e
-        raise
+    paper = _API.get_json(
+        "paper",
+        normalized,
+        params={"fields": _PAPER_FIELDS},
+        parse=_parse_paper,
+        missing=_missing(normalized),
+    )
     if paper is None:
-        raise not_found
+        raise ToolFailure("not_found", _missing(normalized))
 
     return f"Semantic Scholar paper {normalized}:\n" + _format_papers(
         [paper],
@@ -217,14 +215,14 @@ def semantic_scholar_citations(
         "fields": _CITATION_FIELDS,
     }
 
-    try:
-        citations = _API.get_json(
-            "paper", normalized, "citations", params=params, parse=_citations
-        )
-    except HttpError as e:
-        if e.status == 404:
-            raise _not_found(normalized) from e
-        raise
+    citations = _API.get_json(
+        "paper",
+        normalized,
+        "citations",
+        params=params,
+        parse=_citations,
+        missing=_missing(normalized),
+    )
 
     if not citations:
         return f"No Semantic Scholar citations found for: {normalized}"
@@ -257,11 +255,9 @@ def _paper_id(value: str) -> str:
     return normalized
 
 
-def _not_found(paper_id: str) -> ToolFailure:
-    return ToolFailure(
-        "not_found",
-        f"no Semantic Scholar paper with ID {paper_id}; search with semantic_scholar_search.",
-    )
+def _missing(paper_id: str) -> str:
+    """The not_found message for a paper ID Semantic Scholar does not know (its 404)."""
+    return f"no Semantic Scholar paper with ID {paper_id}; search with semantic_scholar_search."
 
 
 def _normalize_paper_id(value: str) -> str:

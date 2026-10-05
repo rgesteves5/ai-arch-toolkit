@@ -9,7 +9,7 @@ from typing import Any
 
 from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
-from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
+from ai_arch_toolkit.toolkit.tools._http import Api
 
 _API = Api(base="https://openlibrary.org", name="Open Library")
 _MAX_RESULTS_LIMIT = 20
@@ -190,12 +190,9 @@ def _record(
     """
     segments = (section, f"{identifier}.json")
     for _ in range(_MAX_REDIRECTS + 1):
-        try:
-            record = _API.get_json(*segments, parse=lambda data: _live_record(data, parse))
-        except HttpError as e:
-            if e.status == 404:
-                raise ToolFailure("not_found", missing) from e
-            raise
+        record = _API.get_json(
+            *segments, parse=lambda data: _live_record(data, parse), missing=missing
+        )
         if record is None:
             raise ToolFailure("not_found", missing)
         if not isinstance(record, _Merged):

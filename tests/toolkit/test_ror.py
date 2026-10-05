@@ -78,3 +78,65 @@ class TestRor:
 
         assert caught.value.error.type == "rate_limited"
         assert caught.value.error.retryable
+
+
+def _failure(fn, *args, **kwargs) -> ToolFailure:
+    with pytest.raises(ToolFailure) as caught:
+        fn(*args, **kwargs)
+    return caught.value
+
+
+@patch(HTTP_OPEN)
+def test_an_unknown_organization_is_not_found(mock_urlopen):
+    body = b'{"errors": ["ROR ID \'https://ror.org/000000000\' does not exist"]}'
+    mock_urlopen.side_effect = http_error(404, "Not Found", body=body)
+
+    failure = _failure(ror_organization, "000000000")
+
+    assert failure.error.type == "not_found"
+    assert failure.error.message == (
+        "ROR has no organization 000000000; find organizations with ror_search"
+    )
+
+
+@patch(HTTP_OPEN)
+def test_a_404_on_the_search_is_an_endpoint_not_found(mock_urlopen):
+    mock_urlopen.side_effect = http_error(404, "Not Found")
+
+    failure = _failure(ror_search, "Lisbon")
+
+    assert failure.error.type == "upstream"
+    assert "ROR: endpoint not found (HTTP 404)" in failure.error.message
+
+
+@patch(HTTP_OPEN)
+def test_a_parameter_ror_refuses_is_a_validation_error(mock_urlopen):
+    body = b'{"errors": ["Filter types:zzz is not a valid filter"]}'
+    mock_urlopen.side_effect = http_error(400, "Bad Request", body=body)
+
+    failure = _failure(ror_search, "Lisbon", org_type="zzz")
+
+    assert failure.error.type == "validation_error"
+    assert not failure.error.retryable
+    assert failure.error.message == (
+        "ROR refused the request: Filter types:zzz is not a valid filter; correct that parameter"
+    )
+
+
+@patch(HTTP_OPEN)
+def test_ror_s_errors_on_a_server_failure_keep_its_words(mock_urlopen):
+    body = b'{"errors": ["Search backend unavailable"]}'
+    mock_urlopen.side_effect = http_error(503, "Service Unavailable", body=body)
+
+    failure = _failure(ror_search, "Lisbon")
+
+    assert failure.error.type == "upstream"
+    assert failure.error.retryable
+    assert failure.error.message == "HTTP error 503: Search backend unavailable"
+
+
+@patch(HTTP_OPEN)
+def test_an_answer_without_errors_is_read_as_a_result(mock_urlopen):
+    mock_urlopen.return_value = respond({"number_of_results": 0, "items": [], "errors": []})
+
+    assert ror_search("zzqqxx") == "No ROR organizations found."

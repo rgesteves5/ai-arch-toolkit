@@ -14,7 +14,6 @@ _API = Api(
     base="https://www.ebi.ac.uk/chembl/api/data",
     name="ChEMBL",
     timeout_s=20,
-    status_messages={404: "no matching records found."},
 )
 _MAX_LIMIT = 25
 _TEXT_RE = re.compile(r"^[\w\s,.'()/%:+-]{1,180}$", re.UNICODE)
@@ -53,12 +52,17 @@ def chembl_molecule(chembl_id: str) -> str:
         chembl_id: ChEMBL molecule ID, e.g. "CHEMBL25".
 
     Raises:
-        ToolFailure: validation_error when the ID is malformed.
+        ToolFailure: validation_error when the ID is malformed; not_found when ChEMBL has no
+            molecule with it.
     """
     normalized = _chembl_id("chembl_id", chembl_id)
     return _API.get_json(
         "molecule",
         f"{normalized}.json",
+        missing=(
+            f"no ChEMBL molecule with ID {normalized} (a target ID is read with chembl_target); "
+            "search with chembl_molecule_search."
+        ),
         parse=lambda data: "\n".join(
             [f"ChEMBL molecule {normalized}:", *_format_molecule(data, index=None, compact=False)]
         ),
@@ -97,12 +101,17 @@ def chembl_target(chembl_id: str) -> str:
         chembl_id: ChEMBL target ID, e.g. "CHEMBL203".
 
     Raises:
-        ToolFailure: validation_error when the ID is malformed.
+        ToolFailure: validation_error when the ID is malformed; not_found when ChEMBL has no
+            target with it.
     """
     normalized = _chembl_id("chembl_id", chembl_id)
     return _API.get_json(
         "target",
         f"{normalized}.json",
+        missing=(
+            f"no ChEMBL target with ID {normalized} (a molecule ID is read with chembl_molecule); "
+            "search with chembl_target_search."
+        ),
         parse=lambda data: _target_text(data, normalized),
     )
 

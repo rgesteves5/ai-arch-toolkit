@@ -47,6 +47,24 @@ class TestDefineWord:
         assert "wiktionary_entry" in caught.value.error.message
 
     @patch(HTTP_OPEN)
+    def test_the_declared_message_wins_over_the_404_body(self, mock_urlopen):
+        # The body the API sends with its 404 (https://dictionaryapi.dev/).
+        body = (
+            b'{"title": "No Definitions Found", "message": "Sorry pal, we couldn\'t find '
+            b'definitions for the word you were looking for.", "resolution": "Try again."}'
+        )
+        mock_urlopen.side_effect = http_error(404, "Not Found", body=body)
+
+        with pytest.raises(ToolFailure) as caught:
+            define_word("xyzzzz")
+
+        assert caught.value.error.type == "not_found"
+        assert caught.value.error.message == (
+            "the Free Dictionary API has no entry for 'xyzzzz'; check the spelling, "
+            "or look it up with wiktionary_entry."
+        )
+
+    @patch(HTTP_OPEN)
     def test_no_definitions_is_a_success(self, mock_urlopen):
         mock_urlopen.return_value = respond([])
 

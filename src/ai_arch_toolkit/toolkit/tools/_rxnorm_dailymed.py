@@ -11,17 +11,11 @@ from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
 
-_RXNAV = Api(
-    base="https://rxnav.nlm.nih.gov/REST",
-    name="RxNorm",
-    timeout_s=20,
-    status_messages={404: "no matching records found."},
-)
+# A call that names one concept or one label declares it (``missing=``): a 404 there is that
+# record missing. A 404 on a search is the endpoint gone, which the door reports as such.
+_RXNAV = Api(base="https://rxnav.nlm.nih.gov/REST", name="RxNorm", timeout_s=20)
 _DAILYMED = Api(
-    base="https://dailymed.nlm.nih.gov/dailymed/services/v2",
-    name="DailyMed",
-    timeout_s=20,
-    status_messages={404: "no matching records found."},
+    base="https://dailymed.nlm.nih.gov/dailymed/services/v2", name="DailyMed", timeout_s=20
 )
 _DAILYMED_PAGE_URL = "https://dailymed.nlm.nih.gov/dailymed/drugInfo.cfm"
 _MAX_LIMIT = 25
@@ -78,6 +72,7 @@ def rxnorm_concept(rxcui: str) -> str:
         normalized,
         "properties.json",
         parse=lambda data: _concept_text(data, normalized),
+        missing=_no_concept(normalized),
     )
 
 
@@ -92,7 +87,7 @@ def rxnorm_related(rxcui: str, tty: str = "", max_results: int = 20) -> str:
 
     Raises:
         ToolFailure: validation_error when ``rxcui`` is not 1-12 digits or ``tty`` is not a
-            term type.
+            term type; not_found when RxNorm answers that it has no concept with ``rxcui``.
     """
     normalized = _rxcui(rxcui)
     if tty and not re.fullmatch(r"^[A-Za-z+]{1,80}$", tty.strip()):
@@ -113,6 +108,7 @@ def rxnorm_related(rxcui: str, tty: str = "", max_results: int = 20) -> str:
             nothing=f"No RxNorm related concepts found for {normalized}.",
             limit=_bounded(max_results),
         ),
+        missing=_no_concept(normalized),
     )
 
 
@@ -124,11 +120,16 @@ def rxnorm_ndcs(rxcui: str) -> str:
         rxcui: RxNorm concept unique identifier.
 
     Raises:
-        ToolFailure: validation_error when ``rxcui`` is not 1-12 digits.
+        ToolFailure: validation_error when ``rxcui`` is not 1-12 digits; not_found when RxNorm
+            answers that it has no concept with it.
     """
     normalized = _rxcui(rxcui)
     return _RXNAV.get_json(
-        "rxcui", normalized, "ndcs.json", parse=lambda data: _ndcs_text(data, normalized)
+        "rxcui",
+        normalized,
+        "ndcs.json",
+        parse=lambda data: _ndcs_text(data, normalized),
+        missing=_no_concept(normalized),
     )
 
 
@@ -186,7 +187,8 @@ def dailymed_label(setid: str, max_sections: int = 12) -> str:
         max_sections: Number of section titles to return (1-25). Defaults to 12.
 
     Raises:
-        ToolFailure: validation_error when ``setid`` is not a DailyMed set ID.
+        ToolFailure: validation_error when ``setid`` is not a DailyMed set ID; not_found when
+            DailyMed has no label with it.
     """
     normalized = setid.strip()
     if not _SETID_RE.fullmatch(normalized):
@@ -198,6 +200,10 @@ def dailymed_label(setid: str, max_sections: int = 12) -> str:
         "spls",
         f"{normalized}.xml",
         parse=lambda xml_text: _label_text(xml_text, normalized, max_sections),
+        missing=(
+            f"DailyMed has no label with set ID {normalized}; find labels with "
+            "dailymed_label_search"
+        ),
     )
 
 
@@ -210,6 +216,10 @@ def _rxcui(rxcui: str) -> str:
             f"invalid rxcui {rxcui!r}; an RxCUI is 1-12 digits; find one with rxnorm_drug_search.",
         )
     return normalized
+
+
+def _no_concept(rxcui: str) -> str:
+    return f"no RxNorm concept with RxCUI {rxcui}; search with rxnorm_drug_search."
 
 
 def _concepts_text(groups: Any, *, header: str, nothing: str, limit: int) -> str:
@@ -238,9 +248,7 @@ def _concepts(groups: Any) -> list[tuple[Any, dict[str, Any]]]:
 def _concept_text(data: dict[str, Any], rxcui: str) -> str:
     props = data.get("properties", {})
     if not isinstance(props, dict) or not props:
-        raise ToolFailure(
-            "not_found", f"no RxNorm concept with RxCUI {rxcui}; search with rxnorm_drug_search."
-        )
+        raise ToolFailure("not_found", _no_concept(rxcui))
     lines = [f"RxNorm concept {rxcui}:"]
     lines.append(_string(props.get("name")) or "(no name)")
     lines.append(

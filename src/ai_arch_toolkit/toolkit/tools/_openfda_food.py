@@ -9,15 +9,13 @@ from typing import Any
 
 from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
-from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
+from ai_arch_toolkit.toolkit.tools._http import Api
 
-# openFDA answers a search that matches nothing with HTTP 404 ("NOT_FOUND: No matches found!").
-_API = Api(
-    base="https://api.fda.gov/food/enforcement.json",
-    name="openFDA",
-    timeout_s=15,
-    status_messages={404: "no matching records found."},
-)
+# openFDA answers a search that matches nothing with HTTP 404 and
+# {"error": {"code": "NOT_FOUND", "message": "No matches found!"}} (observed; the tests replay it;
+# API basics: https://open.fda.gov/apis/), so its searches declare ``empty_on_404``. Its other
+# errors carry their text in ``error.message``, which the door already quotes.
+_API = Api(base="https://api.fda.gov/food/enforcement.json", name="openFDA", timeout_s=15)
 _MAX_RESULTS_LIMIT = 20
 _TEXT_RE = re.compile(r"^[\w\s,.'&()/%:+-]{1,160}$", re.UNICODE)
 _RECALL_RE = re.compile(r"^[A-Z]-\d{3,5}-\d{4}$", re.IGNORECASE)
@@ -96,12 +94,7 @@ def openfda_food_recall_search(
         "limit": str(max(1, min(max_results, _MAX_RESULTS_LIMIT))),
         "skip": str(skip),
     }
-    try:
-        return _API.get_json(params=params, parse=_search_text)
-    except HttpError as e:
-        if e.status != 404:  # a 404 is a search that matched nothing
-            raise
-    return _NO_RECALLS
+    return _API.get_json(params=params, parse=_search_text, empty_on_404=True)
 
 
 @tool(capability="network")
@@ -125,15 +118,11 @@ def openfda_food_recall(recall_number: str) -> str:
     missing = (
         f"openFDA has no food recall {normalized}; find recalls with openfda_food_recall_search"
     )
-    try:
-        recalls = _API.get_json(
-            params={"search": f'recall_number:"{normalized}"', "limit": "1"},
-            parse=_recalls_from_data,
-        )
-    except HttpError as e:
-        if e.status == 404:
-            raise ToolFailure("not_found", missing) from e
-        raise
+    recalls = _API.get_json(
+        params={"search": f'recall_number:"{normalized}"', "limit": "1"},
+        parse=_recalls_from_data,
+        missing=missing,
+    )
 
     if not recalls:
         raise ToolFailure("not_found", missing)

@@ -15,7 +15,7 @@ from ai_arch_toolkit.toolkit.tools._rxnorm_dailymed import (
     rxnorm_ndcs,
     rxnorm_related,
 )
-from tests.toolkit.http_fakes import HTTP_OPEN, respond
+from tests.toolkit.http_fakes import HTTP_OPEN, http_error, respond
 
 _SETID = "53c11fb4-ba31-b5e5-e063-6394a90a9c1a"
 
@@ -130,3 +130,51 @@ class TestRxNormDailyMed:
 
         assert caught.value.error.type == "upstream"
         assert "could not parse XML" in caught.value.error.message
+
+
+def _failure(fn, *args, **kwargs) -> ToolFailure:
+    with pytest.raises(ToolFailure) as caught:
+        fn(*args, **kwargs)
+    return caught.value
+
+
+@pytest.mark.parametrize("tool", [rxnorm_concept, rxnorm_related, rxnorm_ndcs])
+@patch(HTTP_OPEN)
+def test_a_404_for_a_concept_is_not_found(mock_urlopen, tool):
+    mock_urlopen.side_effect = http_error(404, "Not Found")
+
+    failure = _failure(tool, "999999999")
+
+    assert failure.error.type == "not_found"
+    assert failure.error.message == (
+        "no RxNorm concept with RxCUI 999999999; search with rxnorm_drug_search."
+    )
+
+
+@patch(HTTP_OPEN)
+def test_a_404_for_a_label_is_not_found(mock_urlopen):
+    mock_urlopen.side_effect = http_error(404, "Not Found")
+
+    failure = _failure(dailymed_label, _SETID)
+
+    assert failure.error.type == "not_found"
+    assert failure.error.message == (
+        f"DailyMed has no label with set ID {_SETID}; find labels with dailymed_label_search"
+    )
+
+
+@pytest.mark.parametrize(
+    ("call", "kwargs", "api"),
+    [
+        (rxnorm_drug_search, {"name": "ibuprofen"}, "RxNorm"),
+        (dailymed_label_search, {"drug_name": "ibuprofen"}, "DailyMed"),
+    ],
+)
+@patch(HTTP_OPEN)
+def test_a_404_on_a_search_is_an_endpoint_not_found(mock_urlopen, call, kwargs, api):
+    mock_urlopen.side_effect = http_error(404, "Not Found")
+
+    failure = _failure(call, **kwargs)
+
+    assert failure.error.type == "upstream"
+    assert f"{api}: endpoint not found (HTTP 404)" in failure.error.message

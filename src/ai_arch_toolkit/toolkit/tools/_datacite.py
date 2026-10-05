@@ -7,7 +7,7 @@ from typing import Any
 
 from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
-from ai_arch_toolkit.toolkit.tools._http import Api, HttpError
+from ai_arch_toolkit.toolkit.tools._http import Api
 
 _API = Api(base="https://api.datacite.org/dois", name="DataCite", timeout_s=15)
 _MAX_RESULTS_LIMIT = 20
@@ -88,20 +88,13 @@ def datacite_doi(doi: str) -> str:
         msg = f"invalid DOI {doi!r}; a DOI looks like 10.1000/xyz."
         raise ToolFailure("validation_error", msg)
 
-    not_found = ToolFailure(
-        "not_found",
+    missing = (
         f"no DataCite record of DOI {normalized}; search with datacite_search, "
-        "or look the DOI up with crossref_work.",
+        "or look the DOI up with crossref_work."
     )
-    try:
-        record = _API.get_json(normalized, parse=_record)
-    except HttpError as e:
-        if e.status == 404:
-            raise not_found from e
-        raise
-
+    record = _API.get_json(normalized, parse=_record, missing=missing)
     if record is None:
-        raise not_found
+        raise ToolFailure("not_found", missing)
 
     return f"DataCite DOI {normalized}:\n" + _format_dois(
         [record],

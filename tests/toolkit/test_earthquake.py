@@ -109,3 +109,30 @@ class TestEarthquake:
 
         assert caught.value.error.type == "upstream"
         assert caught.value.error.retryable
+
+    @patch(HTTP_OPEN)
+    def test_an_unknown_event_id_is_not_found(self, mock_urlopen):
+        # USGS answers an unknown eventid with a 404 and a text page.
+        mock_urlopen.side_effect = http_error(
+            404, "Not Found", body=b"Error 404: Not Found\n\nUnknown eventid=us0\n"
+        )
+
+        with pytest.raises(ToolFailure) as caught:
+            earthquake_event("us0")
+
+        assert caught.value.error.type == "not_found"
+        assert caught.value.error.message == (
+            "USGS has no earthquake with ID us0; search with earthquake_search."
+        )
+
+    @pytest.mark.parametrize("call", [earthquake_search, earthquake_count])
+    @patch(HTTP_OPEN)
+    def test_404_on_a_query_is_endpoint_not_found(self, mock_urlopen, call):
+        # It read as "no matching records found." (upstream), like an empty search.
+        mock_urlopen.side_effect = http_error(404, "Not Found")
+
+        with pytest.raises(ToolFailure) as caught:
+            call()
+
+        assert caught.value.error.type == "upstream"
+        assert "USGS: endpoint not found (HTTP 404)" in caught.value.error.message

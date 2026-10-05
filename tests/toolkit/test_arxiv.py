@@ -267,8 +267,12 @@ def test_a_query_arxiv_cannot_read_is_explained(mock_urlopen):
     with pytest.raises(ToolFailure) as caught:
         arxiv_search("ti:(")
 
-    assert caught.value.error.type == "upstream"
-    assert caught.value.error.message == "HTTP error 400: Invalid query string: '( ( )'"
+    assert caught.value.error.type == "validation_error"
+    assert not caught.value.error.retryable
+    assert caught.value.error.details == {"status": 400}
+    assert caught.value.error.message.startswith(
+        "arXiv rejected the request: Invalid query string: '( ( )'; check"
+    )
 
 
 @patch(HTTP_OPEN)
@@ -284,5 +288,31 @@ def test_an_error_entry_is_the_error_not_a_paper(mock_urlopen):
     with pytest.raises(ToolFailure) as caught:
         arxiv_paper("1234.1234")
 
+    assert caught.value.error.type == "validation_error"
+    assert caught.value.error.message.startswith(
+        "arXiv rejected the request: incorrect id format for 1234.1234; check"
+    )
+
+
+@patch(HTTP_OPEN)
+def test_an_error_feed_with_a_server_status_is_retryable_upstream(mock_urlopen):
+    mock_urlopen.side_effect = http_error(503, "Service Unavailable", body=_ERROR_FEED)
+
+    with pytest.raises(ToolFailure) as caught:
+        arxiv_search("agents")
+
     assert caught.value.error.type == "upstream"
-    assert caught.value.error.message == "arXiv reported: incorrect id format for 1234.1234"
+    assert caught.value.error.retryable
+    assert caught.value.error.message == "HTTP error 503: Invalid query string: '( ( )'"
+
+
+@patch(HTTP_OPEN)
+def test_a_404_is_endpoint_not_found(mock_urlopen):
+    # The query endpoint answers an unknown ID with an empty feed, so a 404 means it moved.
+    mock_urlopen.side_effect = http_error(404, "Not Found")
+
+    with pytest.raises(ToolFailure) as caught:
+        arxiv_paper("1706.03762")
+
+    assert caught.value.error.type == "upstream"
+    assert "arXiv: endpoint not found (HTTP 404)" in caught.value.error.message

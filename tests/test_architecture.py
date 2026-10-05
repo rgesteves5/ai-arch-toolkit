@@ -450,6 +450,68 @@ def test_the_http_error_catch_detector_sees_every_form() -> None:
     assert not catches_http_errors(f"try:\n    f()\nexcept HttpError as e:\n{precise}")
 
 
+def reads_http_statuses(source: str) -> list[int]:
+    """Lines of an ``except`` that names ``HttpError`` or ``ToolFailure`` and compares a
+    ``.status`` in its body.
+
+    What a status means is declared on the request (``missing=``, ``empty_on_404=``) or read by
+    the API's ``error_reader`` (D38): a tool that branches on the status of a failure it caught is
+    how a 404 used to be translated by hand.
+    """
+
+    def names(node: ast.expr | None) -> list[str]:
+        if node is None:
+            return []
+        if isinstance(node, ast.Tuple):
+            return [name for element in node.elts for name in names(element)]
+        if isinstance(node, ast.Attribute):
+            return [node.attr]
+        return [node.id] if isinstance(node, ast.Name) else []
+
+    def compares_a_status(node: ast.AST) -> bool:
+        return isinstance(node, ast.Compare) and any(
+            isinstance(side, ast.Attribute) and side.attr == "status"
+            for side in (node.left, *node.comparators)
+        )
+
+    return [
+        node.lineno
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.ExceptHandler)
+        and {"HttpError", "ToolFailure"} & set(names(node.type))
+        and any(compares_a_status(inner) for inner in ast.walk(node))
+    ]
+
+
+# EONET answers an unknown event ID with a 500; its catch adds that hint to the failure.
+_STATUS_READERS = {"_eonet.py"}
+
+
+def test_no_tool_reads_the_status_of_a_failure_it_caught() -> None:
+    offenders = {
+        f"{path.name}:{line}"
+        for path in (ROOT / "src/ai_arch_toolkit/toolkit/tools").glob("_*.py")
+        if path != _HTTP_DOOR and path.name not in _STATUS_READERS
+        for line in reads_http_statuses(path.read_text())
+    }
+    assert offenders == set()
+
+
+def test_the_status_reader_detector_sees_every_form() -> None:
+    body = (
+        "    if e.status == 404:\n        raise ToolFailure('not_found', 'x') from e\n    raise\n"
+    )
+    assert reads_http_statuses(f"try:\n    f()\nexcept HttpError as e:\n{body}") == [3]
+    assert reads_http_statuses(f"try:\n    f()\nexcept ToolFailure as e:\n{body}")
+    assert reads_http_statuses(f"try:\n    f()\nexcept _http.HttpError as e:\n{body}")
+    assert reads_http_statuses(
+        "try:\n    f()\nexcept HttpError as e:\n    if 404 == e.status:\n        raise\n"
+    )
+    assert not reads_http_statuses(f"try:\n    f()\nexcept ValueError as e:\n{body}")
+    typed = "    if e.error.type == 'not_found':\n        raise\n"
+    assert not reads_http_statuses(f"try:\n    f()\nexcept ToolFailure as e:\n{typed}")
+
+
 def duplicated_windows(first: str, second: str, size: int = 8) -> int:
     """How many runs of ``size`` lines (whitespace-normalised, at least 6 non-blank) repeat."""
 

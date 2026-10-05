@@ -78,7 +78,8 @@ class TestBraveSearch:
         with pytest.raises(ToolFailure) as caught:
             brave_search("lisbon weather")
 
-        assert caught.value.error.type == "upstream"
+        assert caught.value.error.type == "validation_error"
+        assert not caught.value.error.retryable
         assert "BRAVE_SEARCH_API_KEY" in caught.value.error.message
         assert "https://brave.com/search/api/" in caught.value.error.message
         mock_open.assert_not_called()
@@ -89,13 +90,45 @@ class TestBraveSearch:
         with pytest.raises(ToolFailure) as caught:
             brave_search("x")
         assert caught.value.error.type == "upstream"
-        assert "Brave rejected the key in BRAVE_SEARCH_API_KEY" in caught.value.error.message
+        assert not caught.value.error.retryable
+        assert caught.value.error.message == (
+            "Brave rejected the key in BRAVE_SEARCH_API_KEY (HTTP 401); set a valid key in "
+            "BRAVE_SEARCH_API_KEY (get one: https://brave.com/search/api/)."
+        )
 
         mock_open.side_effect = http_error(429, "Too Many Requests")
         with pytest.raises(ToolFailure) as caught:
             brave_search("y")
         assert caught.value.error.type == "rate_limited"
         assert "rate limited by Brave Search (HTTP 429)" in caught.value.error.message
+
+    @patch(HTTP_OPEN)
+    def test_a_refused_key_carries_braves_words(self, mock_open, keys) -> None:
+        body = {
+            "type": "ErrorResponse",
+            "error": {"detail": "The token is invalid.", "status": 403},
+        }
+        mock_open.side_effect = http_error(403, "Forbidden", body=json.dumps(body).encode())
+
+        with pytest.raises(ToolFailure) as caught:
+            brave_search("x")
+
+        assert caught.value.error.type == "upstream"
+        assert not caught.value.error.retryable
+        assert caught.value.error.message.startswith(
+            "Brave rejected the key in BRAVE_SEARCH_API_KEY (HTTP 403): The token is invalid;"
+        )
+
+    @patch(HTTP_OPEN)
+    def test_another_refusal_is_in_braves_words(self, mock_open, keys) -> None:
+        body = {"type": "ErrorResponse", "error": {"detail": "Unable to validate request."}}
+        mock_open.side_effect = http_error(422, "Unprocessable", body=json.dumps(body).encode())
+
+        with pytest.raises(ToolFailure) as caught:
+            brave_search("x")
+
+        assert caught.value.error.type == "upstream"
+        assert caught.value.error.message == "HTTP error 422: Unable to validate request."
 
     @patch(HTTP_OPEN)
     def test_no_results_is_said(self, mock_open, keys) -> None:
@@ -149,7 +182,8 @@ class TestTavilySearch:
         with pytest.raises(ToolFailure) as caught:
             tavily_search("lisbon weather")
 
-        assert caught.value.error.type == "upstream"
+        assert caught.value.error.type == "validation_error"
+        assert not caught.value.error.retryable
         assert "TAVILY_API_KEY" in caught.value.error.message
         assert "https://app.tavily.com" in caught.value.error.message
         mock_open.assert_not_called()
@@ -161,8 +195,56 @@ class TestTavilySearch:
         with pytest.raises(ToolFailure) as caught:
             tavily_search("x")
 
+        # A usage limit stands until the plan changes: retrying does not help.
+        assert caught.value.error.type == "rate_limited"
+        assert not caught.value.error.retryable
+        assert caught.value.error.message == (
+            "the search exceeds your Tavily plan's usage limit (HTTP 432); "
+            "raise it at https://app.tavily.com."
+        )
+
+    @patch(HTTP_OPEN)
+    def test_the_pay_as_you_go_limit_is_explained_in_tavilys_words(self, mock_open, keys) -> None:
+        body = {"detail": {"error": "This request exceeds the pay-as-you-go limit."}}
+        mock_open.side_effect = http_error(433, "Limit", body=json.dumps(body).encode())
+
+        with pytest.raises(ToolFailure) as caught:
+            tavily_search("x")
+
+        assert caught.value.error.type == "rate_limited"
+        assert not caught.value.error.retryable
+        assert caught.value.error.message.startswith(
+            "the search exceeds your Tavily pay-as-you-go limit (HTTP 433): "
+            "This request exceeds the pay-as-you-go limit;"
+        )
+
+    @patch(HTTP_OPEN)
+    def test_an_invalid_key_is_not_retryable(self, mock_open, keys) -> None:
+        body = {"detail": {"error": "Unauthorized: missing or invalid API key."}}
+        mock_open.side_effect = http_error(401, "Unauthorized", body=json.dumps(body).encode())
+
+        with pytest.raises(ToolFailure) as caught:
+            tavily_search("x")
+
         assert caught.value.error.type == "upstream"
-        assert "your Tavily plan's limit" in caught.value.error.message
+        assert not caught.value.error.retryable
+        assert caught.value.error.message == (
+            "Tavily rejected the key in TAVILY_API_KEY (HTTP 401): Unauthorized: missing or "
+            "invalid API key; set a valid key in TAVILY_API_KEY (get one: https://app.tavily.com)."
+        )
+
+    @patch(HTTP_OPEN)
+    def test_another_refusal_is_in_tavilys_words(self, mock_open, keys) -> None:
+        body = {"detail": {"error": "Query is too long. Max query length is 400 characters."}}
+        mock_open.side_effect = http_error(400, "Bad Request", body=json.dumps(body).encode())
+
+        with pytest.raises(ToolFailure) as caught:
+            tavily_search("x")
+
+        assert caught.value.error.type == "upstream"
+        assert caught.value.error.message == (
+            "HTTP error 400: Query is too long. Max query length is 400 characters."
+        )
 
     @pytest.mark.parametrize(
         ("kwargs", "words"),

@@ -11,7 +11,7 @@ import pytest
 
 from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit import tools
-from ai_arch_toolkit.toolkit.tools._http import Api
+from ai_arch_toolkit.toolkit.tools._http import Api, Reply
 from ai_arch_toolkit.toolkit.tools._mediawiki import (
     mediawiki_error,
     mediawiki_page,
@@ -197,14 +197,42 @@ class TestApiErrors:
 
         assert mediawiki_sections("Stub") == "No MediaWiki sections found for Stub."
 
+    @pytest.mark.parametrize("fn", [mediawiki_search, mediawiki_page])
     @patch(HTTP_OPEN)
-    def test_a_status_error_keeps_its_own_message(self, mock_urlopen):
+    def test_a_404_is_an_endpoint_not_found(self, mock_urlopen, fn):
+        # A missing page is an error object in a 200; a 404 means api.php is not there.
         mock_urlopen.side_effect = http_error(404, "Not Found")
 
-        failure = _failure(mediawiki_page, "apple")
+        failure = _failure(fn, "apple")
 
         assert failure.error.type == "upstream"
-        assert str(failure) == "no matching records found."
+        assert str(failure) == (
+            "MediaWiki: endpoint not found (HTTP 404); the API may have changed"
+        )
+
+    @patch(HTTP_OPEN)
+    def test_a_404_at_a_url_the_caller_gave_is_the_callers_to_fix(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(404, "Not Found")
+
+        failure = _failure(mediawiki_page, "apple", api_url="https://en.wikibooks.org/x/api.php")
+
+        assert failure.error.type == "validation_error"
+        assert str(failure) == (
+            "nothing answers at https://en.wikibooks.org/x/api.php (HTTP 404); check the URL"
+        )
+
+    @pytest.mark.parametrize("code", ["ratelimited", "maxlag"])
+    @patch(HTTP_OPEN)
+    def test_a_rate_limit_the_api_reports_is_rate_limited(self, mock_urlopen, code):
+        mock_urlopen.return_value = respond(_api_error(code, "Slow down."))
+
+        failure = _failure(mediawiki_search, "apple")
+
+        assert failure.error.type == "rate_limited"
+        assert failure.error.retryable
+        assert str(failure) == (
+            f"the wiki asked to slow down ({code}: Slow down); try again later"
+        )
 
     @patch(HTTP_OPEN)
     def test_a_rate_limit_is_rate_limited(self, mock_urlopen):
@@ -218,7 +246,7 @@ class TestApiErrors:
     @pytest.mark.parametrize(
         ("data", "error"),
         [
-            (_MISSING_TITLE, "missingtitle: The page you specified doesn't exist."),
+            (_api_error("readonly", "Read-only mode."), "readonly: Read-only mode."),
             ({"error": {"code": "readonly"}}, "readonly"),
             ({"error": {"info": "Read-only mode."}}, "Read-only mode."),
             ({"error": {"code": None, "info": ""}}, "unknown error"),
@@ -229,7 +257,66 @@ class TestApiErrors:
         ],
     )
     def test_mediawiki_error_reads_the_error_object(self, data, error):
-        assert mediawiki_error(data) == error
+        assert mediawiki_error(Reply(status=200, headers={}, body=data)) == error
+
+    @pytest.mark.parametrize(
+        ("code", "kind", "retryable", "message"),
+        [
+            (
+                "missingtitle",
+                "not_found",
+                False,
+                "no such page (missingtitle: The page you specified doesn't exist); "
+                "find the exact title with the wiki's search",
+            ),
+            (
+                "invalidtitle",
+                "validation_error",
+                False,
+                "not a valid page title (invalidtitle: The page you specified doesn't exist); "
+                "give a title as the wiki's search returns it",
+            ),
+            (
+                "ratelimited",
+                "rate_limited",
+                True,
+                "the wiki asked to slow down (ratelimited: The page you specified doesn't "
+                "exist); try again later",
+            ),
+        ],
+    )
+    def test_mediawiki_error_types_the_codes_that_say_what_happened(
+        self, code, kind, retryable, message
+    ):
+        data = _api_error(code, "The page you specified doesn't exist.")
+
+        error = mediawiki_error(Reply(status=200, headers={}, body=data))
+
+        assert isinstance(error, ToolFailure)
+        assert (error.error.type, error.error.retryable) == (kind, retryable)
+        assert error.error.message == message
+
+    def test_mediawiki_error_reads_the_code_in_the_header_without_an_error_object(self):
+        headers = {"mediawiki-api-error": "ratelimited"}
+
+        error = mediawiki_error(Reply(status=503, headers=headers, body="<html>busy</html>"))
+        plain = mediawiki_error(Reply(status=503, headers={"x": "y"}, body="<html>busy</html>"))
+
+        assert isinstance(error, ToolFailure)
+        assert error.error.type == "rate_limited"
+        assert plain is None
+
+    @patch(HTTP_OPEN)
+    def test_an_error_status_with_the_error_object_reads_the_source(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(
+            500, "Internal Server Error", body=b'{"error": {"code": "internal_api_error"}}'
+        )
+
+        failure = _failure(mediawiki_search, "apple")
+
+        assert failure.error.type == "upstream"
+        assert failure.error.retryable
+        assert str(failure) == "HTTP error 500: internal_api_error"
 
 
 @pytest.mark.parametrize("fn", [mediawiki_search, mediawiki_page, mediawiki_sections])
@@ -278,7 +365,7 @@ def test_every_api_on_a_mediawiki_endpoint_reads_its_error_object():
         "_wikidata._API",
         "_wikipedia._API",
     }
-    assert {name for name, api in apis.items() if api.body_error is not mediawiki_error} == set()
+    assert {name for name, api in apis.items() if api.error_reader is not mediawiki_error} == set()
 
 
 @patch(HTTP_OPEN)
