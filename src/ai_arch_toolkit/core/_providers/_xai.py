@@ -27,10 +27,12 @@ from ai_arch_toolkit.core._middleware import Request
 from ai_arch_toolkit.core._model_id import family, lookup
 from ai_arch_toolkit.core._providers._base import (
     BaseProvider,
+    CallPieces,
     Done,
     LoopAwareClientCache,
     Options,
     Prepared,
+    image_bytes,
     image_media_type,
     image_prompt,
     mark_dispatched,
@@ -184,23 +186,46 @@ _PROFILES: dict[str, _Profile] = {
 # ---------------------------------------------------------------------------
 
 
-def _user_text(content: Any) -> str:
-    """A user turn's text: this adapter sends no images or documents to xAI."""
+# Grok models read images in a user turn, JPEG or PNG, up to 20 MiB, sent as a URL or as base64
+# (https://docs.x.ai/developers/model-capabilities/images/understanding).
+_IMAGE_TYPES = frozenset({"image/jpeg", "image/jpg", "image/png"})
+
+
+def _user_content(content: Any) -> list[str | chat_pb2.Content]:
+    """A user turn's text and images, in order, consecutive texts joined by a line; this adapter
+    sends no documents to xAI."""
     if not isinstance(content, list):
-        return content
+        return [content]
+    parts: list[str | chat_pb2.Content] = []
     texts: list[str] = []
     for part in content:
-        if isinstance(part, CachePart):
-            texts.append(part.content)
-        elif isinstance(part, ImagePart):
-            warnings.warn("xAI does not support image input; image part dropped", stacklevel=4)
+        if isinstance(part, ImagePart):
+            if texts:
+                parts.append("\n".join(texts))
+                texts = []
+            parts.append(xai_chat.image(_chat_image_url(part)))
         elif isinstance(part, DocumentPart):
             warnings.warn(
-                "xAI does not support document input; document part dropped", stacklevel=4
+                "this adapter sends no documents to xAI; document part dropped", stacklevel=4
             )
+        elif isinstance(part, CachePart):
+            texts.append(part.content)
         else:
             texts.append(part if isinstance(part, str) else str(part))
-    return "\n".join(texts)
+    if texts or not parts:
+        parts.append("\n".join(texts))
+    return parts
+
+
+def _chat_image_url(part: ImagePart) -> str:
+    """An image of a user turn; the bytes of one given inline must be a type Grok reads (a web
+    URL's are fetched by xAI, and not checked here)."""
+    url = _image_url(part)
+    if not url.startswith(("https://", "http://")):
+        media_type = image_media_type(image_bytes(part), part.media_type)
+        if media_type not in _IMAGE_TYPES:
+            raise RequestError(f"xAI reads JPEG and PNG images, not {media_type}")
+    return url
 
 
 def _assistant(msg: dict[str, Any]) -> chat_pb2.Message:
@@ -241,7 +266,7 @@ def _messages_to_sdk(messages: list[dict[str, Any]]) -> tuple[list[chat_pb2.Mess
         elif role == "assistant":
             sdk_messages.append(_assistant(msg))
         else:
-            sdk_messages.append(xai_chat.user(_user_text(msg.get("content", ""))))
+            sdk_messages.append(xai_chat.user(*_user_content(msg.get("content", ""))))
     return sdk_messages, "\n\n".join(system) if system else None
 
 
@@ -435,9 +460,21 @@ def _parse_sdk_response(
     )
 
 
-def _chunk_events(chunk: xai_chat.Chunk) -> list[StreamEvent]:
-    """The text and reasoning deltas of one streamed chunk."""
+def _chunk_events(chunk: xai_chat.Chunk, calls: CallPieces) -> list[StreamEvent]:
+    """The text and reasoning deltas of one streamed chunk, and its tool calls, each as one piece
+    with the whole input: xAI streams a function call "in whole in a single chunk"
+    (https://docs.x.ai/docs/guides/function-calling), which the SDK's accumulator appends whole.
+    """
     events: list[StreamEvent] = []
+    for call in chunk.tool_calls:
+        events.append(
+            calls.start(
+                len(calls),
+                call_id=call.id,
+                name=call.function.name,
+                input_json=call.function.arguments,
+            )
+        )
     if chunk.reasoning_content:
         events.append(
             StreamEvent(
@@ -523,6 +560,10 @@ class XAIProvider(LoopAwareClientCache, BaseProvider[_Call, _Final]):
                 format_type=chat_pb2.FormatType.FORMAT_TYPE_JSON_OBJECT
             )
         return Prepared(self._create(params), output_schema=options.output_schema)
+
+    def image_token_bound(self, image: ImageRequest) -> int | None:
+        """Grok Imagine bills per image, no image tokens (https://docs.x.ai/developers/pricing)."""
+        return 0 if family(self._model, _IMAGE_FAMILIES) else None
 
     def prepare_image(self, request: Request) -> _ImageCall:
         """An image generation with ``image.sample``; the input images edit."""
@@ -626,9 +667,10 @@ class XAIProvider(LoopAwareClientCache, BaseProvider[_Call, _Final]):
         mark_dispatched()
         # The SDK pairs every chunk with the response accumulated so far.
         final: xai_chat.Response | None = None
+        calls = CallPieces()
         async for accumulated, chunk in chat.stream():
             final = accumulated
-            for event in _chunk_events(chunk):
+            for event in _chunk_events(chunk, calls):
                 yield event
         if final is not None:
             yield Done(final)

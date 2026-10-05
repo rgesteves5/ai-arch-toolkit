@@ -1,7 +1,8 @@
 """20 — Rich Streaming Events.
 
 stream_events() yields structured StreamEvent objects instead of plain
-text chunks. Each event has a kind: "text", "thinking", or "tool_call".
+text chunks. Each event has a kind: "text", "thinking", "tool_call_delta" (a piece of a tool
+call while the model writes it), "tool_call" (the finished call), or "image".
 
 This is useful for building UIs that render different event types
 differently (e.g. collapsible thinking blocks, formatted tool calls).
@@ -15,11 +16,18 @@ print("=== Rich streaming events ===\n")
 
 stream = llm.stream_events_sync("Explain why the sky is blue in two sentences.")
 
+writing: set[int] = set()  # the tool calls whose pieces have started
 for event in stream:
     if event.kind == "text":
         print(event.text, end="", flush=True)
     elif event.kind == "thinking":
         print(f"\n[thinking] {event.thinking.text[:80]}...")
+    elif event.kind == "tool_call_delta":
+        piece = event.tool_call_delta
+        if piece.index not in writing:
+            writing.add(piece.index)
+            print(f"\n[writing {piece.name}] ", end="")
+        print(piece.input_json, end="", flush=True)
     elif event.kind == "tool_call":
         print(f"\n[tool_call] {event.tool_call.name}({event.tool_call.input})")
 

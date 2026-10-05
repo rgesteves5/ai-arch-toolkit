@@ -18,6 +18,7 @@ import warnings
 from typing import Any, cast
 
 from ai_arch_toolkit.core._exceptions import RequestError
+from ai_arch_toolkit.core._images import ImageRequest
 from ai_arch_toolkit.core._middleware import Request
 from ai_arch_toolkit.core._model_id import lookup
 from ai_arch_toolkit.core._providers import OWN_BASE_URLS
@@ -179,6 +180,11 @@ class MetaProvider(ResponsesProvider):
         if reasoning:
             params["reasoning"] = reasoning
         return Prepared(params, output_schema=options.output_schema)
+
+    def image_token_bound(self, image: ImageRequest) -> int | None:
+        """Muse Image bills a flat price per image, no tokens
+        (https://dev.meta.ai/docs/pricing-rate-limits)."""
+        return 0 if self._image_rules() is not None else None
 
     def prepare_image(self, request: Request) -> ImagesCall:
         """An image generation on Meta's Images API: an edit when it has input images."""

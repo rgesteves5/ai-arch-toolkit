@@ -71,8 +71,14 @@ converts.
 and `image_count` for a provider that bills per image. `ModelPricing` has the matching rates:
 `image_input`, `image_output`, their `batch_` variants, and `per_image`. An image rate left out
 falls back to the text rate. Image tokens count against a budget's token caps. A strict budget
-reserves, for each image asked, an allowance of image output tokens plus the model's per-image
-price. See [Pricing](pricing.md).
+reserves, for each image asked, the model's per-image price plus the image output tokens its
+provider publishes for the model, the quality and the size asked: OpenAI's table for the GPT
+Image models before gpt-image-2 and its calculator for gpt-image-2 and later, Gemini's count per
+image size. A quality or a size left to the model reserves the dearest it can pick (`auto` has
+no published count), and a model with no published count reserves 24,000 tokens, above the
+dearest published image (23,719, a 2880x2880 one at gpt-image-2's `high`). A model billed per
+image reserves no image tokens. Gemini's image models think on every call, billed at the text
+rate: their output token limit is reserved for it. See [Pricing](pricing.md).
 
 ## Images inside a turn
 

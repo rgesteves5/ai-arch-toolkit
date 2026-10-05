@@ -54,7 +54,10 @@ with require_sdk("openai"):
     from ai_arch_toolkit.core._providers._openai_images import (
         ImageModel,
         ImagesCall,
+        SizeTokens,
+        TileTokens,
         image_size,
+        image_token_bound,
         images_call,
     )
     from ai_arch_toolkit.core._providers._responses import (
@@ -195,14 +198,49 @@ _GENERATIONS = (
 # images). gpt-image-2 and later take any size within limits, the earlier ones three fixed sizes
 # (live, I01 check 5); "xhigh" and "max" only the 2.5 models. A dated snapshot takes its model's
 # rules, and an unlisted gpt-image- id the newest ones.
+#
+# Each model's image output tokens per image (G-40), from the same guide: the 2.5 models and
+# gpt-image-2 by its calculator's tiles per quality; the older ones by its table of "models prior
+# to gpt-image-2" (1024x1024, 1024x1536, 1536x1024). gpt-image-1-mini has no table of its own: its
+# counts are its per-image prices (https://developers.openai.com/api/docs/models/gpt-image-1-mini)
+# at its $8 per 1M image output tokens, rounded up within the prices' precision.
 _GPT_IMAGE_QUALITIES = frozenset({"low", "medium", "high", "auto"})
-_GPT_IMAGE_2_5 = ImageModel(size="free", qualities=_GPT_IMAGE_QUALITIES | {"xhigh", "max"})
+_SQUARE, _PORTRAIT, _LANDSCAPE = "1024x1024", "1024x1536", "1536x1024"
+
+
+def _sized(*counts: tuple[str, int, int, int]) -> SizeTokens:
+    return SizeTokens(
+        {
+            quality: {_SQUARE: sq, _PORTRAIT: tall, _LANDSCAPE: wide}
+            for quality, sq, tall, wide in counts
+        }
+    )
+
+
+_GPT_IMAGE_1_TOKENS = _sized(
+    ("low", 272, 408, 400), ("medium", 1056, 1584, 1568), ("high", 4160, 6240, 6208)
+)
+_GPT_IMAGE_1_MINI_TOKENS = _sized(
+    ("low", 687, 812, 812), ("medium", 1437, 1937, 1937), ("high", 4562, 6562, 6562)
+)
+_GPT_IMAGE_2_5 = ImageModel(
+    size="free",
+    qualities=_GPT_IMAGE_QUALITIES | {"xhigh", "max"},
+    tokens=TileTokens({"low": 16, "medium": 24, "high": 48, "xhigh": 64, "max": 96}),
+)
 _IMAGE_MODELS: dict[str, ImageModel] = {
     **dict.fromkeys(("gpt-image-2.5-sunburst", "gpt-image-2.5-flare"), _GPT_IMAGE_2_5),
-    "gpt-image-2": ImageModel(size="free", qualities=_GPT_IMAGE_QUALITIES),
+    "gpt-image-2": ImageModel(
+        size="free",
+        qualities=_GPT_IMAGE_QUALITIES,
+        tokens=TileTokens({"low": 16, "medium": 48, "high": 96}),
+    ),
     **dict.fromkeys(
-        ("gpt-image-1.5", "chatgpt-image-latest", "gpt-image-1", "gpt-image-1-mini"),
-        ImageModel(size="fixed", qualities=_GPT_IMAGE_QUALITIES),
+        ("gpt-image-1.5", "chatgpt-image-latest", "gpt-image-1"),
+        ImageModel(size="fixed", qualities=_GPT_IMAGE_QUALITIES, tokens=_GPT_IMAGE_1_TOKENS),
+    ),
+    "gpt-image-1-mini": ImageModel(
+        size="fixed", qualities=_GPT_IMAGE_QUALITIES, tokens=_GPT_IMAGE_1_MINI_TOKENS
     ),
 }
 _IMAGE_FAMILIES = {"gpt-image-": _GPT_IMAGE_2_5}
@@ -416,6 +454,10 @@ class OpenAIProvider(ResponsesProvider):
                 "gpt-image-2.5-flare"
             )
         return images_call(self._model, request, rules)
+
+    def image_token_bound(self, image: ImageRequest) -> int | None:
+        rules = self._image_rules()
+        return image_token_bound(image, rules) if rules is not None else None
 
     def _reasoning(self, options: Options, model: _Model) -> Reasoning:
         """The effort and the summary a request asks for.

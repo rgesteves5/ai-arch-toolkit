@@ -19,6 +19,7 @@ import pytest
 from xai_sdk import chat as xai_chat
 from xai_sdk.proto import chat_pb2, sample_pb2, usage_pb2
 
+from ai_arch_toolkit.core._content import document, image, user
 from ai_arch_toolkit.core._exceptions import (
     APIError,
     Delivery,
@@ -266,6 +267,50 @@ class TestParseSdkResponse:
 # ---------------------------------------------------------------------------
 # The request: built by the SDK's own chat.create, from each model's profile
 # ---------------------------------------------------------------------------
+
+
+class TestImagesInATurn:
+    """Grok reads JPEG and PNG images in a user turn (G-39); the adapter used to drop them."""
+
+    async def test_the_text_and_images_reach_the_wire_in_order(self):
+        message = user(
+            [
+                "Compare",
+                image(b"\x89PNG\r\n\x1a\n", "image/png"),
+                "with",
+                image("https://example.com/b.jpg"),
+            ]
+        )
+        wire = await _wire("grok-4.7", [message])
+
+        (turn,) = wire.messages
+        assert turn.role == ROLE.ROLE_USER
+        assert [part.WhichOneof("content") for part in turn.content] == [
+            "text",
+            "image_url",
+            "text",
+            "image_url",
+        ]
+        assert turn.content[1].image_url.image_url == "data:image/png;base64,iVBORw0KGgo="
+        assert turn.content[3].image_url.image_url == "https://example.com/b.jpg"
+
+    async def test_an_image_of_another_type_is_refused_before_sending(self):
+        refusal = await _refusal("grok-4.7", messages=[user(["Hi", image(b"RIFF", "image/webp")])])
+        assert "JPEG and PNG" in refusal and "image/webp" in refusal
+
+    async def test_the_bytes_decide_the_type_not_the_declared_one(self):
+        gif = b"GIF89a" + bytes(10)
+        refusal = await _refusal("grok-4.7", messages=[user(["Hi", image(gif)])])  # "image/png"
+        assert "image/gif" in refusal
+
+    async def test_a_web_url_is_left_to_xai(self):
+        wire = await _wire("grok-4.7", [user(["Hi", image("https://example.com/a.gif")])])
+        assert wire.messages[0].content[1].image_url.image_url == "https://example.com/a.gif"
+
+    async def test_a_document_is_dropped_with_a_warning(self):
+        with pytest.warns(UserWarning, match="sends no documents to xAI"):
+            wire = await _wire("grok-4.7", [user(["Read this", document(b"%PDF")])])
+        assert [part.text for part in wire.messages[0].content] == ["Read this"]
 
 
 class TestRequest:
@@ -538,7 +583,13 @@ class TestCalls:
             provider = await fakegrpc.provider("grok-4.6", port)
             events, final = await stream(provider, HI, tools=[WEATHER])
             await provider.close()
-        assert [e.kind for e in events] == ["thinking", "text", "text", "tool_call"]
+        assert [e.kind for e in events] == [
+            "thinking",
+            "text",
+            "text",
+            "tool_call_delta",
+            "tool_call",
+        ]
         assert _texts(events) == ["Checking ", "both."]
         assert final.text == "Checking both."
         assert [block.text for block in final.thinking] == ["Two lookups."]

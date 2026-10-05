@@ -7,6 +7,7 @@ from collections.abc import Iterator
 import pytest
 
 from ai_arch_toolkit.core import (
+    LLM,
     GeneratedImage,
     ImageRequest,
     RequestError,
@@ -14,7 +15,7 @@ from ai_arch_toolkit.core import (
     Usage,
     image,
 )
-from ai_arch_toolkit.core._attempts import _request_size
+from ai_arch_toolkit.core._attempts import _request_size, request_facts
 from ai_arch_toolkit.core._content import user
 from ai_arch_toolkit.core._exceptions import TransportError
 from ai_arch_toolkit.core._metering._scope import MeterScope, RunConfig
@@ -195,15 +196,37 @@ def _strict(max_cost: float) -> MeterScope:
 
 
 async def test_a_strict_budget_reserves_every_image_asked_for() -> None:
-    # Two images reserve 2 x 16,000 image output tokens at $30/M: $0.96, plus the prompt.
+    # A model with no published counts: two images reserve 2 x 24,000 image output tokens at
+    # $30/M, $1.44, plus the prompt.
     llm, provider = fake_llm(drawn(2, image_output_tokens=392), model=IMAGE_MODEL, images=True)
-    with _strict(0.90), pytest.raises(BudgetExceeded):
+    with _strict(1.40), pytest.raises(BudgetExceeded):
         await llm.generate_image("a lighthouse", n=2)
     assert provider.calls == 0
-    with _strict(1.00) as scope:
+    with _strict(1.50) as scope:
         out = await llm.generate_image("a lighthouse", n=2)
     assert len(out.images) == 2
     assert scope.snapshot().cost.to_float() == pytest.approx(392 * 30.0 / 1_000_000)
+
+
+class _Counted(FakeProvider):
+    """An adapter that publishes 196 image output tokens per image (gpt-image-2.5 at low)."""
+
+    def image_token_bound(self, image: ImageRequest) -> int | None:
+        return 196 if image.quality == "low" else None
+
+
+async def test_a_strict_budget_reserves_what_the_adapter_publishes_per_image() -> None:
+    # G-40: 2 x 196 tokens at $30/M is $0.01176 (plus the prompt), not 2 x 24,000.
+    llm, _ = fake_llm(model=IMAGE_MODEL)
+    provider = _Counted(drawn(2, image_output_tokens=392), model=IMAGE_MODEL, images=True)
+    llm._provider = provider
+    with _strict(0.02) as scope:
+        out = await llm.generate_image("a lighthouse", n=2, quality="low")
+    assert len(out.images) == 2 and provider.calls == 1
+    assert scope.snapshot().cost.to_float() == pytest.approx(392 * 30.0 / 1_000_000)
+    with _strict(0.02), pytest.raises(BudgetExceeded):
+        await llm.generate_image("a lighthouse", n=2, quality="high")  # unpublished: the allowance
+    assert provider.calls == 1
 
 
 async def test_a_strict_budget_reserves_the_per_image_price() -> None:
@@ -270,3 +293,30 @@ def test_the_fake_provider_refuses_images_unless_asked() -> None:
     with pytest.raises(RequestError, match="does not generate images"):
         FakeProvider().prepare_image(request)
     assert FakeProvider(images=True).prepare_image(request) is request
+
+
+@pytest.mark.parametrize(
+    ("model", "options", "image_tokens", "output_tokens"),
+    [
+        ("gpt-image-2.5-flare", {"quality": "low", "aspect_ratio": "1:1"}, 196, None),
+        ("gemini-3.1-flash-image", {"resolution": "4K"}, 2520, 32_768),
+        ("muse-image-1.0", {}, 0, None),
+    ],
+)
+def test_the_facts_carry_the_real_adapters_counts(
+    model: str, options: dict[str, object], image_tokens: int, output_tokens: int | None
+) -> None:
+    llm = LLM(model, api_key="test")
+    request = Request(
+        messages=[user("a lighthouse")],
+        system=None,
+        tools=None,
+        model=model,
+        image=ImageRequest(n=2, **options),  # type: ignore[arg-type]
+    )
+    with MeterScope() as scope:
+        facts = request_facts(llm, request, "complete", scope)
+
+    assert facts.declared_images == 2
+    assert facts.declared_image_tokens == image_tokens
+    assert facts.declared_max_output_tokens == output_tokens

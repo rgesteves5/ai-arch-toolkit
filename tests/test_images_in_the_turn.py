@@ -21,6 +21,7 @@ from ai_arch_toolkit.core import (
 from ai_arch_toolkit.core._attempts import _partial
 from ai_arch_toolkit.core._metering._scope import MeterScope
 from ai_arch_toolkit.core._pricing import pricing
+from ai_arch_toolkit.core._providers._base import CallPieces
 from ai_arch_toolkit.core._providers._gemini import _chunk_events
 from ai_arch_toolkit.core._providers._meta import MetaProvider, _input_items
 from ai_arch_toolkit.core._providers._openai import OpenAIProvider
@@ -242,7 +243,7 @@ def test_a_gemini_chunk_sends_thought_images_as_previews() -> None:
             )
         ]
     )
-    events = _chunk_events(chunk)
+    events = _chunk_events(chunk, CallPieces())
     assert [(e.kind, e.partial, e.image.data if e.image else None) for e in events] == [
         ("image", True, WEBP),
         ("image", False, PNG),

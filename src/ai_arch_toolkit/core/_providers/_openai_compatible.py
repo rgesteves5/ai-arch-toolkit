@@ -39,6 +39,7 @@ from ai_arch_toolkit.core._middleware import Request
 from ai_arch_toolkit.core._pricing import _estimate_response_cost
 from ai_arch_toolkit.core._providers._base import (
     BaseProvider,
+    CallPieces,
     Done,
     LoopAwareClientCache,
     Options,
@@ -319,14 +320,29 @@ def _parse_sdk_response(
     )
 
 
-def _chunk_events(chunk: ChatCompletionChunk) -> Iterator[StreamEvent]:
-    """The text and reasoning deltas of one chunk (reasoning comes from compatible servers)."""
+def _chunk_events(chunk: ChatCompletionChunk, calls: CallPieces) -> Iterator[StreamEvent]:
+    """The text and reasoning deltas of one chunk (reasoning comes from compatible servers), and
+    the pieces of its tool calls.
+
+    A tool call's first delta brings its id and name, and every delta of it its ``index`` and the
+    next piece of its arguments (the ``openai`` SDK's ``ChoiceDeltaToolCall``, which its own
+    accumulator joins by ``index``).
+    """
     for choice in chunk.choices[:1]:
         delta = choice.delta
         if fragment := _reasoning_text(delta):
             yield StreamEvent(kind="thinking", thinking=ThinkingBlock(text=fragment), partial=True)
         if delta.content:
             yield StreamEvent(kind="text", text=delta.content)
+        for call in delta.tool_calls or []:
+            arguments = (call.function.arguments if call.function else None) or ""
+            name = (call.function.name if call.function else None) or ""
+            if call.index not in calls:
+                yield calls.start(
+                    call.index, call_id=call.id or "", name=name, input_json=arguments
+                )
+            elif (piece := calls.piece(call.index, arguments)) is not None:
+                yield piece
 
 
 # ---------------------------------------------------------------------------
@@ -496,11 +512,12 @@ class OpenAICompatibleProvider(
         }
         stream = await self._client.chat.completions.create(**streaming)
         received = False
+        calls = CallPieces()
         async with stream:
             async for chunk in stream:
                 received = True
                 snapshot.handle_chunk(chunk)
-                for event in _chunk_events(chunk):
+                for event in _chunk_events(chunk, calls):
                     yield event
         if received:
             yield Done(snapshot.current_completion_snapshot)

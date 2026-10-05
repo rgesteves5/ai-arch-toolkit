@@ -24,6 +24,7 @@ from ai_arch_toolkit.core._providers._base import (
     DEFAULT_THINKING_BUDGET,
     THINKING_EFFORT_BUDGETS,
     BaseProvider,
+    CallPieces,
     Done,
     LoopAwareClientCache,
     Options,
@@ -462,8 +463,19 @@ def _parse_sdk_response(
     )
 
 
-def _stream_event(event: Any) -> StreamEvent | None:
-    """A text delta, or a finished thinking block, from one SDK stream event."""
+def _stream_event(event: Any, calls: CallPieces) -> StreamEvent | None:
+    """A text delta, a finished thinking block, or a piece of a tool call, from one SDK stream
+    event.
+
+    A ``tool_use`` block starts with its id and name, and its input arrives as
+    ``input_json_delta`` pieces of JSON text
+    (https://platform.claude.com/docs/en/build-with-claude/streaming).
+    """
+    if event.type == "content_block_start" and event.content_block.type == "tool_use":
+        block = event.content_block
+        return calls.start(event.index, call_id=block.id, name=block.name)
+    if event.type == "content_block_delta" and event.delta.type == "input_json_delta":
+        return calls.piece(event.index, event.delta.partial_json)
     if event.type == "content_block_delta" and event.delta.type == "text_delta":
         return StreamEvent(kind="text", text=event.delta.text)
     if (
@@ -699,10 +711,11 @@ class AnthropicProvider(LoopAwareClientCache, BaseProvider[Prepared[Params], Mes
         self, prepared: Prepared[Params]
     ) -> AsyncIterator[StreamEvent | Done[Message]]:
         # The SDK accumulates the final message, cumulative usage deltas included.
+        calls = CallPieces()
         async with self._messages().stream(**prepared.params) as stream:
             mark_dispatched()  # a response has begun: the request was sent
             async for event in stream:
-                if (decoded := _stream_event(event)) is not None:
+                if (decoded := _stream_event(event, calls)) is not None:
                     yield decoded
             yield Done(await stream.get_final_message())
 

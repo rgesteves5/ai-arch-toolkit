@@ -73,6 +73,7 @@ async for event in llm.stream_events(messages, tools=tools):
     match event.kind:
         case "text": print(event.text, end="")
         case "thinking": print(f"[thinking] {event.thinking.text}")
+        case "tool_call_delta": print(event.tool_call_delta.input_json, end="")  # a call being written
         case "tool_call": print(f"[tool] {event.tool_call.name}")
         case "image": save(event.image)  # a drawn image; event.partial for a preview
 

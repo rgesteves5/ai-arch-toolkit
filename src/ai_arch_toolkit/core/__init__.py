@@ -90,6 +90,7 @@ from ai_arch_toolkit.core._response import (
     SyncRichStreamResponse,
     ThinkingBlock,
     ToolCall,
+    ToolCallDelta,
     Usage,
 )
 from ai_arch_toolkit.core._retry import RetryConfig
@@ -266,6 +267,7 @@ __all__ = [
     "SyncRichStreamResponse",
     "ThinkingBlock",
     "ToolCall",
+    "ToolCallDelta",
     "ToolDefinition",
     "ToolError",
     "ToolGate",

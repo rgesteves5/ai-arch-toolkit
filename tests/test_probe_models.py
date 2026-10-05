@@ -1,22 +1,30 @@
 from __future__ import annotations
 
 import json
+import struct
+import zlib
 from pathlib import Path
 
+import pytest
 from scripts.probe_models import (
     ModelProbeConfig,
     ProbeAssertionError,
     ProbeResult,
+    _probe_vision,
     _sanitize_error_message,
     classify_exception,
     load_model_configs,
+    red_square_png,
     render_markdown_report,
     result_to_json_row,
     select_models,
     select_scenarios,
 )
 
+from ai_arch_toolkit.core._content import ImagePart
 from ai_arch_toolkit.core._exceptions import APIError, RateLimitError
+from ai_arch_toolkit.core._response import Response
+from tests.fake_provider import fake_llm
 
 
 def test_load_model_configs(tmp_path: Path) -> None:
@@ -174,3 +182,34 @@ def test_sanitize_error_message_redacts_meta_api_keys() -> None:
     assert "111111111111111" not in sanitized
     assert "fakeKEY" not in sanitized
     assert "invalid key <redacted>" in sanitized
+
+
+def test_the_vision_image_is_a_valid_red_png() -> None:
+    data = red_square_png(4)
+
+    assert data.startswith(b"\x89PNG\r\n\x1a\n")
+    width, height, depth, colour = struct.unpack(">IIBB", data[16:26])
+    assert (width, height, depth, colour) == (4, 4, 8, 2)
+    start = data.index(b"IDAT") + 4
+    length = struct.unpack(">I", data[start - 8 : start - 4])[0]
+    rows = zlib.decompress(data[start : start + length])
+    assert rows == (b"\x00" + b"\xff\x00\x00" * 4) * 4
+
+
+async def test_the_vision_probe_sends_the_image_and_reads_the_colour() -> None:
+    llm, provider = fake_llm(Response(text="Red."))
+
+    data = await _probe_vision(llm)
+
+    (message,) = provider.last.messages
+    text, picture = message["content"]
+    assert "colour" in text and isinstance(picture, ImagePart)
+    assert picture.source == red_square_png() and picture.media_type == "image/png"
+    assert data["text_preview"] == "Red."
+
+
+async def test_the_vision_probe_fails_when_the_model_does_not_see_red() -> None:
+    llm, _ = fake_llm(Response(text="I cannot see images."))
+
+    with pytest.raises(ProbeAssertionError, match="Expected red"):
+        await _probe_vision(llm)

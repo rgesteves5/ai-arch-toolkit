@@ -27,7 +27,7 @@ are the recommended entry point, `Agent` (see [Toolkit — Agents](#toolkit-agen
 | `Response` | `_response.py` | LLM response with `text`, `tool_calls`, `usage`, `cost` |
 | `Attempt`, `Usage`, `ToolCall`, `ThinkingBlock`, `Citation` | `_response.py` | Response components and attempt tracking |
 | `OutputSchema` | `_response.py` | Structured output constraint |
-| `StreamEvent`, `RichStreamResponse` | `_response.py` | Streaming types |
+| `StreamEvent`, `ToolCallDelta`, `RichStreamResponse` | `_response.py` | Streaming types (`ToolCallDelta` is a piece of a tool call while the model writes it) |
 | `Content`, `ContentPart` | `_content.py` | `str | list[ContentPart]` message content |
 | `user()`, `assistant()`, `system()`, `tool_result()` | `_content.py` | Message constructors |
 | `ImagePart`, `DocumentPart`, `CachePart` | `_content.py` | Multimodal content parts |

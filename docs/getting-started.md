@@ -111,6 +111,13 @@ async def main():
 asyncio.run(main())
 ```
 
+A tool call streams too: while the model writes it, `tool_call_delta` events carry a
+`ToolCallDelta` (the call's `index` among the answer's calls, its `id`, its `name`, and
+`input_json`, the next piece of its input as JSON text; a call's pieces, joined, are its input).
+Anthropic, OpenAI, Meta and OpenAI-compatible servers send the pieces as the model writes them;
+Gemini and xAI send each call whole, as one piece. The finished call follows as a `tool_call`
+event, with its parsed `input`.
+
 ## Multi-Provider Support
 
 Switch providers by changing the model name:

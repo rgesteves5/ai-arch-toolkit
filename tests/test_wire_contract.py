@@ -307,7 +307,7 @@ class TestGemini:
 
 
 class TestXai:
-    @pytest.mark.filterwarnings("ignore:xAI does not support")  # its images and documents
+    @pytest.mark.filterwarnings("ignore:this adapter sends no documents to xAI")
     async def test_a_full_request_conforms(self) -> None:
         async with XAIProvider("grok-4.3", "k") as provider:
             params = _full(provider, thinking_effort="low")

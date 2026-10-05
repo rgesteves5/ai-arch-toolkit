@@ -64,7 +64,7 @@ llm = LLM("muse-spark-1.3")            # Meta
 
 ### Response Types
 
-- **`_response.py`**: `Response`, `Usage`, `ToolCall`, `ThinkingBlock`, `Citation`, `OutputSchema`, `StreamEvent`, `StreamResponse`, `RichStreamResponse` (and sync variants).
+- **`_response.py`**: `Response`, `Usage`, `ToolCall`, `ToolCallDelta`, `ThinkingBlock`, `Citation`, `OutputSchema`, `StreamEvent`, `StreamResponse`, `RichStreamResponse` (and sync variants).
 
 ### Tools
 

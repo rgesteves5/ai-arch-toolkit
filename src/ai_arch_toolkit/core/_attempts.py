@@ -148,12 +148,24 @@ def request_facts(
         mode=mode,
         model=owner._model,
         provider=owner._provider_name,
-        declared_max_output_tokens=request.kwargs.get("max_tokens"),
+        declared_max_output_tokens=_max_output_tokens(owner, request),
         declared_images=request.image.n if request.image is not None else 0,
+        declared_image_tokens=(
+            owner._provider.image_token_bound(request.image) if request.image is not None else None
+        ),
         content_size_hint=chars,
         non_text_parts=non_text,
         has_server_tools=bool(request.tools) and any(t.get("_server_tool") for t in request.tools),
     )
+
+
+def _max_output_tokens(owner: LLM, request: Request) -> int | None:
+    """The output tokens a request declares, or, for an image generation that declares none, the
+    text and thinking its model can bill beside the images."""
+    declared = request.kwargs.get("max_tokens")
+    if declared is None and request.image is not None:
+        return owner._provider.image_text_token_bound(request.image)
+    return declared
 
 
 def _require_price(scope: MeterScope, facts: OperationRequest) -> None:

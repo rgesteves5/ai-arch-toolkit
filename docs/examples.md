@@ -46,7 +46,7 @@ All examples live in the `examples/` directory. Each is a self-contained script.
 |---|------|---------------------|
 | 13 | `13_structured_output_agent.py` | `react_flow` with tools returning typed JSON via `OutputSchema` |
 | 14 | `14_middleware_agent.py` | LLM middleware firing on every call inside `react_flow` loop (cost logging) |
-| 20 | `20_rich_streaming_events.py` | `stream_events()` with structured `StreamEvent` objects (text, thinking, tool_call) |
+| 20 | `20_rich_streaming_events.py` | `stream_events()` with structured `StreamEvent` objects (text, thinking, the pieces of a tool call, tool_call) |
 | 21 | `21_stream_fallback.py` | Automatic provider fallback during streaming when primary fails |
 | 22 | `22_retry_config.py` | Automatic retries with exponential backoff for transient API failures |
 | 23 | `23_prompt_caching.py` | Anthropic prompt caching with `cache()` for reduced latency and cost |

@@ -28,7 +28,11 @@ flows, manifests) needs these changes; each one is detailed below.
 - **Custom meters.** `MeterOperation.fail(...)` requires a delivery disposition, and
   `unknown_cost_count` counts only unbounded costs.
 - **Streams.** A finished stream carries the same `Response` as `complete()`, and
-  `stream_events()` emits the tool-call events after the text, in the response's order.
+  `stream_events()` emits the tool-call events after the text, in the response's order. Before
+  them come the calls' pieces, as `tool_call_delta` events (G-37): code that matches every
+  `StreamEvent.kind` meets a new one, and code that counts events sees more. A piece counts as
+  delivered, as text does: in `stream_events()` and in an iterated flow, an answer of tool calls
+  only that fails after its first piece is no longer retried or passed to the fallback.
 - **Tools.**
   - `csv_read` is in `toolkit.tools.dangerous` and needs approval.
   - Every tool call has a 120-second deadline and a 200,000-character output cap: set
@@ -65,6 +69,28 @@ flows, manifests) needs these changes; each one is detailed below.
   - `select` or `serialize_as` on an inline template.
 
 ### Added
+- **A strict budget reserves an image by its model, quality and size** (G-40, D61): each image
+  adapter gives the most image output tokens one image of the request costs, from its provider's
+  published counts (`BaseProvider.image_token_bound`, carried to the meter as
+  `OperationRequest.declared_image_tokens`). OpenAI's table covers gpt-image-1, 1.5 and
+  `chatgpt-image-latest`, gpt-image-1-mini's per-image prices give its counts, and OpenAI's
+  calculator covers gpt-image-2 and the 2.5 models (`low` 1024x1024 on Flare is 196 tokens, where
+  16,000 were held); Gemini's counts go by image size, and its image models' thinking, billed at
+  the text rate, is held up to their output limit (`image_text_token_bound`). A model billed per
+  image (Grok Imagine, Muse Image) holds no image tokens. A quality or size left to the model
+  holds the dearest it can pick.
+- **Which models read images** (G-39): `docs/model-compatibility.md` lists, for every model of the
+  probe inventory, whether it reads an image in a request, from its own page at its provider
+  (read 2026-10-05), and the probe runner has a `vision` scenario (a small red square), listed
+  for those models and not run yet.
+- **Tool calls stream as the model writes them** (G-37, D60): `stream_events()` (and an
+  iterated flow's `llm_event`s) emit `StreamEvent(kind="tool_call_delta")` events, each with a
+  `ToolCallDelta`: the call's `index` among the answer's calls, its `id` and `name` (from the
+  first piece, sent as soon as the name is known), and `input_json`, the next piece of its input
+  as JSON text. Anthropic, the Responses API (OpenAI, Meta) and OpenAI-compatible servers send
+  the pieces as the model writes them; Gemini and xAI send a call whole, so it arrives as one
+  piece as soon as its chunk does. The finished `tool_call` events still follow the stream, and a
+  stream left mid-call has no half-written call in its `Response`.
 - **Bounded parsing of the manifests and resources the toolkit loads** (G-34, D59): agent
   manifests and the JSON, TOML and YAML resource codecs (prompt manifests and knowledge among
   their users) go through one module, `toolkit/_safe_data.py`. A YAML document's aliases may add
@@ -302,6 +328,11 @@ flows, manifests) needs these changes; each one is detailed below.
   [docs/agents.md](docs/agents.md#file-backed-agent-manifests).
 
 ### Changed
+- **An image model without published counts holds 24,000 image output tokens per image** in a
+  strict budget and as a failure's worst case (D61), up from 16,000, which did not cover the
+  dearest published image (23,719 tokens, gpt-image-2 at `high` and 2880x2880). So does a
+  gpt-image-2 or 2.5 call that leaves both the quality and the size to the model (23,719 tokens):
+  pass a quality to hold less.
 - **No manifest or resource nests deeper than 100 levels** (D59) of mappings and lists, in
   JSON, TOML or YAML, nor does an agent override with its dotted path: a deeper one raises
   `AgentManifestError`, `AgentOverrideError` or `ResourceDecodeError` (and `PromptLoadError` for
@@ -652,6 +683,15 @@ flows, manifests) needs these changes; each one is detailed below.
   - `select` or `serialize_as` on an inline template (they were ignored).
 
 ### Fixed
+- A tool call whose arguments are empty text (an OpenAI-compatible server's call to a tool that
+  takes none) has an empty input, not `{"_raw": ""}`.
+- The xAI adapter sends a user turn's images to Grok (G-39), JPEG or PNG, where it dropped them
+  with a warning that xAI took no image input; an inline image of another type (by its bytes)
+  raises `RequestError` before sending, and a web URL is left to xAI. Every Grok chat model in the inventory reads images
+  (https://docs.x.ai/developers/model-capabilities/images/understanding).
+- `MemoryMiddleware` finds memories for a request that brings an image (G-38): the query is the
+  text of the message's parts (plain strings, `cache()` parts, `{"text": ...}` dicts), where a
+  `user([text, image(...)])` gave an empty query, and the request went without memories.
 - `GraphStore(NetworkXBackend())` type-checks: the core `NetworkXBackend` is generic in its node
   type, and the memory one holds memory `Node`s, so it satisfies `MemoryBackend` (pyright refused
   it).

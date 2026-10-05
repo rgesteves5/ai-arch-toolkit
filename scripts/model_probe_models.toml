@@ -5,7 +5,11 @@
 #   uv run python scripts/probe_models.py --suite smoke
 #
 # Scenarios:
-#   plain, tools_loop, structured, json_mode, stream, thinking
+#   plain, tools_loop, structured, json_mode, stream, thinking, vision
+#
+# vision sends a small red square and asks its colour; it is listed for the models whose own
+# page documents image input (docs/model-compatibility.md, "Image input").
+#   uv run python scripts/probe_models.py --suite full --scenario vision
 
 # ---------------------------------------------------------------------------
 # OpenAI
@@ -15,80 +19,80 @@
 [[models]]
 id = "gpt-6-astra"
 provider = "openai"
-scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking", "vision"]
 kwargs = { max_tokens = 4096, thinking_effort = "low" }
 
 [[models]]
 id = "gpt-6.1-sol"
 provider = "openai"
-scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking", "vision"]
 kwargs = { max_tokens = 4096, thinking_effort = "low" }
 
 # GPT-6 Sol and Luna reason at "medium" unless sent "none".
 [[models]]
 id = "gpt-6-sol"
 provider = "openai"
-scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking", "vision"]
 kwargs = { max_tokens = 4096, thinking_effort = "low" }
 
 [[models]]
 id = "gpt-6-luna"
 provider = "openai"
-scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking", "vision"]
 kwargs = { max_tokens = 4096, thinking_effort = "low" }
 
 [[models]]
 id = "gpt-5.5"
 provider = "openai"
-scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking", "vision"]
 kwargs = { temperature = 1.0, max_tokens = 64, thinking_effort = "low" }
 
 [[models]]
 id = "gpt-5.4"
 provider = "openai"
-scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking", "vision"]
 kwargs = { temperature = 1.0, max_tokens = 64, thinking_effort = "low" }
 
 [[models]]
 id = "gpt-5.4-mini"
 provider = "openai"
-scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking", "vision"]
 kwargs = { temperature = 1.0, max_tokens = 64, thinking_effort = "low" }
 
 [[models]]
 id = "gpt-5.4-nano"
 provider = "openai"
-scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking", "vision"]
 kwargs = { temperature = 1.0, max_tokens = 64, thinking_effort = "low" }
 
 [[models]]
 id = "gpt-4.1"
 provider = "openai"
-scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream"]
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "vision"]
 kwargs = { temperature = 0.0, max_tokens = 64 }
 
 [[models]]
 id = "gpt-5-mini"
 provider = "openai"
-scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking", "vision"]
 kwargs = { temperature = 1.0, max_tokens = 1024, thinking_effort = "low" }
 
 [[models]]
 id = "gpt-5-nano"
 provider = "openai"
-scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking", "vision"]
 kwargs = { temperature = 1.0, max_tokens = 1024, thinking_effort = "low" }
 
 [[models]]
 id = "gpt-5"
 provider = "openai"
-scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking", "vision"]
 kwargs = { temperature = 1.0, max_tokens = 1024, thinking_effort = "low" }
 
 [[models]]
 id = "o3"
 provider = "openai"
-scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking", "vision"]
 kwargs = { temperature = 1.0, max_tokens = 1024, thinking_effort = "low" }
 
 # ---------------------------------------------------------------------------
@@ -100,25 +104,25 @@ kwargs = { temperature = 1.0, max_tokens = 1024, thinking_effort = "low" }
 [[models]]
 id = "grok-4.7"
 provider = "xai"
-scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream"]
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "vision"]
 kwargs = { max_tokens = 2048, thinking_effort = "low" }
 
 [[models]]
 id = "grok-4.20-reasoning"
 provider = "xai"
-scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream"]
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "vision"]
 kwargs = { temperature = 0.0, max_tokens = 64 }
 
 [[models]]
 id = "grok-4.20-non-reasoning"
 provider = "xai"
-scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream"]
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "vision"]
 kwargs = { temperature = 0.0, max_tokens = 64 }
 
 [[models]]
 id = "grok-4.20-multi-agent"
 provider = "xai"
-scenarios = ["plain", "stream"]
+scenarios = ["plain", "stream", "vision"]
 kwargs = { temperature = 0.0, agent_count = 4 }
 
 [[models]]
@@ -140,7 +144,7 @@ kwargs = { temperature = 0.0, max_tokens = 64 }
 [[models]]
 id = "gemini-3.1-pro-preview"
 provider = "gemini"
-scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking", "vision"]
 allow_transient = true
 kwargs = { temperature = 0.0, max_tokens = 512, thinking_effort = "medium" }
 
@@ -161,28 +165,28 @@ kwargs = { temperature = 0.0, max_tokens = 64 }
 [[models]]
 id = "gemini-3-flash-preview"
 provider = "gemini"
-scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking", "vision"]
 allow_transient = true
 kwargs = { temperature = 0.0, max_tokens = 512, thinking_effort = "medium" }
 
 [[models]]
 id = "gemini-2.5-pro"
 provider = "gemini"
-scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking", "vision"]
 allow_transient = true
 kwargs = { temperature = 0.0, max_tokens = 1024, thinking_budget = 256 }
 
 [[models]]
 id = "gemini-2.5-flash"
 provider = "gemini"
-scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking", "vision"]
 allow_transient = true
 kwargs = { temperature = 0.0, max_tokens = 1024, thinking_budget = 256 }
 
 [[models]]
 id = "gemini-2.5-flash-lite"
 provider = "gemini"
-scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking", "vision"]
 allow_transient = true
 kwargs = { temperature = 0.0, max_tokens = 1024, thinking_budget = 512 }
 
@@ -195,7 +199,7 @@ kwargs = { temperature = 0.0, max_tokens = 1024, thinking_budget = 512 }
 [[models]]
 id = "claude-opus-5-5"
 provider = "anthropic"
-scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking", "vision"]
 allow_transient = true
 tool_choice = "auto"
 kwargs = { max_tokens = 4096, thinking_effort = "low" }
@@ -203,42 +207,42 @@ kwargs = { max_tokens = 4096, thinking_effort = "low" }
 [[models]]
 id = "claude-opus-4-7"
 provider = "anthropic"
-scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream"]
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "vision"]
 allow_transient = true
 kwargs = { temperature = 0.0, max_tokens = 64 }
 
 [[models]]
 id = "claude-sonnet-4-6"
 provider = "anthropic"
-scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream"]
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "vision"]
 allow_transient = true
 kwargs = { temperature = 0.0, max_tokens = 64 }
 
 [[models]]
 id = "claude-haiku-4-5"
 provider = "anthropic"
-scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream"]
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "vision"]
 allow_transient = true
 kwargs = { temperature = 0.0, max_tokens = 64 }
 
 [[models]]
 id = "claude-opus-4-6"
 provider = "anthropic"
-scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream"]
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "vision"]
 allow_transient = true
 kwargs = { temperature = 0.0, max_tokens = 64 }
 
 [[models]]
 id = "claude-sonnet-4-5"
 provider = "anthropic"
-scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream"]
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "vision"]
 allow_transient = true
 kwargs = { temperature = 0.0, max_tokens = 64 }
 
 [[models]]
 id = "claude-opus-4-5"
 provider = "anthropic"
-scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream"]
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "vision"]
 allow_transient = true
 kwargs = { temperature = 0.0, max_tokens = 64 }
 
@@ -259,7 +263,7 @@ kwargs = { temperature = 0.0, max_tokens = 64 }
 [[models]]
 id = "muse-spark-1.3"
 provider = "meta"
-scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking", "vision"]
 allow_transient = true
 tool_choice = "auto"
 kwargs = { temperature = 1.0, max_tokens = 4096, thinking_effort = "low" }

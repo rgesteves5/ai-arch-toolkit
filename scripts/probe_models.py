@@ -11,19 +11,32 @@ import argparse
 import asyncio
 import json
 import re
+import struct
 import sys
 import time
 import tomllib
+import zlib
 from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from ai_arch_toolkit import LLM, OutputSchema, RetryConfig, ToolGroup, run_tools, tool, user
+from ai_arch_toolkit import (
+    LLM,
+    OutputSchema,
+    RetryConfig,
+    ToolGroup,
+    image,
+    run_tools,
+    tool,
+    user,
+)
 from ai_arch_toolkit.core._exceptions import RateLimitError
 
-type ScenarioName = Literal["plain", "tools_loop", "structured", "json_mode", "stream", "thinking"]
+type ScenarioName = Literal[
+    "plain", "tools_loop", "structured", "json_mode", "stream", "thinking", "vision"
+]
 type Classification = Literal[
     "ok",
     "auth_error",
@@ -45,6 +58,7 @@ SCENARIOS: tuple[ScenarioName, ...] = (
     "json_mode",
     "stream",
     "thinking",
+    "vision",
 )
 SUITES: dict[str, tuple[ScenarioName, ...]] = {
     "smoke": ("plain", "tools_loop", "structured"),
@@ -314,6 +328,8 @@ async def _run_probe_success_path(
             return await _probe_stream(llm)
         if scenario == "thinking":
             return await _probe_thinking(llm, require_thinking=model.require_thinking)
+        if scenario == "vision":
+            return await _probe_vision(llm)
     raise ProbeAssertionError(f"Unknown scenario: {scenario}", "framework_bug")
 
 
@@ -406,6 +422,32 @@ async def _probe_thinking(llm: LLM, *, require_thinking: bool) -> dict[str, Any]
         response,
         text_preview=response.text,
         thinking_blocks=len(response.thinking),
+    )
+
+
+async def _probe_vision(llm: LLM) -> dict[str, Any]:
+    """The model reads a small image: a red square, whose colour only the image gives."""
+    question = "What colour is this image? Reply with one lowercase word."
+    response = await llm.complete([user([question, image(red_square_png(), "image/png")])])
+    if "red" not in _normalize_text(response.text).lower():
+        raise ProbeAssertionError(f"Expected red, got {response.text!r}")
+    return _response_data(response, text_preview=response.text)
+
+
+def red_square_png(side: int = 64) -> bytes:
+    """A solid red PNG, ``side`` pixels square, built with the standard library."""
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        body = kind + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
+
+    header = struct.pack(">IIBBBBB", side, side, 8, 2, 0, 0, 0)  # 8-bit RGB
+    rows = b"".join(b"\x00" + b"\xff\x00\x00" * side for _ in range(side))
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", header)
+        + chunk(b"IDAT", zlib.compress(rows))
+        + chunk(b"IEND", b"")
     )
 
 

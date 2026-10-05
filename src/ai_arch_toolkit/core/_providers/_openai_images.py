@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal, cast
 
@@ -49,6 +50,44 @@ _EDGES = {"512": 512, "1K": 1024, "2K": 2048, "4K": 4096}
 type ImagesParams = ImageGenerateParamsNonStreaming | ImageEditParamsNonStreaming
 
 
+@dataclass(frozen=True, slots=True)
+class SizeTokens:
+    """The image output tokens of one image, by quality and size: the published table of a model
+    with fixed sizes."""
+
+    by_quality: Mapping[str, Mapping[str, int]]
+
+    def count(self, quality: str, size: str | None) -> int:
+        """One image's tokens at ``quality`` and ``size`` (``None``: the model's choice, the
+        largest)."""
+        sizes = self.by_quality[quality]
+        return sizes[size] if size is not None else max(sizes.values())
+
+
+@dataclass(frozen=True, slots=True)
+class TileTokens:
+    """The image output tokens of one image on gpt-image-2 and later, by OpenAI's calculator
+    (https://developers.openai.com/api/docs/guides/image-generation, "GPT Image 2.5 and GPT Image
+    2 output tokens"): the image is a grid of ``tiles[quality]`` tiles on its long edge and as
+    many on its short edge as its ratio gives, and each tile costs more as the image has more
+    pixels."""
+
+    tiles: Mapping[str, int]
+
+    def count(self, quality: str, size: str | None) -> int:
+        """One image's tokens at ``quality`` and ``size`` (``None``: the model's choice, whose
+        most is the largest square)."""
+        long_tiles = self.tiles[quality]
+        if size is None:
+            short_tiles, pixels = long_tiles, _MAX_PIXELS
+        else:
+            width, height = (int(edge) for edge in size.split("x"))
+            # The calculator's own arithmetic: tiles over the ratio, a half to the even tile.
+            short_tiles = round(long_tiles / (max(width, height) / min(width, height)))
+            pixels = width * height
+        return -(-long_tiles * short_tiles * (2_000_000 + pixels) // 4_000_000)
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ImageModel:
     """What one image model takes on the Images API.
@@ -60,12 +99,30 @@ class ImageModel:
         qualities: The quality levels it takes; empty when it takes none.
         max_images: The most images one request returns (``n``).
         max_inputs: The most input images an edit takes.
+        tokens: The image output tokens one image costs, by quality and size, where the provider
+            publishes them; ``None`` for a model billed per image.
     """
 
     size: SizeRule
     qualities: frozenset[str] = frozenset()
     max_images: int = 10
     max_inputs: int = 16
+    tokens: SizeTokens | TileTokens | None = None
+
+
+def image_token_bound(options: ImageRequest, rules: ImageModel) -> int | None:
+    """The most image output tokens one image of ``options`` costs (G-40): at its quality and the
+    size it is sent at, or the dearest where it leaves the choice to the model (no quality, or
+    ``"auto"``, whose count OpenAI does not publish). ``None`` without published counts."""
+    if rules.tokens is None:
+        return None
+    size = image_size(options, rules.size)
+    priced = (
+        rules.tokens.tiles if isinstance(rules.tokens, TileTokens) else rules.tokens.by_quality
+    )
+    quality = options.quality
+    qualities = [quality] if quality is not None and quality in priced else list(priced)
+    return max(rules.tokens.count(level, size) for level in qualities)
 
 
 @dataclass(frozen=True, slots=True)

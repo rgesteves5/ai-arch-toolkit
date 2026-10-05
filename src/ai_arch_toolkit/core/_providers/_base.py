@@ -14,7 +14,7 @@ import re
 import uuid
 import warnings
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Callable, Iterator, Mapping
+from collections.abc import AsyncIterator, Callable, Hashable, Iterator, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass, field, fields
 from typing import Any, cast
@@ -28,9 +28,17 @@ from ai_arch_toolkit.core._exceptions import (
     ResponseError,
     TransportError,
 )
+from ai_arch_toolkit.core._images import ImageRequest
 from ai_arch_toolkit.core._middleware import Request
 from ai_arch_toolkit.core._pricing import _estimate_response_cost
-from ai_arch_toolkit.core._response import OutputSchema, Response, StreamEvent, ToolCall, Usage
+from ai_arch_toolkit.core._response import (
+    OutputSchema,
+    Response,
+    StreamEvent,
+    ToolCall,
+    ToolCallDelta,
+    Usage,
+)
 from ai_arch_toolkit.core._stream_lifecycle import close_async
 
 logger = logging.getLogger(__name__)
@@ -248,6 +256,17 @@ class BaseProvider[P, F](ABC):
             "such as gpt-image-2.5-flare, gemini-3.1-flash-image or grok-imagine-image-2.0"
         )
 
+    def image_token_bound(self, image: ImageRequest) -> int | None:
+        """The most image output tokens one image of ``image`` costs, by the provider's published
+        counts for the model, its quality and its size (G-40): ``0`` for a model billed per image,
+        ``None`` where no count is published, and the meter holds its allowance."""
+        return None
+
+    def image_text_token_bound(self, image: ImageRequest) -> int | None:
+        """The most text and thinking output tokens an image generation can bill, for a model
+        that thinks or writes beside its images (G-40); ``None`` for one that bills none."""
+        return None
+
     @abstractmethod
     async def send(self, prepared: P) -> F:
         """Send one request and return the SDK's response."""
@@ -391,6 +410,57 @@ def named_calls(calls: tuple[ToolCall, ...]) -> tuple[ToolCall, ...]:
         taken.add(kept.id)
         named.append(kept)
     return tuple(named)
+
+
+class CallPieces:
+    """The pieces of the tool calls one stream writes, as ``tool_call_delta`` events (G-37, D60).
+
+    A call gets its place among the answer's calls when it starts, and every later piece of it
+    carries that place, its id and its name. An adapter keys a call by what its provider's events
+    name it with (a content block's index, an output index) and starts only the calls its
+    :meth:`BaseProvider.assemble` makes into tool calls, in the same order.
+    """
+
+    __slots__ = ("_calls", "_written")
+
+    def __init__(self) -> None:
+        self._calls: dict[Hashable, ToolCallDelta] = {}  # each call's identity, no input
+        self._written: dict[Hashable, str] = {}  # the input its pieces have written
+
+    def __contains__(self, key: Hashable) -> bool:
+        return key in self._calls
+
+    def __len__(self) -> int:
+        return len(self._calls)
+
+    def start(
+        self, key: Hashable, *, call_id: str, name: str, input_json: str = ""
+    ) -> StreamEvent:
+        """The first piece of a call: its place, id and name, with any input already written."""
+        call = ToolCallDelta(index=len(self._calls), id=call_id, name=name)
+        self._calls[key] = call
+        self._written[key] = input_json
+        return _piece_event(dataclasses.replace(call, input_json=input_json))
+
+    def piece(self, key: Hashable, input_json: str) -> StreamEvent | None:
+        """The next piece of a started call's input; none for an empty piece or an unknown key."""
+        call = self._calls.get(key)
+        if call is None or not input_json:
+            return None
+        self._written[key] += input_json
+        return _piece_event(dataclasses.replace(call, input_json=input_json))
+
+    def finish(self, key: Hashable, whole: str) -> StreamEvent | None:
+        """What a call's pieces have not yet written of its whole input, which the provider sends
+        at the end; none when they wrote it all (or ``whole`` is not what they began)."""
+        written = self._written.get(key)
+        if written is None or not whole.startswith(written):
+            return None
+        return self.piece(key, whole[len(written) :])
+
+
+def _piece_event(piece: ToolCallDelta) -> StreamEvent:
+    return StreamEvent(kind="tool_call_delta", tool_call_delta=piece, partial=True)
 
 
 # ---------------------------------------------------------------------------
@@ -585,9 +655,12 @@ def image_media_type(data: bytes, declared: str | None = None) -> str:
 
 
 def parse_tool_args(raw_args: str | dict[str, Any]) -> dict[str, Any]:
-    """Parse tool call arguments (may be JSON string or dict)."""
+    """Parse tool call arguments (may be JSON string or dict); empty text is a call without
+    arguments, as an OpenAI-compatible server may send for a tool that takes none."""
     if isinstance(raw_args, dict):
         return raw_args
+    if isinstance(raw_args, str) and not raw_args.strip():
+        return {}
     try:
         return json.loads(raw_args)
     except (json.JSONDecodeError, TypeError):

@@ -521,7 +521,7 @@ with flow.iter_sync(state) as sync_execution:
 | `flow_start`, `flow_end` | The run starts; the run has finished (`flow_end.trace` is the complete trace). |
 | `step_start`, `step_end` | A step starts; a step finishes (`step_end.result` and `step_end.error` carry the outcome, `step_end.step_trace` the step's trace entry). Every `step_start` has its `step_end`, also for a step the run cut short. |
 | `step_skipped` | A `when` condition was false, or the step's DAG dependencies kept it from running (`step_trace` is its trace entry, with `skip_reason` and `blocked_by`). |
-| `llm_event` | An LLM call the step made streamed one event: `llm_event` is the `StreamEvent` (text, thinking, tool call, image), `llm_call` the call's id, shared by its events. |
+| `llm_event` | An LLM call the step made streamed one event: `llm_event` is the `StreamEvent` (text, thinking, a piece of a tool call, a tool call, image), `llm_call` the call's id, shared by its events. |
 | `retry`, `timeout`, `fallback` | The step engine takes that decision — while the step is still running. A `timeout` without a `step_name` means the run's own `timeout` elapsed. |
 | `policy_decision` | Any other decision: `low_confidence`, `escalate`, `halt`, `cost_exceeded`, `budget_exceeded`. |
 

@@ -21,6 +21,25 @@ class ToolCall:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class ToolCallDelta:
+    """A piece of a tool call the model is still writing (a ``tool_call_delta`` stream event).
+
+    ``index`` is the call's place among the answer's tool calls, the same as in
+    ``Response.tool_calls`` and in the order of the stream's finished ``tool_call`` events, so the
+    pieces of one call share it. ``id`` and ``name`` are the provider's, on every piece; ``id`` is
+    empty when the provider gives none, and the finished call then carries one of its own.
+    ``input_json`` is the next piece of the call's input as JSON text: a call's pieces, joined in
+    order, are its whole input, and an empty join an empty input (the first piece may be empty,
+    sent as soon as the name is known).
+    """
+
+    index: int
+    id: str
+    name: str
+    input_json: str = ""
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class Usage:
     """Disjoint token usage counters.
 
@@ -392,7 +411,8 @@ class SyncStreamResponse:
 
 @dataclass(frozen=True, slots=True)
 class StreamEvent:
-    """Structured streaming event (text chunk, thinking block, tool call, or image).
+    """Structured streaming event (text chunk, thinking block, tool call, a piece of one, or
+    image).
 
     ``partial`` marks an incremental fragment rather than a finished unit.
     Providers that stream reasoning token-by-token (OpenAI-compatible servers)
@@ -404,14 +424,20 @@ class StreamEvent:
     An ``image`` event carries a generated image: ``partial=True`` for a preview the provider
     sends while it draws (OpenAI's partial images, Gemini's interim thought images), ``False``
     for a finished one. The finalized ``Response.images`` holds the finished images only.
+
+    A ``tool_call_delta`` event (always ``partial``) carries a :class:`ToolCallDelta`: a piece of
+    a call while the model writes it, where the provider streams calls (Anthropic, the Responses
+    API, Chat Completions), or the whole call as soon as it arrives (Gemini, xAI). Each call still
+    ends in one ``tool_call`` event, after the stream, with its parsed input.
     """
 
-    kind: Literal["text", "thinking", "tool_call", "image"]
+    kind: Literal["text", "thinking", "tool_call", "tool_call_delta", "image"]
     text: str = ""
     thinking: ThinkingBlock | None = None
     tool_call: ToolCall | None = None
     partial: bool = False
     image: GeneratedImage | None = None
+    tool_call_delta: ToolCallDelta | None = None
 
 
 class RichStreamResponse:

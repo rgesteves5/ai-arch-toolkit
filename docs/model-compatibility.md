@@ -1,7 +1,8 @@
 # Model Compatibility
 
 This page lists the 35 model IDs tracked by the live probe inventory
-(`scripts/model_probe_models.toml`) and what framework features were verified against them.
+(`scripts/model_probe_models.toml`), what framework features were verified against them, and
+which of them read images, by their providers' pages.
 
 The baseline below comes from the manual live probe runner:
 
@@ -63,6 +64,7 @@ rules (`pytest -m live_api -k <provider>`).
 | JSON mode | `json_mode=True` returns parseable JSON text. |
 | Stream | `LLM.stream()` yields chunks and final response text. |
 | Thinking | `thinking=True` is accepted and returns a coherent final response. Thinking blocks are observational unless a model config requires them. |
+| Vision | A small image in a user message is read: the colour of a red square. Not run yet; see [Image input](#image-input). |
 
 ## OpenAI
 
@@ -359,6 +361,30 @@ streamed answer, structured output with JSON mode, `count_tokens`).
 
 `muse-spark-1.2`, `muse-spark-1.1`, and the contributor tiers share the adapter and have
 pricing entries of their own but were not probed.
+
+## Image Input
+
+Whether a model reads an image sent in a request (`user(["...", image(...)])`), from each
+model's own page at its provider, read on 2026-10-05. These come from the documentation, not
+from a probe: the inventory lists the `vision` scenario for these models
+(`scripts/probe_models.py --suite full --scenario vision`), which has not run yet.
+
+| Provider | Models | Image input | Source |
+|---|---|---|---|
+| OpenAI | every inventory model: `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-sol`, `gpt-6-luna`, `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-4.1`, `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `o3`; also `gpt-5.6`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, outside the inventory | yes ("Input modalities: text, image") | `https://developers.openai.com/api/docs/models/<id>` |
+| xAI | `grok-4.7`, `grok-4.20-reasoning`, `grok-4.20-non-reasoning`, `grok-4.20-multi-agent`; also `grok-4.6` and `grok-4.5`, outside the inventory | yes ("text, image → text"; JPEG and PNG, up to 20 MiB) | `https://docs.x.ai/developers/models/<id>` (the `grok-4.20` ids are aliases of the `-0309` models) |
+| xAI | `grok-4-1-fast-reasoning`, `grok-4-1-fast-non-reasoning` | retired on 2026-05-15; xAI routes them to `grok-4.3`, which reads images | [retirement notice](https://docs.x.ai/developers/migration/may-15-retirement) |
+| Gemini | `gemini-3.1-pro-preview`, `gemini-3-flash-preview`, `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite` | yes (images among the inputs, with video, audio and PDF) | `https://ai.google.dev/gemini-api/docs/models/<id>` |
+| Gemini | `gemini-3.1-flash-lite-preview` | shut down on 2026-05-25 (`gemini-3.1-flash-lite` replaces it) | its model page |
+| Gemini | `gemini-3.1-flash-live-preview` | through the Live API only, which no adapter drives | its model page |
+| Anthropic | `claude-opus-5-5`, `claude-opus-4-7`, `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-haiku-4-5`, `claude-sonnet-4-5` (retires 2026-11-30), `claude-opus-4-5`; also `claude-fable-5-1` and `claude-sonnet-5-5`, outside the inventory | yes ("Text and images → text") | `https://platform.claude.com/docs/en/models/<name>/overview` |
+| Anthropic | `claude-sonnet-4-0` | retired on 2026-06-15: requests fail | [model deprecations](https://platform.claude.com/docs/en/about-claude/model-deprecations) |
+| Meta | `muse-spark-1.3` | yes ("Text, image, video, audio*, PDF"; up to 50 images a request) | [models](https://dev.meta.ai/docs/models), [image understanding](https://dev.meta.ai/docs/image-understanding) |
+
+Every adapter sends a user turn's images to its provider. The xAI adapter takes JPEG and PNG, the
+types Grok reads: an image given inline (bytes, base64, a `data:` URL) of any other type, by its
+bytes, raises `RequestError` before sending, and a web URL is left to xAI. It sends no
+documents. A model whose page lists no image input gets the provider's error for an image.
 
 ## Image Models
 

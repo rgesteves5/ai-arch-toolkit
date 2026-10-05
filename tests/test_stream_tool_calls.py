@@ -92,8 +92,13 @@ class TestAnthropicStreamToolCalls:
         assert [(c.name, c.input) for c in response.tool_calls] == [
             ("get_weather", {"city": "NYC"})
         ]
-        # Tool-call events follow the text.
-        assert [event.kind for event in events] == ["text", "tool_call"]
+        # The call's pieces follow the text as they arrive; the finished call ends the stream.
+        assert [event.kind for event in events] == [
+            "text",
+            "tool_call_delta",
+            "tool_call_delta",
+            "tool_call",
+        ]
 
     async def test_multiple_tool_calls(self):
         provider = _anthropic(

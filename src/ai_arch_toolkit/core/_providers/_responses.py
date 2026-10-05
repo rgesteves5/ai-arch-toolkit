@@ -34,6 +34,7 @@ from ai_arch_toolkit.core._exceptions import (
 from ai_arch_toolkit.core._model_id import family, snapshot_base
 from ai_arch_toolkit.core._providers._base import (
     BaseProvider,
+    CallPieces,
     Done,
     LoopAwareClientCache,
     Options,
@@ -661,9 +662,30 @@ class _TextJoiner:
 # ---------------------------------------------------------------------------
 
 
-def _streamed(event: ResponseStreamEvent, joiner: _TextJoiner) -> list[StreamEvent]:
+def _streamed(
+    event: ResponseStreamEvent, joiner: _TextJoiner, calls: CallPieces
+) -> list[StreamEvent]:
     """The toolkit's events for one Responses stream event: text, reasoning summaries, drawn
-    images (the previews ``partial``); none for the others."""
+    images (the previews ``partial``), the pieces of function calls; none for the others.
+
+    A ``function_call`` item is added with its call id and name, and its arguments arrive as
+    ``response.function_call_arguments.delta`` pieces of the same output index
+    (https://developers.openai.com/api/docs/guides/function-calling#streaming); the ``done``
+    event's whole arguments give whatever the deltas left out, so the pieces join to them on a
+    server that sends no deltas.
+    """
+    if event.type == "response.output_item.added" and event.item.type == "function_call":
+        item = event.item  # its arguments are empty: OpenAI adds the item before writing them
+        start = calls.start(
+            event.output_index, call_id=item.call_id, name=item.name, input_json=item.arguments
+        )
+        return [start]
+    if event.type == "response.function_call_arguments.delta":
+        piece = calls.piece(event.output_index, event.delta)
+        return [piece] if piece is not None else []
+    if event.type == "response.function_call_arguments.done":
+        rest = calls.finish(event.output_index, event.arguments)
+        return [rest] if rest is not None else []
     if event.type == "response.output_text.delta" or event.type == "response.refusal.delta":
         return joiner.events(event.item_id, event.delta)
     if event.type == "response.reasoning_summary_text.delta":
@@ -745,11 +767,12 @@ class ResponsesProvider(LoopAwareClientCache, BaseProvider[Call, Final]):
 
     async def open_stream(self, prepared: Call) -> AsyncIterator[StreamEvent | Done[Final]]:
         """Text streams with a blank line between message items; reasoning summaries stream as
-        ``partial`` thinking. The terminal event carries the whole response — the source of the
-        reasoning replayed on the next turn."""
+        ``partial`` thinking, function calls as their pieces. The terminal event carries the
+        whole response — the source of the reasoning replayed on the next turn."""
         if isinstance(prepared, ImagesCall):
             raise RequestError("an image generation is not streamed: use generate_image()")
         joiner = _TextJoiner()
+        calls = CallPieces()
         final: SDKResponse | None = None
         streaming: ResponseCreateParamsStreaming = {**prepared.params, "stream": True}
         stream = await self._responses().create(**streaming)
@@ -762,7 +785,7 @@ class ResponsesProvider(LoopAwareClientCache, BaseProvider[Call, Final]):
                 elif event.type == "error":
                     raise _reported(self._profile, event.code, event.message or "stream error")
                 else:
-                    for streamed in _streamed(event, joiner):
+                    for streamed in _streamed(event, joiner, calls):
                         yield streamed
         if final is not None:
             yield Done(final)

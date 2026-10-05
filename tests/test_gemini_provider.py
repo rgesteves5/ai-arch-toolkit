@@ -622,7 +622,7 @@ class TestCalls:
             _chunk(_call("get_weather", "fc-1", city="NYC"), finish="STOP"),
         )
         events, response = await stream(provider, HI)
-        assert [e.kind for e in events] == ["thinking", "tool_call"]
+        assert [e.kind for e in events] == ["thinking", "tool_call_delta", "tool_call"]
         assert [(c.name, c.input) for c in response.tool_calls] == [
             ("get_weather", {"city": "NYC"})
         ]

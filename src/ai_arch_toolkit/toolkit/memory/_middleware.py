@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
+from ai_arch_toolkit.core._content import CachePart
 from ai_arch_toolkit.core._middleware import Request
 from ai_arch_toolkit.core._response import Response
 from ai_arch_toolkit.toolkit.memory._types import SearchResult
@@ -88,13 +89,30 @@ class MemoryMiddleware:
 
 
 def _extract_query(request: Request) -> str:
-    """Extract the latest user message text as a search query."""
+    """The text of the latest user message, the search query.
+
+    A message of parts (``user([text, image(...)])``) gives the text of its text parts — plain
+    strings, ``cache()`` parts and ``{"text": ...}`` dicts — and leaves out its images and
+    documents (G-38).
+    """
     for msg in reversed(request.messages):
         if msg.get("role") == "user":
             content = msg.get("content", "")
             if isinstance(content, str):
                 return content
-            if isinstance(content, list):
-                parts = [p.get("text", "") for p in content if isinstance(p, dict)]
-                return " ".join(parts)
+            if isinstance(content, list | tuple):
+                texts = (_part_text(part) for part in content)
+                return " ".join(text for text in texts if text)
+            return ""
     return ""
+
+
+def _part_text(part: object) -> str:
+    if isinstance(part, str):
+        return part
+    if isinstance(part, CachePart):
+        return part.content
+    if isinstance(part, dict):
+        text = part.get("text")
+        return text if isinstance(text, str) else ""
+    return ""  # an image, a document

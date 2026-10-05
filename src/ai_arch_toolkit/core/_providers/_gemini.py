@@ -6,12 +6,13 @@ import base64
 import json
 import logging
 import warnings
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from typing import Any, TypedDict, cast
 
 from ai_arch_toolkit.core._content import CachePart, DocumentPart, ImagePart
 from ai_arch_toolkit.core._exceptions import APIError, ProviderError, RateLimitError, RequestError
+from ai_arch_toolkit.core._images import ImageRequest
 from ai_arch_toolkit.core._middleware import Request
 from ai_arch_toolkit.core._model_id import lookup
 from ai_arch_toolkit.core._providers import OWN_BASE_URLS
@@ -19,6 +20,7 @@ from ai_arch_toolkit.core._providers._base import (
     DEFAULT_THINKING_BUDGET,
     THINKING_EFFORT_BUDGETS,
     BaseProvider,
+    CallPieces,
     Done,
     LoopAwareClientCache,
     Options,
@@ -140,20 +142,32 @@ _PROFILES: dict[str, _Profile] = {
 # image sizes per model; 512 and the extreme ratios on 3.1 Flash only, 1K only on Flash Lite. They
 # take no function calling (https://ai.google.dev/gemini-api/docs/models). The Imagen models and
 # gemini-2.5-flash-image are shut down (https://ai.google.dev/gemini-api/docs/deprecations). A
-# closed list: an image model's id has no family prefix of its own.
+# closed list: an image model's id has no family prefix of its own. Each size's image output
+# tokens, whatever the ratio, are the pricing page's (https://ai.google.dev/gemini-api/docs/pricing)
+# and the image generation guide's (G-40).
 @dataclass(frozen=True, slots=True, kw_only=True)
 class _ImageProfile:
     ratios: frozenset[str]
-    sizes: frozenset[str]
+    sizes: Mapping[str, int]  # each image size it takes, and the tokens of one image at it
+    # The model's output token limit, which bounds its thinking: the Gemini 3 image models think,
+    # and "thinking cannot be disabled in the API" (the image generation guide); each model's page
+    # gives its limit.
+    output_limit: int
 
 
 _RATIOS = frozenset({"1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"})
 _IMAGE_MODELS: dict[str, _ImageProfile] = {
     "gemini-3.1-flash-image": _ImageProfile(
-        ratios=_RATIOS | {"1:4", "4:1", "1:8", "8:1"}, sizes=frozenset({"512", "1K", "2K", "4K"})
+        ratios=_RATIOS | {"1:4", "4:1", "1:8", "8:1"},
+        sizes={"512": 747, "1K": 1120, "2K": 1680, "4K": 2520},
+        output_limit=32_768,
     ),
-    "gemini-3.1-flash-lite-image": _ImageProfile(ratios=_RATIOS, sizes=frozenset({"1K"})),
-    "gemini-3-pro-image": _ImageProfile(ratios=_RATIOS, sizes=frozenset({"1K", "2K", "4K"})),
+    "gemini-3.1-flash-lite-image": _ImageProfile(
+        ratios=_RATIOS, sizes={"1K": 1120}, output_limit=4_096
+    ),
+    "gemini-3-pro-image": _ImageProfile(
+        ratios=_RATIOS, sizes={"1K": 1120, "2K": 1120, "4K": 2000}, output_limit=32_768
+    ),
 }
 
 
@@ -401,14 +415,27 @@ def _parse_sdk_response(
     )
 
 
-def _chunk_events(chunk: types.GenerateContentResponse) -> list[StreamEvent]:
-    """The text and thought fragments of one streamed chunk, and its images: an image model's
-    interim thought images as previews (``partial``), its final image whole."""
+def _chunk_events(chunk: types.GenerateContentResponse, calls: CallPieces) -> list[StreamEvent]:
+    """The text and thought fragments of one streamed chunk, its images (an image model's
+    interim thought images as previews, ``partial``, its final image whole), and its function
+    calls, each as one piece with the whole input.
+
+    The Gemini API sends a function call whole, in one part: streaming its arguments
+    (``stream_function_call_arguments``) is Vertex AI's alone, "not supported in Gemini API"
+    (``google-genai``'s ``FunctionCallingConfig``).
+    """
     candidates = chunk.candidates or []
     content = candidates[0].content if candidates else None
     events: list[StreamEvent] = []
     for part in (content.parts if content else None) or []:
-        if part.inline_data is not None and part.inline_data.data:
+        if part.function_call:
+            call = part.function_call
+            whole = json.dumps(dict(call.args or {}))
+            key = len(calls)  # each part is a call of its own
+            events.append(
+                calls.start(key, call_id=call.id or "", name=call.name or "", input_json=whole)
+            )
+        elif part.inline_data is not None and part.inline_data.data:
             data = part.inline_data.data
             image = GeneratedImage(
                 data=data, media_type=image_media_type(data, part.inline_data.mime_type)
@@ -539,6 +566,21 @@ class GeminiProvider(
         found = lookup(self._model, _IMAGE_MODELS)
         return found.value if found is not None else None
 
+    def image_token_bound(self, image: ImageRequest) -> int | None:
+        """One image's tokens at the size asked, or at the largest the model takes."""
+        profile = self._image_profile()
+        if profile is None:
+            return None
+        resolution = image.resolution
+        if resolution is not None and resolution in profile.sizes:
+            return profile.sizes[resolution]
+        return max(profile.sizes.values())
+
+    def image_text_token_bound(self, image: ImageRequest) -> int | None:
+        """The model's output token limit: its thinking, billed at the text rate, stays within."""
+        profile = self._image_profile()
+        return profile.output_limit if profile is not None else None
+
     def prepare(self, request: Request) -> Prepared[_Generate]:
         if request.tools and self._image_profile() is not None:
             raise RequestError(f"{self._model} draws images and takes no tools")
@@ -668,9 +710,10 @@ class GeminiProvider(
         self, prepared: Prepared[_Generate]
     ) -> AsyncIterator[StreamEvent | Done[types.GenerateContentResponse]]:
         chunks: list[types.GenerateContentResponse] = []
+        calls = CallPieces()
         async for chunk in await self._models().generate_content_stream(**prepared.params):
             chunks.append(chunk)
-            for event in _chunk_events(chunk):
+            for event in _chunk_events(chunk, calls):
                 yield event
         if chunks:
             yield Done(_joined(chunks))

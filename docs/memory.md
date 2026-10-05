@@ -256,7 +256,7 @@ llm = LLM("claude-sonnet-5", middleware=[mw])
 # system prompt, and each turn is recorded back into the store.
 ```
 
-The recall query is the text of the latest `user` message: string content, or dict parts that carry a `text` key. A list of core `Content` parts (plain strings, images, documents) yields no query, so nothing is injected. A turn with a query or a reply text is recorded as `{"query": ..., "response_summary": ...}`, the summary being the reply's first 200 characters.
+The recall query is the text of the latest `user` message: string content, or the text parts of a list — plain strings, `cache()` parts and dicts that carry a `text` key — joined by a space. Images and documents are left out, so `user(["What is my cat called?", image(...)])` searches for its question; a message with no text part yields no query, and nothing is injected. A turn with a query or a reply text is recorded as `{"query": ..., "response_summary": ...}`, the summary being the reply's first 200 characters.
 
 > Injection happens in the **async** hooks (`abefore` / `aafter`), which run for every call — `complete()`, `stream()`, `stream_events()`, and their sync wrappers; the sync hooks are no-ops.
 
