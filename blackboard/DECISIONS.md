@@ -875,3 +875,49 @@ Só acrescentar. Uma decisão revista ganha uma nova entrada que diz qual substi
     custo real coubesse;
   - a app lê `shared.snapshot()` (o gasto com a semente) e guarda no ledger o que cada execução
     gastou.
+
+## D58 · O gasto de cada passo, os spans públicos e as dependências fracas de um DAG (frente A, G-32, G-33)
+
+- **Contexto:**
+  - o `execute_step` só abria um span do meter com `Policy.max_cost`, e o `StepTrace` não dizia o
+    que o meter mediu no passo. A app media cada passo, cada corrida aninhada e cada delegação
+    com o `open_span` e o `current_meter` internos;
+  - um passo de um DAG corria só se todas as dependências tivessem corrido bem. Os caminhos que um
+    `when` separava nunca se juntavam, e um passo opcional não se exprimia;
+  - a razão de um salto vinha só em texto, e a app refazia a regra para dizer que dependência o
+    saltou.
+- **Decisão** (do coordenador, a 2026-10-05, pela forma que o briefing do ai-network pede):
+  - sob um meter, cada passo corre num span seu. O `StepTrace.metered` (um `MeterSnapshot`) é o
+    que lá se mediu, também para um passo que a corrida cortou, até ao corte;
+  - `open_span`, `current_meter`, `current_span_id` e `bind_meter` passam a ser públicos, em
+    `ai_arch_toolkit.core`;
+  - o id de um span é o caminho desde a raiz (`run/3/7`). Uma operação que começa depois de o seu
+    span fechar (a thread de uma tool que um passo deixou a correr) conta no antepassado aberto
+    mais próximo, em vez de falhar. Um id que não pode ser do store é recusado; um id bem formado
+    de outro store não se distingue, como já acontecia com os `span-N`;
+  - uma corrida aninhada tem também um span seu, e a sua entrada nos `children` do passo traz o
+    gasto dela;
+  - o `FlowStep` ganha `after_any` (corre se pelo menos uma correu bem) e `after_optional` (espera
+    por ela e nunca a exige). O passo espera sempre que todas acabem, e cada dependência
+    nomeia-se uma só vez;
+  - o `StepTrace.blocked_by` diz que dependências saltaram um passo e como acabaram (`"failed"`
+    ou `"skipped"`). O texto continua no `skip_reason`.
+- **Alternativas rejeitadas:**
+  - só exportar os spans, sem o gasto no trace: cada app voltava a abrir um span à volta de cada
+    passo;
+  - um `after_any` que corre logo que a primeira acaba bem: o passo leria o estado antes de os
+    outros ramos se fundirem, e as ondas do DAG não o permitem;
+  - um passo opcional como propriedade do passo (`optional=True`): a dependência opcional é mais
+    geral (um dependente pode exigi-lo, outro não);
+  - guardar os spans fechados para as operações tardias: a memória crescia com as iterações, o
+    que o `close_span` existe para impedir.
+- **Consequência:**
+  - todo o passo de um flow medido abre um span, e cada corrida aninhada também. Por passo, o
+    lock do store toma-se três vezes, e fechar o span percorre os spans e as operações vivas.
+    Medido: 4000 passos em leque, todos abertos ao mesmo tempo, em 0,4 s;
+  - um span que não fecha por ter uma operação viva (um stream por drenar, a thread de uma tool
+    que passou do prazo) fica até ao fim da corrida. Antes era só nos passos com `max_cost`; o
+    que fica é proporcional às operações vivas, que o store já guarda;
+  - um `FlowStep` com uma dependência repetida passa a levantar `ValueError`;
+  - as razões dos saltos nomeiam todas as dependências que não correram bem, e o "all
+    dependencies skipped" desaparece.

@@ -751,3 +751,19 @@ R01 publicada em `main` (`b3dae3f`); a R02 começa com a leitura obrigatória da
 - Provado com execuções em tasks e em threads.
 - Gate: 6407 passed, 42 skipped.
 - Próximo: o grupo 9 do briefing, os workflows (G-32, G-33).
+
+## 2026-10-05 · A09 feita: os workflows (Claude, a pedido do dono)
+
+- A A08 foi commitada e publicada (`8de0d02`, `cf8df2f`).
+- D58:
+  - G-32: sob um meter, cada passo corre num span seu, e o `StepTrace.metered` diz o que lá se
+    mediu, também num passo cortado. As corridas aninhadas têm também um span seu. Os spans são
+    públicos;
+  - G-33: `FlowStep(after_any=..., after_optional=...)` e o `StepTrace.blocked_by`.
+- Ao abrir um span por passo, apareceu uma falha que já existia com o `max_cost`: uma operação
+  que começava depois de o seu span fechar levantava `ValueError`. Os ids dos spans são agora
+  caminhos desde a raiz, e a operação conta no antepassado aberto mais próximo.
+- Uma revisão independente não encontrou erros de correcção; os seus sete reparos menores estão
+  tratados (a ficha lista-os).
+- Gate: 6441 passed, 42 skipped.
+- Próximo: o grupo 10 do briefing, os manifestos importados (G-34).

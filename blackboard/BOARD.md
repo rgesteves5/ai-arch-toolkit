@@ -12,14 +12,16 @@
   (`dffcfe9`).
   A A07, o grupo 7 (a pesquisa na web, G-13), está feita a 2026-10-05 e
   publicada (`67dc63e`). A A08, o grupo 8 (o tecto partilhado, G-28), está feita a 2026-10-05 e
-  publicada (`8de0d02`). O próximo é o grupo 9, os workflows (G-32, G-33).
+  publicada (`8de0d02`). A A09, o grupo 9 (os workflows, G-32 e G-33), está feita a
+  2026-10-05 e publicada (`6bea5be`). O próximo é o grupo 10, os manifestos importados (G-34).
 - **Origem:** o briefing de 29/09, onde a app lista o que contorna no toolkit. Cada lacuna diz o
   que falta, a evidência e quando fica feita. A G-36 (imagens) já fechou na frente I.
 - **Decisões:** D48 (nenhum endereço lido do ambiente), D49 (toda a falha tem tecto), D50 (um
   preço pode ter data de fim), D51 (o TLS das tools com as autoridades do sistema), D52 (a chave
   opcional de uma tool vem do ambiente), D53 (um 429 fecha o host durante a espera), D54 (as chamadas ao LLM de um flow
   iterado correm em stream), D55 (as tools de pesquisa Brave e Tavily), D56 (o preço das tools pagas
-  na tabela), D57 (o tecto partilhado).
+  na tabela), D57 (o tecto partilhado), D58 (o gasto de cada passo, os spans públicos e as
+  dependências fracas).
 - **Fora do âmbito:** o ai-network. Não se edita daqui; o dono leva-lhe a nota de cada grupo
   fechado.
 
@@ -33,6 +35,7 @@
 | A06 | As exportações: o encaminhamento de modelos e a regra de loopback (G-14), o backend de memória público e com o tipo certo (G-24) | Claude | done | nada |
 | A07 | A pesquisa na web (G-13): `brave_search` e `tavily_search`, com a chave do ambiente e o custo no meter pela tabela de preços | Claude | done | nada |
 | A08 | O tecto partilhado (G-28): um `SharedMeter`/`SharedBudget` que várias execuções gastam ao mesmo tempo, sob um lock seu, semeado pela app | Claude | done | nada |
+| A09 | Os workflows: o gasto medido de cada passo e os spans públicos (G-32), as dependências fracas e a razão de um salto (G-33) | Claude | done | nada |
 
 ## Frente activa: geração de imagens
 
@@ -147,8 +150,8 @@
   declarações dos manifestos mudaram o terreno de C02, C05, C07 e C08).
 - **Estado:** aberta em 2026-09-15. As nove fichas estão escritas; nenhuma tarefa começou.
 - **Antes de codificar:** o dono fixa as "Decisões a fixar" de cada ficha. Cada decisão tomada entra
-  em `DECISIONS.md` a partir de D58 (as D15 a D42 foram para as frentes R e T, as D43 a D45
-  para a frente O, as D46 e D47 para a frente I e as D48 a D50 para a frente A), com o número dado pelo coordenador.
+  em `DECISIONS.md` a partir de D59 (as D15 a D42 foram para as frentes R e T, as D43 a D45
+  para a frente O, as D46 e D47 para a frente I e as D48 a D58 para a frente A), com o número dado pelo coordenador.
 - **Origem:** o que `docs/internal/agentes-app-toolkit-review.md` pediu ao toolkit (L1, L3–L7, L9, L13
   e o ponto D) e que `docs/internal/toolkit-fix-plan.md` §4 (itens 3 e 10) deixou de fora por ser
   âmbito, não contrato partido.
