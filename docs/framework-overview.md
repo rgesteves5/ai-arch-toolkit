@@ -184,7 +184,7 @@ sources and variables; Prompt controls final section order; layouts produce mode
 
 ### Pre-built Tools (`toolkit/tools/`)
 
-132 pre-built tools across 44 modules, stdlib-only except the three `youtube_*` tools, which
+130 pre-built tools across 43 modules, stdlib-only except the three `youtube_*` tools, which
 need the `youtube` extra. The default public namespace is safe-by-default; shell execution,
 filesystem access, arbitrary URL fetching, and Python execution require explicit opt-in via
 `ai_arch_toolkit.toolkit.tools.dangerous`. The per-tool list is in the
@@ -194,7 +194,7 @@ filesystem access, arbitrary URL fetching, and Python execution require explicit
 |--------|---------|
 | General & utility | `_datetime.py` (time zones, date math), `_math.py` (calculator, unit conversion), `_text.py` (regex search, text stats, base64), `_json.py` (JSON path extraction) |
 | Weather, geo & places | `_weather.py`, `_air_quality.py` (Open-Meteo), `_geo.py` (geocoding, IP lookup, country info, distances, time zones), `_osm.py`, `_overpass.py` (OpenStreetMap) |
-| Reference & knowledge | `_wikipedia.py`, `_wikidata.py`, `_mediawiki.py`, `_dictionary.py`, `_news.py` (Hacker News), `_gdelt.py`, `_youtube.py` (transcripts) |
+| Reference & knowledge | `_wiki.py` (any Wikimedia wiki: search, outline, read; Wiktionary), `_wikidata.py`, `_news.py` (Hacker News), `_gdelt.py`, `_youtube.py` (transcripts) |
 | Scholarly & research | `_arxiv.py`, `_pubmed.py`, `_europe_pmc.py`, `_semantic_scholar.py`, `_crossref.py`, `_ror.py`, `_datacite.py`, `_open_library.py`, `_internet_archive.py` |
 | Biomedical & chemistry | `_uniprot.py`, `_pdb.py`, `_chembl.py`, `_rxnorm_dailymed.py`, `_clinical_trials.py` |
 | Earth, life & public data | `_gbif.py`, `_open_food_facts.py`, `_openfda_food.py`, `_foodon.py`, `_earthquake.py`, `_eonet.py`, `_world_bank.py`, `_who_gho.py`, `_eurostat.py`, `_nvd.py` |

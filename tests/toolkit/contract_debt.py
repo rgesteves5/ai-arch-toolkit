@@ -15,7 +15,7 @@ def _owes(*points: str) -> frozenset[str]:
 
 
 # Definitions of the copied cut helpers (``_truncate``, ``_trim``) left in ``toolkit/tools``.
-CUT_HELPERS = 15
+CUT_HELPERS = 14
 
 DEBT: dict[str, frozenset[str]] = {
     "air_quality_forecast": _owes("window", "limits"),
@@ -38,7 +38,6 @@ DEBT: dict[str, frozenset[str]] = {
     "datacite_doi": _owes("window", "errors"),
     "datacite_search": _owes("window", "errors", "zero", "limits"),
     "date_add": _owes("limits"),
-    "define_word": _owes("window", "errors"),
     "earthquake_count": _owes("errors"),
     "earthquake_event": _owes("errors"),
     "earthquake_search": _owes("window", "errors", "zero", "limits"),
@@ -73,9 +72,6 @@ DEBT: dict[str, frozenset[str]] = {
     "ip_lookup": _owes("errors"),
     "json_extract": _owes("not_found"),
     "list_directory": _owes("window"),
-    "mediawiki_page": _owes("window", "limits"),
-    "mediawiki_search": _owes("window", "zero", "limits"),
-    "mediawiki_sections": _owes("window"),
     "nvd_cve": _owes("window", "errors", "not_found"),
     "nvd_cve_search": _owes("window", "errors", "zero", "limits"),
     "open_food_facts_compare": _owes("window", "errors", "not_found"),
@@ -125,10 +121,6 @@ DEBT: dict[str, frozenset[str]] = {
     "wikidata_entity": _owes("window", "errors"),
     "wikidata_search": _owes("window", "zero", "limits"),
     "wikidata_sparql": _owes("window", "errors", "zero", "limits"),
-    "wikipedia_article": _owes("window", "not_found", "limits"),
-    "wikipedia_related": _owes("window", "not_found", "limits"),
-    "wikipedia_search": _owes("window", "zero", "limits"),
-    "wiktionary_entry": _owes("window", "limits"),
     "world_bank_compare": _owes("window", "errors", "not_found", "limits"),
     "world_bank_countries": _owes("window", "errors", "limits"),
     "world_bank_indicator": _owes("window", "errors"),

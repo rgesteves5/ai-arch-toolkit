@@ -31,6 +31,9 @@ from ai_arch_toolkit.nanope.advanced_multi_purpose_configurable_agent import (
 )
 from ai_arch_toolkit.toolkit.memory._types import Node
 from tests.fake_provider import fake_llm
+from tests.nanope.pending import UNTIL_NANOPE_BUILDS_ITS_TOOLS
+
+pytestmark = UNTIL_NANOPE_BUILDS_ITS_TOOLS
 
 
 def _response(

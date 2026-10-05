@@ -61,15 +61,25 @@ class Window:
             return f"[no {self.unit} from {self.first}{_of(self.total)} | end]"
         return f"[{self.unit} {self.first}-{self.last}{_of(self.total)} | {_onward(self)}]"
 
-    def text(self) -> str:
-        """The body, then the footer on a line of its own."""
+    def text(self, heading: str = "") -> str:
+        """The body, then the footer on a line of its own.
+
+        Args:
+            heading: A line above the body, in the tool's words (what was read, and where).
+        """
         footer = self.footer()
         if not footer or not self.body:
-            return footer or self.body
-        return self.body + ("" if self.body.endswith("\n") else "\n") + footer
+            text = footer or self.body
+        else:
+            text = self.body + ("" if self.body.endswith("\n") else "\n") + footer
+        return f"{heading}\n{text}" if heading and text else heading or text
 
-    def result(self) -> ToolResult:
-        """A successful tool result with :meth:`text` and the window in ``metadata["window"]``."""
+    def result(self, heading: str = "") -> ToolResult:
+        """A successful tool result with :meth:`text` and the window in ``metadata["window"]``.
+
+        Args:
+            heading: A line above the body, in the tool's words (what was read, and where).
+        """
         next_call = dict(self.next_call) if self.next_call is not None else None
         window = {
             "unit": self.unit,
@@ -78,7 +88,7 @@ class Window:
             "total": self.total,
             "next_call": next_call,
         }
-        return ToolResult.success(self.text(), metadata={"window": window})
+        return ToolResult.success(self.text(heading), metadata={"window": window})
 
 
 def text_window(text: str, *, offset: int = 0, limit: int) -> Window:

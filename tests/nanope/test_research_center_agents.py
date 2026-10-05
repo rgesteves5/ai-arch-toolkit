@@ -6,11 +6,13 @@ from unittest.mock import AsyncMock, patch
 
 from ai_arch_toolkit.core._response import Response, ToolCall, Usage
 from ai_arch_toolkit.core._state import State
-from ai_arch_toolkit.nanope.research_center._agents import manager_agent
 from ai_arch_toolkit.toolkit.agents.flows._generate_review import generate_review_initial_state
 from ai_arch_toolkit.toolkit.memory.graph._networkx import NetworkXBackend
 from ai_arch_toolkit.toolkit.memory.graph._store import GraphStore
+from tests.nanope.pending import research_center_agents
 from tests.toolkit.http_fakes import HTTP_OPEN, respond
+
+manager_agent = research_center_agents().manager_agent
 
 _USAGE = Usage(input_tokens=1, output_tokens=1)
 

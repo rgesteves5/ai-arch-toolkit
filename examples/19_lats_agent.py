@@ -9,9 +9,9 @@ Best for tasks where trial-and-error with learning is valuable.
 
 from ai_arch_toolkit import LLM, State, ToolGroup
 from ai_arch_toolkit.toolkit.agents import lats_flow, lats_initial_state
-from ai_arch_toolkit.toolkit.tools import math_eval, wikipedia_search
+from ai_arch_toolkit.toolkit.tools import math_eval, wiki_search
 
-tools = ToolGroup(wikipedia_search, math_eval)
+tools = ToolGroup(wiki_search, math_eval)
 llm = LLM("gpt-4.1-mini")
 
 flow = lats_flow(

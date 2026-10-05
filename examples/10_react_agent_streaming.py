@@ -4,14 +4,14 @@ Use flow.iter_sync() to observe each event as the flow executes.
 This is useful for building live UIs, logging, or debugging multi-step
 reasoning.
 
-Uses real toolkit tools: wikipedia_search, wikipedia_article, and math_eval.
+Uses real toolkit tools: wiki_search, wiki_read, and math_eval.
 """
 
 from ai_arch_toolkit import LLM, State, ToolGroup
 from ai_arch_toolkit.toolkit.agents import react_flow, react_initial_state
-from ai_arch_toolkit.toolkit.tools import math_eval, wikipedia_article, wikipedia_search
+from ai_arch_toolkit.toolkit.tools import math_eval, wiki_read, wiki_search
 
-tools = ToolGroup(wikipedia_search, wikipedia_article, math_eval)
+tools = ToolGroup(wiki_search, wiki_read, math_eval)
 llm = LLM("gpt-4.1-mini")
 
 flow = react_flow(

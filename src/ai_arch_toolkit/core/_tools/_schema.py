@@ -83,9 +83,7 @@ def _hint_to_json_schema(hint: Any) -> tuple[dict[str, object], bool]:
         ``(schema, is_optional)``, where ``is_optional`` is true only when ``None`` is a
         member of a union.
     """
-    # PEP 695 aliases (``type Count = int``) describe their value.
-    if isinstance(hint, typing.TypeAliasType):
-        return _hint_to_json_schema(hint.__value__)
+    hint = _bare(hint)
 
     # ``Any`` and ``object`` accept every JSON value, so the schema sets no constraint.
     if hint is typing.Any or hint is object:
@@ -509,16 +507,38 @@ def _parameter_schema(
 
 
 def _range_of(hint: Any) -> Range | None:
-    """The :class:`Range` of ``Annotated[..., Range(...)]``, also as a member of a union."""
+    """The :class:`Range` of ``Annotated[..., Range(...)]``, also as a member of a union and
+    behind a PEP 695 alias (``type Chars = Annotated[int, Range(1, 20)]``)."""
+    hint = _unaliased(hint)
     members = [hint]
     if typing.get_origin(hint) in (types.UnionType, typing.Union):
-        members = list(typing.get_args(hint))
+        members = [_unaliased(member) for member in typing.get_args(hint)]
     for member in members:
         if typing.get_origin(member) is typing.Annotated:
             found = [item for item in typing.get_args(member)[1:] if isinstance(item, Range)]
             if found:
                 return found[0]
     return None
+
+
+def _bare(hint: Any) -> Any:
+    """The type a hint describes: PEP 695 aliases (``type Count = int``) followed and
+    ``Annotated`` metadata dropped. Inside an alias ``get_type_hints`` cannot drop it;
+    ``_range_of`` reads its ``Range``."""
+    while True:
+        if isinstance(hint, typing.TypeAliasType):
+            hint = hint.__value__
+        elif typing.get_origin(hint) is typing.Annotated:
+            hint = typing.get_args(hint)[0]
+        else:
+            return hint
+
+
+def _unaliased(hint: Any) -> Any:
+    """The value behind PEP 695 aliases, which may alias one another."""
+    while isinstance(hint, typing.TypeAliasType):
+        hint = hint.__value__
+    return hint
 
 
 def _numeric(schema: Mapping[str, object]) -> bool:

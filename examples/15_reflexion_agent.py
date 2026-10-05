@@ -7,9 +7,9 @@ the flow reflects on what went wrong and retries with that insight.
 
 from ai_arch_toolkit import LLM, State, ToolGroup
 from ai_arch_toolkit.toolkit.agents import reflexion_flow, reflexion_initial_state
-from ai_arch_toolkit.toolkit.tools import math_eval, wikipedia_search
+from ai_arch_toolkit.toolkit.tools import math_eval, wiki_search
 
-tools = ToolGroup(wikipedia_search, math_eval)
+tools = ToolGroup(wiki_search, math_eval)
 llm = LLM("gpt-4.1-mini")
 
 

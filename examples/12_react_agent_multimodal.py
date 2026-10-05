@@ -4,7 +4,7 @@ A react_flow that receives an image alongside text and uses Wikipedia
 tools to research and complement its visual analysis.
 
 The flow sees the image (Alice in Wonderland book cover), identifies
-what it depicts, then uses wikipedia_search and wikipedia_article to
+what it depicts, then uses wiki_search and wiki_read to
 look up relevant facts and provide a well-rounded answer.
 """
 
@@ -12,9 +12,9 @@ from pathlib import Path
 
 from ai_arch_toolkit import LLM, State, ToolGroup, image
 from ai_arch_toolkit.toolkit.agents import react_flow, react_initial_state
-from ai_arch_toolkit.toolkit.tools import wikipedia_article, wikipedia_search
+from ai_arch_toolkit.toolkit.tools import wiki_read, wiki_search
 
-tools = ToolGroup(wikipedia_search, wikipedia_article)
+tools = ToolGroup(wiki_search, wiki_read)
 llm = LLM("gpt-4.1-mini")
 
 flow = react_flow(

@@ -77,8 +77,7 @@ ERROR_BODIES: dict[str, tuple[ErrorBody, ...]] = {
             says="Cannot initialize WeatherVariable from invalid String",
         ),
     ),
-    "_mediawiki": _mediawiki(),
-    "_wikipedia": _mediawiki("wikipedia_search", "wikipedia_article", "wikipedia_related"),
+    "_wiki": _mediawiki(),
     "_wikidata": _mediawiki("wikidata_search"),
     "_eurostat": (
         ErrorBody(

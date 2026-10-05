@@ -1,8 +1,8 @@
 {
   "src/ai_arch_toolkit/core/_tools/__init__.py:prepare_tools:C901": 13,
   "src/ai_arch_toolkit/core/_tools/__init__.py:prepare_tools:PLR0912": 14,
-  "src/ai_arch_toolkit/core/_tools/_schema.py:_hint_to_json_schema:C901": 22,
-  "src/ai_arch_toolkit/core/_tools/_schema.py:_hint_to_json_schema:PLR0912": 21,
+  "src/ai_arch_toolkit/core/_tools/_schema.py:_hint_to_json_schema:C901": 21,
+  "src/ai_arch_toolkit/core/_tools/_schema.py:_hint_to_json_schema:PLR0912": 20,
   "src/ai_arch_toolkit/core/_tools/_schema.py:_parse_param_descriptions:C901": 15,
   "src/ai_arch_toolkit/core/_tools/_schema.py:_parse_param_descriptions:PLR0912": 15,
   "src/ai_arch_toolkit/core/_tools/_validation.py:_coerce:C901": 11,

@@ -13,7 +13,7 @@ import pkgutil
 from collections.abc import Callable
 from typing import Any, get_args
 
-from ai_arch_toolkit.core import ToolFailure, ToolFailureType
+from ai_arch_toolkit.core import ToolFailure, ToolFailureType, ToolResult
 
 PACKAGE = "ai_arch_toolkit.toolkit.tools"
 SAFE = importlib.import_module(PACKAGE)
@@ -96,6 +96,7 @@ _BENIGN_BY_TOOL: dict[tuple[str, str], Any] = {
     ("wikidata_sparql", "query"): "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1",
     ("weather_units", "unit"): "c",
     ("who_series", "country"): "PRT",
+    ("wiktionary_entry", "language"): "English",
     ("distance_between", "unit"): "km",
     ("clinical_trials_search", "query"): "asthma",
     ("earthquake_search", "max_radius_km"): 100.0,
@@ -130,6 +131,14 @@ def benign(name: str) -> dict[str, Any]:
 FAILURE_TYPES = frozenset(get_args(ToolFailureType.__value__))
 
 
+def text_of(result: object) -> str | None:
+    """What a tool answered as text: its ``str``, or the text of the successful ``ToolResult`` a
+    windowed answer is (``Window.result()``); ``None`` for anything else."""
+    if isinstance(result, ToolResult):
+        return result.value if result.ok and isinstance(result.value, str) else None
+    return result if isinstance(result, str) else None
+
+
 def answer(name: str, args: dict[str, Any]) -> str | ToolFailure:
     """The tool's text, or the typed failure it raised; any other exception fails the test."""
     try:
@@ -138,5 +147,6 @@ def answer(name: str, args: dict[str, Any]) -> str | ToolFailure:
         assert failure.error.type in FAILURE_TYPES, failure.error
         assert failure.error.message.strip(), failure.error
         return failure
-    assert isinstance(result, str), result
-    return result
+    text = text_of(result)
+    assert text is not None, result
+    return text

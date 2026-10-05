@@ -35,7 +35,7 @@ from ai_arch_toolkit import (
     SimilarityView, TemporalView,
 )
 from ai_arch_toolkit.core import State
-from ai_arch_toolkit.toolkit.tools import get_weather, wikipedia_search, datetime_now
+from ai_arch_toolkit.toolkit.tools import datetime_now, get_weather, wiki_search
 from ai_arch_toolkit.toolkit.agents.flows import react_flow, react_initial_state
 from ai_arch_toolkit.toolkit.memory import memory_tools
 from ai_arch_toolkit.toolkit.memory.graph import NetworkXBackend
@@ -69,7 +69,7 @@ llm = LLM(
 )
 
 # Agent flow with tools + memory tools
-tools = ToolGroup(get_weather, wikipedia_search, datetime_now, *mem.tools)
+tools = ToolGroup(get_weather, wiki_search, datetime_now, *mem.tools)
 flow = react_flow(
     llm, tools,
     system=system_prompt.text,

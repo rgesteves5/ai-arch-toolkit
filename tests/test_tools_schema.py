@@ -645,8 +645,31 @@ class TestAnyOfReachesProviderAdapters:
         assert _variant_types(parameters.properties["tags"].items) == GEMINI_INT_OR_STR
 
 
+# A bounded type named once and reused, as a module writes it (PEP 695), and an alias of it.
+type _Chars = Annotated[int, Range(500, 20_000)]
+type _Size = _Chars
+
+
 class TestRange:
     """``Annotated[int, Range(...)]`` puts the bounds in the schema the model reads."""
+
+    def test_a_range_behind_a_type_alias_reaches_the_schema(self):
+        def read(max_chars: _Chars = 6000, limit: _Size | None = None) -> str:
+            return ""
+
+        props = infer_schema(read)["input_schema"]["properties"]
+        assert props["max_chars"] == {
+            "type": "integer",
+            "minimum": 500,
+            "maximum": 20_000,
+            "default": 6000,
+        }
+        assert props["limit"] == {
+            "type": "integer",
+            "minimum": 500,
+            "maximum": 20_000,
+            "default": None,
+        }
 
     def test_bounds_reach_the_schema(self):
         def search(max_results: Annotated[int, Range(1, 25)] = 10) -> str:

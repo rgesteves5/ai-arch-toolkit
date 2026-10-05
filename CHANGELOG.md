@@ -40,6 +40,10 @@ flows, manifests) needs these changes; each one is detailed below.
     `rate_limited`. Code that calls a tool function directly catches `ToolFailure`; code that
     looked for "failed:" in a returned string reads `result.ok` and `result.error.type`.
   - `csv_read` is in `toolkit.tools.dangerous` and needs approval.
+  - The eight wiki tools are four (T05, D41: one tool per job and per source, no aliases); the
+    table below gives each old call's replacement. Their answers are text from the page the wiki
+    renders, and a long one is a window: called directly, the tool returns a `ToolResult` whose
+    `value` is the text (the executor hands the model that text, as before).
   - Every tool call has a 120-second deadline and a 200,000-character output cap: set
     `timeout_s`/`max_output_chars` (or `None`) on a tool that needs more.
   - On the sync path a synchronous tool runs in a thread of its own: open thread-bound resources
@@ -72,6 +76,24 @@ flows, manifests) needs these changes; each one is detailed below.
   - a boolean `order`;
   - a `metadata_attributes` that is not a list;
   - `select` or `serialize_as` on an inline template.
+
+#### Renamed and removed tools
+
+| Before | Now |
+|---|---|
+| `wikipedia_search(query, results=3)` | `wiki_search(query, max_results=3)` |
+| `wikipedia_article(title, max_chars)` | `wiki_read(title, max_chars=…)`; `section=0` reads the introduction alone |
+| `wikipedia_related(title, limit)` | `wiki_search(f"morelike:{title}", max_results=limit)`: the pages most like it, where `wikipedia_related` listed the page's own links |
+| `mediawiki_search(query, api_url, max_results, offset)` | `wiki_search(query, wiki="en.wikibooks.org", max_results=…, offset=…)` |
+| `mediawiki_page(title, api_url, max_chars)` | `wiki_read(title, wiki=…, max_chars=…)`, with `section=`, `find=` and `offset=` |
+| `mediawiki_sections(title, api_url)` | `wiki_outline(title, wiki=…)` |
+| `wiktionary_entry(term, language, max_chars)` | `wiktionary_entry(term, language, offset=…, max_chars=…)`; a language the entry lacks is `not_found` and names those it has, where the whole entry came back |
+| `define_word(word)` | `wiktionary_entry(word)` (dictionaryapi.dev answered 522) |
+
+The `api_url` of the old MediaWiki tools is now `wiki`, the wiki's host (`"en.wikibooks.org"`);
+English Wikipedia is the default, where the MediaWiki tools defaulted to the English Wiktionary.
+`max_chars` takes 500 to 20,000 and a value outside is refused (`validation_error`), where the old
+tools moved it into their own limits without a word (1 to 100,000, or 200 to 4,000).
 
 ### Added
 - **Typed tool failures** (T01, D37, D42): `ToolFailure(type, message, *, retryable=False,
@@ -340,6 +362,20 @@ flows, manifests) needs these changes; each one is detailed below.
   [docs/agents.md](docs/agents.md#file-backed-agent-manifests).
 
 ### Changed
+- **Breaking:** the wiki family (T05, D39 to D41). `wiki_search`, `wiki_outline`, `wiki_read`
+  and `wiktionary_entry` replace `wikipedia_search`, `wikipedia_article`, `wikipedia_related`,
+  `mediawiki_search`, `mediawiki_page`, `mediawiki_sections`, `wiktionary_entry` and
+  `define_word` (the table in the Upgrade notes). Any Wikimedia wiki is one argument away
+  (`wiki="en.wikibooks.org"`). A page is read from the HTML the wiki renders, not cleaned
+  wikitext: templates expanded, tables one row per line with every cell (a cell that spans rows
+  repeats), no navigation boxes, edit links or footnote markers. `wiki_read` reads a page whole,
+  one section (by the number `wiki_outline` gives, with each section's size) or the passages
+  around a term (`find=`), and every long answer ends with the call that reads on: the rationale
+  of the 1960 Nobel Prize in Physics, 13,888 characters into its list, is one `find="1960"` call
+  away, where `mediawiki_page` stopped at 4,000. A missing page is `not_found` with the search
+  to run, a title the wiki refuses a `validation_error`, zero results say so with the query (and
+  the wiki's suggestion); the limits are `Range` bounds. `define_word` goes: its source answered
+  522, and Wiktionary covers definitions.
 - **Breaking:** every toolkit tool fails by raising `ToolFailure`, never by returning an error
   string (T01): an unknown page, record or identifier is `not_found`, a bad argument
   `validation_error`, a source that fails or explains an error `upstream`, a 429 `rate_limited`.
@@ -714,6 +750,11 @@ flows, manifests) needs these changes; each one is detailed below.
   - `select` or `serialize_as` on an inline template (they were ignored).
 
 ### Fixed
+- **A `Range` behind a PEP 695 alias reaches the schema** (T05). A bound written once as
+  `type Chars = Annotated[int, Range(500, 20_000)]` and used as a parameter's type turned that
+  parameter into a `string` with no bounds: the alias hid the `Annotated` from the schema. The
+  schema now sees through the alias, its type and its `Range`, and the contract test fails an
+  `int` parameter whose schema is not an integer.
 - A tool call whose arguments are empty text (an OpenAI-compatible server's call to a tool that
   takes none) has an empty input, not `{"_raw": ""}`.
 - The xAI adapter sends a user turn's images to Grok (G-39), JPEG or PNG, where it dropped them

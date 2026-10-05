@@ -1,13 +1,10 @@
-"""MediaWiki and Wiktionary tools — public wiki search and page parsing."""
+"""The MediaWiki Action API that the wiki tools share: its error reader and the wikis allowed."""
 
 from __future__ import annotations
 
-import html
 import re
-from collections.abc import Callable
-from typing import Any
+from dataclasses import replace
 
-from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._http import Api, Reply
 
@@ -19,10 +16,11 @@ def mediawiki_error(reply: Reply) -> ToolFailure | str | None:
     result, usually with HTTP 200, and names the code in the ``MediaWiki-API-Error`` header
     (https://www.mediawiki.org/wiki/API:Errors_and_warnings), so every ``Api`` on an ``api.php``
     declares this as its ``error_reader``. The codes that say what happened are typed:
-    ``missingtitle`` is ``not_found`` and ``invalidtitle`` a ``validation_error``
-    (https://www.mediawiki.org/wiki/API:Parse), ``ratelimited`` and ``maxlag`` are
-    ``rate_limited`` and worth a retry (https://www.mediawiki.org/wiki/Manual:Maxlag_parameter);
-    any other code is the source's words, ``code: info``.
+    ``missingtitle`` is ``not_found``; ``invalidtitle`` and ``pagecannotexist`` (a special page)
+    are ``validation_error`` (https://www.mediawiki.org/wiki/API:Parse); ``ratelimited`` and
+    ``maxlag`` are ``rate_limited`` and worth a retry
+    (https://www.mediawiki.org/wiki/Manual:Maxlag_parameter); any other code is the source's
+    words, ``code: info``.
     """
     error = reply.body.get("error") if isinstance(reply.body, dict) else None
     if isinstance(error, dict):
@@ -42,6 +40,11 @@ def mediawiki_error(reply: Reply) -> ToolFailure | str | None:
             "validation_error",
             f"not a valid page title ({brief}); give a title as the wiki's search returns it",
         )
+    if code == "pagecannotexist":
+        return ToolFailure(
+            "validation_error",
+            f"not a page the wiki can hold ({brief}); give an article's title, not a special page",
+        )
     if code in _RATE_LIMITED:
         return ToolFailure(
             "rate_limited",
@@ -54,16 +57,8 @@ def mediawiki_error(reply: Reply) -> ToolFailure | str | None:
 # The codes of a wiki that asks callers to wait: a user's action limit, or replication lag.
 _RATE_LIMITED = frozenset({"ratelimited", "maxlag"})
 
-_DEFAULT_API = "https://en.wiktionary.org/w/api.php"
-_TIMEOUT_S = 15
-_WIKTIONARY = Api(
-    base=_DEFAULT_API, name="MediaWiki", timeout_s=_TIMEOUT_S, error_reader=mediawiki_error
-)
-_MAX_LIMIT = 25
-_TEXT_RE = re.compile(r"^[\w\s,.'()/%:+-]{1,180}$", re.UNICODE)
-_LANG_RE = re.compile(r"^[A-Za-z -]{1,80}$")
-# An api_url from the model must be on one of these hosts, or a subdomain of one.
-_DOMAINS = frozenset(
+# The wikis the tools may read: these hosts, or a subdomain of one (en.wikipedia.org).
+WIKIMEDIA_DOMAINS = frozenset(
     {
         "wikipedia.org",
         "wikimedia.org",
@@ -78,300 +73,76 @@ _DOMAINS = frozenset(
         "mediawiki.org",
     }
 )
+_HOST_RE = re.compile(r"^[a-z0-9-]+(?:\.[a-z0-9-]+)+$")
+_TIMEOUT_S = 15
+# Wikimedia asks a client without an account for one request at a time, at most a few a second
+# (https://meta.wikimedia.org/wiki/User-Agent_policy; https://www.mediawiki.org/wiki/API:Etiquette).
+_INTERVAL_S = 0.25
+# The largest answer a Wikimedia wiki sends (12 MiB; past it the page comes as a warning), with
+# room for the JSON around it (https://www.mediawiki.org/wiki/Manual:$wgAPIMaxResultSize).
+_MAX_BYTES = 13 * 2**20
+
+WIKIPEDIA = "en.wikipedia.org"
+WIKTIONARY = "en.wiktionary.org"
+# The tools' own wikis: a 404 there is an endpoint that moved, not the caller's mistake.
+_WIKIPEDIA_API = Api(
+    base=f"https://{WIKIPEDIA}/w/api.php",
+    name="Wikipedia",
+    timeout_s=_TIMEOUT_S,
+    max_bytes=_MAX_BYTES,
+    min_interval_s=_INTERVAL_S,
+    error_reader=mediawiki_error,
+)
+_WIKTIONARY_API = Api(
+    base=f"https://{WIKTIONARY}/w/api.php",
+    name="Wiktionary",
+    timeout_s=_TIMEOUT_S,
+    max_bytes=_MAX_BYTES,
+    min_interval_s=_INTERVAL_S,
+    error_reader=mediawiki_error,
+)
+_OWN = {WIKIPEDIA: _WIKIPEDIA_API, WIKTIONARY: _WIKTIONARY_API}
 
 
-@tool(capability="network")
-def mediawiki_search(
-    query: str,
-    api_url: str = _DEFAULT_API,
-    max_results: int = 10,
-    offset: int = 0,
-) -> str:
-    """Search a MediaWiki API.
-
-    Args:
-        query: Search text.
-        api_url: MediaWiki API endpoint. Defaults to English Wiktionary.
-        max_results: Number of pages to return (1-25). Defaults to 10.
-        offset: Zero-based result offset. Defaults to 0.
-
-    Raises:
-        ToolFailure: validation_error when ``query``, ``api_url`` or ``offset`` is invalid.
-    """
-    _check_text("query", query)
-    api = _api(api_url)
-    if offset < 0:
-        raise ToolFailure(
-            "validation_error", f"offset must be greater than or equal to 0, not {offset}"
-        )
-    params = {
-        "action": "query",
-        "list": "search",
-        "srsearch": query.strip(),
-        "srlimit": str(_bounded(max_results)),
-        "sroffset": str(offset),
-        "format": "json",
-        "utf8": "1",
-    }
-    return api.get_json(params=params, parse=lambda data: _search_text(data, query, offset))
-
-
-@tool(capability="network")
-def mediawiki_page(title: str, api_url: str = _DEFAULT_API, max_chars: int = 1200) -> str:
-    """Fetch and lightly clean a MediaWiki page's wikitext.
-
-    Args:
-        title: Page title.
-        api_url: MediaWiki API endpoint. Defaults to English Wiktionary.
-        max_chars: Maximum cleaned characters to return (200-4000). Defaults to 1200.
+def wiki_host(wiki: str) -> str:
+    """The host of the wiki ``wiki`` names: a host (``en.wikibooks.org``) or its URL.
 
     Raises:
-        ToolFailure: validation_error when ``title`` or ``api_url`` is invalid; not_found when
-            the wiki has no page with that title.
+        ToolFailure: validation_error unless it is a Wikimedia wiki.
     """
-    _check_text("title", title)
-    return _parsed_page(
-        _api(api_url),
-        title.strip(),
-        "wikitext|sections",
-        lambda data: _page_text(data, title, max_chars),
-    )
-
-
-@tool(capability="network")
-def mediawiki_sections(title: str, api_url: str = _DEFAULT_API) -> str:
-    """List sections for a MediaWiki page.
-
-    Args:
-        title: Page title.
-        api_url: MediaWiki API endpoint. Defaults to English Wiktionary.
-
-    Raises:
-        ToolFailure: validation_error when ``title`` or ``api_url`` is invalid; not_found when
-            the wiki has no page with that title.
-    """
-    _check_text("title", title)
-    return _parsed_page(
-        _api(api_url), title.strip(), "sections", lambda data: _sections_text(data, title)
-    )
-
-
-@tool(capability="network")
-def wiktionary_entry(term: str, language: str = "English", max_chars: int = 1600) -> str:
-    """Fetch a Wiktionary entry and focus on one language section.
-
-    Args:
-        term: Wiktionary term/page title.
-        language: Language section to prioritize. Defaults to English.
-        max_chars: Maximum cleaned characters to return (200-4000). Defaults to 1600.
-
-    Raises:
-        ToolFailure: validation_error when ``term`` or ``language`` is invalid; not_found when
-            Wiktionary has no page for the term.
-    """
-    _check_text("term", term)
-    if not _LANG_RE.fullmatch(language.strip()):
+    host = wiki.strip().lower().removeprefix("https://").removeprefix("http://")
+    host = host.split("/", 1)[0]
+    allowed = any(host == domain or host.endswith(f".{domain}") for domain in WIKIMEDIA_DOMAINS)
+    if not (_HOST_RE.fullmatch(host) and allowed):
         raise ToolFailure(
             "validation_error",
-            f"invalid language {language!r}; name it in English letters, e.g. 'French'",
+            f"invalid wiki {wiki[:200]!r}; name a Wikimedia wiki by its host, e.g. "
+            "'en.wikipedia.org', 'pt.wikipedia.org' or 'en.wikibooks.org'",
         )
-    return _parsed_page(
-        _WIKTIONARY,
-        term.strip(),
-        "wikitext|sections",
-        lambda data: _entry_text(data, term, language.strip(), max_chars),
-    )
+    return host
 
 
-def _api(api_url: str) -> Api:
-    """The MediaWiki API at ``api_url``.
+def wiki_api(wiki: str) -> Api:
+    """The Action API (``https://host/w/api.php``) of the wiki ``wiki`` names.
 
     Raises:
-        ToolFailure: validation_error unless ``api_url`` is a Wikimedia ``https://…/api.php``.
+        ToolFailure: validation_error unless it is a Wikimedia wiki.
     """
-    invalid = (
-        f"invalid api_url {api_url!r}; use a Wikimedia wiki's https://…/api.php, "
-        "e.g. https://en.wikipedia.org/w/api.php"
+    host = wiki_host(wiki)
+    if (own := _OWN.get(host)) is not None:
+        return own
+    api = Api.within(
+        f"https://{host}/w/api.php",
+        WIKIMEDIA_DOMAINS,
+        name=host,
+        timeout_s=_TIMEOUT_S,
+        min_interval_s=_INTERVAL_S,
+        error_reader=mediawiki_error,
     )
-    if api_url.strip() == _DEFAULT_API:  # the module's own: a 404 there is an endpoint that moved
-        return _WIKTIONARY
-    try:
-        api = Api.within(
-            api_url.strip(),
-            _DOMAINS,
-            name="MediaWiki",
-            timeout_s=_TIMEOUT_S,
-            error_reader=mediawiki_error,
-        )
-    except ToolFailure as e:  # a host or URL the door refuses
-        raise ToolFailure("validation_error", invalid) from e
-    if not api.base.endswith("api.php"):
-        raise ToolFailure("validation_error", invalid)
-    return api
+    return replace(api, max_bytes=_MAX_BYTES)
 
 
-def _parsed_page(api: Api, title: str, props: str, parse: Callable[[dict[str, Any]], str]) -> str:
-    """``action=parse`` of ``title``, read with ``parse``.
-
-    Raises:
-        ToolFailure: not_found when the wiki reports the page missing (``missingtitle``, typed by
-            ``mediawiki_error``), with the host and the title; validation_error when it reports
-            the title invalid (``invalidtitle``); the request's own failures otherwise.
-    """
-    try:
-        return api.get_json(params=_parse_params(title, props), parse=parse)
-    except ToolFailure as e:
-        if e.error.type == "not_found":  # no other not_found reaches here: no missing= is sent
-            msg = f"{api.host} has no page titled {title!r}; find the title with mediawiki_search"
-            raise ToolFailure("not_found", msg) from e
-        raise
-
-
-def _check_text(name: str, value: str) -> None:
-    if not _valid_text(value):
-        raise ToolFailure(
-            "validation_error",
-            f"invalid {name} {value[:200]!r}; use 1-180 letters, digits, spaces and "
-            "basic punctuation (,.'()/%:+-)",
-        )
-
-
-def _parse_params(title: str, props: str) -> dict[str, str]:
-    return {"action": "parse", "page": title, "prop": props, "format": "json", "utf8": "1"}
-
-
-def _parse_result(data: dict[str, Any]) -> dict[str, Any]:
-    """The ``parse`` object of an ``action=parse`` answer.
-
-    An error answer never gets here (``mediawiki_error`` read it first), so an answer without a
-    ``parse`` object has an unexpected shape.
-    """
-    parse = data.get("parse")
-    if not isinstance(parse, dict):
-        raise ToolFailure("upstream", 'could not parse API response: no "parse" object')
-    return parse
-
-
-def _search_text(data: dict[str, Any], query: str, offset: int) -> str:
-    items = data.get("query", {}).get("search", [])
-    if not isinstance(items, list) or not items:
-        return "No MediaWiki pages found."
-    total = _string(data.get("query", {}).get("searchinfo", {}).get("totalhits")) or "?"
-    lines = [
-        f"MediaWiki pages for {query!r} (returned {len(items)}, total {total}, offset {offset}):"
-    ]
-    for index, item in enumerate(items, start=1):
-        if not isinstance(item, dict):
-            continue
-        snippet = _strip_html(_string(item.get("snippet")))
-        lines.append(
-            f"{index}. {_string(item.get('title'))} | pageid: {_string(item.get('pageid'))}"
-        )
-        if snippet:
-            lines.append(f"   {snippet}")
-    return "\n".join(lines)
-
-
-def _page_text(data: dict[str, Any], title: str, max_chars: int) -> str:
-    parse = _parse_result(data)
-    page_title = _string(parse.get("title")) or title.strip()
-    text = _extract_wikitext(parse)
-    cleaned = _clean_wikitext(text)
-    sections = _section_titles(parse)
-    limit = max(200, min(max_chars, 4000))
-    lines = [f"MediaWiki page {page_title}:"]
-    if sections:
-        lines.append("   sections: " + "; ".join(sections[:15]))
-    if cleaned:
-        lines.append(_trim(cleaned, limit))
-    return "\n".join(lines)
-
-
-def _sections_text(data: dict[str, Any], title: str) -> str:
-    parse = _parse_result(data)
-    sections = parse.get("sections", [])
-    if not isinstance(sections, list) or not sections:
-        return f"No MediaWiki sections found for {title}."
-    lines = [f"MediaWiki sections for {_string(parse.get('title')) or title.strip()}:"]
-    for section in sections[:_MAX_LIMIT]:
-        if isinstance(section, dict):
-            lines.append(
-                f"{_string(section.get('index'))}. {_string(section.get('line'))} "
-                f"| level: {_string(section.get('level'))}"
-            )
-    return "\n".join(lines)
-
-
-def _entry_text(data: dict[str, Any], term: str, language: str, max_chars: int) -> str:
-    parse = _parse_result(data)
-    text = _extract_wikitext(parse)
-    focused = _language_section(text, language) or text
-    cleaned = _clean_wikitext(focused)
-    sections = _section_titles(parse)
-    limit = max(200, min(max_chars, 4000))
-    lines = [f"Wiktionary entry {term.strip()} ({language}):"]
-    if sections:
-        lines.append("   available sections: " + "; ".join(sections[:20]))
-    if cleaned:
-        lines.append(_trim(cleaned, limit))
-    return "\n".join(lines)
-
-
-def _extract_wikitext(parse: dict[str, Any]) -> str:
-    value = parse.get("wikitext", {})
-    if isinstance(value, dict):
-        raw = value.get("*")
-        return raw if isinstance(raw, str) else _string(raw)
-    return value if isinstance(value, str) else _string(value)
-
-
-def _section_titles(parse: dict[str, Any]) -> list[str]:
-    sections = parse.get("sections", [])
-    if not isinstance(sections, list):
-        return []
-    return [_string(section.get("line")) for section in sections if isinstance(section, dict)]
-
-
-def _language_section(text: str, language: str) -> str:
-    pattern = re.compile(rf"^==\s*{re.escape(language)}\s*==\s*$", re.MULTILINE)
-    match = pattern.search(text)
-    if not match:
-        return ""
-    next_lang = re.search(r"^==[^=].*==\s*$", text[match.end() :], re.MULTILINE)
-    end = match.end() + next_lang.start() if next_lang else len(text)
-    return text[match.end() : end]
-
-
-def _clean_wikitext(text: str) -> str:
-    cleaned = text
-    cleaned = re.sub(r"\{\{[^{}]*\}\}", "", cleaned)
-    cleaned = re.sub(r"<ref[^>]*>.*?</ref>", "", cleaned, flags=re.DOTALL)
-    cleaned = re.sub(r"<[^>]+>", "", cleaned)
-    cleaned = re.sub(r"\[\[([^|\]]+)\|([^\]]+)\]\]", r"\2", cleaned)
-    cleaned = re.sub(r"\[\[([^\]]+)\]\]", r"\1", cleaned)
-    cleaned = re.sub(r"'{2,5}", "", cleaned)
-    cleaned = re.sub(r"^=+\s*(.*?)\s*=+$", r"\1:", cleaned, flags=re.MULTILINE)
-    cleaned = html.unescape(cleaned)
-    return "\n".join(line.strip() for line in cleaned.splitlines() if line.strip())
-
-
-def _strip_html(value: str) -> str:
-    return html.unescape(re.sub(r"<[^>]+>", "", value))
-
-
-def _valid_text(value: str) -> bool:
-    return bool(_TEXT_RE.fullmatch(value.strip()))
-
-
-def _bounded(value: int) -> int:
-    return max(1, min(value, _MAX_LIMIT))
-
-
-def _trim(text: str, max_chars: int) -> str:
-    return text if len(text) <= max_chars else text[: max_chars - 3].rstrip() + "..."
-
-
-def _string(value: Any) -> str:
+def _string(value: object) -> str:
     if value is None:
         return ""
     return " ".join(str(value).split())

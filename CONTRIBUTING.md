@@ -106,10 +106,10 @@ docstrings/comments, and when to use classes vs functions — see
    checks). A call that asks for one resource (a page, an entry, a DOI) passes `missing="…"`, the
    `not_found` message of its 404; any other 404 means the endpoint moved. A call to a service
    that answers "nothing found" with `204 No Content` or an empty body passes
-   `allow_empty=True`, one that answers it with a 404 `empty_on_404=True`. `_weather.py` and
-   `_mediawiki.py` are the templates; an architecture test refuses `urllib.request`,
-   `urllib.error`, `http.client`, `socket` and `ssl` anywhere else in the package (`nanope/`
-   aside).
+   `allow_empty=True`, one that answers it with a 404 `empty_on_404=True`. The wiki family,
+   `_wiki.py`, is the template: the first module migrated to the whole contract (T05). An
+   architecture test refuses `urllib.request`, `urllib.error`, `http.client`, `socket` and `ssl`
+   anywhere else in the package (`nanope/` aside).
 4. Declare the tool's `capability` (`network`, `compute`, …); the invariants test compares it
    with what the tool reaches. Set `max_output_chars`/`timeout_s` on `@tool` when the defaults
    do not fit. Declare numeric limits in the signature, `Annotated[int, Range(1, 25)]`, instead of
@@ -117,10 +117,11 @@ docstrings/comments, and when to use classes vs functions — see
 5. **Never cut without a way on.** Return part of something longer through
    `toolkit/tools/_window.py` — `text_window` (a document by characters, ending on a line),
    `find_window` (the passages around a term), `list_window` (a page the source cut) or
-   `page_window` (a page of a list the tool holds) — and return `window.result()`. Its footer
+   `page_window` (a page of a list the tool holds) — and return `window.result()`, with a
+   `heading=` that says in the tool's words what was read and where. Its footer
    tells the model what was shown, the total, and the exact call that reads on
    (`[chars 0-4000 of 34651 | next: offset=4000]`), and `metadata["window"]` tells the app. The
-   existing tools do not use it: those that mark a cut do so in their own words.
+   wiki family uses it; the tools not yet migrated mark a cut in their own words.
 6. **Fail with a type, never with a string.** When the tool cannot answer, raise
    `ToolFailure(type, message)` from `ai_arch_toolkit.core`: `not_found` (what was asked for
    does not exist), `validation_error` (an argument is wrong), `upstream` (the source failed or

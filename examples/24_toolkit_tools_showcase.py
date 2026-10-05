@@ -11,10 +11,10 @@ from ai_arch_toolkit import ToolFailure
 from ai_arch_toolkit.toolkit.tools import (
     base64_encode,
     datetime_now,
-    define_word,
     math_eval,
     text_stats,
     unit_convert,
+    wiktionary_entry,
 )
 
 # --- Math ---
@@ -34,9 +34,10 @@ print("  now:", datetime_now())
 # --- Knowledge ---
 print("\n=== Knowledge ===")
 try:  # a tool that cannot answer raises ToolFailure; an agent gets it as a failed result
-    print("  'serendipity':", define_word(word="serendipity")[:200], "...")
+    # A long answer is a window: its text ends with the call that reads on.
+    print(wiktionary_entry(term="serendipity", max_chars=600).value)
 except ToolFailure as failure:
-    print(f"  define_word failed [{failure.error.type}]: {failure.error.message}")
+    print(f"  wiktionary_entry failed [{failure.error.type}]: {failure.error.message}")
 
 print("\nAll tools available:")
 print(
@@ -44,7 +45,7 @@ print(
     "base64_encode, base64_decode, regex_search, text_stats, "
     "json_extract, csv_read, "
     "get_weather, get_forecast, geocode, ip_lookup, country_info, "
-    "wikipedia_search, wikipedia_article, define_word, hacker_news"
+    "wiki_search, wiki_outline, wiki_read, wiktionary_entry, hacker_news"
 )
 print("\nDangerous opt-in tools:")
 print(

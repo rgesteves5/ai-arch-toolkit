@@ -23,6 +23,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from tests.toolkit import wiki_pages
+from tests.toolkit.wiki_pages import MISSING_PAGE
+
 type Kind = Literal["lookup", "search", "other"]
 type Body = dict[str, Any] | list[Any] | str | bytes
 
@@ -65,28 +68,28 @@ class ZeroCase(Case):
 # list that may be empty (point 3: zero results is a success that says so); other tools neither.
 _LOOKUPS = """
     arxiv_paper chembl_molecule chembl_target clinical_trial_study country_info crossref_work
-    csv_read dailymed_label datacite_doi define_word earthquake_event eonet_event
-    europe_pmc_article europe_pmc_citations eurostat_compare eurostat_dataset eurostat_dimensions
-    eurostat_series foodon_term gbif_species gbif_species_match get_forecast get_weather
-    internet_archive_item json_extract list_directory mediawiki_page mediawiki_sections nvd_cve
-    open_food_facts_compare open_food_facts_nutrition open_food_facts_product open_library_isbn
-    open_library_work openfda_food_recall pdb_chemical_component pdb_entry pdb_ligands
-    pubmed_article read_file ror_organization rxnorm_concept rxnorm_ndcs rxnorm_related
-    semantic_scholar_citations semantic_scholar_paper uniprot_crossrefs uniprot_entry
-    uniprot_features uniprot_sequence who_indicator who_series wikidata_entity wikipedia_article
-    wikipedia_related wiktionary_entry world_bank_compare world_bank_indicator world_bank_series
-    youtube_transcript youtube_transcript_languages youtube_transcript_search
+    csv_read dailymed_label datacite_doi earthquake_event eonet_event europe_pmc_article
+    europe_pmc_citations eurostat_compare eurostat_dataset eurostat_dimensions eurostat_series
+    foodon_term gbif_species gbif_species_match get_forecast get_weather internet_archive_item
+    json_extract list_directory nvd_cve open_food_facts_compare open_food_facts_nutrition
+    open_food_facts_product open_library_isbn open_library_work openfda_food_recall
+    pdb_chemical_component pdb_entry pdb_ligands pubmed_article read_file ror_organization
+    rxnorm_concept rxnorm_ndcs rxnorm_related semantic_scholar_citations semantic_scholar_paper
+    uniprot_crossrefs uniprot_entry uniprot_features uniprot_sequence who_indicator who_series
+    wiki_outline wiki_read wikidata_entity wiktionary_entry world_bank_compare
+    world_bank_indicator world_bank_series youtube_transcript youtube_transcript_languages
+    youtube_transcript_search
 """
 _SEARCHES = """
-    arxiv_search brave_search chembl_activity_search chembl_molecule_search chembl_target_search
-    clinical_trials_search crossref_search dailymed_label_search datacite_search earthquake_search
-    eonet_events europe_pmc_search eurostat_dataset_search foodon_search gbif_occurrence_search
-    gbif_species_search gdelt_news_search gdelt_timeline geocode internet_archive_search
-    mediawiki_search nvd_cve_search open_food_facts_search open_library_search
+    arxiv_search brave_search chembl_activity_search chembl_molecule_search
+    chembl_target_search clinical_trials_search crossref_search dailymed_label_search
+    datacite_search earthquake_search eonet_events europe_pmc_search eurostat_dataset_search
+    foodon_search gbif_occurrence_search gbif_species_search gdelt_news_search gdelt_timeline
+    geocode internet_archive_search nvd_cve_search open_food_facts_search open_library_search
     openfda_food_recall_search osm_search_place overpass_pois overpass_query pdb_search
-    pubmed_search regex_search ror_search rxnorm_drug_search search_files semantic_scholar_search
-    tavily_search uniprot_search who_indicators wikidata_search wikidata_sparql wikipedia_search
-    world_bank_indicators
+    pubmed_search regex_search ror_search rxnorm_drug_search search_files
+    semantic_scholar_search tavily_search uniprot_search who_indicators wiki_search
+    wikidata_search wikidata_sparql world_bank_indicators
 """
 _OTHERS = """
     air_quality_current air_quality_forecast base64_decode base64_encode date_add date_diff
@@ -115,13 +118,40 @@ _WHOLE = """
 """
 WHOLE = frozenset(_WHOLE.split())
 
+# Network modules whose errors no source documents, and why: point 2, the source's errors, does
+# not apply to their tools. Every other network tool owes it until its source's answers prove it.
+SOURCELESS: dict[str, str] = {
+    "_web": "any URL the caller gives: no one source documents its errors",
+    "_youtube": "youtube-transcript-api, not the HTTP door: it waits for a seam of its own (T09)",
+}
+
 # Integer parameters with no limit to declare, and why. Every other one needs a ``Range``.
 UNBOUNDED: dict[tuple[str, str], str] = {}
 
 
 # --- Point 1: the window ---------------------------------------------------------------------
 
-WINDOW_CASES: dict[str, Case] = {}
+_WIKI_LONG = wiki_pages.parse_answer("Long page", wiki_pages.long_page())
+_OUTLINED = wiki_pages.parse_answer("Long page", wiki_pages.many_sections())
+_ENTRY_LONG = wiki_pages.parse_answer(wiki_pages.ENTRY_TERM, wiki_pages.long_entry())
+
+WINDOW_CASES: dict[str, Case] = {
+    "wiki_read": Case(
+        args={"title": "Long page", "max_chars": 500}, answers=(Answer(body=_WIKI_LONG),)
+    ),
+    "wiki_outline": Case(args={"title": "Long page"}, answers=(Answer(body=_OUTLINED),)),
+    "wiki_search": Case(
+        args={"query": "physics", "max_results": 2},
+        answers=(
+            Answer(body=wiki_pages.search_answer(["A", "B"], total=5, next_offset=2)),
+            Answer(body=wiki_pages.search_answer(["C", "D"], total=5, next_offset=4)),
+        ),
+    ),
+    "wiktionary_entry": Case(
+        args={"term": wiki_pages.ENTRY_TERM, "max_chars": 500},
+        answers=(Answer(body=_ENTRY_LONG),),
+    ),
+}
 
 
 # --- Point 3: a resource that does not exist ---------------------------------------------------
@@ -142,7 +172,6 @@ NOT_FOUND_CASES: dict[str, Case] = {
         "crossref_work",
         "dailymed_label",
         "datacite_doi",
-        "define_word",
         "earthquake_event",
         "eonet_event",
         "eurostat_dataset",
@@ -174,20 +203,8 @@ NOT_FOUND_CASES: dict[str, Case] = {
     # MediaWiki answers a missing page with an error object in a 200 (en.wikibooks.org,
     # 2026-09-29; https://www.mediawiki.org/wiki/API:Errors_and_warnings).
     **{
-        name: Case(
-            args={},
-            answers=(
-                Answer(
-                    body={
-                        "error": {
-                            "code": "missingtitle",
-                            "info": "The page you specified doesn't exist.",
-                        }
-                    }
-                ),
-            ),
-        )
-        for name in ("mediawiki_page", "mediawiki_sections", "wiktionary_entry")
+        name: Case(args={}, answers=(Answer(body=MISSING_PAGE),))
+        for name in ("wiki_outline", "wiki_read", "wiktionary_entry")
     },
     "read_file": Case(args={"path": "missing.txt"}),
     "csv_read": Case(args={"path": "missing.csv"}),
@@ -197,4 +214,10 @@ NOT_FOUND_CASES: dict[str, Case] = {
 
 # --- Point 3: zero results ------------------------------------------------------------------
 
-ZERO_CASES: dict[str, ZeroCase] = {}
+ZERO_CASES: dict[str, ZeroCase] = {
+    "wiki_search": ZeroCase(
+        args={"query": "zzqqxx"},
+        answers=(Answer(body=wiki_pages.search_answer([], total=0)),),
+        says="zzqqxx",
+    ),
+}

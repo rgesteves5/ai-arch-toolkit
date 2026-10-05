@@ -1,6 +1,6 @@
 # Tools Catalog
 
-The complete list of pre-built tools, grouped by domain. All are built on the [`@tool`](tools.md) decorator, use the standard library only (zero extra pip dependencies; the three `youtube_*` tools need the `youtube` extra), and raise a typed `ToolFailure` when they cannot answer, which the executor returns as a failed result — so agents degrade gracefully. None declares [`Range`](tools.md#defining-tools) bounds: a numeric argument outside a limit given below is moved to the nearest limit without a word, not refused.
+The complete list of pre-built tools, grouped by domain. All are built on the [`@tool`](tools.md) decorator, use the standard library only (zero extra pip dependencies; the three `youtube_*` tools need the `youtube` extra), and raise a typed `ToolFailure` when they cannot answer, which the executor returns as a failed result — so agents degrade gracefully. The wiki family declares its limits as [`Range`](tools.md#defining-tools) bounds, which the executor enforces; the other tools still move a numeric argument outside a limit given below to the nearest limit without a word.
 
 Import any of them and drop them into a `ToolGroup`:
 
@@ -78,28 +78,25 @@ For the conceptual guide (`@tool`, `ToolGroup`, server tools), see [Tools](tools
 
 ## Reference & knowledge
 
-**Wikipedia** — `_wikipedia.py`
+**Wikis** — `_wiki.py`
 
-- `wikipedia_search` — Search Wikipedia, return titles with summaries
-- `wikipedia_article` — Get a specific Wikipedia article summary
-- `wikipedia_related` — Get related article titles from a Wikipedia page
+English Wikipedia by default; any Wikimedia wiki by its host (`wiki="en.wikibooks.org"`,
+`"pt.wikipedia.org"`). Pages are read as the HTML the wiki renders, converted to text: tables one
+row per line with every cell, no navigation boxes, edit links or footnote markers.
 
-**Wikidata & MediaWiki** — `_wikidata.py`, `_mediawiki.py`
+- `wiki_search` — Search a wiki's pages (`intitle:`, `incategory:`, `morelike:Title` for related
+  pages), numbered, with the total and the next offset
+- `wiki_outline` — A page's sections: the number `wiki_read` takes, the heading and its size
+- `wiki_read` — Read a page whole, one section, or the passages around a term (`find=`), window by
+  window
+- `wiktionary_entry` — The English Wiktionary's entry for a term in one language: senses by part
+  of speech, pronunciation, etymology and examples
+
+**Wikidata** — `_wikidata.py`
 
 - `wikidata_search` — Search Wikidata entities by label or alias
 - `wikidata_entity` — Get labels, aliases, claims, and Wikipedia links for a Wikidata QID
 - `wikidata_sparql` — Run read-only Wikidata SPARQL SELECT/ASK queries
-- `mediawiki_search` — Search a Wikimedia MediaWiki API
-- `mediawiki_page` — Fetch and lightly clean a MediaWiki page's wikitext
-- `mediawiki_sections` — List sections for a MediaWiki page
-- `wiktionary_entry` — Fetch a Wiktionary entry focused on one language section
-
-The `mediawiki_*` tools accept an `api_url` only on HTTPS Wikimedia domains and their subdomains,
-without credentials or ports.
-
-**Dictionary** — `_dictionary.py`
-
-- `define_word` — Dictionary definition via Free Dictionary API
 
 **News & events** — `_news.py`, `_gdelt.py`
 

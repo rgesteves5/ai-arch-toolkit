@@ -27,7 +27,6 @@ from ai_arch_toolkit.toolkit.tools._datetime import (
     datetime_now,
     timezone_convert,
 )
-from ai_arch_toolkit.toolkit.tools._dictionary import define_word
 from ai_arch_toolkit.toolkit.tools._earthquake import (
     earthquake_count,
     earthquake_event,
@@ -68,12 +67,6 @@ from ai_arch_toolkit.toolkit.tools._internet_archive import (
 )
 from ai_arch_toolkit.toolkit.tools._json import json_extract
 from ai_arch_toolkit.toolkit.tools._math import math_eval, unit_convert
-from ai_arch_toolkit.toolkit.tools._mediawiki import (
-    mediawiki_page,
-    mediawiki_search,
-    mediawiki_sections,
-    wiktionary_entry,
-)
 from ai_arch_toolkit.toolkit.tools._news import hacker_news
 from ai_arch_toolkit.toolkit.tools._nvd import nvd_cve, nvd_cve_search
 from ai_arch_toolkit.toolkit.tools._open_food_facts import (
@@ -136,15 +129,16 @@ from ai_arch_toolkit.toolkit.tools._weather import (
 )
 from ai_arch_toolkit.toolkit.tools._web_search import brave_search, tavily_search
 from ai_arch_toolkit.toolkit.tools._who_gho import who_indicator, who_indicators, who_series
+from ai_arch_toolkit.toolkit.tools._wiki import (
+    wiki_outline,
+    wiki_read,
+    wiki_search,
+    wiktionary_entry,
+)
 from ai_arch_toolkit.toolkit.tools._wikidata import (
     wikidata_entity,
     wikidata_search,
     wikidata_sparql,
-)
-from ai_arch_toolkit.toolkit.tools._wikipedia import (
-    wikipedia_article,
-    wikipedia_related,
-    wikipedia_search,
 )
 from ai_arch_toolkit.toolkit.tools._world_bank import (
     world_bank_compare,
@@ -187,7 +181,6 @@ __all__ = [
     "date_diff",
     "date_format",
     "datetime_now",
-    "define_word",
     "distance_between",
     "earthquake_count",
     "earthquake_event",
@@ -222,9 +215,6 @@ __all__ = [
     "ip_lookup",
     "json_extract",
     "math_eval",
-    "mediawiki_page",
-    "mediawiki_search",
-    "mediawiki_sections",
     "nvd_cve",
     "nvd_cve_search",
     "open_food_facts_compare",
@@ -271,12 +261,12 @@ __all__ = [
     "who_indicator",
     "who_indicators",
     "who_series",
+    "wiki_outline",
+    "wiki_read",
+    "wiki_search",
     "wikidata_entity",
     "wikidata_search",
     "wikidata_sparql",
-    "wikipedia_article",
-    "wikipedia_related",
-    "wikipedia_search",
     "wiktionary_entry",
     "world_bank_compare",
     "world_bank_countries",

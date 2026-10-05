@@ -553,6 +553,7 @@ class Api:
         *,
         name: str,
         timeout_s: float = 10.0,
+        min_interval_s: float = 0.0,
         error_reader: ErrorReader | None = None,
     ) -> Api:
         """An ``Api`` at ``url``, a URL that came from outside the module.
@@ -569,7 +570,12 @@ class Api:
             msg = f"URL not allowed: {url!r} (https://host/path only)"
             raise HttpError(msg, kind="validation_error")
         return cls(
-            base=url, name=name, timeout_s=timeout_s, error_reader=error_reader, caller_base=True
+            base=url,
+            name=name,
+            timeout_s=timeout_s,
+            min_interval_s=min_interval_s,
+            error_reader=error_reader,
+            caller_base=True,
         )
 
     @property

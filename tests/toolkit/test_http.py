@@ -1185,6 +1185,20 @@ class TestReaderEdges:
             "Unknown route"
         )
 
+    def test_a_url_from_the_caller_keeps_the_pace_it_declares(
+        self, web: _Transport, throttle_waits: list[float]
+    ) -> None:
+        api = Api.within(
+            "https://api.example.org/v1", ["example.org"], name="Example", min_interval_s=0.5
+        )
+        for _ in range(2):
+            web.add("https://api.example.org/v1/x", {"ok": True})
+            api.get_json("x", parse=dict)
+
+        assert api.min_interval_s == 0.5
+        assert throttle_waits[0] == 0  # the first request goes at once
+        assert 0 < throttle_waits[1] <= 0.5  # the second waits for the declared interval
+
 
 BILLED = Api(base="https://api.example.org/v1", name="Example", billed_as="example_search")
 

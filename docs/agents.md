@@ -24,10 +24,10 @@ ReasoningSpec        →  build_flow()  →   Flow   →   Agent.run()  →  Age
 ```python
 from ai_arch_toolkit import LLM, ToolGroup
 from ai_arch_toolkit.toolkit.agents import Agent, ReasoningSpec
-from ai_arch_toolkit.toolkit.tools import wikipedia_search, datetime_now
+from ai_arch_toolkit.toolkit.tools import datetime_now, wiki_search
 
 llm = LLM("claude-sonnet-5")
-tools = ToolGroup(wikipedia_search, datetime_now)
+tools = ToolGroup(wiki_search, datetime_now)
 
 spec = ReasoningSpec(strategy="react", system="You are a concise research assistant.")
 agent = Agent(spec, llm, tools)

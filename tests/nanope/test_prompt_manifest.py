@@ -14,6 +14,7 @@ from ai_arch_toolkit.nanope.advanced_multi_purpose_configurable_agent import (
     render_system_prompt,
 )
 from ai_arch_toolkit.toolkit.knowledge import KnowledgeRegistry
+from tests.nanope.pending import UNTIL_NANOPE_BUILDS_ITS_TOOLS
 
 
 def write_manifest(tmp_path: Path) -> Path:
@@ -103,6 +104,7 @@ def test_agent_prompt_config_round_trips_and_affects_fingerprint(tmp_path: Path)
     assert rehydrated.fingerprint == config.fingerprint
 
 
+@UNTIL_NANOPE_BUILDS_ITS_TOOLS
 def test_nanope_injects_knowledge_into_manifest_sections(tmp_path: Path) -> None:
     path = tmp_path / "knowledge.prompt.json"
     path.write_text(

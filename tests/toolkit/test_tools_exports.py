@@ -56,7 +56,7 @@ def test_dangerous_tools_declare_risk_and_require_approval(name: str) -> None:
 
 
 def test_safe_tools_remain_in_default_exports() -> None:
-    for name in ("datetime_now", "math_eval", "get_weather", "wikipedia_search"):
+    for name in ("datetime_now", "math_eval", "get_weather", "wiki_search"):
         assert name in safe_tools.__all__
         assert hasattr(safe_tools, name)
 

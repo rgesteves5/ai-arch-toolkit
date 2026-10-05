@@ -27,6 +27,8 @@ import io
 import json
 import re
 import sys
+import types
+import typing
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Iterator
@@ -43,6 +45,7 @@ from ai_arch_toolkit.toolkit.tools._window import find_window, page_window, text
 from tests.toolkit.contract_cases import (
     KINDS,
     NOT_FOUND_CASES,
+    SOURCELESS,
     UNBOUNDED,
     WHOLE,
     WINDOW_CASES,
@@ -54,7 +57,14 @@ from tests.toolkit.contract_cases import (
 from tests.toolkit.contract_debt import CUT_HELPERS, DEBT
 from tests.toolkit.error_bodies import ERROR_BODIES, ErrorBody
 from tests.toolkit.http_fakes import FakeResponse
-from tests.toolkit.tool_catalog import NETWORK, PACKAGE, TOOLS, benign, schema_properties
+from tests.toolkit.tool_catalog import (
+    NETWORK,
+    PACKAGE,
+    TOOLS,
+    benign,
+    schema_properties,
+    text_of,
+)
 
 POINTS = ("window", "errors", "not_found", "zero", "limits")
 _TOOLS_DIR = Path(sys.modules[PACKAGE].__path__[0])
@@ -117,9 +127,9 @@ def _outcome(fn: Tool, args: dict[str, Any]) -> str | ToolFailure | None:
         result = fn(**args)
     except ToolFailure as failure:
         return failure
-    except Exception:
+    except Exception:  # any other exception is a broken contract, not a crash of the test
         return None
-    return result if isinstance(result, str) else None
+    return text_of(result)
 
 
 def _args(fn: Tool, case: Case) -> dict[str, Any]:
@@ -187,8 +197,9 @@ def _module(fn: Tool) -> ModuleType:
     return sys.modules[fn.__module__]
 
 
-def _has_api(fn: Tool) -> bool:
-    return any(isinstance(value, Api) for value in vars(_module(fn)).values())
+def _has_source(name: str) -> bool:
+    """A network tool whose source documents its errors (not one of ``SOURCELESS``)."""
+    return name in NETWORK and TOOLS[name].__module__.rsplit(".", 1)[-1] not in SOURCELESS
 
 
 def _error_bodies(name: str) -> list[ErrorBody]:
@@ -320,10 +331,33 @@ def _clamps(fn: Tool, param: str) -> bool:
     return False
 
 
+def _declared_int(fn: Tool, param: str) -> bool:
+    """The signature makes ``param`` an ``int`` (through aliases, ``Annotated`` and unions)."""
+    try:
+        pending = [typing.get_type_hints(fn, include_extras=True).get(param)]
+    except (NameError, TypeError):
+        return False
+    while pending:
+        hint = pending.pop()
+        while isinstance(hint, typing.TypeAliasType):
+            hint = hint.__value__
+        origin = typing.get_origin(hint)
+        if origin is typing.Annotated:
+            pending.append(typing.get_args(hint)[0])
+        elif origin in (types.UnionType, typing.Union):
+            pending.extend(typing.get_args(hint))
+        elif hint is int:
+            return True
+    return False
+
+
 def limits_kept(fn: Tool, unbounded: dict[tuple[str, str], str]) -> bool:
-    """Every integer parameter is bounded in the schema (or listed as unbounded, with why), its
-    docstring's range is the schema's, and no code of its module clamps it."""
+    """Every integer parameter is an integer in the schema, bounded there (or listed as
+    unbounded, with why), its docstring's range is the schema's, and no code of its module
+    clamps it."""
     for param, spec in schema_properties(fn).items():
+        if _declared_int(fn, param) and not _integer_branches(spec):
+            return False  # the schema lost the type, and with it any bound
         for branch in _integer_branches(spec):
             bounds = (branch.get("minimum"), branch.get("maximum"))
             if bounds == (None, None) and (fn.__name__, param) not in unbounded:
@@ -348,8 +382,7 @@ def unmet(name: str, monkeypatch: pytest.MonkeyPatch) -> set[str]:
     owed: set[str] = set()
     if name not in WHOLE and not window_kept(fn, WINDOW_CASES.get(name), monkeypatch):
         owed.add("window")
-    with_api = name in NETWORK and _has_api(fn)
-    if with_api and not errors_kept(fn, _error_bodies(name), monkeypatch):
+    if _has_source(name) and not errors_kept(fn, _error_bodies(name), monkeypatch):
         owed.add("errors")
     lookup = KINDS.get(name) == "lookup"
     if lookup and not not_found_kept(fn, NOT_FOUND_CASES.get(name), monkeypatch):
@@ -391,6 +424,7 @@ def test_every_tool_says_what_it_does_and_every_case_can_run() -> None:
     assert {name for name in ZERO_CASES if KINDS.get(name) != "search"} == set()
     modules = {path.stem for path in _TOOLS_DIR.glob("_*.py")}
     assert set(ERROR_BODIES) <= modules
+    assert set(SOURCELESS) <= modules
     misplaced = {
         name
         for module, bodies in ERROR_BODIES.items()
@@ -496,6 +530,16 @@ def helped(max_results: Annotated[int, Range(1, 50)] = 10) -> str:
     return "\n".join(_first(_LINES.splitlines(), max_results))
 
 
+@tool(capability="compute", schema={"max_results": {"type": "string"}})
+def mistyped(max_results: Annotated[int, Range(1, 50)] = 10) -> str:
+    """List some items.
+
+    Args:
+        max_results: How many.
+    """
+    return "\n".join(_LINES.splitlines()[:max_results])
+
+
 @tool(capability="compute")
 def contradicted(max_results: Annotated[int, Range(1, 50)] = 10) -> str:
     """List some items.
@@ -572,6 +616,7 @@ class TestTheChecks:
         assert not limits_kept(silent, {})
         assert not limits_kept(helped, {})
         assert not limits_kept(contradicted, {})
+        assert not limits_kept(mistyped, {})  # an int the schema no longer calls an integer
         assert not limits_kept(silent, {("silent", "max_results"): "test"})  # it still clamps
 
     def test_zero_results_said_with_the_query_are_kept(

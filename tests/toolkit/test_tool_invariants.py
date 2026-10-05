@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import ast
 import email.message
+import importlib
 import inspect
 import io
 import json
@@ -91,8 +92,10 @@ def _imports(nodes: list[ast.stmt]) -> dict[str, str]:
     return names
 
 
-def _reached(module: ModuleType, root: str) -> set[str]:
-    """Every import origin the function ``root`` reaches through the module's own definitions."""
+def _reached(module: ModuleType, root: str, visited: set[str] | None = None) -> set[str]:
+    """Every import origin the function ``root`` reaches through the module's own definitions,
+    and through the functions it imports from the other tool modules (a shared helper)."""
+    visited = set() if visited is None else visited
     tree = ast.parse(inspect.getsource(module))
     imports = _imports(tree.body)
     definitions: dict[str, ast.AST] = {
@@ -119,11 +122,25 @@ def _reached(module: ModuleType, root: str) -> set[str]:
             seen.add(node.id)
             if node.id in imports:
                 origins.add(imports[node.id])
+                origins |= _through_sibling(imports[node.id], visited)
             elif node.id in definitions:
                 todo.append(definitions[node.id])
             elif node.id == "open":
                 origins.add("builtins.open")
     return origins
+
+
+def _through_sibling(origin: str, visited: set[str]) -> set[str]:
+    """What a definition of another tool module reaches, for one this module imports from it."""
+    owner, _, name = origin.rpartition(".")
+    if not owner.startswith(f"{PACKAGE}._") or owner == f"{PACKAGE}._http" or origin in visited:
+        return set()
+    visited.add(origin)
+    module = importlib.import_module(owner)
+    try:
+        return _reached(module, name, visited)
+    except KeyError:  # not a definition of that module (a name it imports in turn)
+        return set()
 
 
 def _reached_capability(origins: set[str]) -> str:
@@ -155,6 +172,9 @@ def test_the_capability_detector_sees_through_helpers_and_constants() -> None:
     )
     assert _reached_capability(_reached(sys.modules[f"{PACKAGE}._shell"], "run_command")) == (
         "shell"
+    )
+    assert _reached_capability(_reached(sys.modules[f"{PACKAGE}._wiki"], "wiki_read")) == (
+        "network"  # through the shared _mediawiki.wiki_api
     )
     assert _reached_capability({f"{PACKAGE}._http.Api", "json"}) == "network"
     assert _reached_capability({"math", "re"}) == "compute"
