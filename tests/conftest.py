@@ -146,3 +146,15 @@ def throttle_waits(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPat
     if request.path.is_relative_to(_TOOLKIT_TESTS):
         monkeypatch.setattr(_http, "_THROTTLE", _http._Throttle(sleep=waits.append))
     return waits
+
+
+@pytest.fixture
+def sandbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A small working directory for the tools, three levels deep, so "../.." stays inside
+    ``tmp_path`` (the toolkit's invariants and contract)."""
+    cwd = tmp_path / "a" / "b" / "c"
+    cwd.mkdir(parents=True)
+    (cwd / "notes.txt").write_text("needle in a file\n")
+    (cwd / "data.csv").write_text("a,b\n1,2\n")
+    monkeypatch.chdir(cwd)
+    return cwd

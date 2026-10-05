@@ -125,15 +125,20 @@ docstrings/comments, and when to use classes vs functions — see
    `ToolFailure(type, message)` from `ai_arch_toolkit.core`: `not_found` (what was asked for
    does not exist), `validation_error` (an argument is wrong), `upstream` (the source failed or
    explained an error) or `rate_limited`. The message gives the source's reason and the next
-   step. Let the door's `HttpError` through (it is a `ToolFailure`); catch it only to raise a
-   more precise one, such as `not_found` for a 404. Zero results is a successful answer that
-   says so, with the query.
+   step. Let the door's `HttpError` through (it is a `ToolFailure`): what a status means is
+   declared on the request (`missing=` for a 404) or read by the `Api`'s `error_reader`, never
+   by catching it (architecture test). Zero results is a successful answer that says so, with
+   the query.
 7. Export from `toolkit/tools/__init__.py`, or from `toolkit/tools/dangerous.py` for a tool with
    side effects (files, a shell, an evaluator, any URL), which also requires approval.
 8. Tests in `tests/toolkit/test_<file>.py`: patch `HTTP_OPEN` with `respond(...)` or
    `http_error(...)` from `tests/toolkit/http_fakes.py` (sockets are blocked there); use
    `tmp_path` for filesystem tools. `tests/toolkit/test_tool_invariants.py` also runs every tool
-   against hostile arguments and response bodies.
+   against hostile arguments and response bodies, and `tests/toolkit/test_tool_contract.py` holds
+   it to the contract (the window, the source's errors, `not_found`, zero results, limits): give
+   the tool its kind and cases in `contract_cases.py` and its source's error answers in
+   `error_bodies.py`. What a tool does not keep yet is listed in `contract_debt.py`, which only
+   shrinks.
 
 ## Adding an agent flow
 

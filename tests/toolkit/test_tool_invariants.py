@@ -1,7 +1,7 @@
 """Executable invariants every toolkit tool keeps.
 
-The tools are discovered from the modules of ``toolkit.tools`` (``pkgutil`` and
-``__tool_definition__``), so a new tool is held to these rules without being listed anywhere:
+The tools are discovered from the modules of ``toolkit.tools`` (``tool_catalog.py``), so a new
+tool is held to these rules without being listed anywhere:
 
 1. it is exported by exactly one namespace, ``toolkit.tools`` or ``toolkit.tools.dangerous``, under
    its schema name;
@@ -19,11 +19,9 @@ from __future__ import annotations
 
 import ast
 import email.message
-import importlib
 import inspect
 import io
 import json
-import pkgutil
 import subprocess
 import sys
 import urllib.error
@@ -31,7 +29,7 @@ import urllib.request
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import ModuleType
-from typing import Any, get_args
+from typing import Any
 from urllib.parse import urlsplit
 
 import pytest
@@ -40,47 +38,23 @@ from ai_arch_toolkit.core import (
     ApprovalDecision,
     ToolCall,
     ToolFailure,
-    ToolFailureType,
     ToolGroup,
 )
 from ai_arch_toolkit.toolkit.tools import _http
 from ai_arch_toolkit.toolkit.tools._http import Api
 from tests.toolkit.http_fakes import respond
-
-PACKAGE = "ai_arch_toolkit.toolkit.tools"
-SAFE = importlib.import_module(PACKAGE)
-DANGEROUS = importlib.import_module(f"{PACKAGE}.dangerous")
-
-# run_command runs its argument as a shell command: hostile arguments would run on this machine.
-NOT_CALLED = frozenset({"run_command"})
-
-
-def _tools() -> dict[str, Callable[..., Any]]:
-    found: dict[str, Callable[..., Any]] = {}
-    for info in pkgutil.iter_modules(SAFE.__path__):
-        if not info.name.startswith("_"):
-            continue
-        module = importlib.import_module(f"{PACKAGE}.{info.name}")
-        for value in vars(module).values():
-            if (
-                inspect.isfunction(value)
-                and value.__module__ == module.__name__
-                and "__tool_definition__" in vars(value)
-            ):
-                found[value.__name__] = value
-    return found
-
-
-TOOLS = _tools()
-
-
-def _capability(name: str) -> str | None:
-    return TOOLS[name].__tool_definition__.policy.capability
-
-
-NETWORK = sorted(name for name in TOOLS if _capability(name) == "network")
-CALLED = sorted(set(TOOLS) - NOT_CALLED)
-
+from tests.toolkit.tool_catalog import (
+    CALLED,
+    DANGEROUS,
+    NETWORK,
+    PACKAGE,
+    SAFE,
+    TOOLS,
+    answer,
+    benign,
+    capability,
+    properties,
+)
 
 # --- 1. Exports --------------------------------------------------------------------------------
 
@@ -167,7 +141,7 @@ def _reached_capability(origins: set[str]) -> str:
 def test_the_declared_capability_is_what_the_code_reaches(name: str) -> None:
     fn = TOOLS[name]
     reached = _reached_capability(_reached(sys.modules[fn.__module__], name))
-    declared = _capability(name)
+    declared = capability(name)
 
     # python_repl evaluates code in a sandbox: it reaches nothing, and declares what it runs.
     assert declared == reached or (declared, reached) == ("python", "compute")
@@ -204,55 +178,6 @@ _HOSTILE: dict[str, dict[str, Any]] = {
 }
 _UNIFORM = ("empty", "long", "dotdot", "control", "url")
 
-# Valid values, so a tool gets past its own checks and reaches the network or the file system.
-_BENIGN_BY_NAME: dict[str, Any] = {
-    "city": "Lisbon", "name": "Portugal", "title": "Python", "term": "test", "word": "test",
-    "date_str": "2024-01-15", "from_date": "2024-01-01", "to_date": "2024-01-31",
-    "start_date": "2024-01-01", "end_date": "2024-01-31", "pub_start_date": "2024-01-01",
-    "pub_end_date": "2024-01-31", "start_time": "2024-01-01", "end_time": "2024-01-31",
-    "time_str": "12:30", "tz": "Europe/Lisbon", "from_tz": "Europe/Lisbon", "to_tz": "Asia/Tokyo",
-    "expression": "1+1", "text": "abc abc", "encoded": "YWJj", "json_string": '{"a": [1, 2]}',
-    "format_out": "%d/%m/%Y", "unit": "km", "from_unit": "km", "to_unit": "mi",
-    "doi": "10.1000/xyz123", "pmid": "12345678", "arxiv_id": "2301.00001",
-    "cve_id": "CVE-2021-44228", "isbn": "9780140328721", "video_url_or_id": "dQw4w9WgXcQ",
-    "accession": "P69905", "pdb_id": "4HHB", "chembl_id": "CHEMBL25", "nct_id": "NCT04280705",
-    "rxcui": "161", "qid": "Q42", "indicator": "NY.GDP.MKTP.CD",
-    "indicator_code": "WHOSIS_000001", "country": "PT", "countries": "PT;ES", "language": "en",
-    "ip": "8.8.8.8", "dataset_id": "nama_10_gdp", "geo_codes": "PT,ES",
-    "barcode": "3017620422003", "barcodes": "3017620422003,5449000000996",
-    "work_id": "OL45883W", "ror_id": "https://ror.org/05a28rw58",
-    "setid": "1efe378e-fee1-4ae9-a4a2-9b8d25ad1d35", "taxon_key": "2435099",
-    "event_id": "us7000abcd", "identifier": "12345678", "source": "MED",
-    "paper_id": "10.1000/xyz123", "term_id": "FOODON_00001002", "component_id": "ATP",
-    "recall_number": "F-0283-2017", "tag_key": "amenity", "tag_value": "cafe",
-    "bbox": "38.70,-9.20,38.75,-9.10", "languages": "en", "year": "2020",
-    "start_year": "2010", "end_year": "2020", "from_year": "2010", "to_year": "2020",
-    "api_url": "https://en.wiktionary.org/w/api.php", "molecule_chembl_id": "CHEMBL25",
-    "target_chembl_id": "CHEMBL204", "ndc": "0002-3227-30", "drug_name": "aspirin",
-    "url": "https://example.com/", "code": "1+1", "lat": 38.7, "lon": -9.1, "lat1": 38.7,
-    "lon1": -9.1, "lat2": 41.1, "lon2": -8.6, "latitude": 38.7, "longitude": -9.1, "value": 1.0,
-}  # fmt: skip
-_BENIGN_BY_TOOL: dict[tuple[str, str], Any] = {
-    ("csv_read", "path"): "data.csv",
-    ("read_file", "path"): "notes.txt",
-    ("list_directory", "path"): ".",
-    ("list_directory", "pattern"): "*",
-    ("search_files", "directory"): ".",
-    ("search_files", "pattern"): "needle",
-    ("json_extract", "path"): "a[0]",
-    ("regex_search", "pattern"): "a",
-    ("date_diff", "start"): "2024-01-01",
-    ("date_diff", "end"): "2024-01-31",
-    ("date_diff", "unit"): "days",
-    ("rxnorm_drug_search", "name"): "aspirin",
-    ("gbif_species_match", "name"): "Puma concolor",
-    ("overpass_query", "query"): "[out:json];node(1);out;",
-    ("wikidata_sparql", "query"): "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1",
-    ("weather_units", "unit"): "celsius",
-    ("distance_between", "unit"): "km",
-    ("clinical_trials_search", "query"): "asthma",
-    ("earthquake_search", "max_radius_km"): 100.0,
-}
 _TARGETED: dict[str, list[Any]] = {
     "pattern": ["(", "[", "", "/etc/*", "**", "***", "../*", "**/../**", "(?P<x>", "(a+)+$"],
     "expression": ["1/0", "(" * 300, "-" * 3000 + "1", "10**400*1.5", "1e308*10", "2**-1e9"],
@@ -266,57 +191,26 @@ _TARGETED: dict[str, list[Any]] = {
 }
 
 
-def _properties(name: str) -> dict[str, dict[str, Any]]:
-    return TOOLS[name].__tool_definition__.schema.input_schema.get("properties", {})
-
-
-def _benign(name: str) -> dict[str, Any]:
-    args: dict[str, Any] = {}
-    for param, spec in _properties(name).items():
-        kind = spec.get("type")
-        value = _BENIGN_BY_NAME.get(param)
-        if (name, param) in _BENIGN_BY_TOOL:
-            args[param] = _BENIGN_BY_TOOL[(name, param)]
-        elif value is not None and (kind == "string") == isinstance(value, str):
-            args[param] = value
-        elif "default" in spec:
-            args[param] = spec["default"]
-        else:
-            args[param] = {"integer": 1, "number": 1.0, "boolean": False}.get(kind, "test")
-    return args
-
-
 def _uniform(name: str, label: str) -> dict[str, Any]:
     index = _UNIFORM.index(label)
     args: dict[str, Any] = {}
-    for param, spec in _properties(name).items():
+    for param, spec in properties(name).items():
         values = list(_HOSTILE.get(spec.get("type", ""), {}).values())
-        args[param] = values[index % len(values)] if values else _benign(name)[param]
+        args[param] = values[index % len(values)] if values else benign(name)[param]
     return args
 
 
 def _plans(name: str) -> Iterator[tuple[str, dict[str, Any]]]:
     """The benign call, every argument hostile at once, then one hostile argument at a time."""
-    base = _benign(name)
+    base = benign(name)
     yield "benign", base
     for label in _UNIFORM:
         yield f"uniform:{label}", _uniform(name, label)
-    for param, spec in _properties(name).items():
+    for param, spec in properties(name).items():
         for label, value in _HOSTILE.get(spec.get("type", ""), {}).items():
             yield f"{param}={label}", {**base, param: value}
         for index, value in enumerate(_TARGETED.get(param, [])):
             yield f"{param}#{index}", {**base, param: value}
-
-
-@pytest.fixture
-def sandbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A small working directory, three levels deep, so "../.." stays inside ``tmp_path``."""
-    cwd = tmp_path / "a" / "b" / "c"
-    cwd.mkdir(parents=True)
-    (cwd / "notes.txt").write_text("needle in a file\n")
-    (cwd / "data.csv").write_text("a,b\n1,2\n")
-    monkeypatch.chdir(cwd)
-    return cwd
 
 
 def _offline(sent: list[str]) -> Callable[[urllib.request.Request, float], Any]:
@@ -354,7 +248,7 @@ def test_hostile_arguments_never_move_a_request_off_the_modules_apis(
     module = sys.modules[TOOLS[name].__module__]
 
     for _label, args in _plans(name):
-        _answer(name, args)
+        answer(name, args)
 
     for url in sent:
         segments = urlsplit(url).path.split("/")
@@ -363,20 +257,6 @@ def test_hostile_arguments_never_move_a_request_off_the_modules_apis(
 
 
 # --- 4. Text or a typed failure, nothing else -----------------------------------------------
-
-_FAILURE_TYPES = frozenset(get_args(ToolFailureType.__value__))
-
-
-def _answer(name: str, args: dict[str, Any]) -> str | ToolFailure:
-    """The tool's text, or the typed failure it raised; any other exception fails the test."""
-    try:
-        result = TOOLS[name](**args)
-    except ToolFailure as failure:
-        assert failure.error.type in _FAILURE_TYPES, failure.error
-        assert failure.error.message.strip(), failure.error
-        return failure
-    assert isinstance(result, str), result
-    return result
 
 
 @pytest.mark.timeout(60)
@@ -388,7 +268,7 @@ def test_hostile_arguments_give_text_or_a_typed_failure(
     for opener in (_offline([]), _http._open):
         monkeypatch.setattr(_http, "_open", opener)
         for label, args in _plans(name):
-            assert isinstance(_answer(name, args), str | ToolFailure), label
+            assert isinstance(answer(name, args), str | ToolFailure), label
 
 
 _BODIES: list[bytes | int] = [
@@ -438,11 +318,11 @@ def test_hostile_response_bodies_give_text_or_a_typed_failure(
     for body in _BODIES:
         sent: list[str] = []
         monkeypatch.setattr(_http, "_open", _answering(body, sent))
-        answer = _answer(name, _benign(name))
+        given = answer(name, benign(name))
         if sent and body in (500, 429):  # a source that fails or rate limits is no answer
-            assert isinstance(answer, ToolFailure), (body, answer)
+            assert isinstance(given, ToolFailure), (body, given)
             expected = "rate_limited" if body == 429 else "upstream"
-            assert answer.error.type == expected, (body, answer.error)
+            assert given.error.type == expected, (body, given.error)
 
 
 def _keys_read(module: ModuleType) -> list[str]:
@@ -484,7 +364,7 @@ def test_bodies_built_from_the_keys_a_module_reads_give_text_or_a_typed_failure(
     # A tool that reads a response outside its _http parse boundary crashes on one of these.
     for body in _shaped_bodies(_keys_read(sys.modules[TOOLS[name].__module__])):
         monkeypatch.setattr(_http, "_open", _answering(body))
-        assert isinstance(_answer(name, _benign(name)), str | ToolFailure), body[:200]
+        assert isinstance(answer(name, benign(name)), str | ToolFailure), body[:200]
 
 
 @pytest.mark.parametrize(
@@ -537,7 +417,7 @@ def test_output_through_the_executor_stays_within_the_limit(
 ) -> None:
     group = ToolGroup(TOOLS[name], approval_handler=_approve_all, max_output_chars=_LIMIT)
     big = b'{"x": "' + b"y" * 5_000_000 + b'"}'
-    runs = [("benign, 5 MB body", _answering(big), _benign(name))]
+    runs = [("benign, 5 MB body", _answering(big), benign(name))]
     runs += [(label, _offline([]), args) for label, args in _plans(name)]
 
     for label, opener, args in runs:
