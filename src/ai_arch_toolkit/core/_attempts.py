@@ -133,7 +133,8 @@ def request_facts(
 ) -> OperationRequest:
     """Build neutral facts, stringifying content only for strict admission or a soft failure."""
     controller = scope.controller
-    wants_size = sized
+    # A shared cost ceiling holds every call's worst case, which needs the size (D57).
+    wants_size = sized or (scope.shared is not None and scope.shared.bounds_cost)
     if controller is not None and not wants_size:
         wants_size = (
             controller.wants_request_size()

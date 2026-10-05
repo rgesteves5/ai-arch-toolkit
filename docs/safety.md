@@ -376,6 +376,33 @@ lifecycle handle, so cleanup can run safely from the consumer's thread.
 
 ---
 
+### A budget several runs share
+
+A `BudgetPolicy` caps one run. Runs in parallel spend from one ceiling when each is bound to the
+same `SharedBudget`, seeded with what was already spent, from an app's ledger say (D57):
+
+```python
+from ai_arch_toolkit.core import RunConfig
+from ai_arch_toolkit.toolkit.budget import BudgetController, BudgetPolicy, SharedBudget
+
+today = SharedBudget(BudgetPolicy(max_cost=5.0), spent=ledger.spent_today())
+
+config = RunConfig(controller=BudgetController(BudgetPolicy(max_cost=1.0)), shared=today)
+await asyncio.gather(agent.run(task_a, config=config), agent.run(task_b, config=config))
+
+today.snapshot().cost        # the seed plus what both runs spent
+today.report()               # a BudgetReport against the shared caps
+```
+
+Every operation of a bound run is admitted against the shared ceiling too, under its own lock,
+and its hold and settlement land in both meters. So that runs never pass `max_cost` together, an
+operation holds its worst case there (the bound of [failed calls](#failed-llm-calls)), even in a
+run with no budget of its own: near the ceiling, a call whose worst case does not fit is refused,
+though its real cost might have. An operation that cannot be priced is refused under a shared cost
+cap, and with `unpriced="fail_closed"` a cost no one could bound closes it. Only `max_cost`,
+`max_llm_calls` and `max_tool_calls` are shared; time and tokens stay per run. The core mechanism
+is `SharedMeter(limits, spent=...)`, which `SharedBudget` builds from a policy.
+
 ## Step-level policy callbacks
 
 Separate from run-wide budgets, a `Policy` on a `Step` or `Flow` decides what happens at each step's boundaries. The declarative callbacks:

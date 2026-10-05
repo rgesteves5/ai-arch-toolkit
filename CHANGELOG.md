@@ -56,6 +56,11 @@ flows, manifests) needs these changes; each one is detailed below.
   - `select` or `serialize_as` on an inline template.
 
 ### Added
+- **A budget several runs share** (D57): `SharedBudget(policy, spent=...)` (on the core's
+  `SharedMeter`), bound to each run with `RunConfig(shared=...)`. Runs in parallel are admitted
+  and settled against it under one lock, each operation holding its worst case there, so
+  together they never pass its `max_cost`; `spent` seeds it with what an app's ledger already
+  holds. It shares `max_cost`, `max_llm_calls` and `max_tool_calls`.
 - **Web search on the toolkit's side** (D55): `brave_search` (Brave Search API,
   `BRAVE_SEARCH_API_KEY`) and `tavily_search` (Tavily, `TAVILY_API_KEY`), for any model, local
   ones included. Without its key, each says where to get one and sends nothing.

@@ -49,6 +49,7 @@ from ai_arch_toolkit.core._metering import (
     Reservation,
     ResourceLimits,
     RunConfig,
+    SharedMeter,
     UsageEvent,
     UsageSink,
 )
@@ -242,6 +243,7 @@ __all__ = [
     "RunConfig",
     "RunState",
     "ServerTool",
+    "SharedMeter",
     "State",
     "StateSnapshot",
     "Step",

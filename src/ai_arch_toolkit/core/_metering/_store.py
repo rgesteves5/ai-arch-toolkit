@@ -40,7 +40,7 @@ from ai_arch_toolkit.core._metering._operation import MeterOperation, OperationR
 from ai_arch_toolkit.core._redaction import Redactor
 from ai_arch_toolkit.core._response import Usage
 
-__all__ = ["MeterStore"]
+__all__ = ["MeterStore", "SharedMeter"]
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +153,104 @@ def _abort(c: _Counters, op: _LiveOp) -> None:
 type FailureBound = Callable[[OperationRequest], Money | None]
 
 
+def _snapshot(c: _Counters, elapsed_s: float) -> MeterSnapshot:
+    return MeterSnapshot(
+        llm_calls=c.c_llm,
+        tool_calls=c.c_tool,
+        input_tokens=c.c_input,
+        output_tokens=c.c_output,
+        cache_read_tokens=c.c_cache_read,
+        cache_write_tokens=c.c_cache_write,
+        cost=c.c_cost,
+        unknown_cost_count=c.unknown,
+        uncertain_cost=c.uncertain,
+        uncertain_cost_count=c.uncertain_count,
+        out_llm_calls=c.o_llm,
+        out_tool_calls=c.o_tool,
+        out_input_tokens=c.o_input,
+        out_output_tokens=c.o_output,
+        out_cost=c.o_cost,
+        elapsed_s=elapsed_s,
+    )
+
+
+class SharedMeter:
+    """A ceiling several runs spend from at once (G-28, D57).
+
+    Each run bound to it (``RunConfig(shared=...)``) keeps its own meter, and every operation it
+    opens is admitted against this one too, under this meter's lock, which is taken after the
+    run's (always in that order). The operation's hold and its settlement land in both. So that
+    runs in parallel never pass ``max_cost`` together, an operation holds its worst case here
+    (D49) even in a run without a budget; one that cannot be priced is refused. ``spent`` seeds
+    the meter with what was spent before (an app's ledger).
+
+    Time and tokens are not shared: ``limits`` may cap the cost and the counts of LLM and tool
+    calls. With ``fail_on_unknown``, a cost no one could bound closes the ceiling.
+    """
+
+    def __init__(
+        self,
+        limits: ResourceLimits | None = None,
+        *,
+        spent: Money | None = None,
+        fail_on_unknown: bool = True,
+    ) -> None:
+        if limits is not None and (
+            limits.max_wall_s is not None
+            or limits.max_input_tokens is not None
+            or limits.max_output_tokens is not None
+            or limits.max_total_tokens is not None
+        ):
+            raise ValueError(
+                "time and tokens are not shared: a shared ceiling caps the cost and the calls"
+            )
+        self._lock = threading.Lock()
+        self._limits = limits
+        self._fail_on_unknown = fail_on_unknown
+        self._started_at = time.monotonic()
+        self._counters = _Counters(c_cost=spent or Money.zero())
+
+    @property
+    def limits(self) -> ResourceLimits | None:
+        return self._limits
+
+    @property
+    def bounds_cost(self) -> bool:
+        """Whether it caps the cost, which makes every operation hold its worst case."""
+        return self._limits is not None and self._limits.max_cost is not None
+
+    def snapshot(self) -> MeterSnapshot:
+        """An atomic read: the seed plus what every bound run spent, holds included."""
+        with self._lock:
+            return _snapshot(self._counters, time.monotonic() - self._started_at)
+
+    def _reserve(self, op: _LiveOp) -> AdmissionDenied | None:
+        """Admit ``op`` and hold its reservation, or say why not (the run's lock is held)."""
+        with self._lock:
+            snap = _snapshot(self._counters, 0.0)
+            denial = limit_denial(snap, self._limits, op.request, op.reservation)
+            if (
+                denial is None
+                and self.bounds_cost
+                and self._fail_on_unknown
+                and snap.unknown_cost_count
+            ):
+                denial = AdmissionDenied(
+                    "a call could not be priced — the shared ceiling fails closed",
+                    dimension="cost",
+                    limit=self._limits.max_cost.to_float()
+                    if self._limits and self._limits.max_cost
+                    else None,
+                )
+            if denial is None:
+                _reserve(self._counters, op)
+            return denial
+
+    def _apply(self, mutate: Callable[[_Counters], None]) -> None:
+        with self._lock:
+            mutate(self._counters)
+
+
 def _fail_cost(op: _LiveOp, delivery: Delivery, bound_of: FailureBound | None) -> Cost:
     """Price a failure outside the store lock: uncertain, at most the operation's strict hold, or
     else the worst case of its facts (D49). Foreign pricing must never break cleanup."""
@@ -204,9 +302,11 @@ class MeterStore:
         redactor: Redactor | None = None,
         sink_error_policy: str = "log",
         failure_bound: FailureBound | None = None,
+        shared: SharedMeter | None = None,
     ) -> None:
         self._lock = threading.Lock()
         self._failure_bound = failure_bound
+        self._shared = shared
         self._clock = clock
         self._started_at = clock()
         self._sinks = tuple(sinks)
@@ -299,33 +399,20 @@ class MeterStore:
             del self._spans[span_id]
 
     def _snapshot_of(self, span: _Span) -> MeterSnapshot:
-        c = span.counters
-        return MeterSnapshot(
-            llm_calls=c.c_llm,
-            tool_calls=c.c_tool,
-            input_tokens=c.c_input,
-            output_tokens=c.c_output,
-            cache_read_tokens=c.c_cache_read,
-            cache_write_tokens=c.c_cache_write,
-            cost=c.c_cost,
-            unknown_cost_count=c.unknown,
-            uncertain_cost=c.uncertain,
-            uncertain_cost_count=c.uncertain_count,
-            out_llm_calls=c.o_llm,
-            out_tool_calls=c.o_tool,
-            out_input_tokens=c.o_input,
-            out_output_tokens=c.o_output,
-            out_cost=c.o_cost,
-            elapsed_s=self._clock() - span.started_at,
-        )
+        return _snapshot(span.counters, self._clock() - span.started_at)
 
-    def _apply(self, parent_span_id: str, mutate: Callable[[_Counters], None]) -> None:
-        """Apply a counter delta to the op's span and every ancestor up to the run root."""
+    def _apply(
+        self, parent_span_id: str, mutate: Callable[[_Counters], None], *, shared: bool = True
+    ) -> None:
+        """Apply a counter delta to the op's span and every ancestor up to the run root, and to
+        the shared meter the run spends from (D57)."""
         sid: str | None = parent_span_id
         while sid is not None:
             span = self._spans[sid]
             mutate(span.counters)
             sid = span.parent
+        if shared and self._shared is not None:
+            self._shared._apply(mutate)
 
     # ------------------------------------------------------------------ open
     def open(
@@ -350,6 +437,7 @@ class MeterStore:
                 raise decision.denial or AdmissionDenied()
             reservation = decision.reservation
             limits = decision.limits
+        reservation = self._shared_hold(request, reservation)
 
         with self._lock:
             if request.parent_span_id not in self._spans:
@@ -366,9 +454,27 @@ class MeterStore:
                 controller=controller,
                 failure_request=failure_request,
             )
+            if self._shared is not None and (denial := self._shared._reserve(op)) is not None:
+                raise denial
             self._ops[op_id] = op
-            self._apply(op.request.parent_span_id, lambda c: _reserve(c, op))
+            self._apply(op.request.parent_span_id, lambda c: _reserve(c, op), shared=False)
             return MeterOperation(self, op_id)
+
+    def _shared_hold(self, request: OperationRequest, reservation: Reservation) -> Reservation:
+        """Under a shared cost ceiling, the operation holds at least its worst case (D57)."""
+        if self._shared is None or not self._shared.bounds_cost:
+            return reservation
+        bound = None
+        if self._failure_bound is not None:
+            try:
+                bound = self._failure_bound(request)
+            except Exception:
+                logger.exception("the worst case of an operation could not be priced")
+        if bound is None:
+            raise AdmissionDenied(
+                "cannot price this operation under a shared cost ceiling", dimension="cost"
+            )
+        return replace(reservation, cost=bound) if bound > reservation.cost else reservation
 
     def _would_exceed_unlocked(
         self,

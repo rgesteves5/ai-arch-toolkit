@@ -21,7 +21,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Protocol
 
-from ai_arch_toolkit.core._metering._store import MeterStore
+from ai_arch_toolkit.core._metering._store import MeterStore, SharedMeter
 from ai_arch_toolkit.core._metering._worst_case import worst_case
 
 if TYPE_CHECKING:
@@ -67,6 +67,7 @@ class RunConfig:
     sink_error_policy: SinkErrorPolicy = "log"  # "raise" propagates a raising sink's error
     allow_unmetered_batch: bool = False  # permit batch_* under an enforcing scope (unmetered)
     retain_meter_events: bool = False  # keep emitted events in-memory; read via scope.events()
+    shared: SharedMeter | None = None  # a ceiling other runs spend from at once (D57)
 
 
 class _RetainingSink:
@@ -96,7 +97,9 @@ class MeterScope:
             redactor=cfg.redactor,
             sink_error_policy=cfg.sink_error_policy,
             failure_bound=self._failure_bound,
+            shared=cfg.shared,
         )
+        self.shared = cfg.shared
         self._controller = cfg.controller
         self.allow_unmetered_batch = cfg.allow_unmetered_batch
         self._scope_token: object | None = None

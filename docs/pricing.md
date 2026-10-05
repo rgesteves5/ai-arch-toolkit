@@ -201,7 +201,7 @@ from ai_arch_toolkit import Flow, BudgetPolicy
 flow = Flow(*steps, budget_policy=BudgetPolicy(max_cost=0.50, max_llm_calls=20))
 ```
 
-See [Tool Governance & Safety → Cumulative budgets](safety.md#cumulative-budgets) for the full budget model and enforcement behavior.
+See [Tool Governance & Safety → Cumulative budgets](safety.md#cumulative-budgets) for the full budget model and enforcement behavior, and [A budget several runs share](safety.md#a-budget-several-runs-share) for one ceiling that runs in parallel spend from.
 
 ---
 

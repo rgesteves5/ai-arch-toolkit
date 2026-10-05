@@ -21,6 +21,7 @@ from ai_arch_toolkit.core._metering._events import EventStatus, UsageEvent, Usag
 from ai_arch_toolkit.core._metering._money import Money
 from ai_arch_toolkit.core._metering._operation import OperationRequest
 from ai_arch_toolkit.core._metering._scope import Pricer, RunConfig
+from ai_arch_toolkit.core._metering._store import SharedMeter
 
 __all__ = [
     "AdmissionController",
@@ -37,6 +38,7 @@ __all__ = [
     "Reservation",
     "ResourceLimits",
     "RunConfig",
+    "SharedMeter",
     "UsageEvent",
     "UsageSink",
 ]
