@@ -6,9 +6,9 @@
 
 A lightweight, unified LLM client for Anthropic, OpenAI, Gemini, xAI, and Meta — plus
 Flow orchestration, nine built-in agent architectures, a typed graph layer with
-agent memory, file-backed prompt templates, knowledge loading, moderation, budgets, and
-metering. Zero core
-dependencies; bring your own provider SDK.
+agent memory, file-backed prompt templates, knowledge loading, moderation, and cost control
+(per-step metering, budgets enforced before each call). Zero core dependencies; bring your own
+provider SDK.
 
 ## Why
 
@@ -16,6 +16,7 @@ dependencies; bring your own provider SDK.
 - **Local models.** Point at Ollama, LM Studio, or vLLM with `base_url=` — arbitrary model tags, no API key needed on localhost, real-time reasoning events.
 - **Async-first, with sync wrappers.** Most coroutines have a `_sync` twin (`complete_sync`, `run_sync`, …); `GraphStore` and the memory views are async-only.
 - **Agent architectures as building blocks.** ReAct, Reflexion, ReWOO, Plan-Execute, Tree of Thoughts, LATS, Self-Discovery, LLM Compiler, and Generate-Review — as declarative `Agent` strategies or standalone `Flow` factories.
+- **Cost you can see and cap.** Every call is priced, and every agent or flow run is metered down to each step. A `BudgetPolicy` (USD, tokens, calls, wall time) is checked before each call is sent, with a strict mode that holds each call's worst case. Failed calls the provider may have billed, paid tools, and parallel runs sharing one ceiling all count. See [Cost control](docs/cost-control.md).
 - **No mandatory deps.** Install only the provider SDKs you actually use.
 
 ## Install
@@ -146,6 +147,31 @@ register your own — see the end-to-end guide
 [`docs/configuring-agents.md`](docs/configuring-agents.md) and the reference
 [`docs/agents.md`](docs/agents.md).
 
+### Cap what a run may spend
+
+Every run is metered. Attach a budget to enforce caps as well: the meter checks each call before it
+is sent, and the run stops cleanly at the cap.
+
+```python
+from ai_arch_toolkit import BudgetPolicy
+
+result = agent.run_sync(
+    "Weather and coordinates of Tokyo?",
+    budget_policy=BudgetPolicy(max_cost=0.05, max_llm_calls=10, reserve="strict"),
+)
+
+report = result.report
+print(f"${report.cost:.4f} in {report.llm_calls} calls · stopped by: {report.breached or 'nothing'}")
+for step in result.flow_result.trace.steps:  # what each step spent
+    if step.metered is not None:
+        print(f"  {step.name}: ${step.metered.cost.to_float():.4f}")
+```
+
+`reserve="strict"` holds each call's worst case before sending it, so calls running in parallel
+can't pass `max_cost` together. Without it, a cost cap is soft: the call that crosses it completes.
+For shared ceilings across runs, per-step caps, how failed calls are priced, and audit sinks, see
+[`docs/cost-control.md`](docs/cost-control.md).
+
 ### The same agent, one level down
 
 Every strategy compiles to a `Flow` you can also build and drive yourself:
@@ -245,6 +271,7 @@ Browse `docs/` for guides, or jump straight to:
 
 - [`docs/getting-started.md`](docs/getting-started.md)
 - [`docs/configuring-agents.md`](docs/configuring-agents.md) — how agents, configs, and prompts fit together
+- [`docs/cost-control.md`](docs/cost-control.md) — see, cap, and audit what runs spend
 - [`docs/agents.md`](docs/agents.md)
 - [`docs/prompts.md`](docs/prompts.md)
 - [`docs/context-model.md`](docs/context-model.md)

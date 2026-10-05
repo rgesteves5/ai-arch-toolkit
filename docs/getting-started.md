@@ -236,6 +236,7 @@ See `examples/28_memory_graph_basics.py` for the memory layer built on top of th
 ## Next Steps
 
 - See `examples/` for complete working examples
+- See what a run costs, and cap it: [Cost Control & Budgets](cost-control.md)
 - Read [Prompts](prompts.md) and the [Context Model](context-model.md)
 - Read the [API docs](api.md) for detailed reference
 - Check the [UV guide](uv-guide.md) for development setup

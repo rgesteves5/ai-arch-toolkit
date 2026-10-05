@@ -13,6 +13,8 @@ nav:
   - Agent & ReasoningSpec: agents.md
   - Flow Architecture: flow-architecture.md
   - Concurrency & Throttling: concurrency.md
+  - Cost Control & Budgets: cost-control.md
+  - Pricing & Cost Tracking: pricing.md
   - LLM Facade: llm.md
   - Content & Messages: content.md
   - Image Generation: images.md
@@ -33,7 +35,6 @@ nav:
   - Middleware: middleware.md
   - Memory: memory.md
   - Moderation: moderation.md
-  - Pricing & Cost Tracking: pricing.md
   - Graph: graph.md
   - Examples: examples.md
   - Model Compatibility: model-compatibility.md

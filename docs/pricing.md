@@ -1,6 +1,6 @@
 # Pricing & Cost Tracking
 
-A response's cost is estimated from a built-in pricing registry — so you can track and cap spend without wiring up your own price table.
+A response's cost is estimated from a built-in pricing registry — so you can track and cap spend without wiring up your own price table. This page covers the prices; for seeing and capping what runs spend, start at [Cost Control & Budgets](cost-control.md).
 
 ## Automatic cost estimation
 
@@ -168,9 +168,10 @@ print(f"{report.llm_calls} LLM calls, {report.total_tokens} tokens")
 if report.cost_uncertain:            # some call couldn't be priced -> cost is a lower bound
     print(f"Cost bound: {report.cost_at_most!r}")  # None if any cost is unbounded
 
-# Per-step timing is still on the trace (per-step cost lives in the meter, not the trace):
+# Per step: what the meter measured in the step's own span (None for a skipped step)
 for st in result.trace.steps:
-    print(f"  {st.name}: {st.duration:.1f}s")
+    if st.metered is not None:
+        print(f"  {st.name}: {st.duration:.1f}s, ${st.metered.cost.to_float():.4f}")
 ```
 
 `Agent` results expose the same via `agent_result.report` / `.cost` / `.usage`.
@@ -201,7 +202,7 @@ from ai_arch_toolkit import Flow, BudgetPolicy
 flow = Flow(*steps, budget_policy=BudgetPolicy(max_cost=0.50, max_llm_calls=20))
 ```
 
-See [Tool Governance & Safety → Cumulative budgets](safety.md#cumulative-budgets) for the full budget model and enforcement behavior, and [A budget several runs share](safety.md#a-budget-several-runs-share) for one ceiling that runs in parallel spend from.
+See [Cost Control & Budgets](cost-control.md) for what each cap guarantees and the recipes, and [Tool Governance & Safety → Cumulative budgets](safety.md#cumulative-budgets) for the full budget model and enforcement behavior, and [A budget several runs share](safety.md#a-budget-several-runs-share) for one ceiling that runs in parallel spend from.
 
 ---
 

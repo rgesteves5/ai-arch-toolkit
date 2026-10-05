@@ -18,7 +18,8 @@ This page is the capabilities index — each subsystem has its own focused page.
 | Prompt-injectable reference data | [Knowledge Registry](knowledge.md) |
 | Files, templates, manifests, layouts, stability, and fingerprints | [Prompts](prompts.md) |
 | Messages and multimodal content | [Content & Messages](content.md) |
-| Cost estimation, the pricing registry, run-wide budgets | [Pricing & Cost Tracking](pricing.md) |
+| Seeing and capping spend: per-run and per-step cost, budgets, shared ceilings, failed calls, audit | [Cost Control & Budgets](cost-control.md) |
+| Cost estimation, the pricing registry, paid tools | [Pricing & Cost Tracking](pricing.md) |
 | Input/output content moderation | [Moderation](moderation.md) |
 | The general-purpose graph layer | [Graph](graph.md) |
 

@@ -20,7 +20,7 @@ A lightweight, unified LLM client and agent architecture toolkit for Python.
 - **Streaming** — text chunks and rich structured events (thinking, tool calls)
 - **Middleware** — before/after hooks for caching, cost tracking, guardrails
 - **Fallback** — automatic provider failover on errors
-- **Metering & budgets** — every flow and agent run is metered; `BudgetPolicy` caps LLM calls, tool calls, tokens, cost, and wall time
+- **Cost control** — every call priced, every flow and agent run metered down to each step; `BudgetPolicy` caps LLM calls, tool calls, tokens, cost, and wall time, checked before each call ([Cost Control & Budgets](cost-control.md))
 - **Batch operations** — `LLM.batch_submit()` / `batch_status()` / `batch_results()` with batch request/result types
 
 ## Quick install
@@ -46,6 +46,7 @@ print(response.text)
 
 - [Getting Started](getting-started.md) — installation, first steps, examples
 - [Configuring Agents](configuring-agents.md) — the end-to-end guide: specs, per-phase config, prompts, manifests
+- [Cost Control & Budgets](cost-control.md) — see, cap, and audit what runs spend
 - [Prompts](prompts.md) — literal prompts, files, templates, manifests, and layouts
 - [Context Model](context-model.md) — Content vs Resources vs Knowledge vs Memory
 - [Model Compatibility](model-compatibility.md) — live-probed model feature matrix
