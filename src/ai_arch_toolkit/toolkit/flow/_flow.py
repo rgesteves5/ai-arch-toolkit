@@ -34,12 +34,40 @@ def _scope_report(scope: object) -> BudgetReport | None:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class FlowStep:
-    """A Step within a Flow, with optional dependencies and conditions."""
+    """A Step within a Flow, with its dependencies and its condition.
+
+    Any dependency makes the flow a DAG. A step waits until every step it names has ended, and
+    then runs or is skipped (G-33):
+
+    * ``after``: each one must have succeeded;
+    * ``after_any``: at least one must have succeeded, as where the paths a ``when`` split join;
+    * ``after_optional``: the step runs however they ended.
+
+    A step skipped because of its dependencies names them in its trace's ``blocked_by``.
+    """
 
     step: Step
     after: tuple[str, ...] = ()
+    after_any: tuple[str, ...] = ()
+    after_optional: tuple[str, ...] = ()
     when: ConditionFn | None = None
     scope: Scope | None = None
+
+    @property
+    def dependencies(self) -> tuple[str, ...]:
+        """Every step this one waits for, in the order declared."""
+        return (*self.after, *self.after_any, *self.after_optional)
+
+
+def _as_flow_step(item: FlowStep | Step | Flow) -> FlowStep:
+    """A flow's step as given, a bare step, or a nested flow (run as a step)."""
+    if isinstance(item, FlowStep):
+        return item
+    if isinstance(item, Step):
+        return FlowStep(step=item)
+    if isinstance(item, Flow):
+        return FlowStep(step=item.as_step())
+    raise TypeError(f"Expected FlowStep, Step, or Flow, got {type(item).__name__}")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -188,45 +216,19 @@ class Flow:
             )
         self._trace_capture: TraceCapture = trace_capture
 
-        # Normalize inputs to FlowSteps
-        flow_steps: list[FlowStep] = []
-        for s in steps:
-            if isinstance(s, FlowStep):
-                flow_steps.append(s)
-            elif isinstance(s, Step):
-                flow_steps.append(FlowStep(step=s))
-            elif isinstance(s, Flow):
-                converted = s.as_step()
-                flow_steps.append(FlowStep(step=converted))
-            else:
-                raise TypeError(f"Expected FlowStep, Step, or Flow, got {type(s).__name__}")
-
-        # Validate unique names
-        names = [fs.step.name for fs in flow_steps]
-        seen: set[str] = set()
-        for n in names:
-            if n in seen:
-                raise ValueError(f"Duplicate step name: {n!r}")
-            seen.add(n)
-
-        # Validate after references
-        name_set = set(names)
-        for fs in flow_steps:
-            for dep in fs.after:
-                if dep not in name_set:
-                    raise ValueError(f"Step {fs.step.name!r} depends on unknown step {dep!r}")
-
+        flow_steps = [_as_flow_step(s) for s in steps]
+        self._validate_names(flow_steps)
         self._steps = tuple(flow_steps)
 
-        # Determine if this is a DAG (has after dependencies)
-        has_deps = any(fs.after for fs in flow_steps)
+        # Determine if this is a DAG (has dependencies)
+        has_deps = any(fs.dependencies for fs in flow_steps)
         has_conditions = any(fs.when is not None for fs in flow_steps)
         self._is_dag = has_deps
 
         # Require max_iterations when `when` conditions make a flow cyclic
         if has_conditions and not has_deps and max_iterations is None:
             raise ValueError(
-                "Flow has `when` conditions without `after` dependencies, which makes it "
+                "Flow has `when` conditions without dependencies, which makes it "
                 "cyclic. You must set `max_iterations` to limit the loop."
             )
 
@@ -379,12 +381,31 @@ class Flow:
         return Step(name=self._name, fn=_run_flow, scope=self._scope)
 
     @staticmethod
+    def _validate_names(steps: list[FlowStep]) -> None:
+        """Each step has a name of its own, and each dependency names a step, once."""
+        names: set[str] = set()
+        for fs in steps:
+            if fs.step.name in names:
+                raise ValueError(f"Duplicate step name: {fs.step.name!r}")
+            names.add(fs.step.name)
+        for fs in steps:
+            declared: set[str] = set()
+            for dep in fs.dependencies:
+                if dep not in names:
+                    raise ValueError(f"Step {fs.step.name!r} depends on unknown step {dep!r}")
+                if dep in declared:
+                    raise ValueError(
+                        f"Step {fs.step.name!r} names {dep!r} more than once in its dependencies"
+                    )
+                declared.add(dep)
+
+    @staticmethod
     def _validate_dag(steps: list[FlowStep]) -> None:
         """Topological sort to detect cycles."""
         adj: dict[str, list[str]] = {fs.step.name: [] for fs in steps}
         in_degree: dict[str, int] = {fs.step.name: 0 for fs in steps}
         for fs in steps:
-            for dep in fs.after:
+            for dep in fs.dependencies:
                 adj[dep].append(fs.step.name)
                 in_degree[fs.step.name] += 1
 

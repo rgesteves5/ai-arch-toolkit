@@ -75,6 +75,8 @@ Public surface: only `BudgetPolicy`, `BudgetReport`, `BudgetExceeded`, `Reserve`
 `RunConfig` (top-level) + the extension contracts (`AdmissionController`, `UsageSink`, `Cost`,
 `Money`, `UsageEvent`, `AdmissionDenied`) under `ai_arch_toolkit.core`. The meter mechanism
 (`MeterStore`/`MeterScope`/`MeterOperation`/`current_meter`/`bind_meter`) is `_`-internal.
+Later, `MeterScope` became public, and with D58 so did `open_span`, `current_meter`,
+`current_span_id` and `bind_meter`: an app measures its own blocks of code in spans.
 
 ---
 

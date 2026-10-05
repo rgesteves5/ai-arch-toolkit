@@ -7,9 +7,8 @@ import logging
 import random
 import time
 from collections.abc import Callable
-from contextlib import nullcontext
 
-from ai_arch_toolkit.core._metering._admission import AdmissionDenied
+from ai_arch_toolkit.core._metering._admission import AdmissionDenied, MeterSnapshot
 from ai_arch_toolkit.core._metering._scope import current_meter, open_span
 from ai_arch_toolkit.core._policy import Policy
 from ai_arch_toolkit.core._state import StateSnapshot
@@ -32,6 +31,7 @@ async def execute_step(
     policy: Policy | None = None,
     on_decision: Callable[[PolicyDecision], None] | None = None,
     capture: TraceCapture = "keys",
+    on_metered: Callable[[MeterSnapshot], None] | None = None,
 ) -> tuple[Result, StepTrace]:
     """Execute a single Step against a (possibly scoped) snapshot.
 
@@ -48,6 +48,9 @@ async def execute_step(
         capture: What the trace records of the snapshot and the result — key names
             (``"keys"``), deep copies (``"full"``), or neither (``"none"``). The input is
             recorded before the step runs, so the step cannot rewrite it.
+        on_metered: Called with what the meter measured in the step when its span closes, also
+            when the step is cancelled or raises, so a caller that cuts it short can record
+            what it spent. Never called without a meter.
     """
     policy = step.policy or policy or Policy()
     input_state, input_keys = capture_state(snapshot.to_dict(), capture)
@@ -59,15 +62,19 @@ async def execute_step(
         if on_decision is not None:
             on_decision(decision)
 
-    # A per-step ``max_cost`` cap needs this step's OWN metered spend (its LLM/tool charges), not
-    # the cumulative run total. Run it in a dedicated meter span and project that span — the span
-    # contextvar isolates it across concurrent DAG steps. Only opened when a cap is set, so the
-    # common (uncapped) path keeps its overhead and span tree unchanged.
+    # Under a meter, the step runs in a span of its own (the span contextvar isolates it across
+    # concurrent DAG steps): the trace records the step's OWN metered spend, read before the span
+    # closes, and a per-step ``max_cost`` projects the same span, not the run's total.
     meter = current_meter()
-    track_cost = policy.max_cost is not None and meter is not None
-    span_cm = open_span("step") if track_cost else nullcontext(None)
-    with span_cm as span_id:
-        result, attempts = await _run_attempts(step, snapshot, policy, t0, record, span_id)
+    metered: MeterSnapshot | None = None
+    with open_span("step") as span_id:
+        try:
+            result, attempts = await _run_attempts(step, snapshot, policy, t0, record, span_id)
+        finally:
+            if meter is not None and span_id is not None:
+                metered = meter.for_span(span_id)
+                if on_metered is not None:
+                    on_metered(metered)
 
     elapsed = time.monotonic() - t0
     output_result, output_keys = capture_result(result.to_dict(), capture)
@@ -82,6 +89,7 @@ async def execute_step(
         cost=result.cost,
         confidence=result.confidence,
         usage=result.usage,
+        metered=metered,
         attempts=attempts,
         policy_decisions=tuple(decisions),
         error=result.error,

@@ -149,6 +149,45 @@ def test_open_span_unknown_parent_raises():
         s.open_span("step", "ghost")
 
 
+def test_an_operation_under_a_closed_span_lands_in_its_nearest_open_ancestor():
+    # A call a step left running (a tool's thread) opens after the step's span has closed.
+    s = store()
+    outer = s.open_span("delegate")
+    step = s.open_span("step", outer)
+    s.close_span(step)
+    settle(s.open(llm_in(step), None))
+    assert s.for_span(outer).llm_calls == 1 and s.snapshot().llm_calls == 1
+
+
+def test_a_span_under_a_closed_span_opens_in_its_nearest_open_ancestor():
+    s = store()
+    outer = s.open_span("delegate")
+    step = s.open_span("step", outer)
+    s.close_span(step)
+    late = s.open_span("step", step)
+    settle(s.open(llm_in(late), None))
+    assert s.for_span(late).llm_calls == 1 and s.for_span(outer).llm_calls == 1
+
+
+def test_a_span_id_the_store_never_issued_is_unknown():
+    s = store()
+    step = s.open_span("step")
+    for ghost in (
+        "run/7",
+        f"{step}/9",
+        "run/x",
+        "elsewhere/1",
+        "run/01",
+        "run/\u0663",  # an Arabic-Indic digit: str.isdigit() takes it, a span number does not
+        "run/\u00b2",  # a superscript two: int() refuses it
+        "run//1",
+        f"{step}/",
+        "run/0",
+    ):
+        with pytest.raises(ValueError, match="unknown parent span"):
+            s.open(llm_in(ghost), None)
+
+
 def test_for_span_unknown_raises():
     s = store()
     with pytest.raises(ValueError, match="unknown span"):

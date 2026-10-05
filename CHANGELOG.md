@@ -40,6 +40,11 @@ flows, manifests) needs these changes; each one is detailed below.
   - A `ToolGroup` refuses another tool under a name it holds (`ValueError`), where it used to
     replace the first with a warning.
 - **Flows and agents.**
+  - A `FlowStep` names each dependency once: a step named twice, in `after` or across `after`,
+    `after_any` and `after_optional`, raises `ValueError`. A DAG's skip reasons name every
+    dependency that did not succeed (`"dependencies 'a' failed, 'b' was skipped"`), and "all
+    dependencies skipped" is gone: read `StepTrace.blocked_by` instead of parsing them. Meter span
+    ids are paths from the run's root (`run/3/7`), not `span-N`.
   - The steps of a parallel DAG wave read the wave's snapshot: return changes as artifacts, since
     a value mutated in place now changes the state in every mode. The trace records a wave's steps
     as they finish.
@@ -56,6 +61,21 @@ flows, manifests) needs these changes; each one is detailed below.
   - `select` or `serialize_as` on an inline template.
 
 ### Added
+- **What each step spent** (G-32, D58): `StepTrace.metered` is what the meter measured in the
+  step's own span (a `MeterSnapshot`): its LLM and tool calls, retries, fallback and nested flows,
+  nothing of its siblings, and up to the cut for a step the run cut short; a flow a step runs
+  itself has a span of its own, and its entry in the step's `children` carries its spend. It
+  reaches the consumer in `step_end`'s `step_trace`, and `to_dict()`/`from_dict()` keep it
+  (`MeterSnapshot` gained both, with amounts as exact USD text, and `Money.to_usd()`).
+- **Spans are public** (G-32, D58): `open_span`, `current_meter`, `current_span_id` and
+  `bind_meter` come from `ai_arch_toolkit.core`, to measure a block of code (a delegated
+  subagent, a run nested in a turn) with `current_meter().for_span(span_id)`, and to carry the
+  meter into a thread.
+- **Weak dependencies in a DAG** (G-33, D58): `FlowStep(after_any=...)` runs once at least one of
+  its dependencies succeeded, which joins the paths a `when` split, and
+  `FlowStep(after_optional=...)` waits for steps that may fail or be skipped without being
+  skipped itself. `StepTrace.blocked_by` names the dependencies that kept a skipped step from
+  running, each `"failed"` or `"skipped"`; `FlowStep.dependencies` lists all three kinds.
 - **A budget several runs share** (D57): `SharedBudget(policy, spent=...)` (on the core's
   `SharedMeter`), bound to each run with `RunConfig(shared=...)`. Runs in parallel are admitted
   and settled against it under one lock, each operation holding its worst case there, so
@@ -269,6 +289,14 @@ flows, manifests) needs these changes; each one is detailed below.
   [docs/agents.md](docs/agents.md#file-backed-agent-manifests).
 
 ### Changed
+- **A step runs in a meter span of its own** whenever a meter is bound (D58), not only under a
+  `Policy.max_cost`, and so does a nested flow run. Span ids are paths from the run's root (`run/3/7`); an operation that starts
+  after its span closed (a tool's thread a step left running) counts in the nearest span still
+  open around it, instead of raising `ValueError`.
+- **A dependency is named once** (D58): a `FlowStep` that names a step twice, in one field or
+  across `after`, `after_any` and `after_optional`, raises `ValueError`. The skip reasons of a
+  DAG name every dependency that did not succeed (`"dependencies 'a' failed, 'b' was skipped"`);
+  "all dependencies skipped" is gone.
 - **Every step that starts ends** (G-22). A step the flow's timeout cancels, a step whose call a
   budget denies, and a step still running when a bug makes the engine raise now report a
   `step_end`, before the run's `timeout`, `policy_decision` or exception, with a trace entry that

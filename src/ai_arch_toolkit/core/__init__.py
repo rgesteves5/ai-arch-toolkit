@@ -53,7 +53,13 @@ from ai_arch_toolkit.core._metering import (
     UsageEvent,
     UsageSink,
 )
-from ai_arch_toolkit.core._metering._scope import MeterScope
+from ai_arch_toolkit.core._metering._scope import (
+    MeterScope,
+    bind_meter,
+    current_meter,
+    current_span_id,
+    open_span,
+)
 from ai_arch_toolkit.core._middleware import Middleware, Request
 from ai_arch_toolkit.core._moderation import ModerationError, ModerationResult, Moderator
 from ai_arch_toolkit.core._policy import OnExhausted, OnLowConfidence, OnTimeout, Policy
@@ -134,7 +140,13 @@ from ai_arch_toolkit.core._tools import (
     tool,
     tool_schema,
 )
-from ai_arch_toolkit.core._trace import PolicyDecision, StepTrace, Trace, TraceCapture
+from ai_arch_toolkit.core._trace import (
+    DependencyOutcome,
+    PolicyDecision,
+    StepTrace,
+    Trace,
+    TraceCapture,
+)
 from ai_arch_toolkit.core.graph import (
     Edge as GraphEdge,
 )
@@ -180,6 +192,7 @@ __all__ = [
     "Cost",
     "CostKind",
     "DangerousToolGate",
+    "DependencyOutcome",
     "DocumentPart",
     "DryRunGate",
     "EventStatus",
@@ -272,12 +285,15 @@ __all__ = [
     "UsageSink",
     "assistant",
     "async_execute_tool",
+    "bind_meter",
     "cache",
     "chars_to_tokens",
     "code_execution",
     "configure_sync_timeouts",
     "count_tokens_local",
     "count_tokens_local_batch",
+    "current_meter",
+    "current_span_id",
     "deprecated",
     "document",
     "execute_step",
@@ -288,6 +304,7 @@ __all__ = [
     "inference_limit",
     "is_local_url",
     "llm_events_to",
+    "open_span",
     "prepare_tools",
     "pricing",
     "redact",

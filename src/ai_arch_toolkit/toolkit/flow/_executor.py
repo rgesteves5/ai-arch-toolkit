@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import time
 from collections import deque
 from collections.abc import AsyncGenerator, Callable, Iterator
@@ -21,7 +22,7 @@ from dataclasses import replace
 from typing import Any
 
 from ai_arch_toolkit.core._llm_events import llm_events_to
-from ai_arch_toolkit.core._metering._admission import AdmissionDenied
+from ai_arch_toolkit.core._metering._admission import AdmissionDenied, MeterSnapshot
 from ai_arch_toolkit.core._metering._scope import (
     MeterScope,
     RunConfig,
@@ -35,6 +36,7 @@ from ai_arch_toolkit.core._step import Result
 from ai_arch_toolkit.core._step_engine import execute_step
 from ai_arch_toolkit.core._sync import _stream_sync
 from ai_arch_toolkit.core._trace import (
+    DependencyOutcome,
     PolicyDecision,
     StepTrace,
     Trace,
@@ -215,6 +217,7 @@ class _FlowRun:
 
     __slots__ = (
         "_events",
+        "_metered",
         "_running",
         "_signal",
         "_started",
@@ -248,6 +251,8 @@ class _FlowRun:
         self.tokens = tokens
         # The steps announced with a step_start and not yet ended, with when they started.
         self._started: dict[str, float] = {}
+        # What the meter measured in each step whose span has closed: a cut step's trace reads it.
+        self._metered: dict[str, MeterSnapshot] = {}
         self.traces: list[StepTrace] = []
         self.results: dict[str, Result] = {}
         self.result: FlowResult | None = None
@@ -270,9 +275,11 @@ class _FlowRun:
         parent_children = _child_traces.get()
         scope, self.owned = _open_meter_scope(flow, self.budget_policy, self.config)
         self.scope = scope
-        # A nested run shares its owner's scope and stays under the span that is current where it
-        # starts (e.g. a parent step's max_cost span), so the parent step sees the nested spend.
-        self.span_id = None if self.owned else current_span_id()
+        # A nested run shares its owner's scope, in a span of its own under the one current where
+        # it starts (the parent step's): the step sees the nested spend, and the run's entry in
+        # the step's trace carries its own.
+        self.span_id = None if self.owned else scope.open_span("flow", current_span_id())
+        metered: MeterSnapshot | None = None
         self._signal = asyncio.Event()
         if flow.timeout is not None:
             self.deadline = asyncio.get_running_loop().time() + flow.timeout
@@ -291,8 +298,9 @@ class _FlowRun:
                 await body.aclose()
                 await self._cancel_running()
             finally:
-                if self.owned:
-                    scope.close()  # even if a second cancellation interrupts the cleanup
+                metered = (
+                    self._close_meter()
+                )  # even if a second cancellation interrupts the cleanup
 
         trace = Trace(
             flow_name=flow.name,
@@ -311,11 +319,26 @@ class _FlowRun:
                     name=flow.name,
                     duration=trace.duration,
                     error=final.error if final is not None else None,
+                    metered=metered,
                     children=trace.steps,
                     started_at=started,
                 )
             )
         yield FlowEvent(type="flow_end", flow_name=flow.name, trace=trace)
+
+    def _close_meter(self) -> MeterSnapshot:
+        """What the run's meter measured; then the scope closes (a run that owns it) or the run's
+        own span does (a nested run)."""
+        scope = self.scope
+        assert scope is not None
+        if self.owned:
+            metered = scope.snapshot()
+            scope.close()
+        else:
+            assert self.span_id is not None
+            metered = scope.for_span(self.span_id)
+            scope.close_span(self.span_id)
+        return metered
 
     async def _stopping(self, body: AsyncGenerator[FlowEvent]) -> AsyncGenerator[FlowEvent]:
         """The body's events, then how the run stopped, if it stopped early: a budget denial,
@@ -389,12 +412,12 @@ class _FlowRun:
         while ready := graph.ready():
             wave = _Wave([])
             for fs in ready:
-                reason = _check_skip_propagation(fs, graph.failed, graph.skipped)
-                if reason is None:
+                blocked = _blocked_by(fs, graph.failed, graph.skipped)
+                if not blocked:
                     wave.steps.append(fs)
                     continue
                 graph.skip(fs)
-                yield self._record_skip(fs, reason)
+                yield self._record_skip(fs, _skip_reason(fs, blocked), blocked)
             if not wave.steps:
                 continue
             async for event in self._run_wave(wave):
@@ -533,6 +556,7 @@ class _FlowRun:
                     policy=self.flow.policy,
                     on_decision=on_decision,
                     capture=self.flow.trace_capture,
+                    on_metered=functools.partial(self._metered.__setitem__, name),
                 )
         finally:
             _child_traces.reset(token)
@@ -652,6 +676,7 @@ class _FlowRun:
     def _ended(self, name: str, result: Result, trace: StepTrace) -> FlowEvent:
         """Record how a step ended and announce it: the one place a ``step_end`` is made."""
         self._started.pop(name, None)
+        self._metered.pop(name, None)
         self.traces.append(trace)
         self.results[name] = result
         return FlowEvent(
@@ -674,6 +699,7 @@ class _FlowRun:
             output_result=output_result,
             output_keys=output_keys,
             duration=now - started,
+            metered=self._metered.get(name),
             error=reason,
             policy_decisions=(decision,),
             started_at=started,
@@ -685,9 +711,15 @@ class _FlowRun:
         names = sorted(self._started, key=self._started.__getitem__)
         return [self._cut(name, reason, decision) for name in names]
 
-    def _record_skip(self, fs: FlowStep, reason: str) -> FlowEvent:
+    def _record_skip(
+        self, fs: FlowStep, reason: str, blocked_by: dict[str, DependencyOutcome] | None = None
+    ) -> FlowEvent:
         trace = StepTrace(
-            name=fs.step.name, skipped=True, skip_reason=reason, started_at=time.monotonic()
+            name=fs.step.name,
+            skipped=True,
+            skip_reason=reason,
+            blocked_by=blocked_by or {},
+            started_at=time.monotonic(),
         )
         self.traces.append(trace)
         return FlowEvent(
@@ -820,10 +852,10 @@ class _Graph:
 
     def __init__(self, flow: Flow) -> None:
         self.steps = {fs.step.name: fs for fs in flow.steps}
-        self.waiting = {fs.step.name: len(fs.after) for fs in flow.steps}
+        self.waiting = {fs.step.name: len(fs.dependencies) for fs in flow.steps}
         self.dependents: dict[str, list[str]] = {name: [] for name in self.steps}
         for fs in flow.steps:
-            for dep in fs.after:
+            for dep in fs.dependencies:
                 self.dependents[dep].append(fs.step.name)
         self.completed: set[str] = set()
         self.failed: set[str] = set()
@@ -855,26 +887,42 @@ class _Graph:
             self.waiting[dependent] -= 1
 
 
-def _check_skip_propagation(fs: FlowStep, failed: set[str], skipped: set[str]) -> str | None:
-    """Check if a step should be skipped due to dependency status."""
-    if not fs.after:
-        return None
+_ENDED: dict[DependencyOutcome, str] = {"failed": "failed", "skipped": "was skipped"}
 
-    # Any dep failed → skip
-    for dep in fs.after:
-        if dep in failed:
-            return f"dependency {dep!r} failed"
 
-    # All deps skipped → skip
-    if all(dep in skipped for dep in fs.after):
-        return "all dependencies skipped"
+def _blocked_by(fs: FlowStep, failed: set[str], skipped: set[str]) -> dict[str, DependencyOutcome]:
+    """The dependencies that keep a step whose dependencies have all ended from running, each with
+    how it ended: every ``after`` one that did not succeed, and the ``after_any`` ones when none
+    of them did. ``after_optional`` ones never block. Empty when the step runs."""
 
-    # Some deps skipped (mixed) → skip (all deps must succeed)
-    for dep in fs.after:
-        if dep in skipped:
-            return f"dependency {dep!r} was skipped"
+    def unsucceeded(names: tuple[str, ...]) -> dict[str, DependencyOutcome]:
+        found: dict[str, DependencyOutcome] = {}
+        for name in names:
+            if name in failed:
+                found[name] = "failed"
+            elif name in skipped:
+                found[name] = "skipped"
+        return found
 
-    return None
+    blocked = unsucceeded(fs.after)
+    either = unsucceeded(fs.after_any)
+    if fs.after_any and len(either) == len(fs.after_any):
+        blocked.update(either)
+    return blocked
+
+
+def _skip_reason(fs: FlowStep, blocked: dict[str, DependencyOutcome]) -> str:
+    """``blocked`` in words: the ``after`` dependencies, then the ``after_any`` ones."""
+    required = [f"{name!r} {_ENDED[blocked[name]]}" for name in fs.after if name in blocked]
+    either = [f"{name!r} {_ENDED[blocked[name]]}" for name in fs.after_any if name in blocked]
+    parts = []
+    if required:
+        parts.append(
+            ("dependency " if len(required) == 1 else "dependencies ") + ", ".join(required)
+        )
+    if either:
+        parts.append("no dependency in after_any succeeded: " + ", ".join(either))
+    return "; ".join(parts)
 
 
 def _open_meter_scope(

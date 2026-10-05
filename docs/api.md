@@ -84,7 +84,7 @@ are the recommended entry point, `Agent` (see [Toolkit — Agents](#toolkit-agen
 | `State`, `StateSnapshot`, `MergeStrategy` | 4-layer mutable state container |
 | `Step`, `StepFn`, `Result` | Named async functions with structured output |
 | `Policy` | Retry, timeout, confidence thresholds, cost limits |
-| `Trace`, `StepTrace`, `PolicyDecision`, `TraceCapture` | Execution records; `TraceCapture` sets what each step's record keeps |
+| `Trace`, `StepTrace`, `PolicyDecision`, `TraceCapture`, `DependencyOutcome` | Execution records; `TraceCapture` sets what each step's record keeps. A `StepTrace` carries what the meter measured in the step (`metered`) and, for a step its dependencies skipped, which ones and how each ended (`blocked_by`) |
 | `execute_step()` | Single-step execution with policy enforcement |
 
 ### Core — Metering
@@ -95,7 +95,8 @@ The neutral meter under every budget. See [Cumulative budgets](safety.md#cumulat
 |--------|-------------|
 | `MeterScope` | Context manager (`with` / `async with`) that meters the LLM calls (`complete`, `stream`, `stream_events`) and tool calls run inside it: `snapshot()`, and `events()` (empty unless `retain_meter_events` is set) |
 | `RunConfig` | A scope's settings: `controller`, `sinks`, `pricer`, `redactor`, `retain_meter_events`, … |
-| `MeterSnapshot`, `UsageEvent`, `UsageSink` | Cumulative counters, one metered operation, and the audit-sink protocol |
+| `open_span`, `current_meter`, `current_span_id`, `bind_meter` | Measure a block of code in a span of its own (`current_meter().for_span(span_id)` reads it), and carry the bound meter into a thread |
+| `MeterSnapshot`, `UsageEvent`, `UsageSink` | Cumulative counters (`to_dict()`/`from_dict()`, amounts as exact USD text), one metered operation, and the audit-sink protocol |
 | `AdmissionController`, `AdmissionDecision`, `AdmissionDenied` | The enforcement hook a scope's `controller` implements, and the terminal error of a denied call |
 | `Cost`, `CostKind`, `Money`, `Pricer` | Typed cost and the pricing protocol a scope uses |
 
@@ -104,7 +105,7 @@ The neutral meter under every budget. See [Cumulative budgets](safety.md#cumulat
 | Symbol | Description |
 |--------|-------------|
 | `Flow` | Composes Steps into sequential, cyclic, or DAG execution graphs |
-| `FlowStep` | Wraps a Step with optional `when` conditions and `after` dependencies |
+| `FlowStep` | Wraps a Step with an optional `when` condition and its dependencies: `after` (each must succeed), `after_any` (one must), `after_optional` (waited for, never required) |
 | `FlowResult` | Total cost, duration, usage, full Trace, and the run's `meter` report |
 | `FlowEvent` | Streaming events: `flow_start`, `flow_end`, `step_start`, `step_end` (with the step's `step_trace`), `step_skipped`, `retry`, `timeout`, `fallback`, `policy_decision`, and `llm_event` (an LLM call's stream event, in an iterated run) |
 | `Scope` | Controls what keys a Step can see (include/exclude/transform/enrich) |

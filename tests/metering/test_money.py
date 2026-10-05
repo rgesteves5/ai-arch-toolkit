@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
-from decimal import Decimal
+from decimal import Decimal, localcontext
 
 import pytest
 
@@ -83,3 +83,13 @@ def test_immutable():
     m = Money.from_usd(0.10)
     with pytest.raises(FrozenInstanceError):
         m._pico = 5
+
+
+@pytest.mark.parametrize("pico", [0, 7, 123_456_789_012_345, -5_000_000_000_001, 10**30 + 1])
+def test_usd_reads_back_exactly_whatever_the_decimal_precision(pico: int):
+    # An app may lower the ambient decimal precision; a serialized amount must not round.
+    with localcontext() as context:
+        context.prec = 8
+        money = Money.from_pico(pico)
+        assert Money.from_usd(money.to_usd()) == money
+        assert Money.from_usd(Decimal(format(money.to_usd(), "f"))) == money

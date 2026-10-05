@@ -240,20 +240,45 @@ for st in trace.steps:
     print(st.name, st.duration)
     print(st.policy_decisions)  # ("retry", "fallback", ...)
     print(st.error)             # None or error string
-    print(st.skipped)           # True if the step did not run (see st.skip_reason)
+    print(st.skipped)           # True if the step did not run (see st.skip_reason, st.blocked_by)
+    print(st.metered)           # what the meter measured in this step (a MeterSnapshot)
 ```
 
-For **spend**, read the run's meter — the single source of truth — not the trace: `result.meter`
-(a `BudgetReport`), or the `result.total_cost` / `result.usage` shortcuts. `trace.total_cost` and
-`st.cost` only reflect each step's `Result(cost=...)`: what a custom step annotated manually, or
-the spend at which a `max_cost` step was stopped.
+For **spend**, read the run's meter — the single source of truth — not the `Result` annotations:
+`result.meter` (a `BudgetReport`), or the `result.total_cost` / `result.usage` shortcuts for the
+whole run, and `st.metered` for one step. A step runs in a meter span of its own, so `st.metered`
+counts its LLM and tool calls, its retries, its fallback and the flows it ran, and nothing of its
+siblings running beside it; a step the run cut short (the flow's timeout, a budget denial) keeps
+what it spent before the cut. A skipped step has none (`None`), and the entry of a flow a step ran
+itself (one of its `children`) carries that run's own spend. `trace.total_cost` and `st.cost`
+only reflect each step's `Result(cost=...)`: what a custom step annotated manually, or the spend at
+which a `max_cost` step was stopped.
+
+To measure a block outside a flow step (a subagent you delegate to, a run nested in a turn), open a
+span of your own: `open_span(name)` yields its id under the bound meter (`None` without one), and
+`current_meter().for_span(span_id)` reads it while it is open. To carry the meter into a thread,
+capture `current_meter()` and `current_span_id()` and bind them there with `bind_meter(meter,
+span_id)`. All four come from `ai_arch_toolkit.core`.
+
+```python
+from ai_arch_toolkit.core import current_meter, open_span
+
+with open_span("delegate") as span_id:
+    answer = await subagent.run(task)
+    spent = current_meter().for_span(span_id) if span_id is not None else None
+```
+
+An operation that starts after the span it ran in has closed — a tool's thread a step left running —
+counts in the nearest span still open around it.
 
 ### StepTrace fields
 
 ```
 name, started_at, duration, cost, confidence, usage, attempts
 policy_decisions: ("retry", "timeout", "fallback", ...)
+metered: what the meter measured in the step's own span (None when unmetered)
 error, skipped, skip_reason
+blocked_by: the dependencies that kept a skipped step from running, each "failed" or "skipped"
 children: the steps of a nested flow (as_step()), or one entry per flow the step ran itself
 input_keys: the keys the step could read (its scoped snapshot), per state layer
 output_keys: the artifact keys the step returned
@@ -357,7 +382,7 @@ result = flow.run_sync(state)
 
 ### Cyclic
 
-Without `after`, steps with `when` conditions loop until no step fires or `max_iterations` is reached. You **must** set `max_iterations` explicitly — omitting it raises `ValueError` at construction time. This prevents accidental infinite loops:
+Without dependencies (`after`, `after_any`, `after_optional`), steps with `when` conditions loop until no step fires or `max_iterations` is reached. You **must** set `max_iterations` explicitly — omitting it raises `ValueError` at construction time. This prevents accidental infinite loops:
 
 ```python
 from ai_arch_toolkit.toolkit.flow import Flow, FlowStep
@@ -380,7 +405,8 @@ Each iteration goes through all steps, evaluates `when`, runs or skips. The loop
 
 ### DAG
 
-Steps with `after` dependencies run in parallel when possible:
+Steps with dependencies (`after`, and the weak `after_any` and `after_optional`, see
+[Skip propagation](#skip-propagation-and-weak-dependencies)) run in parallel when possible:
 
 ```python
 flow = Flow(
@@ -431,12 +457,36 @@ an artifact, changes the State for every step after it and for its siblings too.
 
 **The rule**: if step B needs what step A produces, use `after=("A",)`. If they're truly independent, DAG parallel is safe. The executor enforces `after` deps, but cannot detect implicit State dependencies you forgot to declare.
 
-#### Skip propagation
+#### Skip propagation and weak dependencies
 
-In DAG mode, failures cascade:
-- Any dependency failed → step is skipped
-- All dependencies skipped → step is skipped
-- Dependency skipped → step is skipped (all deps must succeed)
+A step waits until every step it depends on has ended, then runs or is skipped. How it depends on
+each one decides which:
+
+| Field | The step runs when |
+|---|---|
+| `after` | every one of them succeeded (a failure or a skip cascades) |
+| `after_any` | at least one of them succeeded |
+| `after_optional` | always: it waits for them, however they end |
+
+`after_any` joins the paths a `when` split; `after_optional` waits for a step that may fail without
+taking the rest down:
+
+```python
+flow = Flow(
+    FlowStep(step=classify),
+    FlowStep(step=refund, after=("classify",), when=lambda s: s["kind"] == "refund"),
+    FlowStep(step=answer, after=("classify",), when=lambda s: s["kind"] != "refund"),
+    FlowStep(step=enrich, after=("classify",)),                      # may fail
+    FlowStep(step=reply, after_any=("refund", "answer"), after_optional=("enrich",)),
+    name="support",
+)
+```
+
+A step names each dependency once, in one of the three fields. A step its dependencies skip says
+why in its trace: `blocked_by` maps each dependency that kept it from running to how it ended
+(`"failed"` or `"skipped"`), and `skip_reason` says it in words: had `refund` run and failed, `reply`
+would read `"no dependency in after_any succeeded: 'refund' failed, 'answer' was skipped"`.
+A step its own `when` skipped has an empty `blocked_by` and the reason `"condition not met"`.
 
 ### Streaming
 
@@ -470,7 +520,7 @@ with flow.iter_sync(state) as sync_execution:
 |---|---|
 | `flow_start`, `flow_end` | The run starts; the run has finished (`flow_end.trace` is the complete trace). |
 | `step_start`, `step_end` | A step starts; a step finishes (`step_end.result` and `step_end.error` carry the outcome, `step_end.step_trace` the step's trace entry). Every `step_start` has its `step_end`, also for a step the run cut short. |
-| `step_skipped` | A `when` condition was false, or a DAG dependency failed or was skipped (`step_trace` is its trace entry). |
+| `step_skipped` | A `when` condition was false, or the step's DAG dependencies kept it from running (`step_trace` is its trace entry, with `skip_reason` and `blocked_by`). |
 | `llm_event` | An LLM call the step made streamed one event: `llm_event` is the `StreamEvent` (text, thinking, tool call, image), `llm_call` the call's id, shared by its events. |
 | `retry`, `timeout`, `fallback` | The step engine takes that decision — while the step is still running. A `timeout` without a `step_name` means the run's own `timeout` elapsed. |
 | `policy_decision` | Any other decision: `low_confidence`, `escalate`, `halt`, `cost_exceeded`, `budget_exceeded`. |

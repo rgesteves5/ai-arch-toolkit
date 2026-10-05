@@ -19,10 +19,12 @@ A terminal transition optionally builds a :class:`UsageEvent` (only when a sink 
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
+from itertools import pairwise
 
 from ai_arch_toolkit.core._exceptions import Delivery
 from ai_arch_toolkit.core._metering._admission import (
@@ -45,6 +47,7 @@ __all__ = ["MeterStore", "SharedMeter"]
 logger = logging.getLogger(__name__)
 
 _RUN_SPAN = "run"
+_SPAN_NUMBER = re.compile(r"[1-9][0-9]*")  # as open_span writes them: ASCII, no leading zero
 _TOMBSTONE_MAX = (
     50_000  # LRU bound: a long run can terminate millions of ops; keep the recent tail
 )
@@ -328,15 +331,46 @@ class MeterStore:
 
     # ------------------------------------------------------------------ spans
     def open_span(self, scope_type: str, parent_span_id: str | None = None) -> str:
-        """Register a child span (e.g. a flow step / tool). Returns its id."""
+        """Register a child span (e.g. a flow step / tool). Returns its id.
+
+        The id is the path from the root (``run/3/7``), so a span keeps naming its ancestors after
+        they close: see :meth:`_open_span_of`.
+        """
         with self._lock:
-            parent = parent_span_id or _RUN_SPAN
-            if parent not in self._spans:
-                raise ValueError(f"unknown parent span {parent}")
+            parent = self._open_span_of(parent_span_id or _RUN_SPAN)
             self._next_span += 1
-            span_id = f"span-{self._next_span}"
+            span_id = f"{parent}/{self._next_span}"
             self._spans[span_id] = _Span(span_id, parent, scope_type, self._clock())
             return span_id
+
+    def _open_span_of(self, span_id: str) -> str:
+        """The span, or its nearest open ancestor once it has closed: an operation a step left
+        running (a tool's thread) opens after the step's span is gone, and still counts in the
+        spans around it. Caller holds the lock.
+
+        Refuses an id that cannot be one of this store's: not a path of increasing span numbers
+        from the root, written as this store writes them, up to the last one issued. A closed
+        span keeps nothing, so a well-formed id of another store's is not told apart.
+        """
+        if span_id in self._spans:
+            return span_id
+        root, *path = span_id.split("/")
+        numbers = [int(part) for part in path if _SPAN_NUMBER.fullmatch(part)]
+        issued = (
+            root == _RUN_SPAN
+            and numbers
+            and len(numbers) == len(path)
+            and all(a < b for a, b in pairwise(numbers))
+            and numbers[-1] <= self._next_span
+        )
+        if not issued:
+            raise ValueError(f"unknown parent span {span_id}")
+        while path:
+            path.pop()
+            ancestor = "/".join((root, *path))
+            if ancestor in self._spans:
+                return ancestor
+        return _RUN_SPAN  # the root never closes; the loop always returns before this
 
     # ------------------------------------------------------------------ reads
     def snapshot(self) -> MeterSnapshot:
@@ -440,8 +474,9 @@ class MeterStore:
         reservation = self._shared_hold(request, reservation)
 
         with self._lock:
-            if request.parent_span_id not in self._spans:
-                raise ValueError(f"unknown parent span {request.parent_span_id}")
+            parent = self._open_span_of(request.parent_span_id)
+            if parent != request.parent_span_id:
+                request = replace(request, parent_span_id=parent)
             denial = self._would_exceed_unlocked(limits, request, reservation)
             if denial is not None:
                 raise denial

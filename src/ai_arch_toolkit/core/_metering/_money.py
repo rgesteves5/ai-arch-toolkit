@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import ROUND_HALF_EVEN, Decimal
+from decimal import MAX_EMAX, MAX_PREC, MIN_EMIN, ROUND_HALF_EVEN, Context, Decimal
 from typing import Final
 
 __all__ = ["Money"]
 
 _PICO_PER_USD: Final = 1_000_000_000_000  # 1 USD = 1e12 pico-USD
+# Arithmetic that never rounds, whatever precision the app set on the ambient decimal context.
+_EXACT: Final = Context(prec=MAX_PREC, Emax=MAX_EMAX, Emin=MIN_EMIN)
 
 
 @dataclass(frozen=True, slots=True, order=True, repr=False)
@@ -36,7 +38,7 @@ class Money:
         exactly ten cents rather than the nearest binary float.
         """
         dec = amount if isinstance(amount, Decimal) else Decimal(str(amount))
-        pico = (dec * _PICO_PER_USD).to_integral_value(rounding=ROUND_HALF_EVEN)
+        pico = dec.scaleb(12, _EXACT).to_integral_value(rounding=ROUND_HALF_EVEN, context=_EXACT)
         return cls(int(pico))
 
     @classmethod
@@ -51,6 +53,11 @@ class Money:
     def to_float(self) -> float:
         """USD as a float — for display/serialization only, never further accumulation."""
         return self._pico / _PICO_PER_USD
+
+    def to_usd(self) -> Decimal:
+        """USD exactly, to the pico: what :meth:`from_usd` reads back unchanged."""
+        sign, digits, _ = Decimal(self._pico).as_tuple()
+        return Decimal((sign, digits, -12))  # built, not computed: nothing rounds
 
     @property
     def pico(self) -> int:

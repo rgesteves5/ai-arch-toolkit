@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from ai_arch_toolkit.core._metering._admission import MeterSnapshot
 from ai_arch_toolkit.core._redaction import RedactionPolicy, Redactor, TraceMode
 from ai_arch_toolkit.core._response import Usage
 
@@ -21,6 +22,9 @@ type PolicyDecision = Literal[
     "escalate",
     "halt",
 ]
+
+type DependencyOutcome = Literal["failed", "skipped"]
+"""How a dependency that kept a step from running ended (``StepTrace.blocked_by``)."""
 
 type TraceCapture = Literal["keys", "full", "none"]
 """What a trace records of the state a step reads and the result it returns.
@@ -46,7 +50,15 @@ TRACE_CAPTURE_MODES: frozenset[str] = frozenset({"keys", "full", "none"})
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class StepTrace:
-    """Execution record for a single Step."""
+    """Execution record for a single Step.
+
+    ``cost`` and ``usage`` are what the step's ``Result`` reported. ``metered`` is what the meter
+    measured in the step's own span: its LLM and tool calls, its retries, its fallback and the
+    flows it ran, also up to the moment a run cut it short. It is ``None`` for a step that ran in
+    no span: a skipped one, or one executed with no meter bound.
+    ``blocked_by`` names the dependencies that kept a skipped step from running, each with how it
+    ended; it is empty when the step's own ``when`` skipped it.
+    """
 
     name: str
     input_state: dict[str, Any] = field(default_factory=dict)
@@ -57,11 +69,13 @@ class StepTrace:
     cost: float = 0.0
     confidence: float | None = None
     usage: Usage = field(default_factory=Usage)
+    metered: MeterSnapshot | None = None
     attempts: int = 1
     policy_decisions: tuple[PolicyDecision, ...] = ()
     error: str | None = None
     skipped: bool = False
     skip_reason: str | None = None
+    blocked_by: dict[str, DependencyOutcome] = field(default_factory=dict)
     children: tuple[StepTrace, ...] = ()
     started_at: float = 0.0
 
@@ -90,6 +104,7 @@ class StepTrace:
             "cost": self.cost,
             "confidence": self.confidence,
             "usage": dataclasses.asdict(self.usage),
+            "metered": self.metered.to_dict() if self.metered is not None else None,
             "attempts": self.attempts,
             "policy_decisions": list(self.policy_decisions),
             "error": error,
@@ -97,6 +112,7 @@ class StepTrace:
             "skip_reason": active_redactor.redact_text(self.skip_reason)
             if self.skip_reason
             else None,
+            "blocked_by": dict(self.blocked_by),
             "children": [
                 c.to_dict(trace_mode=trace_mode, redactor=active_redactor) for c in self.children
             ],
@@ -118,11 +134,13 @@ class StepTrace:
             cost=data.get("cost", 0.0),
             confidence=data.get("confidence"),
             usage=Usage(**usage_data) if usage_data else Usage(),
+            metered=MeterSnapshot.from_dict(metered) if (metered := data.get("metered")) else None,
             attempts=data.get("attempts", 1),
             policy_decisions=tuple(data.get("policy_decisions", ())),
             error=data.get("error"),
             skipped=data.get("skipped", False),
             skip_reason=data.get("skip_reason"),
+            blocked_by=dict(data.get("blocked_by") or {}),
             children=tuple(StepTrace.from_dict(c) for c in data.get("children", ())),
             started_at=data.get("started_at", 0.0),
         )

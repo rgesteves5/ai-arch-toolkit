@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from collections.abc import Mapping
+from dataclasses import dataclass, field, fields
+from decimal import Decimal
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from ai_arch_toolkit.core._metering._money import Money
 
@@ -135,6 +137,31 @@ class MeterSnapshot:
     def out_total_tokens(self) -> int:
         """Outstanding input + output."""
         return self.out_input_tokens + self.out_output_tokens
+
+    def to_dict(self) -> dict[str, Any]:
+        """The snapshot as JSON-ready values; each amount is its exact USD, as text."""
+        data: dict[str, Any] = {}
+        for item in fields(self):
+            value = getattr(self, item.name)
+            data[item.name] = format(value.to_usd(), "f") if isinstance(value, Money) else value
+        return data
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> MeterSnapshot:
+        """The snapshot :meth:`to_dict` wrote; a missing field takes its default."""
+        values: dict[str, Any] = {}
+        for item in fields(cls):
+            if item.name not in data:
+                continue
+            value = data[item.name]
+            values[item.name] = Money.from_usd(Decimal(value)) if item.name in _AMOUNTS else value
+        return cls(**values)
+
+
+_EMPTY = MeterSnapshot()
+_AMOUNTS = frozenset(
+    item.name for item in fields(MeterSnapshot) if isinstance(getattr(_EMPTY, item.name), Money)
+)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
