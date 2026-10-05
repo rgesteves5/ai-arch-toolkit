@@ -740,3 +740,14 @@ R01 publicada em `main` (`b3dae3f`); a R02 começa com a leitura obrigatória da
 - Sem chaves no `.env`, a verificação ao vivo fica para o dono (o comando está na ficha).
 - Gate: 6396 passed, 42 skipped.
 - Próximo: o grupo 8 do briefing, o tecto partilhado (G-28).
+
+## 2026-10-05 · A08 feita: o tecto partilhado (Claude, a pedido do dono)
+
+- A A07 foi commitada e publicada (`67dc63e`, `86f2033`). Os alertas do Dependabot estão
+  fechados.
+- D57: o `SharedMeter` do core e o `SharedBudget` do toolkit. As execuções ligadas por
+  `RunConfig(shared=...)` são admitidas e acertadas contra ele sob um lock seu, e cada operação
+  reserva lá o seu pior caso. Assim, juntas não passam do tecto.
+- Provado com execuções em tasks e em threads.
+- Gate: 6407 passed, 42 skipped.
+- Próximo: o grupo 9 do briefing, os workflows (G-32, G-33).

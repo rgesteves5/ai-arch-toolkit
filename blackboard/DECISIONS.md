@@ -845,3 +845,33 @@ Só acrescentar. Uma decisão revista ganha uma nova entrada que diz qual substi
   por chamada, que cobraria uma chamada sem chave ou recusada.
 - **Consequência:** o custo de uma tool paga entra no meter, nos budgets e no relatório, como o
   das chamadas ao LLM.
+
+## D57 · Um tecto partilhado por várias execuções: o `SharedMeter`, sob um lock seu (frente A, G-28)
+
+- **Contexto:**
+  - cada `MeterScope` tem o seu `MeterStore`, e um `BudgetPolicy` só conta dentro dele;
+  - duas execuções a correr ao mesmo tempo não gastam do mesmo tecto. O ai-network dá a cada
+    uma o que restava quando começou, e juntas podem passar dele;
+  - o ai-network decidiu (D-55 dele) um orçamento partilhado no toolkit, com a admissão e o
+    acerto sob um lock, que a app semeia com o que o ledger já gastou.
+- **Decisão** (o resultado vem da D-55 do ai-network; o desenho é do coordenador, a 2026-10-05):
+  - o core ganha o `SharedMeter(limits, spent=...)`, com um lock e contadores seus, semeados
+    com o gasto que a app já tem;
+  - liga-se a cada execução pelo `RunConfig(shared=...)`, que todas as entradas já aceitam;
+  - cada operação de uma execução ligada é admitida também contra ele, sob o seu lock, depois do
+    da execução (a ordem é sempre execução → partilhado, sem risco de deadlock). A reserva e o
+    acerto ficam nos dois contadores;
+  - para que juntas nunca passem do tecto de custo, cada operação reserva nele o seu pior caso
+    (D49), mesmo numa execução sem budget ou com um budget sem reserva estrita. Uma operação
+    sem preço é recusada sob um tecto de custo;
+  - o `SharedBudget(policy, spent=...)` do toolkit constrói-o a partir de um `BudgetPolicy`:
+    `max_cost`, `max_llm_calls` e `max_tool_calls` (o tempo e os tokens não se partilham);
+  - um custo desconhecido numa execução fecha o tecto partilhado, com o `unpriced="fail_closed"`.
+- **Alternativas rejeitadas:**
+  - dar a cada execução o que resta quando começa (o contorno de hoje);
+  - um tecto partilhado sem reservas, que deixa passar o que estiver em curso.
+- **Consequência:**
+  - perto do tecto, uma chamada pode ser recusada por o seu pior caso não caber, mesmo que o
+    custo real coubesse;
+  - a app lê `shared.snapshot()` (o gasto com a semente) e guarda no ledger o que cada execução
+    gastou.
