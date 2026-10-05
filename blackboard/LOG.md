@@ -717,3 +717,14 @@ R01 publicada em `main` (`b3dae3f`); a R02 começa com a leitura obrigatória da
   Corrigido também um bug antigo do `aclose()` logo a seguir ao `flow_start`.
 - Gate: 6333 passed, 42 skipped.
 - Próximo: o grupo 6 do briefing, as exportações (G-14, G-24).
+
+## 2026-10-05 · A06 feita: as exportações (Claude, a pedido do dono)
+
+- A A05 foi commitada e publicada (`31bf368`, `6bc7038`).
+- G-14: o encaminhamento de modelos é público (`resolve_provider_name`, `MODEL_PREFIXES`,
+  `MODEL_IDS`, `is_local_url`).
+- G-24: o `NetworkXBackend` é público, e o do core é genérico no tipo de nó, por isso
+  `GraphStore(NetworkXBackend())` passa no pyright.
+- À parte: o `virtualenv` dos três alertas altos do Dependabot.
+- Gate: 6352 passed, 42 skipped.
+- Próximo: o grupo 7 do briefing, a pesquisa na web (G-13).
