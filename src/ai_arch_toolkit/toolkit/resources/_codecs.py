@@ -7,6 +7,7 @@ import tomllib
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from ai_arch_toolkit.toolkit._safe_data import UnsafeDataError, load_json, load_toml, load_yaml
 from ai_arch_toolkit.toolkit.resources._errors import ResourceDecodeError
 from ai_arch_toolkit.toolkit.resources._types import ResourceRef
 
@@ -56,8 +57,8 @@ class JsonCodec:
     def decode(self, raw: bytes, ref: ResourceRef) -> DecodedResource:
         text = _decode_text(raw, ref)
         try:
-            data = json.loads(text)
-        except json.JSONDecodeError as exc:
+            data = load_json(text)
+        except (json.JSONDecodeError, UnsafeDataError) as exc:
             raise ResourceDecodeError(f"invalid JSON in {ref.uri!r}: {exc}") from exc
         return DecodedResource(data=data, text=text)
 
@@ -70,14 +71,15 @@ class TomlCodec:
     def decode(self, raw: bytes, ref: ResourceRef) -> DecodedResource:
         text = _decode_text(raw, ref)
         try:
-            data = tomllib.loads(text)
-        except tomllib.TOMLDecodeError as exc:
+            data = load_toml(text)
+        except (tomllib.TOMLDecodeError, UnsafeDataError) as exc:
             raise ResourceDecodeError(f"invalid TOML in {ref.uri!r}: {exc}") from exc
         return DecodedResource(data=data, text=text)
 
 
 class YamlCodec:
-    """Decode YAML with safe loading when PyYAML is installed."""
+    """Decode YAML with safe loading when PyYAML is installed, its aliases and nesting bounded
+    (``toolkit/_safe_data.py``)."""
 
     name = "yaml"
 
@@ -90,8 +92,8 @@ class YamlCodec:
             ) from None
         text = _decode_text(raw, ref)
         try:
-            data = yaml.safe_load(text)
-        except yaml.YAMLError as exc:
+            data = load_yaml(text)
+        except (yaml.YAMLError, UnsafeDataError) as exc:
             raise ResourceDecodeError(f"invalid YAML in {ref.uri!r}: {exc}") from exc
         return DecodedResource(data=data, text=text)
 

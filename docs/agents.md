@@ -325,7 +325,11 @@ Use `load_agent_manifest()` when configuration lives in versioned files. The
 public loader supports `.agent.yaml`, `.agent.yml`, `.agent.json`, and
 `.agent.toml`; YAML requires the `yaml` extra. It strictly rejects unknown
 fields and resolves, in order, inherited parents, the child, an optional named
-profile, and governed dotted-path overrides.
+profile, and governed dotted-path overrides. Parsing is bounded, so an imported
+manifest costs in proportion to its size: YAML aliases may expand only so far, no
+file nests deeper than 100 levels, nor does an override with its dotted path, and a
+parent that several manifests extend is read once (see
+[Bounded parsing](resources.md#bounded-parsing)).
 
 ```yaml
 version: 1

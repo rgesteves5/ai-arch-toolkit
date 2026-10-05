@@ -40,6 +40,10 @@ flows, manifests) needs these changes; each one is detailed below.
   - A `ToolGroup` refuses another tool under a name it holds (`ValueError`), where it used to
     replace the first with a warning.
 - **Flows and agents.**
+  - An agent manifest, prompt manifest or JSON/TOML/YAML resource that nests deeper than 100
+    levels, or whose YAML aliases expand past their bound, is refused (D59). So is a YAML alias
+    inside its own anchor (`loop: &a [*a]`), which used to load as a list that contains itself,
+    and an agent override whose dotted path and value together pass 100 levels.
   - A `FlowStep` names each dependency once: a step named twice, in `after` or across `after`,
     `after_any` and `after_optional`, raises `ValueError`. A DAG's skip reasons name every
     dependency that did not succeed (`"dependencies 'a' failed, 'b' was skipped"`), and "all
@@ -61,6 +65,15 @@ flows, manifests) needs these changes; each one is detailed below.
   - `select` or `serialize_as` on an inline template.
 
 ### Added
+- **Bounded parsing of the manifests and resources the toolkit loads** (G-34, D59): agent
+  manifests and the JSON, TOML and YAML resource codecs (prompt manifests and knowledge among
+  their users) go through one module, `toolkit/_safe_data.py`. A YAML document's aliases may add
+  at most 10,000 nodes and 1,000,000 characters, or as many as it holds if that is more, so an
+  alias bomb is refused before it expands (412 bytes took 2.6 s and 170 MB, and each level
+  multiplied by ten; an alias copying a long string, 139 KB took 3.3 s and 2 GB); anchors and
+  merge keys keep working. An alias inside its own anchor is refused. A manifest that several
+  others extend (`extends`) or include (`include`) is read and built once per load: ten agent
+  manifests of 757 bytes, each extending the next four times, were read 349,525 times.
 - **What each step spent** (G-32, D58): `StepTrace.metered` is what the meter measured in the
   step's own span (a `MeterSnapshot`): its LLM and tool calls, retries, fallback and nested flows,
   nothing of its siblings, and up to the cut for a step the run cut short; a flow a step runs
@@ -289,10 +302,14 @@ flows, manifests) needs these changes; each one is detailed below.
   [docs/agents.md](docs/agents.md#file-backed-agent-manifests).
 
 ### Changed
+- **No manifest or resource nests deeper than 100 levels** (D59) of mappings and lists, in
+  JSON, TOML or YAML, nor does an agent override with its dotted path: a deeper one raises
+  `AgentManifestError`, `AgentOverrideError` or `ResourceDecodeError` (and `PromptLoadError` for
+  a prompt manifest), not a bare `RecursionError`.
 - **A step runs in a meter span of its own** whenever a meter is bound (D58), not only under a
-  `Policy.max_cost`, and so does a nested flow run. Span ids are paths from the run's root (`run/3/7`); an operation that starts
-  after its span closed (a tool's thread a step left running) counts in the nearest span still
-  open around it, instead of raising `ValueError`.
+  `Policy.max_cost`, and so does a nested flow run. Span ids are paths from the run's root
+  (`run/3/7`); an operation that starts after its span closed (a tool's thread a step left
+  running) counts in the nearest span still open around it, instead of raising `ValueError`.
 - **A dependency is named once** (D58): a `FlowStep` that names a step twice, in one field or
   across `after`, `after_any` and `after_optional`, raises `ValueError`. The skip reasons of a
   DAG name every dependency that did not succeed (`"dependencies 'a' failed, 'b' was skipped"`);

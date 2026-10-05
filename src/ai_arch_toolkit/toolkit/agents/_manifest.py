@@ -20,6 +20,13 @@ from types import MappingProxyType
 from typing import Any
 
 from ai_arch_toolkit.core import OutputSchema, Policy
+from ai_arch_toolkit.toolkit._safe_data import (
+    UnsafeDataError,
+    check_depth,
+    load_json,
+    load_toml,
+    load_yaml,
+)
 from ai_arch_toolkit.toolkit._shape import ShapeError
 from ai_arch_toolkit.toolkit.agents._manifest_shape import AGENT_MANIFEST, REACT_KNOBS
 from ai_arch_toolkit.toolkit.agents._spec import ReasoningSpec
@@ -237,6 +244,7 @@ def load_agent_manifest(
         stack=(),
         sources=sources,
         max_depth=max_inheritance_depth,
+        loaded={},
     )
     profiles = merged.pop("profiles", {})
     if profile is not None:
@@ -301,17 +309,27 @@ def _load_merged(
     stack: tuple[Path, ...],
     sources: list[Path],
     max_depth: int,
+    loaded: dict[Path, tuple[dict[str, Any], int]],
 ) -> dict[str, Any]:
+    """The manifest at ``path`` merged over its parents.
+
+    ``loaded`` keeps each manifest this load has merged, with how many levels of parents it has:
+    a parent that several manifests extend is read and merged once (G-34), and a cycle through it
+    would have been refused the first time. Callers only merge the result, which copies it.
+    """
     canonical = path.expanduser().resolve()
     _require_allowed(canonical, roots, context="inherited manifest")
     _validate_manifest_suffix(canonical, context="inherited manifest")
     if canonical in stack:
         cycle = " -> ".join(str(item) for item in (*stack, canonical))
         raise AgentManifestCycleError(f"agent manifest cycle detected: {cycle}")
-    if len(stack) >= max_depth:
+    done = loaded.get(canonical)
+    if len(stack) + (done[1] if done is not None else 0) >= max_depth:
         raise AgentManifestError(
             f"agent manifest inheritance exceeds maximum {max_depth}: {canonical}"
         )
+    if done is not None:
+        return done[0]
     data = _read_manifest(canonical)
     # Scan every source before inheritance/profile selection can discard content. The
     # final merged value is scanned again after runtime overrides.
@@ -320,6 +338,7 @@ def _load_merged(
     data = _resolve_relative_paths(data, canonical.parent, roots)
 
     merged: dict[str, Any] = {}
+    levels = 0
     for parent in _extends(data):
         parent_path = (canonical.parent / parent).resolve()
         merged = _deep_merge(
@@ -330,12 +349,16 @@ def _load_merged(
                 stack=(*stack, canonical),
                 sources=sources,
                 max_depth=max_depth,
+                loaded=loaded,
             ),
         )
+        levels = max(levels, 1 + loaded[parent_path][1])
     if canonical not in sources:
         sources.append(canonical)
     child = {key: value for key, value in data.items() if key != "extends"}
-    return _deep_merge(merged, child)
+    result = _deep_merge(merged, child)
+    loaded[canonical] = (result, levels)
+    return result
 
 
 def _read_manifest(path: Path) -> dict[str, Any]:
@@ -346,18 +369,18 @@ def _read_manifest(path: Path) -> dict[str, Any]:
     try:
         if path.name.endswith((".agent.yaml", ".agent.yml")):
             try:
-                import yaml
+                import yaml  # noqa: F401 — load_yaml needs it
             except ImportError as exc:  # pragma: no cover - exercised without yaml extra
                 raise ImportError(
                     "pyyaml is required for YAML agent manifests: "
                     "pip install 'ai-arch-toolkit[yaml]'"
                 ) from exc
-            loaded = yaml.safe_load(text)
+            loaded = load_yaml(text)
         elif path.name.endswith(".agent.json"):
-            loaded = json.loads(text)
+            loaded = load_json(text)
         else:
-            loaded = tomllib.loads(text)
-    except (json.JSONDecodeError, tomllib.TOMLDecodeError) as exc:
+            loaded = load_toml(text)
+    except (json.JSONDecodeError, tomllib.TOMLDecodeError, UnsafeDataError) as exc:
         raise AgentManifestError(f"could not parse agent manifest {path}: {exc}") from exc
     except Exception as exc:
         if exc.__class__.__module__.startswith("yaml"):
@@ -425,6 +448,10 @@ def _apply_overrides(data: dict[str, Any], overrides: Mapping[str, Any]) -> None
             raise AgentOverrideError(f"override {path!r} is denied by the manifest policy")
         if not any(_covers(entry, path) for entry in allow):
             raise AgentOverrideError(f"override {path!r} is not allowed by the manifest policy")
+        try:  # before the recursive walks below: the path's own levels count too (G-34)
+            check_depth(value, above=len(path.split(".")))
+        except UnsafeDataError as exc:
+            raise AgentOverrideError(f"override {path!r}: {exc}") from exc
         canonical = _canonical_config(value, f"override {path!r}")
         _set_dotted(data, path, canonical)
 

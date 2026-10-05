@@ -281,6 +281,78 @@ def test_the_chat_completions_detector_sees_a_call() -> None:
     assert chat_completions_calls("from openai.types.chat import ChatCompletion\n") == []
 
 
+# The modules that may import PyYAML, and what each may use of it (``None``: anything). Reading
+# YAML is ``_safe_data``'s alone, which bounds the aliases and the nesting (G-34, D59).
+_YAML_USERS: dict[str, frozenset[str] | None] = {
+    "toolkit/_safe_data.py": None,
+    "toolkit/resources/_serializers.py": frozenset({"safe_dump", "YAMLError"}),
+    "toolkit/resources/_codecs.py": frozenset({"YAMLError"}),
+    "toolkit/agents/_manifest.py": frozenset(),  # imported only to say how to install it
+}
+
+
+def yaml_use(source: str) -> tuple[bool, set[str]]:
+    """Whether a module imports PyYAML, and the names it takes from it: imported by name, read as
+    an attribute of the module (under any alias), or asked of it with ``getattr``."""
+    tree = ast.parse(source)
+    imported = False
+    names: set[str] = set()
+    aliases: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "yaml" or alias.name.startswith("yaml."):
+                    imported = True
+                    aliases.add(alias.asname or alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] == "yaml":
+            imported = True
+            names.update(alias.name for alias in node.names)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+            if node.value.id in aliases:
+                names.add(node.attr)
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "getattr"
+            and node.args
+            and isinstance(node.args[0], ast.Name)
+            and node.args[0].id in aliases
+        ):
+            names.add("getattr")
+    return imported, names
+
+
+def test_yaml_is_read_only_by_the_safe_data_module() -> None:
+    package = ROOT / "src/ai_arch_toolkit"
+    offenders: dict[str, set[str]] = {}
+    for path in package.rglob("*.py"):
+        if "nanope" in path.parts:
+            continue
+        imported, names = yaml_use(path.read_text())
+        if not imported:
+            continue
+        relative = path.relative_to(package).as_posix()
+        if relative not in _YAML_USERS:
+            offenders[relative] = names or {"import"}
+            continue
+        allowed = _YAML_USERS[relative]
+        if allowed is not None and not names <= allowed:
+            offenders[relative] = names - allowed
+    assert offenders == {}
+
+
+def test_the_yaml_use_detector_sees_every_way_in() -> None:
+    assert yaml_use("import yaml\ndata = yaml.safe_load(text)\n") == (True, {"safe_load"})
+    assert yaml_use("from yaml import safe_load\n") == (True, {"safe_load"})
+    assert yaml_use("import yaml as y\ny.SafeLoader(t).get_single_data()\n") == (
+        True,
+        {"SafeLoader"},
+    )
+    assert yaml_use("import yaml\nload = getattr(yaml, 'safe_load')\n") == (True, {"getattr"})
+    assert yaml_use("import json\njson.loads(text)\n") == (False, set())
+
+
 _NETWORK_MODULES = ("urllib.request", "urllib.error", "http.client", "socket", "ssl")
 _HTTP_DOOR = ROOT / "src/ai_arch_toolkit/toolkit/tools/_http.py"
 

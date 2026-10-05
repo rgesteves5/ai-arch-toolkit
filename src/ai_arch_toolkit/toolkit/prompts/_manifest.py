@@ -108,6 +108,7 @@ def _load_prompt_path(
         knowledge=knowledge,
         stack=(),
         max_include_depth=max_include_depth,
+        loaded={},
     )
 
 
@@ -146,19 +147,39 @@ def _load_prompt(
     knowledge: KnowledgeRegistry | None,
     stack: tuple[Path, ...],
     max_include_depth: int,
+    loaded: dict[Path, tuple[PromptTemplate, int]],
 ) -> PromptTemplate:
+    """The template of the manifest at ``path``, with its base and includes.
+
+    ``loaded`` keeps each template this load has built, with how many levels of manifests it
+    reaches: a manifest that several others extend or include is read and built once (G-34),
+    and a cycle through it would have been refused the first time.
+    """
     canonical = path.expanduser().resolve()
+    done = loaded.get(canonical)
+    if done is not None:
+        if len(stack) + done[1] >= max_include_depth:
+            raise PromptValidationError(
+                f"prompt manifest include depth exceeds maximum {max_include_depth}: {canonical}"
+            )
+        return done[0]
     resource = _manifest_resource(canonical, resolver, stack, max_include_depth)
     data: Mapping[str, Any] = resource.data
+    levels = 0
 
     def load(value: str) -> PromptTemplate:
-        return _load_prompt(
-            _relative_path(canonical, value),
+        nonlocal levels
+        child = _relative_path(canonical, value).expanduser().resolve()
+        template = _load_prompt(
+            child,
             resolver=resolver,
             knowledge=knowledge,
             stack=(*stack, canonical),
             max_include_depth=max_include_depth,
+            loaded=loaded,
         )
+        levels = max(levels, 1 + loaded[child][1])
+        return template
 
     extends = data.get("extends")
     base = load(extends) if extends is not None else None
@@ -180,7 +201,9 @@ def _load_prompt(
         _infer_manifest_variables(sections, variables)
     except (TypeError, ValueError) as exc:
         raise PromptValidationError(f"invalid prompt template configuration: {exc}") from exc
-    return _template(data, base, sections, variables, canonical, resource.fingerprint)
+    template = _template(data, base, sections, variables, canonical, resource.fingerprint)
+    loaded[canonical] = (template, levels)
+    return template
 
 
 def _manifest_resource(
