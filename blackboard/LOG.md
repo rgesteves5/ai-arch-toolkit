@@ -813,3 +813,15 @@ R01 publicada em `main` (`b3dae3f`); a R02 começa com a leitura obrigatória da
   memória, as docs, o `csv_read`, o 404 do OFF) e as baixas. As duas médias que são da porta
   passaram para a ficha T02.
 - Gate: 6769 passed, 42 skipped; ruff, formatação e pyright limpos.
+
+## 2026-10-05 · T02 feita: a porta HTTP lê cada fonte (Claude, a pedido do dono)
+
+- A T01 foi publicada (`8cd6c3c`, `40d283b`), e o dono pediu para avançar para a T02.
+- **A porta:** um `error_reader` por `Api` no lugar do `body_error` e do `status_messages`, o
+  `missing=` e o `empty_on_404=` por chamada, o 404 sem declaração como endpoint que mudou, e o
+  texto de erro da fonte na mensagem. O coordenador fez a porta e os seus testes primeiro.
+- **Os 31 módulos:** quatro agentes em paralelo, com módulos e testes disjuntos e o mesmo guia (a
+  nota de desenho da ficha). Um teste de arquitectura recusa um `except` que compare o estado de
+  uma falha, salvo o do EONET.
+- A revisão independente não achou falhas graves. Corrigi as médias e as baixas (ficha T02).
+- Gate: 6898 passed, 42 skipped; ruff, formatação e pyright limpos.
