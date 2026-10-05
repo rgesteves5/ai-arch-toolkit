@@ -728,3 +728,15 @@ R01 publicada em `main` (`b3dae3f`); a R02 começa com a leitura obrigatória da
 - À parte: o `virtualenv` dos três alertas altos do Dependabot.
 - Gate: 6352 passed, 42 skipped.
 - Próximo: o grupo 7 do briefing, a pesquisa na web (G-13).
+
+## 2026-10-05 · A07 feita: a pesquisa na web (Claude, a pedido do dono)
+
+- A A06 foi commitada e publicada (`dffcfe9`, `3ebbc6a`), com o `virtualenv` dos alertas do
+  Dependabot à parte (`834f735`).
+- O dono escolheu as duas tools e o preço na tabela:
+  - D55: o `brave_search` e o `tavily_search`, com a chave do ambiente;
+  - D56: uma secção `[tools]` na tabela de preços. O meter cobra as unidades que o serviço
+    cobrou, que a porta HTTP regista.
+- Sem chaves no `.env`, a verificação ao vivo fica para o dono (o comando está na ficha).
+- Gate: 6396 passed, 42 skipped.
+- Próximo: o grupo 8 do briefing, o tecto partilhado (G-28).

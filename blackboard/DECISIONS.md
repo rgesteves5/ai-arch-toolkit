@@ -808,3 +808,40 @@ Só acrescentar. Uma decisão revista ganha uma nova entrada que diz qual substi
   - dentro de um flow iterado, uma chamada que falhe depois do primeiro evento já não se repete
     (a semântica do stream); antes dele, o retry e o fallback são os de sempre;
   - o `run()` fica como estava.
+
+## D55 · Duas tools de pesquisa na web, Brave e Tavily, com chave do ambiente (frente A, G-13)
+
+- **Contexto:**
+  - "Procura na web" é o pedido mais comum a um assistente, e o toolkit só tem a server tool
+    `web_search()`, que o fornecedor do modelo corre e cobra;
+  - essa server tool não serve modelos locais nem compatíveis, ignora o `ServerTool.config`, e
+    o meter não lhe conhece o custo;
+  - o ai-network decidiu (D-51 dele) uma tool do toolkit, com a chave de uma API de pesquisa.
+- **Decisão** (o dono escolheu-a a 2026-10-05: "as duas"):
+  - `brave_search(query)` usa a Brave Search API ($5 por 1000 pedidos, $5 de crédito grátis por
+    mês) e lê a chave de `BRAVE_SEARCH_API_KEY`;
+  - `tavily_search(query)` usa a Tavily (pesquisa básica, um crédito de $0,008, 1000 créditos
+    grátis por mês) e lê a chave de `TAVILY_API_KEY`;
+  - cada uma lê a sua chave do ambiente (D52), e sem ela diz onde a pedir, sem enviar pedido;
+  - os nomes são os dos serviços: `web_search` já é a server tool do core.
+- **Alternativas rejeitadas:** só uma das duas.
+- **Consequência:** a app oferece a que tiver chave. Servem qualquer modelo, também os locais.
+
+## D56 · O preço de uma tool paga vive na tabela de preços, e o meter cobra o que o serviço cobrou (frente A, G-13)
+
+- **Contexto:** o meter contava toda a tool como gratuita, a não ser com um pricer próprio. Uma
+  tool de pesquisa custa por pedido.
+- **Decisão** (o dono escolheu-a a 2026-10-05):
+  - a tabela de preços ganha uma secção `[tools]`. Cada entrada, pelo nome da tool, dá o preço
+    de uma unidade (`per_unit`: um pedido na Brave, um crédito na Tavily), com `until` e `then`
+    (D50). `pricing.register_tool(...)` muda-o para o plano de cada um;
+  - o meter reserva uma unidade antes da chamada (o tecto da D49);
+  - a porta HTTP das tools regista cada pedido que o serviço aceitou, com as unidades que ele
+    diz ter gasto (`Api(billed_as=..., bill_units=...)`). O executor cobra no fim a soma
+    registada;
+  - um pedido recusado (sem chave, 401, 429, um erro de rede) não custa nada;
+  - uma tool fora da tabela continua gratuita, ou com o preço do pricer próprio.
+- **Alternativas rejeitadas:** um preço declarado na tool, que só se muda no código; e um preço
+  por chamada, que cobraria uma chamada sem chave ou recusada.
+- **Consequência:** o custo de uma tool paga entra no meter, nos budgets e no relatório, como o
+  das chamadas ao LLM.
