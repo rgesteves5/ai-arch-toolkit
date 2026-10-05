@@ -56,6 +56,15 @@ flows, manifests) needs these changes; each one is detailed below.
   - `select` or `serialize_as` on an inline template.
 
 ### Added
+- **Web search on the toolkit's side** (D55): `brave_search` (Brave Search API,
+  `BRAVE_SEARCH_API_KEY`) and `tavily_search` (Tavily, `TAVILY_API_KEY`), for any model, local
+  ones included. Without its key, each says where to get one and sends nothing.
+- **Paid tools are priced** (D56): a `[tools]` section of the price table gives a tool's price
+  per unit its service bills (`ToolPricing`, `pricing.register_tool`, `get_tool`, `list_tools`;
+  dated like a model's). The meter holds one unit before the call and charges the units the
+  service billed: a refused request costs nothing. Brave is $0.005 a search, Tavily $0.008 a
+  credit. `Api(billed_as=..., bill_units=..., key_required=..., key_prefix=...)` declares this for
+  any tool.
 - The model routing is public (G-14): `resolve_provider_name`, the read-only tables
   `MODEL_PREFIXES` and `MODEL_IDS` (views of the ones `create_provider` routes by), and
   `is_local_url`, the loopback rule, from `ai_arch_toolkit.core`.

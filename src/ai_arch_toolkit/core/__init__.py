@@ -56,7 +56,7 @@ from ai_arch_toolkit.core._metering._scope import MeterScope
 from ai_arch_toolkit.core._middleware import Middleware, Request
 from ai_arch_toolkit.core._moderation import ModerationError, ModerationResult, Moderator
 from ai_arch_toolkit.core._policy import OnExhausted, OnLowConfidence, OnTimeout, Policy
-from ai_arch_toolkit.core._pricing import ModelPricing, PricingRegistry, pricing
+from ai_arch_toolkit.core._pricing import ModelPricing, PricingRegistry, ToolPricing, pricing
 from ai_arch_toolkit.core._providers import (
     MODEL_IDS,
     MODEL_PREFIXES,
@@ -255,6 +255,7 @@ __all__ = [
     "ToolError",
     "ToolGate",
     "ToolGroup",
+    "ToolPricing",
     "ToolResult",
     "ToolRuntimePolicy",
     "ToolSchema",

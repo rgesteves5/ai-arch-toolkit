@@ -1131,3 +1131,20 @@ batch_cache_read = 0.015
 input = 0.10
 output = 0.20
 cache_read = 0.01
+
+# ═══════════════════════════════════════════════════════════════════
+# Paid tools (D56) — USD per unit the service bills, keyed by the tool's name. The meter charges
+# the units a call's service billed and holds one before the call. Override with
+# pricing.register_tool("brave_search", ToolPricing(per_unit=...)) for one's own plan.
+# ═══════════════════════════════════════════════════════════════════
+
+# Brave Search API, the Search plan: $5 per 1,000 requests ($5 of free credit a month).
+# Verified 2026-10-05: https://brave.com/search/api/
+[tools.brave_search]
+per_unit = 0.005
+
+# Tavily, pay as you go: $0.008 per credit; a basic search is one credit (1,000 free a month).
+# Verified 2026-10-05: https://www.tavily.com/pricing and
+# https://docs.tavily.com/documentation/api-credits
+[tools.tavily_search]
+per_unit = 0.008

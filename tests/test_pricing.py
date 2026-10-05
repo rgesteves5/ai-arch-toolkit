@@ -1157,3 +1157,61 @@ class TestTablePromotionsAndVendors:
         price = pricing.get(model)
         assert price is not None
         assert (price.input, price.output, price.cache_read) == rates
+
+
+class TestToolPrices:
+    """A paid tool's price lives in the table, by the tool's name, per unit it bills (D56)."""
+
+    def test_the_table_prices_the_two_search_tools(self) -> None:
+        from ai_arch_toolkit.core import ToolPricing
+
+        assert pricing.get_tool("brave_search") == ToolPricing(per_unit=0.005)
+        assert pricing.get_tool("tavily_search") == ToolPricing(per_unit=0.008)
+        assert pricing.get_tool("arxiv_search") is None
+        assert {"brave_search", "tavily_search"} <= set(pricing.list_tools())
+
+    def test_register_tool_sets_the_price_of_ones_own_plan(self) -> None:
+        from ai_arch_toolkit.core import ToolPricing
+
+        registry = PricingRegistry()
+        registry.register_tool("brave_search", ToolPricing(per_unit=0.003))
+        assert registry.get_tool("brave_search") == ToolPricing(per_unit=0.003)
+        registry.unregister_tool("brave_search")
+        assert registry.get_tool("brave_search") is None
+        registry.reset()
+        assert registry.get_tool("brave_search") == ToolPricing(per_unit=0.005)
+
+    def test_a_tool_price_can_end_on_a_date(self) -> None:
+        from ai_arch_toolkit.core import ToolPricing
+
+        promo = ToolPricing(
+            per_unit=0.004, until=date(2026, 11, 1), then=ToolPricing(per_unit=0.005)
+        )
+        registry = PricingRegistry()
+        registry.register_tool("search", promo)
+
+        assert registry.get_tool("search", on=date(2026, 11, 1)).per_unit == 0.004  # type: ignore[union-attr]
+        assert registry.get_tool("search", on=date(2026, 11, 2)).per_unit == 0.005  # type: ignore[union-attr]
+
+    def test_a_toml_file_takes_a_tools_section(self, tmp_path: Path) -> None:
+        priced = tmp_path / "prices.toml"
+        priced.write_text(
+            "[tools.my_search]\nper_unit = 0.01\nuntil = 2026-12-31\n\n"
+            "[tools.my_search.then]\nper_unit = 0.02\n"
+        )
+        registry = PricingRegistry()
+
+        registry.load(priced)
+
+        assert registry.get_tool("my_search", on=date(2026, 12, 31)).per_unit == 0.01  # type: ignore[union-attr]
+        assert registry.get_tool("my_search", on=date(2027, 1, 1)).per_unit == 0.02  # type: ignore[union-attr]
+        assert "tools" not in registry.list_models()
+
+    def test_the_meter_prices_one_unit_of_a_priced_tool_and_nothing_of_another(self) -> None:
+        from ai_arch_toolkit.core import Cost, Money, OperationRequest, Usage
+
+        def request(name: str) -> OperationRequest:
+            return OperationRequest(kind="tool", parent_span_id="run", metadata={"tool": name})
+
+        assert pricing.price(request("brave_search"), Usage()) == Cost.known(Money.from_usd(0.005))
+        assert pricing.price(request("arxiv_search"), Usage()) == Cost.known(Money.zero())

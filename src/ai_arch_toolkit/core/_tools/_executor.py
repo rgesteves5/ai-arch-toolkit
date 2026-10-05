@@ -18,10 +18,12 @@ from ai_arch_toolkit.core._metering._cost import Cost
 from ai_arch_toolkit.core._metering._money import Money
 from ai_arch_toolkit.core._metering._operation import MeterOperation, OperationRequest
 from ai_arch_toolkit.core._metering._scope import current_meter, current_span_id
+from ai_arch_toolkit.core._pricing import pricing
 from ai_arch_toolkit.core._redaction import Redactor
 from ai_arch_toolkit.core._response import ToolCall, Usage
 from ai_arch_toolkit.core._sync import _run_sync
 from ai_arch_toolkit.core._tools._approval import ApprovalHandler
+from ai_arch_toolkit.core._tools._billing import Billed, billing
 from ai_arch_toolkit.core._tools._definition import ToolDefinition, ToolRuntimePolicy
 from ai_arch_toolkit.core._tools._governance import (
     ApprovalGate,
@@ -316,12 +318,14 @@ _NO_USAGE = Usage()  # tools consume no tokens
 _ZERO_COST = Cost.known(Money.zero())
 
 
-def _meter_tool_open(tool_call: ToolCall) -> tuple[MeterOperation | None, Cost]:
+def _meter_tool_open(tool_call: ToolCall) -> tuple[MeterOperation | None, Cost | None]:
     """Open + start a metered op for a tool that is about to run, or ``(None, …)`` if unmetered.
 
     Called only after gates + max-calls pass, so a blocked/dry-run tool is never metered.
     ``AdmissionDenied`` from ``open`` propagates (terminal — a tool executor never converts it
-    to a ``ToolResult``; only the flow executor does).
+    to a ``ToolResult``; only the flow executor does). The cost is a custom pricer's for the whole
+    call, or ``None``: the call is then charged the units its service billed, at the table's price
+    (D56), which the admission held one of.
     """
     scope = current_meter()
     if scope is None:
@@ -333,9 +337,11 @@ def _meter_tool_open(tool_call: ToolCall) -> tuple[MeterOperation | None, Cost]:
     )
     op = scope.open(request)
     op.mark_started()
-    # A tool has no token cost, so it's free unless a custom pricer says otherwise. A pricer that
-    # RAISES or returns an estimate (settle rejects estimates) must not flip a successful tool into
-    # an error OR leak this started op — fall back to free and keep going.
+    if scope.pricer is None:
+        return op, None
+    # A custom pricer prices the whole call. One that RAISES or returns an estimate (settle
+    # rejects estimates) must not flip a successful tool into an error OR leak this started op —
+    # fall back to free and keep going.
     cost = _ZERO_COST
     if scope.pricer is not None:
         try:
@@ -441,12 +447,28 @@ def _spent(run_state: RunState, max_calls: int | None) -> int | None:
     return None
 
 
+def _billed_cost(billed: Billed) -> Cost:
+    """What the call's services billed, at the table's price per unit (D56)."""
+    total = Money.zero()
+    for name, units in billed:
+        price = pricing.get_tool(name)
+        if price is None:
+            return Cost.unknown(f"no price for the paid tool {name!r}")
+        total = total + Money.from_usd(price.per_unit) * units
+    return Cost.known(total)
+
+
 def _finished(
-    op: MeterOperation | None, cost: Cost, admitted: _Admitted, value: Any, redactor: Redactor
+    op: MeterOperation | None,
+    cost: Cost | None,
+    admitted: _Admitted,
+    value: Any,
+    redactor: Redactor,
+    billed: Billed,
 ) -> ToolResult:
     result = _with_audit(_coerce_result(value), admitted.audit, redactor)
     if op is not None:
-        op.settle(usage=_NO_USAGE, cost=cost)
+        op.settle(usage=_NO_USAGE, cost=cost if cost is not None else _billed_cost(billed))
     return result
 
 
@@ -456,13 +478,15 @@ def _failed(
     admitted: _Admitted,
     limits: _Limits,
     redactor: Redactor,
+    billed: Billed,
 ) -> ToolResult:
-    """The result of a tool that raised or ran out of time; the op keeps its count, costs nothing.
+    """The result of a tool that raised or ran out of time; the op keeps its count, and costs
+    only what a paid service billed before the failure.
 
     A budget denial is terminal and a cancellation is not the tool's: both propagate.
     """
     if op is not None:
-        op.fail("unbilled")
+        op.fail("unbilled", cost=_billed_cost(billed) if billed else None)
     if isinstance(exc, _TimedOut):
         return _timed_out(admitted.tool_call, limits.timeout_s)
     if isinstance(exc, AdmissionDenied) or not isinstance(exc, Exception):
@@ -488,12 +512,13 @@ def _run_tool_sync(
         return _max_calls_block(admitted.tool_call, limit, admitted.audit, redactor)
     op, cost = _meter_tool_open(admitted.tool_call)  # AdmissionDenied here is terminal
     fn, args = definition.fn, (admitted.positional, admitted.keywords)
-    try:
-        # A loop of the sync path's own: the daemon thread of a timed-out tool does not hold it.
-        value = _run_sync(_invoke(fn, *args, limits.timeout_s))
-        result = _finished(op, cost, admitted, value, redactor)
-    except BaseException as exc:
-        result = _failed(op, exc, admitted, limits, redactor)
+    with billing() as billed:
+        try:
+            # A loop of the sync path's own: a timed-out tool's daemon thread does not hold it.
+            value = _run_sync(_invoke(fn, *args, limits.timeout_s))
+            result = _finished(op, cost, admitted, value, redactor, billed)
+        except BaseException as exc:
+            result = _failed(op, exc, admitted, limits, redactor, billed)
     return _bounded(result, limits.max_output_chars)
 
 
@@ -519,11 +544,12 @@ async def _arun_tool(
         return _max_calls_block(admitted.tool_call, limit, admitted.audit, redactor)
     op, cost = _meter_tool_open(admitted.tool_call)  # AdmissionDenied here is terminal
     fn, args = definition.fn, (admitted.positional, admitted.keywords)
-    try:
-        value = await _invoke(fn, *args, limits.timeout_s)
-        result = _finished(op, cost, admitted, value, redactor)
-    except BaseException as exc:
-        result = _failed(op, exc, admitted, limits, redactor)
+    with billing() as billed:
+        try:
+            value = await _invoke(fn, *args, limits.timeout_s)
+            result = _finished(op, cost, admitted, value, redactor, billed)
+        except BaseException as exc:
+            result = _failed(op, exc, admitted, limits, redactor, billed)
     return _bounded(result, limits.max_output_chars)
 
 

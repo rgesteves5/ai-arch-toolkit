@@ -91,6 +91,36 @@ input = 2.0
 output = 4.0
 ```
 
+### Paid tools
+
+A tool that calls a paid API is priced in the same table, under `[tools]`, by the tool's name,
+per unit its service bills: a request for Brave Search, a credit for Tavily (D56). The meter holds
+one unit before the call, so a strict budget refuses a call it cannot pay, and charges the units
+the service billed when the call ends. A request the service refused (no key, a 401, a 429, a
+network error) costs nothing. A tool without an entry stays free, or takes what a custom pricer
+gives it.
+
+```python
+from ai_arch_toolkit.core import ToolPricing, pricing
+
+pricing.get_tool("brave_search")                         # ToolPricing(per_unit=0.005)
+pricing.register_tool("brave_search", ToolPricing(per_unit=0.003))   # your plan's price
+pricing.list_tools()                                     # ["brave_search", "tavily_search"]
+```
+
+```toml
+[tools.my_search]
+per_unit = 0.01
+until = 2026-12-31           # optional, as for a model
+
+[tools.my_search.then]
+per_unit = 0.02
+```
+
+A tool of your own bills through the toolkit's HTTP door: declare its API with
+`Api(..., billed_as="my_search")` (and `bill_units=` to read the units its answer reports), and
+each request the service accepts is charged at the `[tools.my_search]` price.
+
 ### How a model id finds its price
 
 A model id is priced by its own entry, or as a dated snapshot of an entry:

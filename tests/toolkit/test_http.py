@@ -881,3 +881,88 @@ class TestRest:
         throttle.wait("api.example.org", 5.0)
 
         assert slept == [0.0, 5.0]
+
+
+# --- D56: a request its service accepted is billed ---------------------------------------------
+
+BILLED = Api(base="https://api.example.org/v1", name="Example", billed_as="example_search")
+
+
+def _credits(text: str) -> int:
+    return int(json.loads(text)["usage"]["credits"])
+
+
+class TestBilling:
+    def test_an_accepted_request_is_billed_one_unit(self, web: _Transport) -> None:
+        from ai_arch_toolkit.core._tools._billing import billing
+
+        web.add("https://api.example.org/v1/a", {"ok": True})
+
+        with billing() as billed:
+            BILLED.get_json("a", parse=dict)
+
+        assert billed == [("example_search", 1)]
+
+    def test_the_units_the_answer_reports_are_billed(self, web: _Transport) -> None:
+        from ai_arch_toolkit.core._tools._billing import billing
+
+        api = Api(
+            base="https://api.example.org/v1",
+            name="Example",
+            billed_as="example_search",
+            bill_units=_credits,
+        )
+        web.add("https://api.example.org/v1/a", {"usage": {"credits": 2}})
+
+        with billing() as billed:
+            api.get_json("a", parse=dict)
+
+        assert billed == [("example_search", 2)]
+
+    @pytest.mark.parametrize("status", [401, 429, 500])
+    def test_a_refused_request_is_not_billed(self, web: _Transport, status: int) -> None:
+        from ai_arch_toolkit.core._tools._billing import billing
+
+        web.add("https://api.example.org/v1/a", b"", status=status)
+
+        with billing() as billed, pytest.raises(HttpError):
+            BILLED.get_json("a", parse=dict)
+
+        assert billed == []
+
+    def test_a_request_that_never_arrived_is_not_billed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ai_arch_toolkit.core._tools._billing import billing
+
+        def fail(request: urllib.request.Request, timeout: float) -> Any:
+            raise urllib.error.URLError("offline")
+
+        monkeypatch.setattr(_http, "_open", fail)
+
+        with billing() as billed, pytest.raises(HttpError):
+            BILLED.get_json("a", parse=dict)
+
+        assert billed == []
+
+    def test_outside_a_tool_call_a_billed_request_records_nothing(self, web: _Transport) -> None:
+        web.add("https://api.example.org/v1/a", {})
+
+        assert BILLED.get_json("a", parse=dict) == {}
+
+    def test_a_key_can_go_after_a_prefix(
+        self, web: _Transport, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        api = Api(
+            base="https://api.example.org/v1",
+            name="Example",
+            key_env="EXAMPLE_API_KEY",
+            key_header="Authorization",
+            key_prefix="Bearer ",
+        )
+        monkeypatch.setenv("EXAMPLE_API_KEY", "k-123")
+        web.add("https://api.example.org/v1/a", {})
+
+        api.get_json("a", parse=dict)
+
+        assert web.seen[0].get_header("Authorization") == "Bearer k-123"

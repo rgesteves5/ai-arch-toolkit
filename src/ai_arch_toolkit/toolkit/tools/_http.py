@@ -26,6 +26,8 @@ from dataclasses import dataclass, field
 from email.message import Message
 from typing import IO, Any, Protocol
 
+from ai_arch_toolkit.core._tools._billing import bill
+
 
 def _version() -> str:
     try:
@@ -413,8 +415,12 @@ class Api:
         cooldown_s: After a 429 without a ``Retry-After``, how long the host takes no request: a
             request in that time fails at once and says when to try again (D53).
         key_env: The environment variable that holds the API's optional key (D52), read at each
-            request and sent in ``key_header``; without it, a 429 says where to get one
-            (``key_url``).
+            request and sent in ``key_header``, after ``key_prefix`` (``"Bearer "``); without it,
+            a 429 says where to get one (``key_url``). With ``key_required``, a request without
+            the key fails before it is sent, saying where to get one.
+        billed_as: For a paid API, the tool price its requests are billed at (D56): each request
+            it accepts records ``bill_units`` of the answer's text (the units it says it billed),
+            or one, for the executor to charge. A refused request records nothing.
         params: Query parameters sent with every request.
         segment_safe: Characters left raw in path segments.
         query_safe: Characters left raw in the query string.
@@ -440,7 +446,11 @@ class Api:
     cooldown_s: float = 0.0
     key_env: str | None = None
     key_header: str = "x-api-key"
+    key_prefix: str = ""
     key_url: str = ""
+    key_required: bool = False
+    billed_as: str | None = None
+    bill_units: Callable[[str], int] | None = None
 
     def __post_init__(self) -> None:
         if not _plain_base(self.base):
@@ -579,7 +589,10 @@ class Api:
         )
         headers = {"User-Agent": USER_AGENT}
         if key := self._key():
-            headers[self.key_header] = key
+            headers[self.key_header] = f"{self.key_prefix}{key}"
+        elif self.key_required and self.key_env:
+            where = f" (get one: {self.key_url})" if self.key_url else ""
+            raise HttpError(f"no key: set {self.key_env}{where}.")
         data = None
         if body is not None:
             data, headers["Content-Type"] = body
@@ -604,7 +617,20 @@ class Api:
             _THROTTLE.done(self.host, self.min_interval_s)
         if not complete:
             raise HttpError(f"response larger than {self.max_bytes} bytes")
-        return status, _text(raw, charset)
+        text = _text(raw, charset)
+        if self.billed_as is not None:
+            bill(self.billed_as, self._units(text))
+        return status, text
+
+    def _units(self, text: str) -> int:
+        """The units an accepted request was billed: what the answer says, or one."""
+        if self.bill_units is None:
+            return 1
+        try:
+            units = int(self.bill_units(text))
+        except _SHAPE_ERRORS:
+            return 1
+        return max(units, 0)
 
     def _describe(self, status: int, reason: str, body: str) -> str:
         """The error of an error status: in the API's words when its body gives them."""

@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ModelPricing", "PricingRegistry", "pricing"]
+__all__ = ["ModelPricing", "PricingRegistry", "ToolPricing", "pricing"]
 
 type PriceMatch = Literal["exact", "prefix"]
 
@@ -85,6 +85,40 @@ class ModelPricing:
 _RATE_FIELDS = frozenset(field.name for field in fields(ModelPricing)) - {"until", "then"}
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ToolPricing:
+    """USD per unit a paid tool's service bills: a request (Brave), a credit (Tavily) (D56).
+
+    The tool reports the units its service billed (``core._tools._billing.bill``); the meter
+    charges them at this price, and holds one unit before the call. Like a model's, the price may
+    end on a day (``until``, UTC) and give way to another (``then``).
+    """
+
+    per_unit: float
+    until: date | None = None
+    then: ToolPricing | None = None
+
+    def on(self, day: date) -> ToolPricing:
+        """The price that applies on ``day``: this one until its ``until``, then the next."""
+        price = self
+        while price.until is not None and day > price.until and price.then is not None:
+            price = price.then
+        return price
+
+
+def _tool_price_of(values: dict[str, Any]) -> ToolPricing:
+    """A ``[tools.<name>]`` entry's price, and the one after its ``until`` (a ``then`` table)."""
+    then = values.get("then")
+    until = values.get("until")
+    if until is not None and not isinstance(until, date):
+        raise ValueError(f"until must be a TOML date (2026-11-21), got {until!r}")
+    return ToolPricing(
+        per_unit=float(values["per_unit"]),
+        until=until,
+        then=_tool_price_of(then) if isinstance(then, dict) else None,
+    )
+
+
 def _today() -> date:
     """Today in UTC, the day a price is read for (tests fix it)."""
     return datetime.now(UTC).date()
@@ -128,6 +162,7 @@ class PricingRegistry:
 
     def __init__(self) -> None:
         self._models: dict[str, ModelPricing] = {}  # exact ids and their aliases
+        self._tools: dict[str, ToolPricing] = {}  # paid tools, by tool name (D56)
         self._prefixes: dict[str, ModelPricing] = {}  # registered with match="prefix"
         # Memoize lookups: get() is on the settle hot path (once per LLM attempt), and a run
         # reuses the same model string thousands of times. Cleared on any mutation.
@@ -160,6 +195,15 @@ class PricingRegistry:
         self._prefixes.pop(model, None)
         self._cache.clear()
 
+    def register_tool(self, name: str, price: ToolPricing) -> None:
+        """Register or override the price of the paid tool ``name``, per unit it bills (D56):
+        the price of one's own plan, say."""
+        self._tools[name] = price
+
+    def unregister_tool(self, name: str) -> None:
+        """Remove the price of the tool ``name``: the meter then counts it free."""
+        self._tools.pop(name, None)
+
     def _table(self, match: PriceMatch) -> dict[str, ModelPricing]:
         if match == "exact":
             return self._models
@@ -185,6 +229,16 @@ class PricingRegistry:
     def list_models(self) -> list[str]:
         """Every registered id, alias and prefix, sorted."""
         return sorted({*self._models, *self._prefixes})
+
+    def get_tool(self, name: str, *, on: date | None = None) -> ToolPricing | None:
+        """The price of the paid tool ``name`` on day ``on`` (today, UTC, by default), or
+        ``None`` for a tool that costs nothing."""
+        price = self._tools.get(name)
+        return price.on(on or _today()) if price is not None else None
+
+    def list_tools(self) -> list[str]:
+        """Every paid tool with a price, sorted."""
+        return sorted(self._tools)
 
     # ── Cost Estimation ──
 
@@ -331,8 +385,13 @@ class PricingRegistry:
         Provider-hosted server tools make the whole cost ``unknown`` because their charge is
         not reflected in the token counts.
         """
+        if request.kind == "tool":
+            # One unit of a paid tool (what a call holds, D49); the executor charges the units
+            # the service billed. A tool without a price costs nothing.
+            tool = self.get_tool(str(request.metadata.get("tool", "")))
+            return Cost.known(Money.from_usd(tool.per_unit) if tool else Money.zero())
         if request.kind != "llm":
-            return Cost.known(Money.zero())  # non-LLM ops carry no token cost here
+            return Cost.known(Money.zero())  # custom ops carry no token cost here
         if request.has_server_tools:
             return Cost.unknown("provider-hosted server tools have unmetered cost")
         model = request.model
@@ -366,7 +425,11 @@ class PricingRegistry:
         with open(path, "rb") as f:
             data: dict[str, Any] = tomllib.load(f)
 
+        for name, values in data.get("tools", {}).items():
+            self._tools[name] = _tool_price_of(values)
         for model, values in data.items():
+            if model == "tools":
+                continue
             if isinstance(values, dict):
                 price = _price_of(values)
                 table = self._table(values.get("match", "exact"))
@@ -378,6 +441,7 @@ class PricingRegistry:
         """Reset to shipped defaults, discarding all custom registrations."""
         self._models.clear()
         self._prefixes.clear()
+        self._tools.clear()
         self._cache.clear()
         self._load_defaults()
 

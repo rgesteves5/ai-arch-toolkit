@@ -134,6 +134,7 @@ from ai_arch_toolkit.toolkit.tools._weather import (
     get_weather_by_coords,
     weather_units,
 )
+from ai_arch_toolkit.toolkit.tools._web_search import brave_search, tavily_search
 from ai_arch_toolkit.toolkit.tools._who_gho import who_indicator, who_indicators, who_series
 from ai_arch_toolkit.toolkit.tools._wikidata import (
     wikidata_entity,
@@ -167,6 +168,7 @@ __all__ = [
     "arxiv_search",
     "base64_decode",
     "base64_encode",
+    "brave_search",
     "chembl_activity_search",
     "chembl_molecule",
     "chembl_molecule_search",
@@ -255,6 +257,7 @@ __all__ = [
     "semantic_scholar_citations",
     "semantic_scholar_paper",
     "semantic_scholar_search",
+    "tavily_search",
     "text_stats",
     "timezone_convert",
     "timezone_lookup",
