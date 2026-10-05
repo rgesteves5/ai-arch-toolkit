@@ -837,3 +837,17 @@ R01 publicada em `main` (`b3dae3f`); a R02 começa com a leitura obrigatória da
 - A revisão independente não achou falhas graves. Corrigi as médias e as baixas (ficha T04).
 - Gate: 7045 passed, 42 skipped; ruff, formatação e pyright limpos.
 
+## 2026-10-05 · T05 feita: a família wiki (Claude, a pedido do dono)
+
+- A T04b foi publicada (`7532ba4`, `b1c63f6`); o dono pediu a T05 e, em paralelo, a página das
+  decisões da frente C (vaga 1, publicada como artifact para ele escolher).
+- **nanope:** o dono decidiu tratar dele: a T05 tira os nomes, e os testes que constroem as suas
+  tools saltam até ele o actualizar.
+- **As tools:** quatro (`wiki_search`, `wiki_outline`, `wiki_read`, `wiktionary_entry`) no lugar
+  de oito, em qualquer wiki Wikimedia. Lêem o HTML que a wiki renderiza, convertido pela stdlib, e as
+  secções cortam-se do texto pela posição (a investigação mostrou que pedi-las à wiki é obsoleto e
+  mais caro para ela).
+- A revisão independente achou uma falha grave no core (um `Range` atrás de um alias perdia-se) e
+  duas médias de HTML hostil; todas corrigidas, com as baixas.
+- Gate: 6981 passed, 101 skipped; ruff, formatação e pyright limpos.
+

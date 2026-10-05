@@ -1,98 +1,9 @@
 # Quadro
 
-## Frente activa: as lacunas que o ai-network contorna
-
-- **Estado:** aberta em 2026-10-03, a pedido do dono, pela ordem do briefing do ai-network
-  (`ai-network/board/toolkit-brief.md`, D-54 dele). A A01, o grupo 1 (a segurança), está feita
-  a 2026-10-03 e publicada (`002642c`). A A02, o grupo 2 (o custo), está feita a 2026-10-04 e
-  publicada (`4bb8cc0`). A A03, o grupo 3 (a correcção), está feita a 2026-10-04 e
-  publicada (`87c7e35`); a G-15 já tinha fechado na frente O. A A04, o grupo 4 (as fontes que falham, G-30), está feita a 2026-10-04 e
-  publicada (`331786d`). A A05, o grupo 5 (o streaming dentro das estratégias, G-22), está feita a
-  2026-10-05 e publicada (`31bf368`). A A06, o grupo 6 (as exportações), está feita a 2026-10-05 e publicada
-  (`dffcfe9`).
-  A A07, o grupo 7 (a pesquisa na web, G-13), está feita a 2026-10-05 e
-  publicada (`67dc63e`). A A08, o grupo 8 (o tecto partilhado, G-28), está feita a 2026-10-05 e
-  publicada (`8de0d02`). A A09, o grupo 9 (os workflows, G-32 e G-33), está feita a
-  2026-10-05 e publicada (`6bea5be`). A A10, o grupo 10 (os manifestos importados, G-34), está feita a
-  2026-10-05 e publicada (`34da992`). A G-36, o grupo 11, fechou na frente I. Depois de pedir uma
-  pausa, o dono pediu para terminar a frente: as A11 a A14 (os grupos 12 a 15: G-37, G-38, G-39,
-  G-40) estão feitas a 2026-10-05 e publicadas (`1e1e223`). **Frente A concluída** com elas: o briefing não
-  tem mais grupos (a G-25 fica de fora, pelo próprio briefing).
-- **Origem:** o briefing de 29/09, onde a app lista o que contorna no toolkit. Cada lacuna diz o
-  que falta, a evidência e quando fica feita. A G-36 (imagens) já fechou na frente I.
-- **Decisões:** D48 (nenhum endereço lido do ambiente), D49 (toda a falha tem tecto), D50 (um
-  preço pode ter data de fim), D51 (o TLS das tools com as autoridades do sistema), D52 (a chave
-  opcional de uma tool vem do ambiente), D53 (um 429 fecha o host durante a espera), D54 (as chamadas ao LLM de um flow
-  iterado correm em stream), D55 (as tools de pesquisa Brave e Tavily), D56 (o preço das tools pagas
-  na tabela), D57 (o tecto partilhado), D58 (o gasto de cada passo, os spans públicos e as
-  dependências fracas), D59 (os aliases do YAML, o aninhamento e as heranças com limite), D60 (os
-  argumentos das ferramentas a chegar), D61 (a reserva de uma imagem pela qualidade e pelo
-  tamanho).
-- **Fora do âmbito:** o ai-network. Não se edita daqui; o dono leva-lhe a nota de cada grupo
-  fechado.
-
-| ID | Tarefa | Dono | Estado | Depende de |
-|---|---|---|---|---|
-| A01 | Segurança: nenhum endereço do ambiente (G-16) e as chaves `xai-`, `gsk_` e `AIza` no `Redactor` (G-19) | Claude | done | nada |
-| A02 | Custo: toda a falha tem tecto (G-29), preços com data e os que faltam (G-20) | Claude | done | nada |
-| A03 | Correcção: tools com nome repetido e embrulhadas (G-21), ids das chamadas (G-23), o cliente xAI sem loop (G-17), pedidos longos da Anthropic (G-18), `cwd` no `run_command` (G-26), ligações no `search_files` (G-27) | Claude | done | nada |
-| A04 | As fontes que falham (G-30): o TLS com as autoridades do sistema (Eurostat), a chave do Semantic Scholar, a espera do GDELT depois de um 429, e o User-Agent | Claude | done | nada |
-| A05 | O streaming dentro das estratégias (G-22): o `StepTrace` no fim de cada passo, todo o passo que começa acaba, e os tokens das chamadas ao LLM num flow iterado | Claude | done | nada |
-| A06 | As exportações: o encaminhamento de modelos e a regra de loopback (G-14), o backend de memória público e com o tipo certo (G-24) | Claude | done | nada |
-| A07 | A pesquisa na web (G-13): `brave_search` e `tavily_search`, com a chave do ambiente e o custo no meter pela tabela de preços | Claude | done | nada |
-| A08 | O tecto partilhado (G-28): um `SharedMeter`/`SharedBudget` que várias execuções gastam ao mesmo tempo, sob um lock seu, semeado pela app | Claude | done | nada |
-| A09 | Os workflows: o gasto medido de cada passo e os spans públicos (G-32), as dependências fracas e a razão de um salto (G-33) | Claude | done | nada |
-| A10 | Os manifestos importados (G-34): os aliases do YAML, o aninhamento e as heranças com limite, num só sítio para os manifestos e os recursos | Claude | done | nada |
-| A11 | Os argumentos das ferramentas a chegar (G-37): eventos `tool_call_delta` em todos os adaptadores | Claude | done | nada |
-| A12 | A memória num pedido com imagens (G-38): o `MemoryMiddleware` procura pelo texto das partes | Claude | done | nada |
-| A13 | Que modelos vêem imagens (G-39): a matriz pelas páginas dos fornecedores, o cenário `vision`, e as imagens no adaptador xAI | Claude | done | nada |
-| A14 | A reserva de uma imagem pela qualidade e pelo tamanho (G-40): as contagens publicadas por modelo, nos adaptadores | Claude | done | nada |
-
-## Frente activa: geração de imagens
-
-- **Estado:** aberta em 2026-10-03, a pedido do dono. **Frente I concluída** a 2026-10-03: as cinco
-  fichas estão feitas, commitadas e publicadas em `main` a pedido do dono (`07c16c7` sonda,
-  `f8d25a7` código, `23c4ed7` docs, `9edbe66` blackboard; a árvore do código passa o gate
-  sozinha).
-  - Gate: 6217 passed, 42 skipped.
-  - Ao vivo: OpenAI e Meta (cerca de $0.45 no total). O Gemini e o xAI esperam pela faturação e
-    pelos créditos ("Por fazer").
-- **Decisões:** D46 (a forma: `LLM.generate_image()` e `Response.images`) e D47 (os parâmetros
-  portáveis). O dono aceitou as recomendações a 2026-10-03.
-- **Origem:** o ai-network precisa de gerar imagens (a G-36 dele; a E06-09 espera por isto).
-  - Hoje o toolkit não tem chamada para modelos de imagem.
-  - As imagens de uma resposta perdem-se: o Gemini deita fora as partes `inline_data`, e o
-    núcleo da Responses ignora os `image_generation_call`.
-- **Base:** `main` @ `be64062`; gate 6086 passed, 42 skipped.
-- **Com as outras frentes:**
-  - A C05 (server tools): a `image_generation()` da I04 é a primeira server tool com config
-    tipada, e a C05 generaliza a partir dela.
-  - A C06 (catálogo): os modelos de imagem entram nos factos quando a C06 correr.
-  - A C01 (`Agent.stream()`): os eventos `image` passam pelo `on_event` dela.
-  - A frente T não toca em adaptadores.
-- **Como correr:**
-  - A I01 escreve-a e corre-a o Claude, depois de o dono autorizar as chamadas pagas (menos de
-    $1).
-  - A I02 pode começar já, em paralelo, num agente com contexto limpo.
-  - A I03 espera pela I01 e pela I02, a I04 pela I03, e a I05 fecha a frente.
-  - Os agentes não fazem commits nem chamadas a fornecedores; o dono revê e commita.
-
-| ID | Tarefa | Dono | Estado | Depende de |
-|---|---|---|---|---|
-| I01 | Sonda ao vivo: as APIs de imagem (custo no `usage`, edição sem estado, assinaturas do Gemini, tamanhos) | Claude (script e execução, com autorização do dono) | done | nada |
-| I02 | Tipos, preços e o charge site: `GeneratedImage`, `Response.images`, `LLM.generate_image()`, tokens e tarifas de imagem | Claude | done | nada |
-| I03 | Adaptadores: gerar e editar no OpenAI (Images API), no Gemini, no xAI e na Meta; preços e regras por modelo | Claude | done | I01, I02 |
-| I04 | Imagens no turno: a server tool `image_generation()` do OpenAI, o evento `image` no stream, o reenvio | Claude | done | I01, I03 |
-| I05 | Documentação, exemplo e verificação ao vivo final | Claude | done | I03, I04 |
-
-### Quebras visíveis
-
-- **I04:** o `StreamEvent.kind` ganha `"image"`. O resto é aditivo.
-
 ## Frente activa: contrato das tools
 
 - **Estado:** aberta em 2026-09-30. Fichas T00 (regras) e T01 a T09 escritas. A T01 está feita a
-  2026-10-05 (Claude, a pedido do dono, com cinco agentes nos módulos) e publicada (`8cd6c3c`); a T02 também (`afe6674`); a T04b também (`7532ba4`); a seguir, a T05. A T03 e a T04a
+  2026-10-05 (Claude, a pedido do dono, com cinco agentes nos módulos) e publicada (`8cd6c3c`); a T02 também (`afe6674`); a T04b também (`7532ba4`); a T05 também (`1e60f67`); a seguir, as T06 a T09. A T03 e a T04a
   estão feitas: PR #71, em `main` desde 2026-09-30 (`84c0ee2`). A T01 já pode começar: a sessão
   paralela, que mexia no `_http.py` e em nove módulos, terminou (`6a34668`).
 - **Plano:** `docs/internal/tools-contract-plan.md`. **Regras:** `tasks/T00-rules.md`, que remete
@@ -123,7 +34,7 @@
 | T03 | Janela: primitiva de corte com rodapé e continuação | Claude | done | nada |
 | T04a | Limites na assinatura: marcador no schema e no validador | Claude | done | nada; em série com a C02 |
 | T04b | Invariante de contrato e lista de dívida | Claude | done | T01, T02, T03, T04a |
-| T05 | Família wiki: HTML, navegação e fusão (8 tools) | — | todo | T04b |
+| T05 | Família wiki: HTML, navegação e fusão (8 tools) | Claude | done | T04b |
 | T06 | Literatura e identificadores (8 módulos, 18 tools) | — | todo | T05 |
 | T07 | Vida e saúde (9 módulos, 34 tools) | — | todo | T05 |
 | T08 | Dados, geo e notícias (13 módulos, 44 tools) | — | todo | T05 |
@@ -225,6 +136,95 @@ Vinte entradas em `FINDINGS.md` (2026-09-15): catorze reproduzidas pelo coordena
 cinco confirmadas no código e na documentação oficial. Onze não tinham tarefa, por serem correcções
 e não capacidades: o plano de robustez agrupou-as nas suas seis causas, que a frente R corrigiu. O
 que ficou aberto está em "Por fazer".
+
+## Frente anterior: as lacunas que o ai-network contorna
+
+- **Estado:** aberta em 2026-10-03, a pedido do dono, pela ordem do briefing do ai-network
+  (`ai-network/board/toolkit-brief.md`, D-54 dele). A A01, o grupo 1 (a segurança), está feita
+  a 2026-10-03 e publicada (`002642c`). A A02, o grupo 2 (o custo), está feita a 2026-10-04 e
+  publicada (`4bb8cc0`). A A03, o grupo 3 (a correcção), está feita a 2026-10-04 e
+  publicada (`87c7e35`); a G-15 já tinha fechado na frente O. A A04, o grupo 4 (as fontes que falham, G-30), está feita a 2026-10-04 e
+  publicada (`331786d`). A A05, o grupo 5 (o streaming dentro das estratégias, G-22), está feita a
+  2026-10-05 e publicada (`31bf368`). A A06, o grupo 6 (as exportações), está feita a 2026-10-05 e publicada
+  (`dffcfe9`).
+  A A07, o grupo 7 (a pesquisa na web, G-13), está feita a 2026-10-05 e
+  publicada (`67dc63e`). A A08, o grupo 8 (o tecto partilhado, G-28), está feita a 2026-10-05 e
+  publicada (`8de0d02`). A A09, o grupo 9 (os workflows, G-32 e G-33), está feita a
+  2026-10-05 e publicada (`6bea5be`). A A10, o grupo 10 (os manifestos importados, G-34), está feita a
+  2026-10-05 e publicada (`34da992`). A G-36, o grupo 11, fechou na frente I. Depois de pedir uma
+  pausa, o dono pediu para terminar a frente: as A11 a A14 (os grupos 12 a 15: G-37, G-38, G-39,
+  G-40) estão feitas a 2026-10-05 e publicadas (`1e1e223`). **Frente A concluída** com elas: o briefing não
+  tem mais grupos (a G-25 fica de fora, pelo próprio briefing).
+- **Origem:** o briefing de 29/09, onde a app lista o que contorna no toolkit. Cada lacuna diz o
+  que falta, a evidência e quando fica feita. A G-36 (imagens) já fechou na frente I.
+- **Decisões:** D48 (nenhum endereço lido do ambiente), D49 (toda a falha tem tecto), D50 (um
+  preço pode ter data de fim), D51 (o TLS das tools com as autoridades do sistema), D52 (a chave
+  opcional de uma tool vem do ambiente), D53 (um 429 fecha o host durante a espera), D54 (as chamadas ao LLM de um flow
+  iterado correm em stream), D55 (as tools de pesquisa Brave e Tavily), D56 (o preço das tools pagas
+  na tabela), D57 (o tecto partilhado), D58 (o gasto de cada passo, os spans públicos e as
+  dependências fracas), D59 (os aliases do YAML, o aninhamento e as heranças com limite), D60 (os
+  argumentos das ferramentas a chegar), D61 (a reserva de uma imagem pela qualidade e pelo
+  tamanho).
+- **Fora do âmbito:** o ai-network. Não se edita daqui; o dono leva-lhe a nota de cada grupo
+  fechado.
+
+| ID | Tarefa | Dono | Estado | Depende de |
+|---|---|---|---|---|
+| A01 | Segurança: nenhum endereço do ambiente (G-16) e as chaves `xai-`, `gsk_` e `AIza` no `Redactor` (G-19) | Claude | done | nada |
+| A02 | Custo: toda a falha tem tecto (G-29), preços com data e os que faltam (G-20) | Claude | done | nada |
+| A03 | Correcção: tools com nome repetido e embrulhadas (G-21), ids das chamadas (G-23), o cliente xAI sem loop (G-17), pedidos longos da Anthropic (G-18), `cwd` no `run_command` (G-26), ligações no `search_files` (G-27) | Claude | done | nada |
+| A04 | As fontes que falham (G-30): o TLS com as autoridades do sistema (Eurostat), a chave do Semantic Scholar, a espera do GDELT depois de um 429, e o User-Agent | Claude | done | nada |
+| A05 | O streaming dentro das estratégias (G-22): o `StepTrace` no fim de cada passo, todo o passo que começa acaba, e os tokens das chamadas ao LLM num flow iterado | Claude | done | nada |
+| A06 | As exportações: o encaminhamento de modelos e a regra de loopback (G-14), o backend de memória público e com o tipo certo (G-24) | Claude | done | nada |
+| A07 | A pesquisa na web (G-13): `brave_search` e `tavily_search`, com a chave do ambiente e o custo no meter pela tabela de preços | Claude | done | nada |
+| A08 | O tecto partilhado (G-28): um `SharedMeter`/`SharedBudget` que várias execuções gastam ao mesmo tempo, sob um lock seu, semeado pela app | Claude | done | nada |
+| A09 | Os workflows: o gasto medido de cada passo e os spans públicos (G-32), as dependências fracas e a razão de um salto (G-33) | Claude | done | nada |
+| A10 | Os manifestos importados (G-34): os aliases do YAML, o aninhamento e as heranças com limite, num só sítio para os manifestos e os recursos | Claude | done | nada |
+| A11 | Os argumentos das ferramentas a chegar (G-37): eventos `tool_call_delta` em todos os adaptadores | Claude | done | nada |
+| A12 | A memória num pedido com imagens (G-38): o `MemoryMiddleware` procura pelo texto das partes | Claude | done | nada |
+| A13 | Que modelos vêem imagens (G-39): a matriz pelas páginas dos fornecedores, o cenário `vision`, e as imagens no adaptador xAI | Claude | done | nada |
+| A14 | A reserva de uma imagem pela qualidade e pelo tamanho (G-40): as contagens publicadas por modelo, nos adaptadores | Claude | done | nada |
+
+## Frente anterior: geração de imagens
+
+- **Estado:** aberta em 2026-10-03, a pedido do dono. **Frente I concluída** a 2026-10-03: as cinco
+  fichas estão feitas, commitadas e publicadas em `main` a pedido do dono (`07c16c7` sonda,
+  `f8d25a7` código, `23c4ed7` docs, `9edbe66` blackboard; a árvore do código passa o gate
+  sozinha).
+  - Gate: 6217 passed, 42 skipped.
+  - Ao vivo: OpenAI e Meta (cerca de $0.45 no total). O Gemini e o xAI esperam pela faturação e
+    pelos créditos ("Por fazer").
+- **Decisões:** D46 (a forma: `LLM.generate_image()` e `Response.images`) e D47 (os parâmetros
+  portáveis). O dono aceitou as recomendações a 2026-10-03.
+- **Origem:** o ai-network precisa de gerar imagens (a G-36 dele; a E06-09 espera por isto).
+  - Hoje o toolkit não tem chamada para modelos de imagem.
+  - As imagens de uma resposta perdem-se: o Gemini deita fora as partes `inline_data`, e o
+    núcleo da Responses ignora os `image_generation_call`.
+- **Base:** `main` @ `be64062`; gate 6086 passed, 42 skipped.
+- **Com as outras frentes:**
+  - A C05 (server tools): a `image_generation()` da I04 é a primeira server tool com config
+    tipada, e a C05 generaliza a partir dela.
+  - A C06 (catálogo): os modelos de imagem entram nos factos quando a C06 correr.
+  - A C01 (`Agent.stream()`): os eventos `image` passam pelo `on_event` dela.
+  - A frente T não toca em adaptadores.
+- **Como correr:**
+  - A I01 escreve-a e corre-a o Claude, depois de o dono autorizar as chamadas pagas (menos de
+    $1).
+  - A I02 pode começar já, em paralelo, num agente com contexto limpo.
+  - A I03 espera pela I01 e pela I02, a I04 pela I03, e a I05 fecha a frente.
+  - Os agentes não fazem commits nem chamadas a fornecedores; o dono revê e commita.
+
+| ID | Tarefa | Dono | Estado | Depende de |
+|---|---|---|---|---|
+| I01 | Sonda ao vivo: as APIs de imagem (custo no `usage`, edição sem estado, assinaturas do Gemini, tamanhos) | Claude (script e execução, com autorização do dono) | done | nada |
+| I02 | Tipos, preços e o charge site: `GeneratedImage`, `Response.images`, `LLM.generate_image()`, tokens e tarifas de imagem | Claude | done | nada |
+| I03 | Adaptadores: gerar e editar no OpenAI (Images API), no Gemini, no xAI e na Meta; preços e regras por modelo | Claude | done | I01, I02 |
+| I04 | Imagens no turno: a server tool `image_generation()` do OpenAI, o evento `image` no stream, o reenvio | Claude | done | I01, I03 |
+| I05 | Documentação, exemplo e verificação ao vivo final | Claude | done | I03, I04 |
+
+### Quebras visíveis
+
+- **I04:** o `StreamEvent.kind` ganha `"image"`. O resto é aditivo.
 
 ## Frente anterior: OpenAI pela Responses API
 
@@ -371,6 +371,11 @@ que ficou aberto está em "Por fazer".
 
 ## Por fazer (dono do repositório)
 
+- **nanope, depois da T05:** trocar as tools que a família wiki substituiu (`define_word`,
+  `wikipedia_search`, `wikipedia_article`, `wikipedia_related`) pelas novas, pela tabela de
+  migração do `CHANGELOG`, em `advanced_multi_purpose_configurable_agent` (`_tools.py`,
+  `_profiles.py`, README) e em `research_center/_agents.py`. Até lá, os testes de `tests/nanope`
+  que constroem as tools saltam (`tests/nanope/pending.py`) e voltam a correr sozinhos.
 - **Anthropic:** quando houver créditos, correr
   `uv run pytest tests/integration/test_provider_contracts_live.py -m live_api -k anthropic -q`
   (usa o `claude-haiku-4-5`, que leva `temperature` no corpo do pedido). Confirma a correcção do
