@@ -921,3 +921,56 @@ Só acrescentar. Uma decisão revista ganha uma nova entrada que diz qual substi
   - um `FlowStep` com uma dependência repetida passa a levantar `ValueError`;
   - as razões dos saltos nomeiam todas as dependências que não correram bem, e o "all
     dependencies skipped" desaparece.
+
+## D59 · Os manifestos e recursos que o toolkit carrega: os aliases do YAML, o aninhamento e as heranças com limite (frente A, G-34)
+
+- **Contexto:**
+  - o `yaml.safe_load` partilha o nó de um alias, mas os percursos do toolkit (o
+    `_canonical_config` e a impressão digital dos manifestos de agente) andam pela árvore já
+    expandida. 412 bytes com seis níveis de dez aliases levam 2,6 s e 170 MB, e cada nível
+    multiplica por dez;
+  - o `YamlCodec` dos recursos, por onde passam os manifestos de prompt e o conhecimento, faz o
+    mesmo `safe_load` sem limite;
+  - um ficheiro de 4 KB com 2000 níveis de aninhamento levanta um `RecursionError` cru, em YAML,
+    JSON e TOML;
+  - o `extends` dos manifestos de agente e o `extends`/`include` dos de prompt relêem um pai
+    por cada caminho até ele. Dez manifestos de agente com 757 bytes, cada um a herdar quatro
+    vezes do seguinte, dão 349 525 leituras;
+  - a app recusa, antes do toolkit, âncoras, aliases e mais de 32 níveis (E02-05 do ai-network).
+- **Decisão** (do coordenador, a 2026-10-05, pela forma que o briefing pede: "recusa aliases, ou
+  limita o que eles expandem"):
+  - um só módulo, `toolkit/_safe_data.py`, lê o YAML, o JSON e o TOML dos manifestos de agente e
+    dos codecs dos recursos. Um teste de arquitectura só deixa importar o PyYAML nos módulos que
+    lista, e os seus loaders só no `_safe_data`;
+  - os aliases limitam-se, não se proíbem, como faz também o go-yaml (com outra regra, uma razão
+    entre os aliases e o resto). Antes de construir os dados, um percurso iterativo do grafo de
+    nós mede a árvore expandida. Os aliases podem acrescentar até 10 000 nós e 1 000 000 de
+    caracteres, ou tantos quantos o documento tem, se for mais. Contar os caracteres apanha um
+    alias que copia muitas vezes um texto longo (139 KB davam 3,3 s e 2 GB só a contar nós);
+  - as chaves de um mapa fundido (`<<`) contam ao lado das do mapa, não como um nível. Uma cadeia
+    de merge keys tem no máximo 100 elos, porque o PyYAML desce uma vez por elo;
+  - um alias dentro da sua própria âncora é recusado;
+  - nenhum documento passa de 100 níveis de mapas e listas, em nenhum formato. O YAML conta os
+    níveis enquanto se compõe e pára no 101.º. No JSON e no TOML, o parser que fica sem pilha é a
+    mesma recusa, e o resto vê-se num percurso nível a nível;
+  - um override de um manifesto de agente também não passa de 100 níveis, contando os do seu
+    caminho com pontos;
+  - um manifesto que vários herdam ou incluem é lido e construído uma só vez por carregamento. O
+    limite de herança conta-se na mesma por todos os caminhos;
+  - a recusa é um `UnsafeDataError`, que cada sítio converte no seu erro (`AgentManifestError`,
+    `AgentOverrideError`, `ResourceDecodeError`, e daí `PromptLoadError`).
+- **Alternativas rejeitadas:**
+  - proibir as âncoras e os aliases: são YAML normal, e as merge keys servem para não repetir
+    configuração. A app pode continuar a proibi-los do seu lado;
+  - um tecto absoluto de nós: recusaria um ficheiro de dados grande sem aliases nenhuns;
+  - confiar no `RecursionError`: chega tarde (0,8 s para 2000 níveis em YAML) e depende do limite
+    de recursão do processo;
+  - passar pelo mesmo módulo os ficheiros que são dados da própria app (um grafo guardado, uma
+    tabela de preços): não são manifestos importados, e ficam como estão.
+- **Consequência:**
+  - um manifesto ou recurso com mais de 100 níveis passa a ser recusado, também num recurso JSON
+    que antes carregava;
+  - os percursos recursivos do toolkit sobre manifestos, recursos e overrides não passam de 100
+    níveis;
+  - um manifesto ou recurso custa em proporção ao seu tamanho. Ler um YAML grande fica 14 a 17%
+    mais lento, e um JSON de 15 MB passa de 0,18 s para 0,30 s.

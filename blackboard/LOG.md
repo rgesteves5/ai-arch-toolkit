@@ -767,3 +767,20 @@ R01 publicada em `main` (`b3dae3f`); a R02 começa com a leitura obrigatória da
   tratados (a ficha lista-os).
 - Gate: 6441 passed, 42 skipped.
 - Próximo: o grupo 10 do briefing, os manifestos importados (G-34).
+
+## 2026-10-05 · A10 feita: os manifestos importados (Claude, a pedido do dono)
+
+- A A09 foi commitada e publicada (`6bea5be`, `e199cc8`).
+- D59: os manifestos de agente e os codecs dos recursos (prompts e conhecimento) lêem o YAML, o
+  JSON e o TOML por `toolkit/_safe_data.py`:
+  - os aliases do YAML podem acrescentar até 10 000 nós e 1 000 000 de caracteres, ou o tamanho
+    do documento;
+  - nada passa de 100 níveis, nem um override com o seu caminho;
+  - um manifesto que vários herdam ou incluem lê-se uma vez.
+- A revisão independente apanhou o que a primeira versão deixava passar: um alias para um texto
+  longo (139 KB davam 2 GB) e as heranças multiplicadas (349 525 leituras para dez ficheiros).
+  Os sete reparos estão tratados (a ficha lista-os).
+- Gate: 6477 passed, 42 skipped.
+- Publicada (`34da992`). O dono pediu para não fazer o grupo 12 do briefing (os argumentos das
+  ferramentas a chegar, G-37): a frente pára até o dono dizer o que se segue. A G-36 (o grupo 11)
+  fechou na frente I.
