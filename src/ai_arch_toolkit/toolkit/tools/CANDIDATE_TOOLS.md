@@ -259,6 +259,9 @@ capabilities.
   IDs can be ephemeral.
 - Suggested priority: implement `brave_llm_context`, `brave_web_search`, then
   `brave_news_search`.
+- Status: in part. Web search is implemented as `brave_search` in `_web_search.py` (D55, D56,
+  D65: `query`, `count` as `max_results`, `offset`, `country`, `freshness`); news search and LLM
+  context remain.
 - References:
   - https://api-dashboard.search.brave.com/app/documentation/web-search/get-started
   - https://api-dashboard.search.brave.com/documentation/services/llm-context
@@ -281,6 +284,8 @@ capabilities.
 - Risk: requires account and API key; advanced search/extraction consumes more credits; crawl
   tools need strict limits to avoid expensive broad traversals.
 - Suggested priority: implement `tavily_search`, then `tavily_extract`.
+- Status: in part. Search is implemented as `tavily_search` in `_web_search.py` (D55, D56, D65:
+  `query`, `max_results`, `topic`, `time_range`, `include_answer`, basic depth); extract remains.
 - Reference: https://docs.tavily.com/documentation/api-reference/endpoint/search
 
 ### 24. Serper.dev

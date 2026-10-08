@@ -1,6 +1,6 @@
 # Examples
 
-Forty-seven runnable scripts that walk through the main public surfaces in the
+Forty-nine runnable scripts that walk through the main public surfaces in the
 toolkit, from a one-line completion to budgets and metering. Each file is
 self-contained — pick a number, copy-paste, run.
 
@@ -54,6 +54,7 @@ toolkit tools.
 | 06 | [`06_tool_loop.py`](06_tool_loop.py) | `@tool` + `ToolGroup` + `run_tools_sync` loop | OpenAI |
 | 24 | [`24_toolkit_tools_showcase.py`](24_toolkit_tools_showcase.py) | Calls a few pre-built tools directly (math, text, datetime, dictionary) and names some others | None |
 | 25 | [`25_server_tools.py`](25_server_tools.py) | Provider-hosted `web_search()` | Anthropic |
+| 49 | [`49_local_web_search.py`](49_local_web_search.py) | A local model (Ollama) searching the web with `brave_search` or `tavily_search`, metered under a budget | Brave or Tavily |
 
 ### 🛡️ Reliability
 
@@ -150,7 +151,7 @@ than strict numerical order:
 
 1. **Get a call working** — 01, 02, 03 (then 11 if you care about images).
 2. **Add structure** — 04 (structured output), 07 (thinking), 08 (async).
-3. **Bring in tools** — 06, then 24 and 25.
+3. **Bring in tools** — 06, then 24 and 25, and 49 for web search with a local model.
 4. **Step up to agents** — 09, 10, 13, 14, then any of 15–19, 26, and 27 depending on
    the architecture you need; 47 shows per-phase model/prompt configuration and
    agent manifests.

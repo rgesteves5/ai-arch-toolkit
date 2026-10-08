@@ -118,10 +118,12 @@ GDELT's free API takes few requests per minute from one address: after a 429 bot
 
 **Web search** — `_web_search.py`
 
-These two run on the toolkit's side, so they serve any model, local ones included, unlike the provider-hosted `web_search()` server tool. Each needs a key of your own in the environment, and says where to get one, without sending anything, when it is missing; each search is billed by the service, and the meter counts it at the price table's `[tools]` entry ([Pricing](pricing.md#paid-tools)).
+These two run on the toolkit's side, so they serve any model, local ones included, unlike the provider-hosted `web_search()` server tool ([the contrast](tools.md#web-search-hosted-or-local)). Each needs a key of your own in the environment, and says where to get one, without sending anything, when it is missing; each search is billed by the service, and the meter counts it at the price table's `[tools]` entry ([Pricing](pricing.md#paid-tools)). A search the service refuses costs nothing.
 
-- `brave_search` — Search the web with Brave Search (`BRAVE_SEARCH_API_KEY`; 1–20 results, a country and an age limit); $5 per 1,000 searches, with $5 of free credit a month
-- `tavily_search` — Search the web with Tavily, which returns an excerpt of each page and, if asked, a short answer (`TAVILY_API_KEY`; 1–20 results, `general` or `news`, an age limit); a basic search is one credit, $0.008, with 1,000 free a month
+Both declare their limits as `Range` bounds, show each result whole, and leave out any result whose URL is not `http(s)` (a `javascript:` or `data:` link never reaches the model), saying how many they left out. They are network tools of low risk that run without approval, like the other network tools; their results are third-party text ([Safety](safety.md#web-search-tools)).
+
+- `brave_search` — Search the web with Brave Search (`BRAVE_SEARCH_API_KEY`; 1–20 results a page, a country and an age limit). Brave serves ten pages: the footer names the next one (`next: offset=1, max_results=10`); $5 per 1,000 searches, with $5 of free credit a month
+- `tavily_search` — Search the web with Tavily, which returns an excerpt of each page and, if asked, a short answer (`TAVILY_API_KEY`; 0–20 results, 0 for the answer alone, `general` or `news`, an age limit). Tavily serves one page, and a full page says so; a basic search is one credit, $0.008, with 1,000 free a month
 
 ## Scholarly & research
 

@@ -160,6 +160,29 @@ The message is written for the person the model repeats it to.
 
 `DangerousToolGate(*, blocked, allow=False)` — names in `blocked` are refused; set `allow=True` to turn the gate into a no-op (e.g. flip it per environment).
 
+### Web search tools
+
+`brave_search` and `tavily_search` are not dangerous tools: like the other network tools, each declares `capability="network"`, `risk_level="low"` and no approval, so a group or an agent runs them without an `approval_handler`. Each search is billed on your key, and the cost is the budget's to bound: the meter holds one unit before the call and charges what the service billed ([Cumulative budgets](#cumulative-budgets), [Pricing](pricing.md#paid-tools)). Two things to weigh before handing them to a model:
+
+- **The query leaves your process.** It carries whatever the context puts in it, a user's words or a document's, and goes to Brave or Tavily. A page or a tool result that tells the model what to search for can steer it there.
+- **The results are third-party text.** Titles and snippets come from pages nobody vetted, and the model reads them as it reads any tool result; the toolkit adds no label. It only leaves out any result whose URL is not `http(s)`, so a `javascript:` or `data:` link never reaches the model.
+
+An app that wants a person to see each query re-decorates the tool, which keeps its name, schema and price, or adds a [gate of its own](#custom-gates) that reads `ctx.tool_call.input["query"]`:
+
+```python
+from ai_arch_toolkit import ToolGroup, tool
+from ai_arch_toolkit.toolkit.tools import brave_search
+
+reviewed_search = tool(
+    capability="network",
+    risk_level="medium",
+    requires_approval=True,
+    approval_reason="Sends the query to Brave Search, billed per search.",
+)(brave_search)
+
+group = ToolGroup(reviewed_search, approval_handler=approve_handler)  # no handler: every call denied
+```
+
 ### Human approval
 
 For tools marked `requires_approval=True`, supply an `approval_handler`. The handler receives an **`ApprovalRequest`** (with the *real, unredacted* arguments so it can decide) and returns an **`ApprovalDecision`**. With no handler, approval-required tools are **denied by default**.

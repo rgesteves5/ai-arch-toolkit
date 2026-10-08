@@ -54,6 +54,7 @@ All examples live in the `examples/` directory. Each is a self-contained script.
 | 25 | `25_server_tools.py` | A provider-hosted server tool (`web_search()`) run by an Anthropic model |
 | 36 | `36_fallback_chains_and_attempts.py` | Fallback chains, attempt tracking across retries/fallbacks, flow-level traces |
 | 37 | `37_budgets_and_metering.py` | Read a run's cost from `result.meter`, cap runs with `BudgetPolicy` (on the `Flow` and per run), wrap raw LLM calls in `budget_scope`, and audit usage events with `MeterScope` |
+| 49 | `49_local_web_search.py` | A local model (Ollama, `base_url` on loopback) running a ReAct agent with `brave_search` or `tavily_search`, whichever has a key, under a budget that bounds what the searches cost; it skips without a key or a server |
 
 ## Memory
 

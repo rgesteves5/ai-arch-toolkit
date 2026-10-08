@@ -105,16 +105,17 @@ KINDS: dict[str, Kind] = {
     **dict.fromkeys(_OTHERS.split(), "other"),
 }
 
-# The 38 tools that never cut what they return (plan, annex A): point 1, the window, does not
-# apply. Every other tool cuts, and owes a window until a case proves it.
+# The 38 tools that never cut what they return (plan, annex A), and tavily_search, whose source
+# serves one page and whose excerpts come whole (C08): point 1, the window, does not apply. Every
+# other tool cuts, and owes a window until a case proves it.
 _WHOLE = """
     air_quality_current base64_decode base64_encode chembl_molecule chembl_target country_info
     date_add date_diff date_format datetime_now distance_between earthquake_count
     earthquake_event eonet_categories foodon_term gbif_species gbif_species_match get_forecast
     get_forecast_by_coords get_weather get_weather_by_coords ip_lookup json_extract math_eval
     openfda_food_recall pdb_chemical_component pdb_entry pdb_ligands python_repl
-    reverse_geocode rxnorm_concept text_stats timezone_convert timezone_lookup unit_convert
-    uniprot_sequence weather_units who_indicator
+    reverse_geocode rxnorm_concept tavily_search text_stats timezone_convert timezone_lookup
+    unit_convert uniprot_sequence weather_units who_indicator
 """
 WHOLE = frozenset(_WHOLE.split())
 
@@ -130,6 +131,14 @@ UNBOUNDED: dict[tuple[str, str], str] = {}
 
 
 # --- Point 1: the window ---------------------------------------------------------------------
+
+
+def _brave_page(titles: list[str], *, more: bool) -> dict[str, Any]:
+    """A page of Brave's web results, and whether Brave has more
+    (https://api-dashboard.search.brave.com/api-reference/web/search/get)."""
+    results = [{"title": t, "url": f"https://{t.lower()}.example/"} for t in titles]
+    return {"query": {"more_results_available": more}, "web": {"results": results}}
+
 
 _WIKI_LONG = wiki_pages.parse_answer("Long page", wiki_pages.long_page())
 _OUTLINED = wiki_pages.parse_answer("Long page", wiki_pages.many_sections())
@@ -150,6 +159,14 @@ WINDOW_CASES: dict[str, Case] = {
     "wiktionary_entry": Case(
         args={"term": wiki_pages.ENTRY_TERM, "max_chars": 500},
         answers=(Answer(body=_ENTRY_LONG),),
+    ),
+    # Brave pages by ``offset``, in pages of ``count`` results.
+    "brave_search": Case(
+        args={"query": "physics", "max_results": 2},
+        answers=(
+            Answer(body=_brave_page(["Alpha", "Beta"], more=True)),
+            Answer(body=_brave_page(["Gamma", "Delta"], more=False)),
+        ),
     ),
 }
 
@@ -218,6 +235,16 @@ ZERO_CASES: dict[str, ZeroCase] = {
     "wiki_search": ZeroCase(
         args={"query": "zzqqxx"},
         answers=(Answer(body=wiki_pages.search_answer([], total=0)),),
+        says="zzqqxx",
+    ),
+    "brave_search": ZeroCase(
+        args={"query": "zzqqxx"},
+        answers=(Answer(body=_brave_page([], more=False)),),
+        says="zzqqxx",
+    ),
+    "tavily_search": ZeroCase(
+        args={"query": "zzqqxx"},
+        answers=(Answer(body={"query": "zzqqxx", "results": [], "usage": {"credits": 1}}),),
         says="zzqqxx",
     ),
 }

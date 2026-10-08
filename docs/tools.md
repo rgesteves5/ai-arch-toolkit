@@ -170,6 +170,29 @@ response = llm.complete_sync(
 
 `image_generation(model=..., quality=..., aspect_ratio=..., resolution=..., output_format=..., partial_images=...)` lets an OpenAI model draw in the middle of its turn, with the image model it names; it is the one server tool with a typed config, checked against that image model's rules. Only the OpenAI adapter on OpenAI's own host sends it. See [Image Generation](images.md).
 
+### Web search: hosted or local
+
+The toolkit has two ways to search the web. The server tool `web_search()` asks the model's provider to search inside its turn; the toolkit tools `brave_search` and `tavily_search` are function tools that the toolkit runs, with a search API key of your own ([catalog](tools-catalog.md#web-search-your-own-key-billed)).
+
+| | `web_search()` | `brave_search`, `tavily_search` |
+|---|---|---|
+| Who runs it | The provider, inside the model's turn | The toolkit, through the governed executor (gates, limits, budget) |
+| Who bills it | The provider, outside the token counts: the meter cannot price it, so the turn's cost is unknown ([Cost control](cost-control.md)) | Brave or Tavily, on your key; the meter charges each search the service accepted at the price table's `[tools]` entry ([Pricing](pricing.md#paid-tools)), and a refused search costs nothing |
+| Which models | Anthropic, Gemini, OpenAI (its own host) and Meta; xAI and OpenAI-compatible servers raise `RequestError` | Any model that calls tools, local ones included (Ollama, LM Studio, vLLM) |
+| Key | None beyond the provider's | `BRAVE_SEARCH_API_KEY` or `TAVILY_API_KEY`, read from the environment at each request |
+| Options | None: a config raises `RequestError` | Brave: `max_results` (1–20 a page), `offset` (the page, 0–9), `country`, `freshness`. Tavily: `max_results` (0–20, one page), `topic`, `time_range`, `include_answer` |
+| What the model reads | The provider's citations and summary | A numbered list: title, URL (only `http(s)`), the whole snippet; Brave's pages end with the call for the next one |
+
+```python
+from ai_arch_toolkit import LLM, ToolGroup
+from ai_arch_toolkit.toolkit.tools import brave_search
+
+llm = LLM("qwen3:8b", base_url="http://localhost:11434/v1")  # a local model, no provider key
+response = llm.complete_sync("What changed in Python 3.14?", tools=ToolGroup(brave_search))
+```
+
+Both are network tools of low risk that run without approval, like the other network tools; [Safety](safety.md#web-search-tools) says what they send and what they bring back. [Example 49](examples.md) runs an agent on a local model with whichever key you have.
+
 ---
 
 ## Pre-built tools catalog

@@ -64,7 +64,130 @@ def _mediawiki(*tools: str) -> tuple[ErrorBody, ...]:
     )
 
 
+_BRAVE_ERRORS = "https://api-dashboard.search.brave.com/api-reference/web/search/get"
+_TAVILY_ERRORS = "https://docs.tavily.com/documentation/api-reference/endpoint/search"
+_BRAVE = frozenset({"brave_search"})
+_TAVILY = frozenset({"tavily_search"})
+
+
+def _brave(status: int, code: str, detail: str) -> dict[str, object]:
+    """Brave's error body: the reference's ``ErrorResponse`` schema (``type``, and an ``error``
+    with ``id``, ``status``, ``code``, ``detail`` and ``meta``); the values are the test's."""
+    error = {"id": "4c1b7e6e", "status": status, "code": code, "detail": detail, "meta": {}}
+    return {"type": "ErrorResponse", "error": error, "time": 1759900000}
+
+
+def _tavily(error: str) -> dict[str, object]:
+    """Tavily's error body, as the reference shows it: ``{"detail": {"error": …}}``."""
+    return {"detail": {"error": error}}
+
+
+_WEB_SEARCH = (
+    # Brave documents 404, 422 and 429, each with the ErrorResponse schema.
+    ErrorBody(
+        source=f"{_BRAVE_ERRORS} (422)",
+        status=422,
+        body=_brave(422, "VALIDATION", "Unable to validate request parameter(s)."),
+        type="validation_error",
+        says="Unable to validate request parameter(s)",
+        tools=_BRAVE,
+    ),
+    ErrorBody(
+        source=f"{_BRAVE_ERRORS} (429)",
+        status=429,
+        body=_brave(429, "RATE_LIMITED", "Request rate limit exceeded for plan."),
+        type="rate_limited",
+        says="Request rate limit exceeded for plan.",
+        tools=_BRAVE,
+    ),
+    ErrorBody(
+        source=f"{_BRAVE_ERRORS} (404)",
+        status=404,
+        body=_brave(404, "NOT_FOUND", "Resource not found."),
+        type="upstream",
+        says="endpoint not found (HTTP 404); the API may have changed: Resource not found.",
+        tools=_BRAVE,
+    ),
+    # Tavily documents 400, 401, 422, 429, 432, 433 and 500, with these bodies.
+    ErrorBody(
+        source=f"{_TAVILY_ERRORS} (400)",
+        status=400,
+        body=_tavily("Invalid topic. Must be 'general' or 'news'."),
+        type="validation_error",
+        says="Invalid topic. Must be 'general' or 'news'",
+        tools=_TAVILY,
+    ),
+    ErrorBody(
+        source=f"{_TAVILY_ERRORS} (401)",
+        status=401,
+        body=_tavily("Unauthorized: missing or invalid API key."),
+        type="upstream",
+        says="Unauthorized: missing or invalid API key",
+        tools=_TAVILY,
+    ),
+    ErrorBody(
+        source=f"{_TAVILY_ERRORS} (422)",
+        status=422,
+        body={
+            "detail": [
+                {
+                    "type": "string_type",
+                    "loc": ["body", "query"],
+                    "msg": "Input should be a valid string",
+                    "input": [],
+                }
+            ]
+        },
+        type="validation_error",
+        says="query: Input should be a valid string",
+        tools=_TAVILY,
+    ),
+    ErrorBody(
+        source=f"{_TAVILY_ERRORS} (429)",
+        status=429,
+        body=_tavily(
+            "Your request has been blocked due to excessive requests. Please reduce the rate of "
+            "requests."
+        ),
+        type="rate_limited",
+        says="Your request has been blocked due to excessive requests.",
+        tools=_TAVILY,
+    ),
+    ErrorBody(
+        source=f"{_TAVILY_ERRORS} (432)",
+        status=432,
+        body=_tavily(
+            "This request exceeds your plan's set usage limit. Please upgrade your plan or "
+            "contact support@tavily.com"
+        ),
+        type="rate_limited",
+        says="This request exceeds your plan's set usage limit",
+        tools=_TAVILY,
+    ),
+    ErrorBody(
+        source=f"{_TAVILY_ERRORS} (433)",
+        status=433,
+        body=_tavily(
+            "This request exceeds the pay-as-you-go limit. You can increase your limit on the "
+            "Tavily dashboard."
+        ),
+        type="rate_limited",
+        says="This request exceeds the pay-as-you-go limit",
+        tools=_TAVILY,
+    ),
+    ErrorBody(
+        source=f"{_TAVILY_ERRORS} (500)",
+        status=500,
+        body=_tavily("Internal Server Error"),
+        type="upstream",
+        says="Internal Server Error",
+        tools=_TAVILY,
+    ),
+)
+
+
 ERROR_BODIES: dict[str, tuple[ErrorBody, ...]] = {
+    "_web_search": _WEB_SEARCH,
     "_air_quality": (
         ErrorBody(
             source="https://open-meteo.com/en/docs/air-quality-api (Errors)",
