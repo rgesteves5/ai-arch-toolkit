@@ -1,42 +1,26 @@
-"""Air quality tools — Open-Meteo air quality forecasts with no API key required."""
+"""Air quality tools: Open-Meteo's air quality, now and hour by hour, for any point (free, no key;
+https://open-meteo.com/en/docs/air-quality-api, CAMS data).
+
+Times are asked as Unix time (``timeformat=unixtime``, always UTC) and shown in ISO 8601 UTC: a
+local time would hide the clock changes inside a forecast. The point's time zone, which sets where
+each day starts, is named in the heading.
+"""
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
-from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.core import Range, ToolResult, tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
-from ai_arch_toolkit.toolkit.tools._http import Api, Reply
+from ai_arch_toolkit.toolkit.tools._open_meteo import AIR_QUALITY, measured
+from ai_arch_toolkit.toolkit.tools._values import plain, utc
+from ai_arch_toolkit.toolkit.tools._window import page_window
 
-
-def _error_reason(reply: Reply) -> ToolFailure | str | None:
-    """The error Open-Meteo reports in a JSON body; ``None`` when there is none.
-
-    An invalid parameter gets HTTP 400 and ``{"error": true, "reason": "..."}``
-    (https://open-meteo.com/en/docs/air-quality-api, "Errors"): the request's arguments were
-    rejected, a ``validation_error``. Any other answer carrying a ``reason`` is the source
-    failing, in its words.
-    """
-    body = reply.body
-    reason = _string(body.get("reason")) if isinstance(body, dict) else ""
-    if not reason:
-        return None
-    if reply.status == 400:
-        msg = (
-            f"Open-Meteo rejected the request: {reason}; check the coordinates, the variables "
-            "and the timezone (an IANA name such as 'Europe/Lisbon', or 'auto')."
-        )
-        return ToolFailure("validation_error", msg)
-    return reason
-
-
-_API = Api(
-    base="https://air-quality-api.open-meteo.com/v1/air-quality",
-    name="Open-Meteo",
-    timeout_s=15,
-    error_reader=_error_reason,
-)
-_MAX_HOURS_LIMIT = 72
+# Up to 7 days of forecast and 92 past days (https://open-meteo.com/en/docs/air-quality-api).
+_MAX_FORECAST_DAYS = 7
+_MAX_PAST_DAYS = 92
+_MAX_HOURS = 72
+_ATTRIBUTION = "Open-Meteo Air Quality API, CAMS data"
 _DEFAULT_VARIABLES = "european_aqi,us_aqi,pm10,pm2_5,ozone,nitrogen_dioxide"
 _VALID_VARIABLES = {
     "pm10",
@@ -92,13 +76,14 @@ def air_quality_current(
     variables: str = _DEFAULT_VARIABLES,
     timezone: str = "auto",
 ) -> str:
-    """Get current air quality values for coordinates using Open-Meteo.
+    """Get the current air quality at a point, from Open-Meteo: AQI and pollutant values, each
+    with its unit.
 
     Args:
         latitude: Latitude in decimal degrees.
         longitude: Longitude in decimal degrees.
-        variables: Comma-separated current variables. Defaults to common AQI and pollutant values.
-        timezone: Timezone name or "auto". Defaults to "auto".
+        variables: Comma-separated variables, e.g. "european_aqi,pm2_5,ozone".
+        timezone: An IANA time zone, e.g. "Europe/Lisbon", or "auto" for the point's own.
 
     Raises:
         ToolFailure: validation_error when the coordinates, the variables or the timezone are
@@ -107,14 +92,14 @@ def air_quality_current(
     """
     _validate_location(latitude, longitude)
     parsed = _parse_variables(variables)
-
     params = {
         "latitude": str(latitude),
         "longitude": str(longitude),
         "current": ",".join(parsed),
         "timezone": timezone.strip() or "auto",
+        "timeformat": "unixtime",
     }
-    return _API.get_json(params=params, parse=lambda data: _current_text(data, parsed))
+    return AIR_QUALITY.get_json(params=params, parse=lambda data: _current_text(data, parsed))
 
 
 @tool(capability="network")
@@ -122,21 +107,25 @@ def air_quality_forecast(
     latitude: float,
     longitude: float,
     variables: str = _DEFAULT_VARIABLES,
-    forecast_days: int = 3,
-    past_days: int = 0,
+    forecast_days: Annotated[int, Range(1, _MAX_FORECAST_DAYS)] = 3,
+    past_days: Annotated[int, Range(0, _MAX_PAST_DAYS)] = 0,
     timezone: str = "auto",
-    max_hours: int = 24,
-) -> str:
-    """Get an hourly air quality forecast for coordinates using Open-Meteo.
+    max_hours: Annotated[int, Range(1, _MAX_HOURS)] = 24,
+    offset: Annotated[int, Range(0)] = 0,
+) -> ToolResult:
+    """Get the hourly air quality at a point, from Open-Meteo: the past days asked for, then
+    the forecast, one hour per line.
 
     Args:
         latitude: Latitude in decimal degrees.
         longitude: Longitude in decimal degrees.
-        variables: Comma-separated hourly variables. Defaults to common AQI and pollutant values.
-        forecast_days: Forecast days to request (1-7). Defaults to 3.
-        past_days: Past forecast days to include (0-7). Defaults to 0.
-        timezone: Timezone name or "auto". Defaults to "auto".
-        max_hours: Maximum hourly rows to return (1-72). Defaults to 24.
+        variables: Comma-separated variables, e.g. "european_aqi,pm2_5,ozone".
+        forecast_days: Days of forecast, from today.
+        past_days: Past days before today, to include.
+        timezone: An IANA time zone, e.g. "Europe/Lisbon", or "auto" for the point's own; it
+            sets where each day starts.
+        max_hours: How many hours to show.
+        offset: How many hours to skip; the footer gives the next offset.
 
     Raises:
         ToolFailure: validation_error when the coordinates, the variables or the timezone are
@@ -145,11 +134,6 @@ def air_quality_forecast(
     """
     _validate_location(latitude, longitude)
     parsed = _parse_variables(variables)
-
-    forecast_days = max(1, min(forecast_days, 7))
-    past_days = max(0, min(past_days, 7))
-    max_hours = max(1, min(max_hours, _MAX_HOURS_LIMIT))
-
     params = {
         "latitude": str(latitude),
         "longitude": str(longitude),
@@ -157,20 +141,51 @@ def air_quality_forecast(
         "forecast_days": str(forecast_days),
         "past_days": str(past_days),
         "timezone": timezone.strip() or "auto",
+        "timeformat": "unixtime",
     }
-    return _API.get_json(params=params, parse=lambda data: _forecast_text(data, parsed, max_hours))
+    return AIR_QUALITY.get_json(
+        params=params, parse=lambda data: _forecast_answer(data, parsed, offset, max_hours)
+    )
 
 
 def _current_text(data: dict[str, Any], variables: tuple[str, ...]) -> str:
-    if not isinstance(data.get("current"), dict):
-        raise ToolFailure("upstream", "Open-Meteo answered without current values.")
-    return _format_current(data, variables)
+    current = data.get("current")
+    if not isinstance(current, dict):
+        raise ToolFailure(
+            "upstream", "Open-Meteo answered without current values; try again later."
+        )
+    units = data.get("current_units") or {}
+    lines = [f"Current air quality at {_point(data)} ({_ATTRIBUTION}):"]
+    when = current.get("time")
+    if isinstance(when, int | float):
+        lines.append(f"Time: {utc(when)}")
+    lines += [f"{name}: {measured(current.get(name), units.get(name))}" for name in variables]
+    return "\n".join(lines)
 
 
-def _forecast_text(data: dict[str, Any], variables: tuple[str, ...], max_hours: int) -> str:
-    if not isinstance(data.get("hourly"), dict):
-        raise ToolFailure("upstream", "Open-Meteo answered without hourly values.")
-    return _format_forecast(data, variables, max_hours)
+def _forecast_answer(
+    data: dict[str, Any], variables: tuple[str, ...], offset: int, limit: int
+) -> ToolResult:
+    hourly = data.get("hourly")
+    if not isinstance(hourly, dict) or not isinstance(hourly.get("time"), list):
+        raise ToolFailure(
+            "upstream", "Open-Meteo answered without hourly values; try again later."
+        )
+    units = data.get("hourly_units") or {}
+    rows = [
+        " | ".join([utc(when), *(_cell(hourly, units, name, index) for name in variables)])
+        for index, when in enumerate(hourly["time"])
+    ]
+    heading = f"Hourly air quality at {_point(data)}, times in UTC ({_ATTRIBUTION}):"
+    if not rows:
+        return ToolResult.success(f"{heading}\nOpen-Meteo returned no hours for that period.")
+    return page_window(rows, offset=offset, limit=limit).result(heading=heading)
+
+
+def _cell(hourly: dict[str, Any], units: dict[str, Any], name: str, index: int) -> str:
+    values = hourly.get(name)
+    value = values[index] if isinstance(values, list) and index < len(values) else None
+    return f"{name}: {measured(value, units.get(name))}"
 
 
 def _parse_variables(value: str) -> tuple[str, ...]:
@@ -199,68 +214,15 @@ def _validate_location(latitude: float, longitude: float) -> None:
         raise ToolFailure("validation_error", msg)
 
 
-def _format_current(data: dict[str, Any], variables: tuple[str, ...]) -> str:
-    current = data.get("current", {})
-    units = data.get("current_units", {})
-    header = _location_header("Open-Meteo air quality current", data)
-    lines = [header]
-    time = _string(current.get("time"))
-    if time:
-        lines.append(f"Time: {time}")
-    for variable in variables:
-        value = current.get(variable)
-        unit = _string(units.get(variable))
-        lines.append(f"{variable}: {_format_value(value)}{_unit_suffix(unit)}")
-    lines.append("Attribution: Open-Meteo Air Quality API / CAMS data providers")
-    return "\n".join(lines)
-
-
-def _format_forecast(data: dict[str, Any], variables: tuple[str, ...], max_hours: int) -> str:
-    hourly = data.get("hourly", {})
-    units = data.get("hourly_units", {})
-    times = hourly.get("time", [])
-    if not isinstance(times, list):
-        times = []
-    lines = [
-        _location_header(
-            f"Open-Meteo air quality forecast ({min(len(times), max_hours)} hours)", data
-        )
-    ]
-    for index, timestamp in enumerate(times[:max_hours], start=1):
-        parts = [str(timestamp)]
-        for variable in variables:
-            values = hourly.get(variable, [])
-            value = (
-                values[index - 1] if isinstance(values, list) and index - 1 < len(values) else None
-            )
-            unit = _string(units.get(variable))
-            parts.append(f"{variable}: {_format_value(value)}{_unit_suffix(unit)}")
-        lines.append(f"{index}. " + " | ".join(parts))
-    lines.append("Attribution: Open-Meteo Air Quality API / CAMS data providers")
-    return "\n".join(lines)
-
-
-def _location_header(label: str, data: dict[str, Any]) -> str:
-    lat = _format_value(data.get("latitude"))
-    lon = _format_value(data.get("longitude"))
+def _point(data: dict[str, Any]) -> str:
+    """The grid point Open-Meteo answered for, and its time zone."""
+    where = f"latitude {plain(data.get('latitude')) or '?'}, "
+    where += f"longitude {plain(data.get('longitude')) or '?'}"
     timezone = _string(data.get("timezone"))
-    suffix = f" ({timezone})" if timezone else ""
-    return f"{label} for {lat}, {lon}{suffix}:"
+    return f"{where} (time zone {timezone})" if timezone else where
 
 
-def _string(value: Any) -> str:
+def _string(value: object) -> str:
     if value is None:
         return ""
     return " ".join(str(value).split())
-
-
-def _format_value(value: Any) -> str:
-    if value is None:
-        return "missing"
-    if isinstance(value, float):
-        return f"{value:.6g}"
-    return str(value)
-
-
-def _unit_suffix(unit: str) -> str:
-    return f" {unit}" if unit else ""

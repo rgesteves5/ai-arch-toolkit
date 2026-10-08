@@ -1,4 +1,5 @@
-"""Geography tools — geocoding, IP lookup, country info (free, no API key)."""
+"""Geography tools: places by name, time zones, distances, IP addresses and countries (free, no
+key). Reverse geocoding is ``osm_reverse_geocode``'s (``_osm``)."""
 
 from __future__ import annotations
 
@@ -6,20 +7,50 @@ import ipaddress
 import math
 import re
 from decimal import Decimal
-from typing import Any
+from typing import Annotated, Any
 
-from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.core import Range, ToolResult, tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
-from ai_arch_toolkit.toolkit.tools._http import Api
+from ai_arch_toolkit.toolkit.tools._first_results import asked, first_results_window
+from ai_arch_toolkit.toolkit.tools._http import Api, Reply
 from ai_arch_toolkit.toolkit.tools._mediawiki import mediawiki_error
+from ai_arch_toolkit.toolkit.tools._open_meteo import (
+    FORECAST,
+    GEOCODING,
+    GEOCODING_DEPTH,
+    Place,
+    geocoding_params,
+    places,
+)
+from ai_arch_toolkit.toolkit.tools._values import plain
 
-_GEOCODING = Api(base="https://geocoding-api.open-meteo.com/v1", name="Open-Meteo", query_safe=",")
-_FORECAST = Api(base="https://api.open-meteo.com/v1", name="Open-Meteo", query_safe=",")
-# One request per second, a clock the osm_* tools share:
-# https://operations.osmfoundation.org/policies/nominatim/
-_NOMINATIM = Api(base="https://nominatim.openstreetmap.org", name="Nominatim", min_interval_s=1.1)
-# The free endpoint is HTTPS and allows commercial use: https://ipwhois.io/documentation
-_IPWHOIS = Api(base="https://ipwho.is", name="ipwho.is", segment_safe=":")
+
+def _ipwhois_error(reply: Reply) -> ToolFailure | str | None:
+    """The error an ipwho.is answer reports; ``None`` for a result.
+
+    ipwho.is says ``"success": false`` and why, in ``message``: with HTTP 200 for an address it
+    cannot locate ("Invalid IP address", "Reserved range"), and with a 4xx for the rest ("Rate
+    limit exceeded" with a 429) (https://ipwhois.io/documentation, "Errors"). An address it
+    cannot locate is the caller's to change, a ``validation_error``.
+    """
+    body = reply.body
+    if not isinstance(body, dict) or body.get("success") is not False:
+        return None
+    message = _string(body.get("message")) or "no reason given"
+    if reply.status == 200 and message in _UNLOCATABLE:
+        return ToolFailure(
+            "validation_error",
+            f"ipwho.is cannot locate this address ({message}): a private, reserved or malformed "
+            "address has no public location; give a public IPv4 or IPv6 address",
+        )
+    return message
+
+
+_UNLOCATABLE = frozenset({"Invalid IP address", "Reserved range"})
+# The free endpoint is HTTPS, 1000 requests a day per client IP: https://ipwhois.io/documentation
+_IPWHOIS = Api(
+    base="https://ipwho.is", name="ipwho.is", segment_safe=":", error_reader=_ipwhois_error
+)
 # Country facts come from Wikidata, free and without a key: the search API finds the candidates,
 # one SPARQL query reads those that hold an ISO 3166-1 code. REST Countries took v1-v4 down and
 # its v5 needs a key: https://restcountries.com/docs/countries/legacy-api-deprecation
@@ -32,6 +63,7 @@ _WIKIDATA = Api(
 _WIKIDATA_SPARQL = Api(
     base="https://query.wikidata.org/sparql", name="Wikidata Query Service", timeout_s=15
 )
+_NAME_CHARS = 200
 _COUNTRY_RE = re.compile(r"^[\w .,'\u2019()&-]{1,80}$")
 _QID_RE = re.compile(r"^Q\d+$")
 # One row per fact and value, so a fact with many values adds rows instead of multiplying them.
@@ -60,44 +92,40 @@ type _Facts = dict[str, list[tuple[str, str]]]
 
 
 @tool(capability="network")
-def geocode(city: str) -> str:
-    """Get the coordinates and country for a city using Open-Meteo geocoding.
+def geocode(
+    city: str,
+    max_results: Annotated[int, Range(1, GEOCODING_DEPTH)] = 10,
+    offset: Annotated[int, Range(0, GEOCODING_DEPTH - 1)] = 0,
+) -> ToolResult:
+    """Find places by name with Open-Meteo's geocoding, in its order: their coordinates, region,
+    country, time zone and population.
 
     Args:
-        city: City name, e.g. "Tokyo", "London", "São Paulo".
-    """
-    params = {"name": city, "count": "3", "language": "en", "format": "json"}
-    lines = _GEOCODING.get_json("search", params=params, parse=_geocode_lines)
-    if not lines:
-        return f"No results for: {city!r}"
-    return f"Geocoding results for {city!r}:\n" + "\n".join(lines)
-
-
-@tool(capability="network")
-def reverse_geocode(lat: float, lon: float) -> str:
-    """Look up a place name from latitude and longitude.
-
-    Uses OpenStreetMap Nominatim reverse geocoding (free, no API key).
-
-    Args:
-        lat: Latitude in decimal degrees.
-        lon: Longitude in decimal degrees.
+        city: The place's name, e.g. "Tokyo", "London" or "São Paulo".
+        max_results: How many places to list.
+        offset: How many places to skip; the footer gives the next offset.
 
     Raises:
-        ToolFailure: validation_error when the coordinates are out of range.
+        ToolFailure: validation_error when ``city`` is empty or too long.
     """
-    _validate_coords(lat, lon)
-    params = {"format": "jsonv2", "lat": lat, "lon": lon, "zoom": "10", "addressdetails": "1"}
-    return _NOMINATIM.get_json(
-        "reverse", params=params, parse=lambda data: _place_text(data, lat, lon)
+    name = " ".join(city.split())
+    if not name or len(name) > _NAME_CHARS:
+        raise ToolFailure(
+            "validation_error",
+            f"invalid city {city[:100]!r}; give a place name of 1 to {_NAME_CHARS} characters, "
+            "e.g. 'Lisbon'",
+        )
+    params = geocoding_params(name, asked(offset, max_results, GEOCODING_DEPTH))
+    return GEOCODING.get_json(
+        "search",
+        params=params,
+        parse=lambda data: _geocode_answer(places(data), name, offset, max_results),
     )
 
 
 @tool(capability="network")
 def timezone_lookup(lat: float, lon: float) -> str:
-    """Look up the timezone for a coordinate pair.
-
-    Uses Open-Meteo forecast metadata (free, no API key).
+    """Look up the time zone of a point and its UTC offset now, from Open-Meteo.
 
     Args:
         lat: Latitude in decimal degrees.
@@ -114,7 +142,7 @@ def timezone_lookup(lat: float, lon: float) -> str:
         "forecast_days": "1",
         "timezone": "auto",
     }
-    return _FORECAST.get_json(
+    return FORECAST.get_json(
         "forecast", params=params, parse=lambda data: _timezone_text(data, lat, lon)
     )
 
@@ -164,16 +192,15 @@ def distance_between(
 
 @tool(capability="network")
 def ip_lookup(ip: str = "") -> str:
-    """Look up geographic location and ISP info for an IP address.
-
-    Uses ipwho.is (free, no API key, 1000 requests/day per client IP).
+    """Look up the approximate location, time zone and network of a public IP address, from
+    ipwho.is (1000 requests a day per client IP).
 
     Args:
-        ip: Explicit IPv4 or IPv6 address to look up.
+        ip: An IPv4 or IPv6 address.
 
     Raises:
-        ToolFailure: validation_error when ``ip`` is not an IP address; upstream when ipwho.is
-            reports it cannot look the address up (a reserved range, for one).
+        ToolFailure: validation_error when ``ip`` is not an IP address, or ipwho.is cannot locate
+            it (a private or reserved range).
     """
     try:
         target = str(ipaddress.ip_address(ip))
@@ -230,74 +257,68 @@ def country_info(name: str) -> str:
     return text
 
 
-def _geocode_lines(data: dict[str, Any]) -> list[str]:
-    lines: list[str] = []
-    for r in data.get("results") or []:
-        name = r.get("name", "")
-        country = r.get("country", "")
-        admin = r.get("admin1", "")
-        loc = f"{name}, {admin}, {country}" if admin else f"{name}, {country}"
-        line = f"  {loc}: {r.get('latitude', '?')}°N, {r.get('longitude', '?')}°E"
-        if r.get("population"):
-            line += f", pop: {r['population']:,}"
-        if r.get("timezone"):
-            line += f", tz: {r['timezone']}"
-        lines.append(line)
-    return lines
+def _geocode_answer(found: list[Place], name: str, offset: int, limit: int) -> ToolResult:
+    if not found:
+        return ToolResult.success(
+            f"No places named {name!r} in Open-Meteo's geocoding; check the spelling, or search "
+            "OpenStreetMap with osm_search_place."
+        )
+    lines = [f"{number}. {_place_line(place)}" for number, place in enumerate(found, start=1)]
+    window = first_results_window(
+        lines,
+        offset=offset,
+        limit=limit,
+        depth=GEOCODING_DEPTH,
+        narrow="add the region or country to the name, or search with osm_search_place",
+    )
+    return window.result(heading=f"Places named {name!r} (Open-Meteo geocoding):")
 
 
-def _place_text(data: dict[str, Any], lat: float, lon: float) -> str:
-    display = data.get("display_name")
-    if not display:
-        return f"No reverse geocoding result for coordinates: {lat}, {lon}"
-    address = data.get("address", {})
-    country = address.get("country", "?")
-    state = (
-        address.get("state")
-        or address.get("region")
-        or address.get("county")
-        or address.get("state_district")
-        or "?"
-    )
-    city = (
-        address.get("city")
-        or address.get("town")
-        or address.get("village")
-        or address.get("municipality")
-        or address.get("hamlet")
-        or "?"
-    )
-    return (
-        f"Coordinates: {lat}, {lon}\n"
-        f"Location: {display}\n"
-        f"City: {city}\n"
-        f"Region: {state}\n"
-        f"Country: {country}"
-    )
+def _place_line(place: Place) -> str:
+    parts = [place.label(), place.position()]
+    if place.timezone:
+        parts.append(f"time zone {place.timezone}")
+    if place.population is not None:
+        parts.append(f"population {place.population}")
+    if place.elevation is not None:
+        parts.append(f"elevation {plain(place.elevation)} m")
+    return " | ".join(parts)
 
 
 def _timezone_text(data: dict[str, Any], lat: float, lon: float) -> str:
-    timezone = data.get("timezone")
+    timezone = _string(data.get("timezone"))
     if not timezone:
-        return f"No timezone found for coordinates: {lat}, {lon}"
+        raise ToolFailure("upstream", "Open-Meteo answered without a time zone; try again later.")
+    abbreviation = _string(data.get("timezone_abbreviation"))
+    named = f"{timezone} ({abbreviation})" if abbreviation else timezone
     offset = _format_utc_offset(data.get("utc_offset_seconds"))
-    return f"Coordinates: {lat}, {lon}\nTimezone: {timezone}\nUTC offset: {offset}"
+    return (
+        f"Coordinates: latitude {plain(lat)}, longitude {plain(lon)}\n"
+        f"Time zone: {named}\n"
+        f"UTC offset now: {offset}"
+    )
 
 
 def _ip_text(data: dict[str, Any], target: str) -> str:
     if data.get("success") is not True:
-        reason = str(data.get("message") or "unknown error").rstrip(".")
-        raise ToolFailure("upstream", f"ipwho.is could not look up {target}: {reason}.")
+        raise ToolFailure(
+            "upstream", f"ipwho.is answered without a result for {target}; try again later."
+        )
     connection = data.get("connection") or {}
     timezone = data.get("timezone") or {}
+    code = _string(data.get("country_code"))
+    country = _string(data.get("country")) or "?"
+    zone = _string(timezone.get("id")) or "?"
+    utc_offset = _string(timezone.get("utc"))
     return (
-        f"IP: {data.get('ip', '?')}\n"
-        f"Location: {data.get('city', '?')}, {data.get('region', '?')}, "
-        f"{data.get('country', '?')}\n"
-        f"Coordinates: {data.get('latitude', '?')}°N, {data.get('longitude', '?')}°E\n"
-        f"Timezone: {timezone.get('id', '?')}\n"
-        f"ISP: {connection.get('isp', '?')}\n"
-        f"Organization: {connection.get('org', '?')}"
+        f"IP: {_string(data.get('ip')) or target}\n"
+        f"Location: {_string(data.get('city')) or '?'}, {_string(data.get('region')) or '?'}, "
+        f"{country}{f' ({code})' if code else ''}\n"
+        f"Coordinates (approximate): latitude {plain(data.get('latitude')) or '?'}, "
+        f"longitude {plain(data.get('longitude')) or '?'}\n"
+        f"Time zone: {zone}{f' (UTC{utc_offset})' if utc_offset else ''}\n"
+        f"ISP: {_string(connection.get('isp')) or '?'}\n"
+        f"Organization: {_string(connection.get('org')) or '?'}"
     )
 
 
@@ -415,3 +436,9 @@ def _format_utc_offset(offset_seconds: int | None) -> str:
     total_minutes = abs(offset_seconds) // 60
     hours, minutes = divmod(total_minutes, 60)
     return f"UTC{sign}{hours:02d}:{minutes:02d}"
+
+
+def _string(value: object) -> str:
+    if value is None:
+        return ""
+    return " ".join(str(value).split())

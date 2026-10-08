@@ -25,8 +25,8 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from tests.toolkit import biodata_answers as bio
+from tests.toolkit import geo_answers, wiki_pages, youtube_fakes
 from tests.toolkit import health_pages as health
-from tests.toolkit import wiki_pages, youtube_fakes
 from tests.toolkit.wiki_pages import MISSING_PAGE
 from tests.toolkit.youtube_fakes import LOADER, FakeTranscript, FakeTranscriptList
 
@@ -101,10 +101,9 @@ _SEARCHES = """
 """
 _OTHERS = """
     air_quality_current air_quality_forecast base64_decode base64_encode date_add date_diff
-    date_format datetime_now distance_between earthquake_count eonet_categories
-    get_forecast_by_coords get_weather_by_coords hacker_news http_get ip_lookup math_eval
-    osm_reverse_geocode python_repl reverse_geocode run_command scrape_text text_stats
-    timezone_convert timezone_lookup unit_convert weather_units world_bank_countries
+    date_format datetime_now distance_between earthquake_count eonet_categories hacker_news
+    http_get ip_lookup math_eval osm_reverse_geocode python_repl run_command scrape_text
+    text_stats timezone_convert timezone_lookup unit_convert world_bank_countries
     world_bank_sources world_bank_topics
 """
 KINDS: dict[str, Kind] = {
@@ -121,10 +120,9 @@ _WHOLE = """
     air_quality_current base64_decode base64_encode chembl_molecule chembl_target country_info
     date_add date_diff date_format datetime_now distance_between earthquake_count
     earthquake_event eonet_categories foodon_term gbif_species gbif_species_match get_forecast
-    get_forecast_by_coords get_weather get_weather_by_coords ip_lookup json_extract math_eval
-    openfda_food_recall pdb_chemical_component pdb_entry pdb_ligands
-    reverse_geocode rxnorm_concept tavily_search text_stats timezone_convert timezone_lookup
-    unit_convert uniprot_sequence weather_units who_indicator
+    get_weather ip_lookup json_extract math_eval openfda_food_recall osm_reverse_geocode
+    pdb_chemical_component pdb_entry pdb_ligands rxnorm_concept tavily_search text_stats
+    timezone_convert timezone_lookup unit_convert uniprot_sequence who_indicator
     open_food_facts_compare open_food_facts_product
 """
 WHOLE = frozenset(_WHOLE.split())
@@ -394,6 +392,42 @@ WINDOW_CASES: dict[str, Case] = {
     # A fixed command, as in test_shell.py: the contract never builds arguments for it.
     "run_command": Case(args={"command": "seq 1 3000", "max_output": 1000}),
     "python_repl": Case(args={"code": "for number in range(6000):\n    print(number)"}),
+    # Geo, weather and natural events (T08b). A source with no offset of its own is asked for
+    # its first results again, one more each time (``_first_results``).
+    "geocode": Case(
+        args={"city": "Springfield", "max_results": 2},
+        answers=(Answer(body=geo_answers.geocoding(3)),),
+    ),
+    "osm_search_place": Case(
+        args={"query": "Springfield", "max_results": 2},
+        answers=(Answer(body=geo_answers.nominatim_places(3)),),
+    ),
+    "overpass_query": Case(
+        args={"max_results": 2}, answers=(Answer(body=geo_answers.overpass_elements(5)),)
+    ),
+    "overpass_pois": Case(
+        args={"max_results": 2}, answers=(Answer(body=geo_answers.overpass_elements(5)),)
+    ),
+    "air_quality_forecast": Case(
+        args={"max_hours": 2}, answers=(Answer(body=geo_answers.air_quality_hours(5)),)
+    ),
+    "eonet_events": Case(
+        args={"max_results": 2}, answers=(Answer(body=geo_answers.eonet_events(3)),)
+    ),
+    "eonet_event": Case(
+        args={"event_id": "EONET_1", "max_points": 2},
+        answers=(Answer(body=geo_answers.eonet_event(points=5)),),
+    ),
+    # USGS: the count of the search, then its page, for each call.
+    "earthquake_search": Case(
+        args={"max_results": 2},
+        answers=(
+            Answer(body="3"),
+            Answer(body=geo_answers.usgs_features(1, 2)),
+            Answer(body="3"),
+            Answer(body=geo_answers.usgs_features(3)),
+        ),
+    ),
 }
 
 
@@ -454,6 +488,15 @@ NOT_FOUND_CASES: dict[str, Case] = {
     "gbif_species_match": Case(
         args={}, answers=(Answer(body={"confidence": 100, "matchType": "NONE"}),)
     ),
+    # Open-Meteo's geocoding and Wikidata's search find nothing for the name (T08b).
+    "country_info": Case(args={}, answers=(Answer(body={"search": []}),)),
+    **{
+        name: Case(
+            args={"city": "Zzqqxx", "latitude": None, "longitude": None},
+            answers=(Answer(body=geo_answers.NO_PLACES),),
+        )
+        for name in ("get_weather", "get_forecast")
+    },
     "read_file": Case(args={"path": "missing.txt"}),
     "csv_read": Case(args={"path": "missing.csv"}),
     "list_directory": Case(args={"path": "missing"}),
@@ -573,4 +616,21 @@ ZERO_CASES: dict[str, ZeroCase] = {
     ),
     "search_files": ZeroCase(args={"pattern": "zzqq"}, says="zzqq"),
     "regex_search": ZeroCase(args={"pattern": "zzqq"}, says="zzqq"),
+    # Geo and natural events (T08b).
+    "geocode": ZeroCase(
+        args={"city": "Zzqqxx"}, answers=(Answer(body=geo_answers.NO_PLACES),), says="Zzqqxx"
+    ),
+    "osm_search_place": ZeroCase(
+        args={"query": "zzqqxx"}, answers=(Answer(body=[]),), says="zzqqxx"
+    ),
+    "overpass_query": ZeroCase(args={}, answers=(Answer(body={"elements": []}),), says="node(1)"),
+    "overpass_pois": ZeroCase(
+        args={}, answers=(Answer(body={"elements": []}),), says="amenity=cafe"
+    ),
+    "eonet_events": ZeroCase(
+        args={"category": "wildfires"},
+        answers=(Answer(body={"events": []}),),
+        says="category=wildfires",
+    ),
+    "earthquake_search": ZeroCase(args={}, answers=(Answer(body="0"),), says="2024-01-01"),
 }

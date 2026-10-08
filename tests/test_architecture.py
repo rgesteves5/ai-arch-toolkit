@@ -483,8 +483,9 @@ def reads_http_statuses(source: str) -> list[int]:
     ]
 
 
-# EONET answers an unknown event ID with a 500; its catch adds that hint to the failure.
-_STATUS_READERS = {"_eonet.py"}
+# Modules allowed to read the status of a failure they caught: none (EONET's 500 for an unknown
+# event ID is read by its event API's error reader since T08b).
+_STATUS_READERS: set[str] = set()
 
 
 def test_no_tool_reads_the_status_of_a_failure_it_caught() -> None:

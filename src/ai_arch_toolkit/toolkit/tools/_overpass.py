@@ -1,14 +1,21 @@
-"""Overpass tools — public OpenStreetMap object queries."""
+"""Overpass tools: OpenStreetMap objects by query, or by tag in an area (free, no key;
+https://wiki.openstreetmap.org/wiki/Overpass_API).
+
+Overpass answers a query whole, with no paging of its own, so a page of its elements is cut from
+the answer and the footer gives the offset of the next (the query runs again for it).
+"""
 
 from __future__ import annotations
 
 import html
 import re
-from typing import Any
+from typing import Annotated, Any
 
-from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.core import Range, ToolResult, tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._http import Api, Reply
+from ai_arch_toolkit.toolkit.tools._values import plain
+from ai_arch_toolkit.toolkit.tools._window import page_window
 
 # Overpass explains a failed request in an HTML page, one "<strong>Error</strong>: ..." paragraph
 # per error (https://dev.overpass-api.de/overpass-doc/en/preface/commons.html): a 400 for a query
@@ -62,27 +69,39 @@ _API = Api(
     timeout_s=35,
     error_reader=_overpass_error,
 )
-_MAX_LIMIT = 50
+_MAX_RESULTS = 50
+_MAX_QUERY_CHARS = 4000
+_MAX_RADIUS_M = 50_000
 _TAG_RE = re.compile(r"^[A-Za-z0-9_:-]{1,80}$")
 _VALUE_RE = re.compile(r"^[\w\s,.'()/%:+-]{1,120}$", re.UNICODE)
+_ATTRIBUTION = "Overpass API; data © OpenStreetMap contributors, ODbL"
+# The tags worth a line under each element, besides its name.
+_SHOWN_TAGS = ("amenity", "shop", "tourism", "leisure", "website", "phone", "opening_hours")
 
 
 @tool(capability="network")
-def overpass_query(query: str, max_results: int = 25) -> str:
-    """Run a bounded Overpass QL query and summarize returned OSM elements.
+def overpass_query(
+    query: str,
+    max_results: Annotated[int, Range(1, _MAX_RESULTS)] = 25,
+    offset: Annotated[int, Range(0)] = 0,
+) -> ToolResult:
+    """Run an Overpass QL query and list the OpenStreetMap elements it returns.
 
     Args:
-        query: Complete Overpass QL query. It should include output format and timeout.
-        max_results: Number of elements to return (1-50). Defaults to 25.
+        query: A complete Overpass QL query with JSON output and a timeout, e.g.
+            '[out:json][timeout:25];node["amenity"="cafe"](38.7,-9.2,38.8,-9.1);out;'.
+        max_results: How many elements to list.
+        offset: How many elements to skip; the footer gives the next offset.
 
     Raises:
         ToolFailure: validation_error when the query is empty, too long, has no output format,
             or Overpass cannot read it (HTTP 400); upstream when Overpass reports a runtime
             error (a timeout, out of memory).
     """
-    if not query.strip() or len(query) > 4000:
+    if not query.strip() or len(query) > _MAX_QUERY_CHARS:
         raise ToolFailure(
-            "validation_error", f"query must be 1-4000 characters (got {len(query)})."
+            "validation_error",
+            f"query must be 1-{_MAX_QUERY_CHARS} characters (got {len(query)}).",
         )
     if "[out:" not in query or "out" not in query:
         raise ToolFailure(
@@ -92,9 +111,10 @@ def overpass_query(query: str, max_results: int = 25) -> str:
         )
     return _run(
         query,
+        offset,
         max_results,
-        label="Overpass elements",
-        nothing="No Overpass elements found.",
+        heading=f"OpenStreetMap elements the Overpass query returned ({_ATTRIBUTION}):",
+        nothing=f"No OpenStreetMap elements match the Overpass query {query!r}.",
     )
 
 
@@ -105,19 +125,21 @@ def overpass_pois(
     bbox: str = "",
     latitude: float | None = None,
     longitude: float | None = None,
-    radius_m: int = 1000,
-    max_results: int = 25,
-) -> str:
-    """Search OpenStreetMap points/ways/relations by tag in a bbox or radius.
+    radius_m: Annotated[int, Range(1, _MAX_RADIUS_M)] = 1000,
+    max_results: Annotated[int, Range(1, _MAX_RESULTS)] = 25,
+    offset: Annotated[int, Range(0)] = 0,
+) -> ToolResult:
+    """List the OpenStreetMap nodes, ways and relations with a tag, in a box or around a point.
 
     Args:
-        tag_key: OSM tag key, e.g. "amenity", "shop", or "tourism".
-        tag_value: Optional exact tag value, e.g. "hospital" or "cafe".
-        bbox: Optional south,west,north,east bounding box.
-        latitude: Optional center latitude for radius search.
-        longitude: Optional center longitude for radius search.
-        radius_m: Radius in meters when latitude/longitude are provided. Defaults to 1000.
-        max_results: Number of elements to return (1-50). Defaults to 25.
+        tag_key: An OSM tag key, e.g. "amenity", "shop" or "tourism".
+        tag_value: The tag's exact value, e.g. "hospital" or "cafe"; any value when empty.
+        bbox: A box as south,west,north,east in degrees, e.g. "38.6,-9.3,38.8,-9.0".
+        latitude: The center's latitude, for a search around a point (without ``bbox``).
+        longitude: The center's longitude.
+        radius_m: The radius around the point, in meters.
+        max_results: How many elements to list.
+        offset: How many elements to skip; the footer gives the next offset.
 
     Raises:
         ToolFailure: validation_error when the tag or the area is invalid or missing; upstream
@@ -133,12 +155,9 @@ def overpass_pois(
             "validation_error",
             f"invalid tag_value {tag_value!r}; give a plain OSM tag value such as 'cafe'.",
         )
-    area = _area_clause(bbox, latitude, longitude, radius_m)
-    tag = (
-        f'["{tag_key.strip()}"="{tag_value.strip()}"]'
-        if tag_value.strip()
-        else f'["{tag_key.strip()}"]'
-    )
+    area, where = _area_clause(bbox, latitude, longitude, radius_m)
+    key, value = tag_key.strip(), tag_value.strip()
+    tag = f'["{key}"="{value}"]' if value else f'["{key}"]'
     selector = f"{tag}{area}"
     query = (
         "[out:json][timeout:25];"
@@ -149,27 +168,31 @@ def overpass_pois(
         ");"
         "out center tags;"
     )
+    tagged = f"{key}={value}" if value else f"{key}=*"
     return _run(
         query,
+        offset,
         max_results,
-        label="Overpass POIs",
-        nothing="No Overpass POIs found.",
+        heading=f"OpenStreetMap elements tagged {tagged} {where} ({_ATTRIBUTION}):",
+        nothing=f"No OpenStreetMap elements tagged {tagged} {where}.",
     )
 
 
-def _run(query: str, max_results: int, *, label: str, nothing: str) -> str:
+def _run(query: str, offset: int, limit: int, *, heading: str, nothing: str) -> ToolResult:
     return _API.post_form(
         form={"data": query},
-        parse=lambda data: _summary(data, max_results, label=label, nothing=nothing),
+        parse=lambda data: _answer(data, offset, limit, heading=heading, nothing=nothing),
     )
 
 
-def _summary(data: dict[str, Any], max_results: int, *, label: str, nothing: str) -> str:
+def _answer(
+    data: dict[str, Any], offset: int, limit: int, *, heading: str, nothing: str
+) -> ToolResult:
     elements = _elements(data)
     if not elements:
-        return nothing
-    page = elements[: _bounded(max_results)]
-    return _format_elements(page, header=f"{label} (returned {len(page)} of {len(elements)}):")
+        return ToolResult.success(nothing)
+    lines = [_element(number, item) for number, item in enumerate(elements, start=1)]
+    return page_window(lines, offset=offset, limit=limit).result(heading=heading)
 
 
 def _area_clause(
@@ -177,27 +200,12 @@ def _area_clause(
     latitude: float | None,
     longitude: float | None,
     radius_m: int,
-) -> str:
+) -> tuple[str, str]:
+    """The area filter of the query, and how the answer names it."""
     if bbox.strip():
-        parts = [part.strip() for part in bbox.split(",")]
-        if len(parts) != 4:
-            raise ToolFailure(
-                "validation_error",
-                f"invalid bbox {bbox!r}; give south,west,north,east, e.g. '38.6,-9.3,38.8,-9.0'.",
-            )
-        try:
-            south, west, north, east = [float(part) for part in parts]
-        except ValueError:
-            raise ToolFailure(
-                "validation_error", f"invalid bbox {bbox!r}; its four values must be numbers."
-            ) from None
-        if not (-90 <= south <= north <= 90 and -180 <= west <= east <= 180):
-            raise ToolFailure(
-                "validation_error",
-                f"invalid bbox {bbox!r}; need -90 <= south <= north <= 90 and "
-                "-180 <= west <= east <= 180.",
-            )
-        return f"({south},{west},{north},{east})"
+        south, west, north, east = _bbox(bbox)
+        where = f"in the box south {south}, west {west}, north {north}, east {east}"
+        return f"({south},{west},{north},{east})", where
     if latitude is None or longitude is None:
         raise ToolFailure(
             "validation_error", "no area to search; provide bbox or latitude and longitude."
@@ -208,11 +216,30 @@ def _area_clause(
             f"invalid coordinates {latitude}, {longitude}; latitude must be between -90 and 90 "
             "and longitude between -180 and 180.",
         )
-    if radius_m <= 0 or radius_m > 50000:
+    where = f"within {radius_m} m of latitude {plain(latitude)}, longitude {plain(longitude)}"
+    return f"(around:{radius_m},{latitude},{longitude})", where
+
+
+def _bbox(bbox: str) -> tuple[float, float, float, float]:
+    parts = [part.strip() for part in bbox.split(",")]
+    if len(parts) != 4:
         raise ToolFailure(
-            "validation_error", f"radius_m must be between 1 and 50000 (got {radius_m})."
+            "validation_error",
+            f"invalid bbox {bbox!r}; give south,west,north,east, e.g. '38.6,-9.3,38.8,-9.0'.",
         )
-    return f"(around:{radius_m},{latitude},{longitude})"
+    try:
+        south, west, north, east = [float(part) for part in parts]
+    except ValueError:
+        raise ToolFailure(
+            "validation_error", f"invalid bbox {bbox!r}; its four values must be numbers."
+        ) from None
+    if not (-90 <= south <= north <= 90 and -180 <= west <= east <= 180):
+        raise ToolFailure(
+            "validation_error",
+            f"invalid bbox {bbox!r}; need -90 <= south <= north <= 90 and "
+            "-180 <= west <= east <= 180.",
+        )
+    return south, west, north, east
 
 
 def _elements(data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -220,37 +247,26 @@ def _elements(data: dict[str, Any]) -> list[dict[str, Any]]:
     return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
 
 
-def _format_elements(elements: list[dict[str, Any]], *, header: str) -> str:
-    lines = [header]
-    for index, item in enumerate(elements, start=1):
-        tags = item.get("tags", {}) if isinstance(item.get("tags"), dict) else {}
-        name = _string(tags.get("name")) or "(unnamed)"
-        element_id = _string(item.get("id"))
-        element_type = _string(item.get("type"))
-        lat, lon = _coords(item)
-        lines.append(
-            f"{index}. {name} | {element_type}/{element_id} | coords: {lat or '?'}, {lon or '?'}"
-        )
-        interesting = []
-        for key in ("amenity", "shop", "tourism", "leisure", "website", "phone", "opening_hours"):
-            if _string(tags.get(key)):
-                interesting.append(f"{key}={_string(tags.get(key))}")
-        if interesting:
-            lines.append(f"   tags: {'; '.join(interesting)}")
-    return "\n".join(lines)
+def _element(number: int, item: dict[str, Any]) -> str:
+    """An element's lines: its name, its ``type/id`` (``overpass_query`` reads it back, e.g.
+    ``node(1);out;``), its position (a way's or relation's center) and the tags worth showing."""
+    tags = _mapping(item.get("tags"))
+    name = _string(tags.get("name")) or "(unnamed)"
+    reference = f"{_string(item.get('type'))}/{_string(item.get('id'))}"
+    line = f"{number}. {name} | {reference} | {_position(item)}"
+    shown = [f"{key}={_string(tags.get(key))}" for key in _SHOWN_TAGS if _string(tags.get(key))]
+    return f"{line}\n   tags: {'; '.join(shown)}" if shown else line
 
 
-def _coords(item: dict[str, Any]) -> tuple[str, str]:
-    lat = _string(item.get("lat"))
-    lon = _string(item.get("lon"))
-    if not lat and isinstance(item.get("center"), dict):
-        lat = _string(item["center"].get("lat"))
-        lon = _string(item["center"].get("lon"))
-    return lat, lon
+def _position(item: dict[str, Any]) -> str:
+    point = item if "lat" in item else item.get("center")
+    if not isinstance(point, dict) or point.get("lat") is None or point.get("lon") is None:
+        return "no position"
+    return f"latitude {plain(point.get('lat'))}, longitude {plain(point.get('lon'))}"
 
 
-def _bounded(value: int) -> int:
-    return max(1, min(value, _MAX_LIMIT))
+def _mapping(value: object) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
 
 
 def _string(value: Any) -> str:

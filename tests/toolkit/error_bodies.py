@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from ai_arch_toolkit.core import ToolFailureType
+from tests.toolkit import geo_answers
 from tests.toolkit.contract_cases import Body
 
 
@@ -188,6 +189,24 @@ _WEB_SEARCH = (
 _ARCHIVE_METADATA = "https://archive.org/developers/md-read.html (extended errors; the text is"
 _LIBRARY_ITEMS = frozenset({"open_library_work", "open_library_isbn"})
 
+
+def _open_meteo(source: str, reason: str, *tools: str) -> ErrorBody:
+    """Open-Meteo's refusal: HTTP 400 and ``{"error": true, "reason": ...}``."""
+    return ErrorBody(
+        source=source,
+        status=400,
+        body={"error": True, "reason": reason},
+        type="validation_error",
+        says=reason.rstrip("."),
+        tools=frozenset(tools),
+    )
+
+
+_IPWHOIS_ERRORS = "https://ipwhois.io/documentation (Errors)"
+_FORECAST_ERRORS = "https://open-meteo.com/en/docs (Errors)"
+_OVERPASS_ERRORS = "https://dev.overpass-api.de/overpass-doc/en/preface/commons.html"
+_FDSN_ERRORS = "https://www.fdsn.org/webservices/FDSN-WS-Specification-Commonalities-1.2.pdf"
+
 ERROR_BODIES: dict[str, tuple[ErrorBody, ...]] = {
     "_web_search": _WEB_SEARCH,
     "_internet_archive": (
@@ -251,6 +270,77 @@ ERROR_BODIES: dict[str, tuple[ErrorBody, ...]] = {
         ),
     ),
     "_wiki": _mediawiki(),
+    # Geo, weather and natural events (T08b).
+    "_geo": (
+        *_mediawiki("country_info"),
+        _open_meteo(
+            "https://open-meteo.com/en/docs/geocoding-api (Errors)",
+            geo_answers.GEOCODING_REASON,
+            "geocode",
+        ),
+        _open_meteo(_FORECAST_ERRORS, geo_answers.OPEN_METEO_REASON, "timezone_lookup"),
+        ErrorBody(
+            source=_IPWHOIS_ERRORS,
+            status=200,
+            body={"success": False, "message": "Reserved range"},
+            type="validation_error",
+            says="Reserved range",
+            tools=frozenset({"ip_lookup"}),
+        ),
+        ErrorBody(
+            source=_IPWHOIS_ERRORS,
+            status=429,
+            body={"success": False, "message": "Rate limit exceeded"},
+            type="rate_limited",
+            says="Rate limit exceeded",
+            tools=frozenset({"ip_lookup"}),
+        ),
+    ),
+    "_weather": (_open_meteo(_FORECAST_ERRORS, geo_answers.OPEN_METEO_REASON),),
+    "_osm": (
+        ErrorBody(
+            source="Nominatim's _format_error and get_layers (github.com/osm-search/Nominatim)",
+            status=400,
+            body={"error": {"code": 400, "message": geo_answers.NOMINATIM_LAYER_MESSAGE}},
+            type="validation_error",
+            says=geo_answers.NOMINATIM_LAYER_MESSAGE,
+        ),
+    ),
+    "_overpass": (
+        ErrorBody(
+            source=_OVERPASS_ERRORS,
+            status=400,
+            body=geo_answers.overpass_page("line 1: parse error: ';' expected - ')' found."),
+            type="validation_error",
+            says="line 1: parse error",
+        ),
+        ErrorBody(
+            source="live, 2026-09-29 (overpass-api.de, a runtime error sent with HTTP 200)",
+            status=200,
+            body={"elements": [], "remark": geo_answers.OVERPASS_TIMEOUT},
+            type="upstream",
+            says="runtime error: Query timed out",
+        ),
+    ),
+    "_eonet": (
+        ErrorBody(
+            source="live, 2026-09-30 (EONET's page for an unknown event ID; its documentation, "
+            "https://eonet.gsfc.nasa.gov/docs/v3, describes no error answers)",
+            status=500,
+            body=geo_answers.EONET_ERROR_PAGE,
+            type="upstream",
+            says="HTTP error 500",
+        ),
+    ),
+    "_earthquake": (
+        ErrorBody(
+            source=_FDSN_ERRORS,
+            status=400,
+            body=geo_answers.fdsn_error(400, "Bad Request", geo_answers.USGS_BAD_START),
+            type="validation_error",
+            says=geo_answers.USGS_BAD_START.rstrip("."),
+        ),
+    ),
     "_wikidata": _mediawiki("wikidata_search"),
     "_eurostat": (
         ErrorBody(

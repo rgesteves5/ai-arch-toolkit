@@ -58,7 +58,6 @@ from ai_arch_toolkit.toolkit.tools._geo import (
     distance_between,
     geocode,
     ip_lookup,
-    reverse_geocode,
     timezone_lookup,
 )
 from ai_arch_toolkit.toolkit.tools._internet_archive import (
@@ -120,13 +119,7 @@ from ai_arch_toolkit.toolkit.tools._uniprot import (
     uniprot_search,
     uniprot_sequence,
 )
-from ai_arch_toolkit.toolkit.tools._weather import (
-    get_forecast,
-    get_forecast_by_coords,
-    get_weather,
-    get_weather_by_coords,
-    weather_units,
-)
+from ai_arch_toolkit.toolkit.tools._weather import get_forecast, get_weather
 from ai_arch_toolkit.toolkit.tools._web_search import brave_search, tavily_search
 from ai_arch_toolkit.toolkit.tools._who_gho import who_indicator, who_indicators, who_series
 from ai_arch_toolkit.toolkit.tools._wiki import (
@@ -207,9 +200,7 @@ __all__ = [
     "gdelt_timeline",
     "geocode",
     "get_forecast",
-    "get_forecast_by_coords",
     "get_weather",
-    "get_weather_by_coords",
     "hacker_news",
     "internet_archive_item",
     "internet_archive_search",
@@ -237,7 +228,6 @@ __all__ = [
     "pubmed_article",
     "pubmed_search",
     "regex_search",
-    "reverse_geocode",
     "ror_organization",
     "ror_search",
     "rxnorm_concept",
@@ -257,7 +247,6 @@ __all__ = [
     "uniprot_search",
     "uniprot_sequence",
     "unit_convert",
-    "weather_units",
     "who_indicator",
     "who_indicators",
     "who_series",

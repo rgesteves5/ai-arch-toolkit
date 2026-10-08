@@ -47,32 +47,28 @@ For the conceptual guide (`@tool`, `ToolGroup`, server tools), see [Tools](tools
 
 **Weather** — `_weather.py`
 
-- `get_weather` — Current weather for a city (temp, humidity, wind, conditions)
-- `get_forecast` — Multi-day weather forecast for a city
-- `get_weather_by_coords` — Current weather for a latitude/longitude pair
-- `get_forecast_by_coords` — Multi-day forecast for a latitude/longitude pair
-- `weather_units` — Current weather for a city with Celsius/Fahrenheit output
+- `get_weather` — Current weather at a city or a latitude/longitude pair, in metric or imperial units, from Open-Meteo; with a city it uses the first match and says when other places share the name
+- `get_forecast` — Daily forecast (up to 16 days) at a city or a latitude/longitude pair, in metric or imperial units
 
 **Air quality** — `_air_quality.py`
 
-- `air_quality_current` — Current AQI and pollutant values for coordinates via Open-Meteo
-- `air_quality_forecast` — Hourly AQI and pollutant forecast for coordinates via Open-Meteo
+- `air_quality_current` — Current AQI and pollutant values for coordinates via Open-Meteo, at a UTC time
+- `air_quality_forecast` — Hourly AQI and pollutant values for coordinates (up to 7 days ahead and 92 back), a page of hours at a time
 
 **Geography** — `_geo.py`
 
-- `geocode` — Coordinates and country for a city name
-- `reverse_geocode` — Place name and region from coordinates
-- `timezone_lookup` — Timezone and UTC offset from coordinates
+- `geocode` — Places by name (coordinates, region, country, time zone, population) from Open-Meteo, a page at a time, up to the 100 it returns
+- `timezone_lookup` — Time zone and current UTC offset of a point
 - `distance_between` — Great-circle distance between coordinate pairs
 - `ip_lookup` — Geographic location and ISP info for an explicit IP, from ipwho.is over HTTPS (free, 1000 requests a day per client IP)
 - `country_info` — Country facts from Wikidata by name or ISO 3166-1 code (capital, population, area, languages, currencies, time zones)
 
 **OpenStreetMap** — `_osm.py`, `_overpass.py`
 
-- `osm_search_place` — Search places and addresses with OpenStreetMap Nominatim
-- `osm_reverse_geocode` — Reverse geocode coordinates with OpenStreetMap Nominatim
-- `overpass_query` — Run a bounded Overpass QL query
-- `overpass_pois` — Search OpenStreetMap points/ways/relations by tag in a bbox or radius
+- `osm_search_place` — Search places and addresses with OpenStreetMap Nominatim, a page at a time, up to the 40 it returns
+- `osm_reverse_geocode` — The place at a point, with its full address, at the detail `zoom` asks (18 a building … 10 a city … 3 a country)
+- `overpass_query` — Run an Overpass QL query and page through the elements it returns
+- `overpass_pois` — OpenStreetMap nodes, ways and relations with a tag, in a box or around a point, a page at a time
 
 ---
 
@@ -263,12 +259,12 @@ one item per line, tables one row per line.
 
 **Natural events** — `_earthquake.py`, `_eonet.py`
 
-- `earthquake_search` — Search USGS earthquake events by date, magnitude, depth, and location
-- `earthquake_event` — Get a USGS earthquake event by ID
+- `earthquake_search` — Search USGS earthquake events by date, magnitude, depth, and location, with the total that match and times in UTC
+- `earthquake_event` — Get a USGS earthquake event by ID (deleted events are reported as such)
 - `earthquake_count` — Count USGS earthquake events for a date/magnitude query
 - `eonet_categories` — List NASA EONET event categories
-- `eonet_events` — Search NASA EONET natural events
-- `eonet_event` — Get a NASA EONET event by ID
+- `eonet_events` — Search NASA EONET natural events by category, status, source, box and period (up to 365 days, or dates)
+- `eonet_event` — Get a NASA EONET event by ID, with its whole track a page at a time
 
 **Official statistics** — `_world_bank.py`, `_who_gho.py`, `_eurostat.py`
 

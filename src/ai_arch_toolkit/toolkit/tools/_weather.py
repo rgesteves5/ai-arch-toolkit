@@ -1,24 +1,53 @@
-"""Weather tools — real weather data via Open-Meteo (no API key required)."""
+"""Weather tools: the current weather and the daily forecast at a place, from Open-Meteo (free, no
+key; https://open-meteo.com/en/docs).
+
+A place is a city, which Open-Meteo's geocoding resolves to its first match (the answer says when
+others share the name), or the coordinates of any point. Open-Meteo converts the units itself
+(``temperature_unit``, ``wind_speed_unit``, ``precipitation_unit``) and names each one in the
+answer (``current_units``, ``daily_units``), so every value is shown with the unit it came in.
+"""
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import Any
+from collections.abc import Sequence
+from dataclasses import dataclass
+from typing import Annotated, Any, Literal
 
-from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.core import Range, tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
-from ai_arch_toolkit.toolkit.tools._http import Api
+from ai_arch_toolkit.toolkit.tools._open_meteo import (
+    FORECAST,
+    GEOCODING,
+    Place,
+    geocoding_params,
+    measured,
+    places,
+)
+from ai_arch_toolkit.toolkit.tools._values import plain, utc
 
-_GEOCODING = Api(base="https://geocoding-api.open-meteo.com/v1", name="Open-Meteo")
-_FORECAST = Api(base="https://api.open-meteo.com/v1", name="Open-Meteo", query_safe=",")
+type Units = Literal["metric", "imperial"]
+
+# https://open-meteo.com/en/docs: "temperature_unit", "wind_speed_unit", "precipitation_unit".
+_UNITS: dict[str, dict[str, str]] = {
+    "metric": {},
+    "imperial": {
+        "temperature_unit": "fahrenheit",
+        "wind_speed_unit": "mph",
+        "precipitation_unit": "inch",
+    },
+}
 _CURRENT_FIELDS = (
-    "temperature_2m,relative_humidity_2m,apparent_temperature,"
-    "weather_code,wind_speed_10m,wind_direction_10m"
+    "temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,weather_code,"
+    "wind_speed_10m,wind_direction_10m"
 )
 _DAILY_FIELDS = (
-    "temperature_2m_max,temperature_2m_min,weather_code,precipitation_sum,wind_speed_10m_max"
+    "weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,wind_speed_10m_max"
 )
+# Up to 16 days of forecast (https://open-meteo.com/en/docs, "forecast_days").
+_MAX_DAYS = 16
 
+# The WMO weather interpretation codes Open-Meteo returns (https://open-meteo.com/en/docs,
+# "WMO Weather interpretation codes").
 _WMO_CODES: dict[int, str] = {
     0: "Clear sky",
     1: "Mainly clear",
@@ -29,14 +58,16 @@ _WMO_CODES: dict[int, str] = {
     51: "Light drizzle",
     53: "Moderate drizzle",
     55: "Dense drizzle",
+    56: "Light freezing drizzle",
+    57: "Dense freezing drizzle",
     61: "Slight rain",
     63: "Moderate rain",
     65: "Heavy rain",
     66: "Light freezing rain",
     67: "Heavy freezing rain",
-    71: "Slight snow",
-    73: "Moderate snow",
-    75: "Heavy snow",
+    71: "Slight snow fall",
+    73: "Moderate snow fall",
+    75: "Heavy snow fall",
     77: "Snow grains",
     80: "Slight rain showers",
     81: "Moderate rain showers",
@@ -49,206 +80,241 @@ _WMO_CODES: dict[int, str] = {
 }
 
 
-def _at_city(
-    city: str, report: Callable[[float, float, str], str], by_coords: str = "get_weather_by_coords"
+@tool(capability="network")
+def get_weather(
+    city: str = "",
+    latitude: float | None = None,
+    longitude: float | None = None,
+    units: Units = "metric",
 ) -> str:
-    """``report`` at the city's first geocoding match; without one, raises ``ToolFailure``, which
-    points to ``by_coords``, the tool that takes coordinates instead."""
-    params = {"name": city, "count": "1", "language": "en", "format": "json"}
-    place = _GEOCODING.get_json(
-        "search", params=params, parse=lambda data: _first_match(data, city)
-    )
-    if place is None:
-        raise ToolFailure(
-            "not_found",
-            f"Open-Meteo has no place named {city!r}; check the spelling, or give coordinates "
-            f"to {by_coords}",
-        )
-    lat, lon, display = place
-    return report(lat, lon, display)
+    """Get the current weather at a city or a point, from Open-Meteo: conditions, temperature
+    and how it feels, humidity, precipitation and wind.
 
+    Args:
+        city: A place name, e.g. "Tokyo"; Open-Meteo's first match is used, and the answer says
+            when other places share the name.
+        latitude: The point's latitude in decimal degrees, with ``longitude``; then ``city`` only
+            names the place.
+        longitude: The point's longitude in decimal degrees.
+        units: "metric" (°C, km/h, mm) or "imperial" (°F, mph, inch).
 
-def _first_match(data: dict[str, Any], city: str) -> tuple[float, float, str] | None:
-    """The first geocoding result as (lat, lon, display_name), or ``None`` without one."""
-    results = data.get("results")
-    if not results:
-        return None
-    r = results[0]
-    name = r.get("name", city)
-    country = r.get("country", "")
-    display = f"{name}, {country}" if country else name
-    return r["latitude"], r["longitude"], display
-
-
-def _current_weather(lat: float, lon: float, display: str, unit: str = "c") -> str:
-    """The current weather at a coordinate pair, formatted."""
-    params = {"latitude": lat, "longitude": lon, "current": _CURRENT_FIELDS, "timezone": "auto"}
-    return _FORECAST.get_json(
-        "forecast",
-        params=params,
-        parse=lambda data: _format_current_weather(data, display, unit),
-    )
-
-
-def _daily_forecast(lat: float, lon: float, display: str, days: int) -> str:
-    """The daily forecast at a coordinate pair, formatted."""
+    Raises:
+        ToolFailure: validation_error when neither a city nor both coordinates are given, a
+            coordinate is out of range or ``units`` is unknown; not_found when Open-Meteo knows
+            no place by that name.
+    """
+    unit_params = _unit_params(units)
+    where = _where(city, latitude, longitude)
     params = {
-        "latitude": lat,
-        "longitude": lon,
+        "latitude": where.latitude,
+        "longitude": where.longitude,
+        "current": _CURRENT_FIELDS,
+        "timezone": "auto",
+        "timeformat": "unixtime",
+        **unit_params,
+    }
+    return FORECAST.get_json(
+        "forecast", params=params, parse=lambda data: _current_text(data, where)
+    )
+
+
+@tool(capability="network")
+def get_forecast(
+    city: str = "",
+    latitude: float | None = None,
+    longitude: float | None = None,
+    days: Annotated[int, Range(1, _MAX_DAYS)] = 3,
+    units: Units = "metric",
+) -> str:
+    """Get the daily weather forecast at a city or a point, from Open-Meteo: conditions, lowest
+    and highest temperature, precipitation and strongest wind for each day, from today.
+
+    Args:
+        city: A place name, e.g. "Tokyo"; Open-Meteo's first match is used, and the answer says
+            when other places share the name.
+        latitude: The point's latitude in decimal degrees, with ``longitude``; then ``city`` only
+            names the place.
+        longitude: The point's longitude in decimal degrees.
+        days: How many days to forecast.
+        units: "metric" (°C, km/h, mm) or "imperial" (°F, mph, inch).
+
+    Raises:
+        ToolFailure: validation_error when neither a city nor both coordinates are given, a
+            coordinate is out of range or ``units`` is unknown; not_found when Open-Meteo knows
+            no place by that name.
+    """
+    unit_params = _unit_params(units)
+    where = _where(city, latitude, longitude)
+    params = {
+        "latitude": where.latitude,
+        "longitude": where.longitude,
         "daily": _DAILY_FIELDS,
         "timezone": "auto",
         "forecast_days": days,
+        **unit_params,
     }
-    return _FORECAST.get_json(
-        "forecast", params=params, parse=lambda data: _format_forecast(data, display, days)
+    return FORECAST.get_json(
+        "forecast", params=params, parse=lambda data: _forecast_text(data, where)
     )
 
 
-def _format_current_weather(data: dict, display: str, unit: str = "c") -> str:
-    """Format the current-weather response into a human-readable string."""
-    current = data.get("current", {})
-    temp = current.get("temperature_2m", "?")
-    feels = current.get("apparent_temperature", "?")
-    humidity = current.get("relative_humidity_2m", "?")
-    wind = current.get("wind_speed_10m", "?")
-    wind_dir = current.get("wind_direction_10m", "?")
-    code = current.get("weather_code", -1)
-    condition = _WMO_CODES.get(code, "Unknown")
-    tz = data.get("timezone", "")
+# --- The place ---------------------------------------------------------------------------------
 
-    temp_unit = "°C"
-    wind_unit = "km/h"
-    if unit == "f":
-        temp = _c_to_f(temp)
-        feels = _c_to_f(feels)
-        wind = _kmh_to_mph(wind)
-        temp_unit = "°F"
-        wind_unit = "mph"
 
-    return (
-        f"{display} ({tz}):\n"
-        f"  Temperature: {_format_number(temp)}{temp_unit} "
-        f"(feels like {_format_number(feels)}{temp_unit})\n"
-        f"  Conditions: {condition}\n"
-        f"  Humidity: {humidity}%\n"
-        f"  Wind: {_format_number(wind)} {wind_unit} (direction: {wind_dir}°)"
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _Where:
+    """The point a forecast is for: its coordinates, how to name it, and a note on how it was
+    chosen (empty when the caller gave it)."""
+
+    latitude: float
+    longitude: float
+    name: str
+    note: str = ""
+
+
+def _unit_params(units: str) -> dict[str, str]:
+    if units not in _UNITS:
+        raise ToolFailure(
+            "validation_error", f"invalid units {units!r}; use 'metric' or 'imperial'"
+        )
+    return _UNITS[units]
+
+
+def _where(city: str, latitude: float | None, longitude: float | None) -> _Where:
+    """The point the caller gave, or the first place Open-Meteo finds for ``city``.
+
+    Raises:
+        ToolFailure: validation_error without a city or both coordinates, or for a coordinate out
+            of range; not_found when no place has that name.
+    """
+    name = " ".join(city.split())
+    if latitude is not None or longitude is not None:
+        if latitude is None or longitude is None:
+            raise ToolFailure(
+                "validation_error",
+                "give both latitude and longitude, or a city instead of them",
+            )
+        _validate_coords(latitude, longitude)
+        position = f"latitude {plain(latitude)}, longitude {plain(longitude)}"
+        return _Where(
+            latitude=latitude,
+            longitude=longitude,
+            name=f"{name} ({position})" if name else position,
+        )
+    if not name:
+        raise ToolFailure(
+            "validation_error", "give a city, e.g. 'Lisbon', or its latitude and longitude"
+        )
+    found = GEOCODING.get_json("search", params=geocoding_params(name, 2), parse=places)
+    if not found:
+        raise ToolFailure(
+            "not_found",
+            f"Open-Meteo knows no place named {name!r}; check the spelling, find it with "
+            "osm_search_place, or give its latitude and longitude",
+        )
+    return _chosen(found, name)
+
+
+def _chosen(found: Sequence[Place], name: str) -> _Where:
+    first = found[0]
+    note = (
+        f"{first.label()} is the first of several places named {name!r}; for another, list "
+        f"them with geocode({name!r}) and pass its latitude and longitude."
+        if len(found) > 1
+        else ""
+    )
+    return _Where(
+        latitude=first.latitude,
+        longitude=first.longitude,
+        name=f"{first.label()} ({first.position()})",
+        note=note,
     )
 
 
-def _format_forecast(data: dict, display: str, days: int) -> str:
-    """Format the forecast response into a human-readable string."""
-    daily = data.get("daily", {})
-    dates = daily.get("time", [])
-    highs = daily.get("temperature_2m_max", [])
-    lows = daily.get("temperature_2m_min", [])
-    codes = daily.get("weather_code", [])
-    precip = daily.get("precipitation_sum", [])
-    wind = daily.get("wind_speed_10m_max", [])
-
-    lines = [f"{display} — {days}-day forecast:"]
-    for i, date in enumerate(dates):
-        condition = _WMO_CODES.get(codes[i] if i < len(codes) else -1, "Unknown")
-        hi = highs[i] if i < len(highs) else "?"
-        lo = lows[i] if i < len(lows) else "?"
-        rain = precip[i] if i < len(precip) else 0
-        w = wind[i] if i < len(wind) else "?"
-        lines.append(f"  {date}: {lo}°C - {hi}°C, {condition}, precip: {rain}mm, wind: {w} km/h")
-
-    return "\n".join(lines)
+def _validate_coords(latitude: float, longitude: float) -> None:
+    if not -90 <= latitude <= 90:
+        raise ToolFailure(
+            "validation_error", f"latitude must be between -90 and 90, got {latitude}"
+        )
+    if not -180 <= longitude <= 180:
+        raise ToolFailure(
+            "validation_error", f"longitude must be between -180 and 180, got {longitude}"
+        )
 
 
-def _c_to_f(value: float | str) -> float | str:
-    """Convert Celsius to Fahrenheit if the value is numeric."""
-    if isinstance(value, (int, float)):
-        return value * 9 / 5 + 32
-    return value
+# --- Answers -----------------------------------------------------------------------------------
 
 
-def _kmh_to_mph(value: float | str) -> float | str:
-    """Convert km/h to mph if the value is numeric."""
-    if isinstance(value, (int, float)):
-        return value * 0.621371
-    return value
+def _current_text(data: dict[str, Any], where: _Where) -> str:
+    current = data.get("current")
+    if not isinstance(current, dict):
+        raise ToolFailure(
+            "upstream", "Open-Meteo answered without current values; try again later."
+        )
+    units = data.get("current_units") or {}
+
+    def value(field: str) -> str:
+        return measured(current.get(field), units.get(field))
+
+    when = current.get("time")
+    at = f", as of {utc(when)}" if isinstance(when, int | float) else ""
+    lines = [
+        f"Current weather at {where.name}{_zone(data)}{at}:",
+        f"  Conditions: {_condition(current.get('weather_code'))}",
+        f"  Temperature: {value('temperature_2m')}, feels like {value('apparent_temperature')}",
+        f"  Humidity: {value('relative_humidity_2m')}",
+        f"  Precipitation: {value('precipitation')}",
+        f"  Wind: {value('wind_speed_10m')} from {value('wind_direction_10m')}",
+    ]
+    return "\n".join([*lines, where.note] if where.note else lines)
 
 
-def _format_number(value: float | str) -> str:
-    """Format numeric values without unnecessary trailing zeroes."""
-    if isinstance(value, (int, float)):
-        return f"{value:.1f}".rstrip("0").rstrip(".")
-    return str(value)
+def _forecast_text(data: dict[str, Any], where: _Where) -> str:
+    daily = data.get("daily")
+    if not isinstance(daily, dict) or not isinstance(daily.get("time"), list):
+        raise ToolFailure("upstream", "Open-Meteo answered without a forecast; try again later.")
+    units = data.get("daily_units") or {}
+
+    def value(field: str, index: int) -> str:
+        values = daily.get(field)
+        found = values[index] if isinstance(values, list) and index < len(values) else None
+        return measured(found, units.get(field))
+
+    lines = [f"Daily forecast at {where.name}{_zone(data)}:"]
+    for index, day in enumerate(daily["time"]):
+        codes = daily.get("weather_code")
+        code = codes[index] if isinstance(codes, list) and index < len(codes) else None
+        lines.append(
+            f"  {plain(day)}: {_condition(code)}; "
+            f"{value('temperature_2m_min', index)} to {value('temperature_2m_max', index)}; "
+            f"precipitation {value('precipitation_sum', index)}; "
+            f"wind up to {value('wind_speed_10m_max', index)}"
+        )
+    return "\n".join([*lines, where.note] if where.note else lines)
 
 
-@tool(capability="network")
-def get_weather(city: str) -> str:
-    """Get the current weather for a city using Open-Meteo (free, no API key).
-
-    Returns temperature, conditions, humidity, wind speed, and "feels like" temperature.
-
-    Args:
-        city: City name, e.g. "Tokyo", "London", "New York".
-
-    Raises:
-        ToolFailure: not_found when Open-Meteo knows no place by that name.
-    """
-    return _at_city(city, _current_weather)
+def _zone(data: dict[str, Any]) -> str:
+    """The time zone Open-Meteo resolved for the point, with its UTC offset now."""
+    timezone = _string(data.get("timezone"))
+    seconds = data.get("utc_offset_seconds")
+    if not timezone:
+        return ""
+    if not isinstance(seconds, int):
+        return f", time zone {timezone}"
+    sign = "+" if seconds >= 0 else "-"
+    hours, minutes = divmod(abs(seconds) // 60, 60)
+    return f", time zone {timezone} (UTC{sign}{hours:02d}:{minutes:02d})"
 
 
-@tool(capability="network")
-def get_forecast(city: str, days: int = 3) -> str:
-    """Get a multi-day weather forecast for a city using Open-Meteo (free, no API key).
-
-    Args:
-        city: City name, e.g. "Tokyo", "London", "New York".
-        days: Number of forecast days (1-7). Defaults to 3.
-
-    Raises:
-        ToolFailure: not_found when Open-Meteo knows no place by that name.
-    """
-    days = max(1, min(days, 7))
-    return _at_city(
-        city,
-        lambda lat, lon, display: _daily_forecast(lat, lon, display, days),
-        "get_forecast_by_coords",
-    )
+def _condition(code: object) -> str:
+    """The WMO code with its label."""
+    if not isinstance(code, int):
+        return "not reported"
+    label = _WMO_CODES.get(code)
+    return f"{label} (WMO code {code})" if label else f"WMO code {code}"
 
 
-@tool(capability="network")
-def get_weather_by_coords(lat: float, lon: float) -> str:
-    """Get the current weather for a latitude/longitude pair using Open-Meteo.
-
-    Args:
-        lat: Latitude in decimal degrees.
-        lon: Longitude in decimal degrees.
-    """
-    return _current_weather(lat, lon, f"{lat}, {lon}")
-
-
-@tool(capability="network")
-def get_forecast_by_coords(lat: float, lon: float, days: int = 3) -> str:
-    """Get a multi-day weather forecast for a latitude/longitude pair.
-
-    Args:
-        lat: Latitude in decimal degrees.
-        lon: Longitude in decimal degrees.
-        days: Number of forecast days (1-7). Defaults to 3.
-    """
-    days = max(1, min(days, 7))
-    return _daily_forecast(lat, lon, f"{lat}, {lon}", days)
-
-
-@tool(capability="network")
-def weather_units(city: str, unit: str = "c") -> str:
-    """Get current weather for a city with converted output units.
-
-    Args:
-        city: City name, e.g. "Tokyo", "London", "New York".
-        unit: Output unit: "c" or "f". Defaults to Celsius.
-
-    Raises:
-        ToolFailure: validation_error when the unit is not "c" or "f"; not_found when Open-Meteo
-            knows no place by that name.
-    """
-    unit = unit.lower().strip()
-    if unit not in {"c", "f"}:
-        raise ToolFailure("validation_error", f"invalid unit {unit!r}; use 'c' or 'f'")
-    return _at_city(city, lambda lat, lon, display: _current_weather(lat, lon, display, unit))
+def _string(value: object) -> str:
+    if value is None:
+        return ""
+    return " ".join(str(value).split())

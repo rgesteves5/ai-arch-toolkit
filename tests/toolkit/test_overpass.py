@@ -6,8 +6,10 @@ from unittest.mock import patch
 
 import pytest
 
+from ai_arch_toolkit.core import ToolResult
 from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._overpass import overpass_pois, overpass_query
+from tests.toolkit import geo_answers
 from tests.toolkit.http_fakes import HTTP_OPEN, http_error, respond
 
 
@@ -22,6 +24,10 @@ def _page(*errors: str) -> bytes:
         "<p>The data included in this document is from www.openstreetmap.org.</p>\n"
         f"{paragraphs}</body>\n</html>\n"
     ).encode()
+
+
+def _text(result: ToolResult | str) -> str:
+    return result.value if isinstance(result, ToolResult) else result
 
 
 def _failure(fn, *args, **kwargs) -> ToolFailure:
@@ -50,13 +56,44 @@ class TestOverpass:
 
         result = overpass_query('[out:json];node["amenity"="cafe"](38,-10,39,-9);out tags;')
 
-        assert "Cafe A | node/1" in result
+        assert _text(result).splitlines()[1:] == [
+            "1. Cafe A | node/1 | latitude 38.7, longitude -9.1",
+            "   tags: amenity=cafe; opening_hours=Mo-Fr",
+        ]
 
         mock_urlopen.return_value = respond(_DATA)
         result = overpass_pois("amenity", "cafe", latitude=38.7, longitude=-9.1, radius_m=500)
-        assert "amenity=cafe" in result
+        assert _text(result).splitlines()[0] == (
+            "OpenStreetMap elements tagged amenity=cafe within 500 m of latitude 38.7, longitude "
+            "-9.1 (Overpass API; data © OpenStreetMap contributors, ODbL):"
+        )
         body = mock_urlopen.call_args.args[0].data.decode()
         assert "around%3A500%2C38.7%2C-9.1" in body
+
+    @patch(HTTP_OPEN)
+    def test_every_element_is_reachable_through_the_window(self, mock_urlopen):
+        # It showed "returned 25 of 60" and nothing could read the other 35.
+        mock_urlopen.side_effect = lambda *_: respond(geo_answers.overpass_elements(60))
+
+        first = overpass_pois("amenity", "cafe", bbox="38.6,-9.3,38.8,-9.0")
+        last = overpass_pois("amenity", "cafe", bbox="38.6,-9.3,38.8,-9.0", offset=50)
+
+        assert isinstance(first, ToolResult)
+        assert _text(first).endswith("[results 1-25 of 60 | next: offset=25]")
+        assert _text(last).splitlines()[-3:] == [
+            "60. Café Way | way/77 | latitude 38.71, longitude -9.14",
+            "   tags: amenity=cafe; opening_hours=Mo-Fr 08:00-18:00",
+            "[results 51-60 of 60 | end]",
+        ]
+
+    def test_the_limits_are_in_the_schema(self):
+        properties = overpass_pois.__tool_definition__.schema.input_schema["properties"]
+        assert (properties["radius_m"]["minimum"], properties["radius_m"]["maximum"]) == (
+            1,
+            50000,
+        )
+        assert properties["max_results"]["maximum"] == 50
+        assert properties["offset"]["minimum"] == 0
 
     @patch(HTTP_OPEN)
     def test_a_runtime_error_is_the_tools_error_even_with_partial_elements(self, mock_urlopen):
@@ -83,13 +120,15 @@ class TestOverpass:
     def test_no_element_is_a_success(self, mock_urlopen):
         mock_urlopen.return_value = respond({"elements": []})
 
-        assert overpass_query("[out:json];node(1);out;") == "No Overpass elements found."
+        assert _text(overpass_query("[out:json];node(1);out;")) == (
+            "No OpenStreetMap elements match the Overpass query '[out:json];node(1);out;'."
+        )
 
     @patch(HTTP_OPEN)
     def test_another_remark_is_a_note(self, mock_urlopen):
         mock_urlopen.return_value = respond({**_DATA, "remark": "a note that is no error"})
 
-        assert "Cafe A | node/1" in overpass_query("[out:json];node(1);out;")
+        assert "Cafe A | node/1" in _text(overpass_query("[out:json];node(1);out;"))
 
     @patch(HTTP_OPEN)
     def test_invalid_options_do_not_call_api(self, mock_urlopen):

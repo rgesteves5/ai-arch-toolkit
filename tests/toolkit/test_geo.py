@@ -2,22 +2,22 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qs, urlparse
 
 import pytest
 
+from ai_arch_toolkit.core import ToolResult
 from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._geo import (
     country_info,
     distance_between,
     geocode,
     ip_lookup,
-    reverse_geocode,
     timezone_lookup,
 )
-from ai_arch_toolkit.toolkit.tools._osm import osm_search_place
-from tests.toolkit.http_fakes import HTTP_OPEN, respond
+from tests.toolkit import geo_answers
+from tests.toolkit.http_fakes import HTTP_OPEN, http_error, respond
 
 
 def _failure(call) -> ToolFailure:
@@ -26,53 +26,90 @@ def _failure(call) -> ToolFailure:
     return caught.value
 
 
+def _text(result: ToolResult | str) -> str:
+    return result.value if isinstance(result, ToolResult) else result
+
+
+def _query(mock_urlopen: MagicMock) -> dict[str, list[str]]:
+    return parse_qs(urlparse(mock_urlopen.call_args.args[0].full_url).query)
+
+
 class TestGeocode:
     @patch(HTTP_OPEN)
-    def test_returns_results(self, mock_urlopen):
-        mock_urlopen.return_value = respond(
-            {
-                "results": [
-                    {
-                        "name": "Tokyo",
-                        "country": "Japan",
-                        "admin1": "Tokyo",
-                        "latitude": 35.6762,
-                        "longitude": 139.6503,
-                        "population": 13960000,
-                        "timezone": "Asia/Tokyo",
-                    }
-                ]
-            }
+    def test_lists_the_places_labelled_with_signed_coordinates(self, mock_urlopen):
+        mock_urlopen.return_value = respond(geo_answers.geocoding(1, name="Tokyo"))
+
+        text = _text(geocode("Tokyo"))
+
+        assert text == (
+            "Places named 'Tokyo' (Open-Meteo geocoding):\n"
+            "1. Tokyo, State 1, United States (US) | latitude 39.80172, longitude -89.64371 | "
+            "time zone America/Chicago | population 116250 | elevation 182.0 m"
         )
-        result = geocode("Tokyo")
-        assert "Tokyo" in result
-        assert "Japan" in result
-        assert "35.6762" in result
-        assert "13,960,000" in result
-        assert "Asia/Tokyo" in result
 
     @patch(HTTP_OPEN)
-    def test_no_results(self, mock_urlopen):
-        mock_urlopen.return_value = respond({"results": None})
-        result = geocode("Nonexistentville")
-        assert "No results" in result
+    def test_shows_more_than_three_and_pages_on(self, mock_urlopen):
+        # It always showed 3, and nothing told the agent there were more.
+        mock_urlopen.return_value = respond(geo_answers.geocoding(6))
+
+        result = geocode("Springfield", max_results=5)
+
+        text = _text(result)
+        assert "5. Springfield, State 5" in text
+        assert "6. Springfield" not in text
+        assert text.endswith("[results 1-5 | next: offset=5]")
+        assert _query(mock_urlopen)["count"] == ["6"]  # the page and one more
+        assert isinstance(result, ToolResult)
+        assert result.metadata["window"]["next_call"] == {"offset": 5}
 
     @patch(HTTP_OPEN)
-    def test_no_admin(self, mock_urlopen):
-        mock_urlopen.return_value = respond(
-            {
-                "results": [
-                    {
-                        "name": "Monaco",
-                        "country": "Monaco",
-                        "latitude": 43.73,
-                        "longitude": 7.42,
-                    }
-                ]
-            }
+    def test_the_next_page_says_the_total_when_the_source_has_no_more(self, mock_urlopen):
+        mock_urlopen.return_value = respond(geo_answers.geocoding(7))
+
+        text = _text(geocode("Springfield", max_results=5, offset=5))
+
+        assert _query(mock_urlopen)["count"] == ["11"]
+        lines = text.splitlines()
+        assert [line.split(" |")[0] for line in lines[1:3]] == [
+            "6. Springfield, State 6, United States (US)",
+            "7. Springfield, State 7, United States (US)",
+        ]
+        assert lines[3:] == ["[results 6-7 of 7 | end]"]
+
+    @patch(HTTP_OPEN)
+    def test_past_the_hundred_places_it_says_how_to_narrow(self, mock_urlopen):
+        mock_urlopen.return_value = respond(geo_answers.geocoding(100))
+
+        text = _text(geocode("Springfield", max_results=10, offset=90))
+
+        assert _query(mock_urlopen)["count"] == ["100"]
+        assert "(the source returns no more than 100 results; add the region or country" in text
+
+    @patch(HTTP_OPEN)
+    def test_no_place_is_a_success_that_names_the_query(self, mock_urlopen):
+        mock_urlopen.return_value = respond(geo_answers.NO_PLACES)
+
+        assert _text(geocode("Nonexistentville")) == (
+            "No places named 'Nonexistentville' in Open-Meteo's geocoding; check the spelling, "
+            "or search OpenStreetMap with osm_search_place."
         )
-        result = geocode("Monaco")
-        assert "Monaco, Monaco" in result
+
+    @patch(HTTP_OPEN)
+    def test_open_meteos_refusal_is_a_validation_error_in_its_words(self, mock_urlopen):
+        body = b'{"error": true, "reason": "Parameter count must be between 1 and 100."}'
+        mock_urlopen.side_effect = http_error(400, "Bad Request", body=body)
+
+        failure = _failure(lambda: geocode("Tokyo"))
+
+        assert failure.error.type == "validation_error"
+        assert failure.error.message == (
+            "Open-Meteo rejected the request: Parameter count must be between 1 and 100; "
+            "correct the argument it names and call again"
+        )
+
+    def test_an_empty_name_asks_nothing(self):
+        failure = _failure(lambda: geocode("  "))
+        assert failure.error.type == "validation_error"
 
     @patch(HTTP_OPEN)
     def test_api_failure(self, mock_urlopen):
@@ -93,6 +130,7 @@ class TestIpLookup:
                 "success": True,
                 "type": "IPv4",
                 "country": "United States",
+                "country_code": "US",
                 "region": "California",
                 "city": "Mountain View",
                 "latitude": 37.386,
@@ -104,9 +142,9 @@ class TestIpLookup:
         result = ip_lookup("8.8.8.8")
         assert result == (
             "IP: 8.8.8.8\n"
-            "Location: Mountain View, California, United States\n"
-            "Coordinates: 37.386°N, -122.084°E\n"
-            "Timezone: America/Los_Angeles\n"
+            "Location: Mountain View, California, United States (US)\n"
+            "Coordinates (approximate): latitude 37.386, longitude -122.084\n"
+            "Time zone: America/Los_Angeles (UTC-07:00)\n"
             "ISP: Google LLC\n"
             "Organization: Google LLC"
         )
@@ -122,11 +160,30 @@ class TestIpLookup:
         assert url == "https://ipwho.is/2001:4860:4860::8888"
 
     @patch(HTTP_OPEN)
-    def test_failed_status(self, mock_urlopen):
+    def test_a_reserved_address_is_the_callers_to_change(self, mock_urlopen):
+        # It was an upstream failure, which reads as "try again later".
         mock_urlopen.return_value = respond({"success": False, "message": "Reserved range"})
         failure = _failure(lambda: ip_lookup("10.0.0.1"))
+        assert failure.error.type == "validation_error"
+        assert str(failure) == (
+            "ipwho.is cannot locate this address (Reserved range): a private, reserved or "
+            "malformed address has no public location; give a public IPv4 or IPv6 address"
+        )
+
+    @patch(HTTP_OPEN)
+    def test_another_reason_is_the_sources_failure_in_its_words(self, mock_urlopen):
+        mock_urlopen.return_value = respond({"success": False, "message": "Server busy"})
+        failure = _failure(lambda: ip_lookup("8.8.8.8"))
         assert failure.error.type == "upstream"
-        assert str(failure) == "ipwho.is could not look up 10.0.0.1: Reserved range."
+        assert str(failure) == "Server busy"
+
+    @patch(HTTP_OPEN)
+    def test_the_daily_limit_is_a_rate_limit(self, mock_urlopen):
+        body = b'{"success": false, "message": "Rate limit exceeded"}'
+        mock_urlopen.side_effect = http_error(429, "Too Many Requests", body=body)
+        failure = _failure(lambda: ip_lookup("8.8.8.8"))
+        assert failure.error.type == "rate_limited"
+        assert "ipwho.is said: Rate limit exceeded" in str(failure)
 
     @patch(HTTP_OPEN)
     def test_api_error(self, mock_urlopen):
@@ -135,50 +192,36 @@ class TestIpLookup:
         assert failure.error.type == "upstream"
 
 
-class TestReverseGeocode:
-    @patch(HTTP_OPEN)
-    def test_returns_location(self, mock_urlopen):
-        mock_urlopen.return_value = respond(
-            {
-                "display_name": "Tokyo, Japan",
-                "address": {
-                    "city": "Tokyo",
-                    "state": "Tokyo",
-                    "country": "Japan",
-                },
-            }
-        )
-        result = reverse_geocode(35.6762, 139.6503)
-        assert "Tokyo, Japan" in result
-        assert "City: Tokyo" in result
-        assert "Country: Japan" in result
-
-    def test_invalid_coordinates(self):
-        failure = _failure(lambda: reverse_geocode(100.0, 10.0))
-        assert failure.error.type == "validation_error"
-        assert "latitude out of range" in str(failure)
-
-    @patch(HTTP_OPEN)
-    def test_a_place_with_no_address_is_a_success(self, mock_urlopen):
-        mock_urlopen.return_value = respond({"error": "Unable to geocode"})
-        assert (
-            reverse_geocode(0.0, -30.0)
-            == "No reverse geocoding result for coordinates: 0.0, -30.0"
-        )
-
-
 class TestTimezoneLookup:
     @patch(HTTP_OPEN)
     def test_returns_timezone(self, mock_urlopen):
         mock_urlopen.return_value = respond(
             {
                 "timezone": "Asia/Tokyo",
+                "timezone_abbreviation": "JST",
                 "utc_offset_seconds": 32400,
             }
         )
-        result = timezone_lookup(35.6762, 139.6503)
-        assert "Asia/Tokyo" in result
-        assert "UTC+09:00" in result
+        assert timezone_lookup(35.6762, 139.6503) == (
+            "Coordinates: latitude 35.6762, longitude 139.6503\n"
+            "Time zone: Asia/Tokyo (JST)\n"
+            "UTC offset now: UTC+09:00"
+        )
+
+    @patch(HTTP_OPEN)
+    def test_an_answer_without_a_time_zone_is_no_answer(self, mock_urlopen):
+        mock_urlopen.return_value = respond({"utc_offset_seconds": 0})
+        failure = _failure(lambda: timezone_lookup(0.0, 0.0))
+        assert failure.error.type == "upstream"
+        assert "without a time zone" in str(failure)
+
+    @patch(HTTP_OPEN)
+    def test_open_meteos_refusal_keeps_its_reason(self, mock_urlopen):
+        body = b'{"error": true, "reason": "Latitude must be in range of -90 to 90."}'
+        mock_urlopen.side_effect = http_error(400, "Bad Request", body=body)
+        failure = _failure(lambda: timezone_lookup(10.0, 10.0))
+        assert failure.error.type == "validation_error"
+        assert "Latitude must be in range of -90 to 90" in str(failure)
 
     @patch(HTTP_OPEN)
     def test_api_error(self, mock_urlopen):
@@ -367,16 +410,3 @@ def test_ip_lookup_rejects_invalid_ip_before_request(mock_urlopen, ip):
     assert failure.error.type == "validation_error"
     assert "invalid IP address" in str(failure)
     mock_urlopen.assert_not_called()
-
-
-@patch(HTTP_OPEN)
-def test_reverse_geocode_shares_nominatims_one_request_per_second_with_the_osm_tools(
-    mock_urlopen, throttle_waits
-):
-    mock_urlopen.side_effect = [respond([]), respond({"display_name": "Lisboa"})]
-
-    osm_search_place("Lisbon")
-    reverse_geocode(38.7, -9.1)
-
-    assert throttle_waits[0] == 0
-    assert 1.0 < throttle_waits[1] <= 1.1

@@ -94,7 +94,6 @@ _BENIGN_BY_TOOL: dict[tuple[str, str], Any] = {
     ("gbif_species_match", "name"): "Puma concolor",
     ("overpass_query", "query"): "[out:json];node(1);out;",
     ("wikidata_sparql", "query"): "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1",
-    ("weather_units", "unit"): "c",
     ("who_series", "country"): "PRT",
     ("wiktionary_entry", "language"): "English",
     ("distance_between", "unit"): "km",
