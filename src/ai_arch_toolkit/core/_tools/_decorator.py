@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import functools
 import inspect
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, overload
 
 from ai_arch_toolkit.core._tools._definition import (
@@ -53,8 +53,15 @@ def tool(
     Can be used bare (``@tool``) or with arguments
     (``@tool(name=..., requires_approval=...)``). Attaches the canonical
     ``__tool_definition__`` (a :class:`ToolDefinition`) to the decorated function.
+    ``schema`` maps a parameter's name to JSON Schema keywords merged into what was inferred for
+    it; a tool described by a complete JSON Schema is :func:`tool_from_schema`'s.
     ``max_output_chars`` and ``timeout_s`` bound each call (see :class:`ToolRuntimePolicy`).
+
+    Raises:
+        TypeError: ``schema`` is not a mapping of parameter names to mappings.
+        ValueError: The tool's name is not portable (see :class:`ToolSchema`).
     """
+    _check_overrides(schema)
     policy = ToolRuntimePolicy(
         capability=capability,
         risk_level=risk_level,
@@ -90,3 +97,26 @@ def tool(
     if fn is not None:
         return _wrap(fn)
     return _wrap
+
+
+def _check_overrides(schema: object) -> None:
+    """Raise ``TypeError`` unless ``schema`` maps each parameter's name to JSON Schema keywords.
+
+    A complete schema (``{"type": "object", "properties": ...}``) would otherwise be merged in as
+    parameters named ``type`` and ``properties``.
+    """
+    if schema is None:
+        return
+    if isinstance(schema, Mapping):
+        wrong = [key for key, value in schema.items() if not isinstance(value, Mapping)]
+        if not wrong:
+            return
+        found = f"{wrong[0]!r} mapped to a {type(schema[wrong[0]]).__name__}"
+    else:
+        found = f"a {type(schema).__name__}"
+    msg = (
+        "@tool(schema=...) maps each parameter's name to the JSON Schema keywords merged into "
+        f"what was inferred for it; got {found}. A tool described by a complete JSON Schema is "
+        "built with tool_from_schema()."
+    )
+    raise TypeError(msg)

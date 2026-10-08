@@ -67,6 +67,12 @@ def test_range_is_exported_for_tool_authors(module: ModuleType) -> None:
     assert module.Range is core_tools.Range
 
 
+@pytest.mark.parametrize("module", [core_tools, core, ai_arch_toolkit], ids=lambda m: m.__name__)
+def test_tool_from_schema_is_exported(module: ModuleType) -> None:
+    assert "tool_from_schema" in module.__all__
+    assert module.tool_from_schema is core_tools.tool_from_schema
+
+
 def test_custom_gate_built_from_public_imports_blocks_a_call() -> None:
     from ai_arch_toolkit import (
         ExecutionContext,

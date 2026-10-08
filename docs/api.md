@@ -47,7 +47,8 @@ are the recommended entry point, `Agent` (see [Toolkit — Agents](#toolkit-agen
 | Symbol | Description |
 |--------|-------------|
 | `@tool` | Decorator: auto-generates JSON Schema from type hints + docstrings |
-| `ToolGroup` | Collection with `execute()` / `async_execute()`, its own gates, approval handler, and `max_calls` |
+| `tool_from_schema()` | A tool from a name, a description, a complete JSON Schema and a handler that takes the arguments as one `dict` (an MCP server's tools, for one); governed like any `@tool` |
+| `ToolGroup` | Collection with `execute()` / `async_execute()`, its own gates, approval handler, and `max_calls`; one tool per name, changed while in use with `add(replace=)` / `remove()` |
 | `ToolResult`, `ToolError` | Structured outcome of one tool call; `execute()` never raises on tool failure |
 | `execute_tool()`, `async_execute_tool()` | Run one `ToolCall` against a list of callables through the governed executor |
 | `run_tools()`, `run_tools_sync()` | Run every tool call in a `Response` and return `tool_result` messages (a toolkit helper: import it from `ai_arch_toolkit` or `ai_arch_toolkit.toolkit`) |
@@ -56,7 +57,7 @@ are the recommended entry point, `Agent` (see [Toolkit — Agents](#toolkit-agen
 | `ToolRuntimePolicy` | Risk metadata, capability, output cap (`max_output_chars`), and deadline (`timeout_s`) that `@tool(...)` attaches to a tool |
 | `Range` | Inclusive bounds for a numeric parameter, `Annotated[int, Range(1, 25)]`: in the schema, and enforced before the call |
 | `infer_schema()` | Manual schema inference from a callable |
-| `prepare_tools()` | Normalize tools (`@tool` functions, dicts, `ToolGroup`s) into the provider-facing definition dicts the adapters take |
+| `prepare_tools()` | Normalize tools (`@tool` functions, dicts, `ToolGroup`s) into the provider-facing definition dicts the adapters take; two different tools with one name, or a name that is not portable, raise `ValueError` |
 
 ### Core — Graph
 

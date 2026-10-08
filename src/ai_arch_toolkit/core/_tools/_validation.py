@@ -9,19 +9,23 @@ actually run and an invalid call never reaches a human:
 * ``boolean`` accepts bools and the strings ``"true"`` / ``"false"`` (any case);
 * ``enum`` is checked after coercion, and so are a parameter's top-level ``minimum``/``maximum``
   (from a ``Range`` in the signature or a ``schema=`` override), whose refusal names the range;
-* ``anyOf`` keeps a value that already matches a branch, and otherwise takes the first branch that
-  coerces it (``int | str`` keeps ``"1"`` as a string);
+* ``anyOf``, ``oneOf`` and a ``type`` list (``["integer", "null"]``) keep a value that already
+  matches a branch, and otherwise take the first branch that coerces it (``int | str`` keeps
+  ``"1"`` as a string);
 * ``string``, ``array``, ``object`` and untyped schemas (``Any``) are left as they are — the schema
   generator maps unknown Python types to ``string``, so rejecting non-strings would refuse valid
-  calls;
+  calls — and so is everything nested in an array or an object (D7);
 * ``None`` passes only where the parameter admits it — a ``None`` default, an annotation that
-  includes ``None``, or no usable annotation (``Any``, untyped). The schema does not record this,
-  so it is read from the signature; elsewhere ``null`` is refused like any other wrong type;
+  includes ``None``, or no usable annotation (``Any``, untyped). The schema of a ``@tool`` does not
+  record this, so it is read from the signature; a keyword that arrives through ``**kwargs`` (every
+  argument of a ``tool_from_schema`` tool) admits it where its schema does (untyped, or ``null``
+  among its types or branches). Elsewhere ``null`` is refused like any other wrong type;
 * a parameter the schema does not require but the function has no default for
   (``query: str | None``) receives ``None`` when the model omits it.
 
 Required arguments must be present, and arguments the schema does not declare are refused unless
-the function takes ``**kwargs``. Finally the arguments must bind to the function's signature.
+the function takes ``**kwargs`` and the schema's root leaves them open (``additionalProperties:
+false`` refuses them, D62). Finally the arguments must bind to the function's signature.
 """
 
 from __future__ import annotations
@@ -35,6 +39,7 @@ from typing import Any, get_type_hints
 from ai_arch_toolkit.core._tools._schema import _hint_to_json_schema
 
 _INTEGER_TEXT = re.compile(r"^[+-]?\d+$")
+_VARIADIC = (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
 
 
 class ArgumentError(Exception):
@@ -52,22 +57,35 @@ def validate_arguments(
     if not isinstance(arguments, Mapping):  # e.g. a custom gate's GateModify with a list
         raise ArgumentError(f"arguments must be a mapping, got {type(arguments).__name__}")
     coerced = dict(arguments)
-    properties = schema.get("properties")
-    if not isinstance(properties, Mapping):
+    properties = _declared(schema)
+    if properties is None:
         return coerced
     _check_required(schema.get("required"), coerced)
-    _check_declared(fn, properties, coerced)
+    _check_declared(fn, schema, properties, coerced)
 
-    none_allowed = _none_allowed(fn)
+    known = _none_allowed(fn)
     for name, value in arguments.items():
         declared = properties.get(name)
         if isinstance(declared, Mapping):
-            coerced[name] = _checked(name, value, declared, none_allowed.get(name, True))
+            coerced[name] = _checked(name, value, declared, _admits_none(known, name, declared))
 
     for param in _parameters(fn):
         if param.name in properties and param.name not in coerced and _needs_value(param):
             coerced[param.name] = None  # optional in the schema, required by the signature
     return coerced
+
+
+def _declared(schema: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """The arguments the root declares: its ``properties``, none at all for a closed root
+    without them, ``None`` for a schema that says nothing about its arguments."""
+    properties = schema.get("properties")
+    if isinstance(properties, Mapping):
+        return properties
+    return {} if _closed(schema) else None
+
+
+def _closed(schema: Mapping[str, Any]) -> bool:
+    return schema.get("additionalProperties") is False
 
 
 def _check_required(required: object, arguments: Mapping[str, Any]) -> None:
@@ -78,9 +96,14 @@ def _check_required(required: object, arguments: Mapping[str, Any]) -> None:
 
 
 def _check_declared(
-    fn: Callable[..., Any], properties: Mapping[str, Any], arguments: Mapping[str, Any]
+    fn: Callable[..., Any],
+    schema: Mapping[str, Any],
+    properties: Mapping[str, Any],
+    arguments: Mapping[str, Any],
 ) -> None:
-    if _accepts_extra_keywords(fn):
+    """Refuse an argument the schema does not declare, unless ``**kwargs`` takes it and the
+    root leaves it open."""
+    if not _closed(schema) and _accepts_extra_keywords(fn):
         return
     unexpected = [name for name in arguments if name not in properties]
     if unexpected:
@@ -116,7 +139,7 @@ def _within(value: Any, schema: Mapping[str, Any]) -> bool:
 
 def _describe_bounds(schema: Mapping[str, Any]) -> str:
     """``integer from 1 to 25``, ``number at least 0``, ``integer at most 100``."""
-    branches = [branch for branch in schema.get("anyOf") or () if isinstance(branch, Mapping)]
+    branches = _branches(schema)
     kinds = [b.get("type") for b in branches or [schema] if b.get("type") in ("integer", "number")]
     kind = kinds[0] if kinds else "number"
     low, high = schema.get("minimum"), schema.get("maximum")
@@ -127,26 +150,47 @@ def _describe_bounds(schema: Mapping[str, Any]) -> str:
     return f"{kind} at most {high}"
 
 
-def _none_allowed(fn: Callable[..., Any]) -> dict[str, bool]:
-    """Per parameter, whether ``None`` is a value its default or annotation admits.
+def _none_allowed(fn: Callable[..., Any]) -> dict[str, bool] | None:
+    """Per named parameter, whether ``None`` is a value its default or annotation admits.
 
-    A parameter missing from the result (``**kwargs`` names, an unreadable signature, an
-    annotation that does not resolve) is treated as admitting ``None``: a valid call is never
-    refused because the answer could not be worked out.
+    ``None`` when the signature or its hints cannot be read: every argument then admits ``None``,
+    since a valid call is never refused because the answer could not be worked out. A parameter
+    without a usable annotation admits it too.
     """
     try:
         parameters = inspect.signature(fn).parameters
         hints = get_type_hints(fn)
     except Exception:
-        return {}
+        return None
     allowed: dict[str, bool] = {}
     for name, param in parameters.items():
+        if param.kind in _VARIADIC:
+            continue
         if param.default is None or name not in hints:
             allowed[name] = True
             continue
         schema, is_optional = _hint_to_json_schema(hints[name])
         allowed[name] = is_optional or not schema  # the empty schema is ``Any`` / ``object``
     return allowed
+
+
+def _admits_none(known: Mapping[str, bool] | None, name: str, declared: Mapping[str, Any]) -> bool:
+    """Whether ``null`` is a value for the argument ``name``: its parameter says, else (a keyword
+    that arrives through ``**kwargs``) its schema does (D62)."""
+    if known is None:
+        return True
+    if name in known:
+        return known[name]
+    return _admits_null(declared)
+
+
+def _admits_null(schema: Mapping[str, Any]) -> bool:
+    """Whether a schema lets ``null`` through: untyped, typed ``null``, or a branch that does."""
+    branches = _branches(schema)
+    if branches:
+        return any(_admits_null(branch) for branch in branches)
+    allowed = _enum(schema)
+    return schema.get("type") in (None, "null") and (allowed is None or None in allowed)
 
 
 def _parameters(fn: Callable[..., Any]) -> list[inspect.Parameter]:
@@ -157,8 +201,7 @@ def _parameters(fn: Callable[..., Any]) -> list[inspect.Parameter]:
 
 
 def _needs_value(param: inspect.Parameter) -> bool:
-    variadic = (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
-    return param.default is inspect.Parameter.empty and param.kind not in variadic
+    return param.default is inspect.Parameter.empty and param.kind not in _VARIADIC
 
 
 def bind_arguments(
@@ -207,42 +250,53 @@ def _accepts_extra_keywords(fn: Callable[..., Any]) -> bool:
     return any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters)
 
 
+def _branches(schema: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    """The alternatives a schema offers: its ``anyOf`` or ``oneOf`` branches, or one branch per
+    member of a ``type`` list, each with the schema's other keywords (D62).
+
+    A ``oneOf`` is read as an ``anyOf``: a value that fits two branches is the server's to refuse.
+    """
+    for keyword in ("anyOf", "oneOf"):
+        branches = [branch for branch in schema.get(keyword) or () if isinstance(branch, Mapping)]
+        if branches:
+            return branches
+    kinds = schema.get("type")
+    if not isinstance(kinds, list):
+        return []
+    rest = {key: value for key, value in schema.items() if key != "type"}
+    return [{**rest, "type": kind} for kind in kinds]
+
+
 def _coerce(value: Any, schema: Mapping[str, Any]) -> tuple[bool, Any, str]:
     """``(ok, coerced value, description of what was expected)``."""
     if value is None:
         return True, None, ""
-
-    branches = [branch for branch in schema.get("anyOf") or () if isinstance(branch, Mapping)]
+    branches = _branches(schema)
     if branches:
-        if any(_matches(value, branch) for branch in branches):
-            return True, value, ""
-        for branch in branches:
-            ok, coerced, _ = _coerce(value, branch)
-            if ok:
-                return True, coerced, ""
-        return False, value, " or ".join(_describe(branch) for branch in branches)
-
+        return _coerce_to_a_branch(value, branches)
     kind = schema.get("type")
-    if kind == "integer":
-        ok, coerced = _to_integer(value)
-    elif kind == "number":
-        ok, coerced = _to_number(value)
-    elif kind == "boolean":
-        ok, coerced = _to_boolean(value)
-    elif kind == "null":
-        ok, coerced = False, value  # None already returned above
-    else:
-        ok, coerced = True, value
-
+    convert = _CONVERTERS.get(kind, _as_it_is) if isinstance(kind, str) else _as_it_is
+    ok, coerced = convert(value)
     allowed = _enum(schema)
     if ok and allowed is not None and coerced not in allowed:
         return False, value, f"one of {list(allowed)!r}"
     return ok, coerced, _describe(schema)
 
 
+def _coerce_to_a_branch(value: Any, branches: list[Mapping[str, Any]]) -> tuple[bool, Any, str]:
+    """A value that already matches a branch as it is, else the first branch that coerces it."""
+    if any(_matches(value, branch) for branch in branches):
+        return True, value, ""
+    for branch in branches:
+        ok, coerced, _ = _coerce(value, branch)
+        if ok:
+            return True, coerced, ""
+    return False, value, " or ".join(_describe(branch) for branch in branches)
+
+
 def _matches(value: Any, schema: Mapping[str, Any]) -> bool:
     """Whether ``value`` already fits ``schema`` exactly, with no coercion."""
-    branches = [branch for branch in schema.get("anyOf") or () if isinstance(branch, Mapping)]
+    branches = _branches(schema)
     if branches:
         return any(_matches(value, branch) for branch in branches)
     kind = schema.get("type")
@@ -319,6 +373,22 @@ def _to_boolean(value: Any) -> tuple[bool, Any]:
     return False, value
 
 
+def _to_null(value: Any) -> tuple[bool, Any]:
+    return False, value  # ``None`` itself never gets here
+
+
+def _as_it_is(value: Any) -> tuple[bool, Any]:
+    return True, value
+
+
+_CONVERTERS: dict[str, Callable[[Any], tuple[bool, Any]]] = {
+    "integer": _to_integer,
+    "number": _to_number,
+    "boolean": _to_boolean,
+    "null": _to_null,
+}
+
+
 def _parse_int(text: str) -> int | None:
     try:
         return int(text)
@@ -335,7 +405,7 @@ def _parse_float(text: str) -> float | None:
 
 
 def _describe(schema: Mapping[str, Any]) -> str:
-    branches = [branch for branch in schema.get("anyOf") or () if isinstance(branch, Mapping)]
+    branches = _branches(schema)
     if branches:
         return " or ".join(_describe(branch) for branch in branches)
     kind = schema.get("type")

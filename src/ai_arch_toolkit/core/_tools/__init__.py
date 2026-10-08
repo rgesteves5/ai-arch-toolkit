@@ -18,8 +18,12 @@ from ai_arch_toolkit.core._tools._definition import (
     ToolDefinition,
     ToolRuntimePolicy,
     ToolSchema,
+    check_tool_name,
+    one_per_name,
 )
+from ai_arch_toolkit.core._tools._dynamic import tool_from_schema
 from ai_arch_toolkit.core._tools._executor import (
+    _definition_for,
     async_execute_tool,
     execute_tool,
 )
@@ -70,6 +74,7 @@ __all__ = [
     "infer_schema",
     "prepare_tools",
     "tool",
+    "tool_from_schema",
     "tool_schema",
 ]
 
@@ -81,25 +86,26 @@ def prepare_tools(
 
     Accepts:
     - ``None`` → ``None``
-    - A single ``@tool``-decorated function → list with one provider dict
     - A ``ToolGroup`` → its ``.definitions`` (provider-safe)
+    - A single tool → list with one provider dict
     - A list containing any mix of:
-        - ``@tool``-decorated functions (have ``__tool_definition__``)
+        - tools: ``@tool`` functions, :func:`tool_from_schema` tools, plain callables
         - Plain dicts (``{"name": ..., "input_schema": ...}``)
         - ``ToolGroup`` instances (flattened)
+        - server tools (``web_search()``, ...)
+
+    One name, one tool: a tool met again, in the list or in a group in it, is sent once.
+
+    Raises:
+        ValueError: Two different tools share a name, or a name is not portable (see
+            :class:`ToolSchema`), before anything is sent.
     """
     if tools is None:
         return None
-
-    # Single decorated function
-    if callable(tools) and hasattr(tools, "__tool_definition__"):
-        return [tools.__tool_definition__.schema.to_provider_dict()]  # type: ignore[union-attr]
-
-    # ToolGroup
     if isinstance(tools, ToolGroup):
         return tools.definitions
-
-    # List of mixed items
+    if callable(tools):
+        tools = [tools]
     if not isinstance(tools, list):
         warnings.warn(
             "Unsupported tools input type "
@@ -107,33 +113,38 @@ def prepare_tools(
             stacklevel=3,
         )
         return None
+    return one_per_name([entry for item in tools for entry in _wire_entries(item)])
 
-    result: list[dict[str, Any]] = []
-    for item in tools:
-        if isinstance(item, ServerTool):
-            result.append({"_server_tool": True, "type": item.type, **item.config})
-        elif isinstance(item, dict):
-            if item.get("_server_tool"):  # already in wire form (e.g. a request after middleware)
-                result.append(item)
-                continue
-            if "name" not in item or not item["name"]:
-                warnings.warn(
-                    "Tool dict missing 'name' field; skipping",
-                    stacklevel=3,
-                )
-                continue
-            result.append(item)
-        elif isinstance(item, ToolGroup):
-            result.extend(item.definitions)
-        elif callable(item):
-            definition = getattr(item, "__tool_definition__", None)
-            if definition is not None:
-                result.append(definition.schema.to_provider_dict())
-            else:
-                result.append(infer_schema(item))
-        else:
-            warnings.warn(
-                f"Skipping unsupported tool entry of type {type(item).__name__}",
-                stacklevel=3,
-            )
-    return result
+
+# A tool on its way to a provider: its name (none for a server tool), what makes it the same
+# tool, and the dict the adapters take.
+type _Wire = tuple[str | None, object, dict[str, Any]]
+
+
+def _wire_entries(item: object) -> list[_Wire]:
+    """The tools ``item`` holds, as wire entries; none for an entry that is skipped."""
+    if isinstance(item, ServerTool):
+        return [(None, item, {"_server_tool": True, "type": item.type, **item.config})]
+    if isinstance(item, dict):
+        return _dict_entries(item)
+    if isinstance(item, ToolGroup):
+        return [_definition_entry(definition) for definition in item.runtime_definitions]
+    if callable(item):
+        return [_definition_entry(_definition_for(item))]
+    warnings.warn(f"Skipping unsupported tool entry of type {type(item).__name__}", stacklevel=4)
+    return []
+
+
+def _definition_entry(definition: ToolDefinition) -> _Wire:
+    return definition.schema.name, definition.fn, definition.schema.to_provider_dict()
+
+
+def _dict_entries(item: dict[str, Any]) -> list[_Wire]:
+    if item.get("_server_tool"):  # already in wire form (e.g. a request after middleware)
+        return [(None, item, item)]
+    name = item.get("name")
+    if not name:
+        warnings.warn("Tool dict missing 'name' field; skipping", stacklevel=5)
+        return []
+    check_tool_name(name)
+    return [(name, item, item)]

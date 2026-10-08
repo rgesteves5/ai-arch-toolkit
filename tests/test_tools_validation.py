@@ -9,6 +9,7 @@ import pytest
 
 from ai_arch_toolkit.core._metering._scope import MeterScope
 from ai_arch_toolkit.core._response import ToolCall
+from ai_arch_toolkit.core._tools import tool_from_schema
 from ai_arch_toolkit.core._tools._approval import ApprovalDecision, ApprovalRequest
 from ai_arch_toolkit.core._tools._decorator import tool
 from ai_arch_toolkit.core._tools._governance import ExecutionContext, GateModify, GateResult
@@ -489,3 +490,117 @@ async def test_bounds_written_in_a_schema_override_are_enforced_too() -> None:
 
     assert refused.error is not None
     assert "expected integer at least 0, got int -1" in refused.error.message
+
+
+# --- D62 (C02.3): oneOf and type lists coerce like anyOf; a closed root; **kwargs and null ---
+
+
+def _echo(arguments: dict[str, Any]) -> str:
+    return repr(sorted(arguments.items()))
+
+
+def _dynamic(properties: dict[str, Any], **root: Any) -> Any:
+    """A tool from a complete schema whose handler answers with the dict it received."""
+    schema = {"type": "object", "properties": properties, **root}
+    return tool_from_schema(_echo, name="dynamic", input_schema=schema)
+
+
+@pytest.mark.parametrize("mode", MODES)
+async def test_one_of_coerces_like_any_of(mode: str) -> None:
+    group = ToolGroup(_dynamic({"mode": {"oneOf": [{"type": "integer"}, {"type": "boolean"}]}}))
+
+    assert (await _execute(group, _call("dynamic", mode="7"), mode)).value == "[('mode', 7)]"
+    assert (await _execute(group, _call("dynamic", mode="true"), mode)).value == "[('mode', True)]"
+    refused = await _execute(group, _call("dynamic", mode="fast"), mode)
+    assert refused.error is not None and refused.error.type == "validation_error"
+    assert "expected integer or boolean" in refused.error.message
+
+
+@pytest.mark.parametrize("mode", MODES)
+async def test_a_type_list_coerces_like_any_of(mode: str) -> None:
+    group = ToolGroup(_dynamic({"limit": {"type": ["integer", "null"], "minimum": 1}}))
+
+    assert (await _execute(group, _call("dynamic", limit="5"), mode)).value == "[('limit', 5)]"
+    assert (await _execute(group, _call("dynamic", limit=None), mode)).value == "[('limit', None)]"
+    refused = await _execute(group, _call("dynamic", limit="many"), mode)
+    assert refused.error is not None and "expected integer or null" in refused.error.message
+    below = await _execute(group, _call("dynamic", limit="0"), mode)
+    assert below.error is not None and "integer at least 1" in below.error.message
+
+
+async def test_a_type_list_keeps_a_value_that_already_matches_a_member() -> None:
+    group = ToolGroup(_dynamic({"value": {"type": ["integer", "string"]}}))
+
+    assert group.execute(_call("dynamic", value="1")).value == "[('value', '1')]"
+    assert group.execute(_call("dynamic", value=1.0)).value == "[('value', 1)]"
+
+
+@pytest.mark.parametrize("mode", MODES)
+async def test_a_closed_root_refuses_an_unknown_key_even_with_kwargs(mode: str) -> None:
+    closed = _dynamic({"q": {"type": "string"}}, additionalProperties=False)
+
+    result = await _execute(ToolGroup(closed), _call("dynamic", q="a", extra=1), mode)
+
+    assert result.error is not None and result.error.type == "validation_error"
+    assert "unexpected argument(s) 'extra'; expected: q" in result.error.message
+    assert result.error.details["argument"] == "extra"
+
+
+async def test_a_closed_root_without_properties_takes_no_arguments() -> None:
+    bare = tool_from_schema(
+        _echo, name="bare", input_schema={"type": "object", "additionalProperties": False}
+    )
+    group = ToolGroup(bare)
+
+    assert group.execute(_call("bare")).ok
+    refused = group.execute(_call("bare", x=1))
+    assert refused.error is not None and "unexpected argument(s) 'x'" in refused.error.message
+
+
+async def test_an_open_root_with_kwargs_lets_unknown_keys_through() -> None:
+    result = ToolGroup(_dynamic({"q": {"type": "string"}})).execute(_call("dynamic", q="a", x=1))
+
+    assert result.ok and result.value == "[('q', 'a'), ('x', 1)]"
+
+
+@pytest.mark.parametrize("mode", MODES)
+async def test_null_through_kwargs_passes_only_where_the_schema_admits_it(mode: str) -> None:
+    group = ToolGroup(
+        _dynamic(
+            {
+                "count": {"type": "integer"},
+                "maybe": {"anyOf": [{"type": "integer"}, {"type": "null"}]},
+                "either": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+                "listed": {"type": ["string", "null"]},
+                "anything": {},
+            }
+        )
+    )
+
+    refused = await _execute(group, _call("dynamic", count=None), mode)
+    assert refused.error is not None and refused.error.type == "validation_error"
+    assert "argument 'count': expected integer, got null" in refused.error.message
+    for name in ("maybe", "either", "listed", "anything"):
+        result = await _execute(group, _call("dynamic", **{name: None}), mode)
+        assert result.ok, (name, result.to_model_text())
+
+
+@tool(schema={"colour": {"type": "string"}})
+def paint(wall: str, **extra: Any) -> str:
+    """Paint a wall; extra keyword arguments arrive through **extra."""
+    return f"{wall} {sorted(extra.items())}"
+
+
+async def test_a_keyword_declared_only_in_the_schema_admits_null_only_if_the_schema_does() -> None:
+    refused = ToolGroup(paint).execute(_call("paint", wall="north", colour=None))
+
+    assert refused.error is not None and "'colour'" in refused.error.message
+    assert ToolGroup(paint).execute(_call("paint", wall="north", colour="red")).ok
+
+
+async def test_nested_values_are_left_as_they_are() -> None:
+    nested = _dynamic({"filter": {"type": "object", "properties": {"n": {"type": "integer"}}}})
+
+    result = ToolGroup(nested).execute(_call("dynamic", filter={"n": "3"}))
+
+    assert result.ok and result.value == "[('filter', {'n': '3'})]"

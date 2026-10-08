@@ -179,6 +179,13 @@ def _enum_schema(values: list[Any]) -> dict[str, object]:
 
 _LOCAL_DEFINITION = "#/$defs/"
 
+# Inlining can multiply a schema: a definition that refers twice to the next one doubles at each
+# level (1.9 KB with 18 such levels became 17.5 MB in 1.4 s). A schema that arrives at run time,
+# from an MCP server, must fail fast instead. The size is in about one unit per character of
+# JSON; the depth matches the toolkit's other loaded data (D59).
+_INLINE_SIZE_LIMIT = 1_000_000
+_SCHEMA_DEPTH_LIMIT = 100
+
 
 def _inline_local_refs(schema: dict[str, Any]) -> dict[str, object]:
     """Resolve ``#/$defs/...`` references so the schema stands on its own.
@@ -188,31 +195,80 @@ def _inline_local_refs(schema: dict[str, Any]) -> dict[str, object]:
     the pointers name, so a provider sees dangling references (Gemini rejects the tool). A
     reference to a definition being expanded (a recursive model) is kept, together with the
     table, which :func:`infer_schema` hoists to the tool's root.
+
+    Raises:
+        ValueError: The inlined schema would take more than about 1,000,000 characters of JSON
+            or nest deeper than 100 levels. The walk stops there, so a hostile schema fails in
+            milliseconds.
     """
     definitions = schema.get("$defs")
     if not isinstance(definitions, dict):
         return schema
-
-    def resolve(node: Any, expanding: frozenset[str]) -> Any:
-        if isinstance(node, list):
-            return [resolve(item, expanding) for item in node]
-        if not isinstance(node, dict):
-            return node
-        ref = node.get("$ref")
-        if isinstance(ref, str) and ref.startswith(_LOCAL_DEFINITION):
-            name = ref.removeprefix(_LOCAL_DEFINITION)
-            if name in definitions and name not in expanding:
-                target = resolve(definitions[name], expanding | {name})
-                siblings = {k: resolve(v, expanding) for k, v in node.items() if k != "$ref"}
-                return {**target, **siblings}  # a field's description sits next to its $ref
-        return {key: resolve(value, expanding) for key, value in node.items()}
-
-    inlined: dict[str, object] = resolve(
-        {key: value for key, value in schema.items() if key != "$defs"}, frozenset()
-    )
+    root = {key: value for key, value in schema.items() if key != "$defs"}
+    inlined: dict[str, object] = _Inlining(definitions).resolve(root, frozenset(), 0)
     if _mentions_local_ref(inlined):
         inlined["$defs"] = definitions
     return inlined
+
+
+class _Inlining:
+    """One walk that inlines a schema's ``#/$defs/...`` references, and what it may still spend."""
+
+    __slots__ = ("_definitions", "_left")
+
+    def __init__(self, definitions: dict[str, Any]) -> None:
+        self._definitions = definitions
+        self._left = _INLINE_SIZE_LIMIT
+
+    def resolve(self, node: Any, expanding: frozenset[str], depth: int) -> Any:
+        """``node`` with its references inlined, but those to a definition being expanded."""
+        self._spend(node, depth)
+        if isinstance(node, list):
+            return [self.resolve(item, expanding, depth + 1) for item in node]
+        if not isinstance(node, dict):
+            return node
+        name = self._target(node, expanding)
+        if name is None:
+            return {key: self.resolve(value, expanding, depth + 1) for key, value in node.items()}
+        target = self.resolve(self._definitions[name], expanding | {name}, depth)
+        siblings = {
+            key: self.resolve(value, expanding, depth + 1)
+            for key, value in node.items()
+            if key != "$ref"
+        }
+        return {**target, **siblings}  # a field's description sits next to its $ref
+
+    def _target(self, node: dict[str, Any], expanding: frozenset[str]) -> str | None:
+        """The definition ``node`` refers to, when it is one to inline."""
+        ref = node.get("$ref")
+        if not isinstance(ref, str) or not ref.startswith(_LOCAL_DEFINITION):
+            return None
+        name = ref.removeprefix(_LOCAL_DEFINITION)
+        return name if name in self._definitions and name not in expanding else None
+
+    def _spend(self, node: object, depth: int) -> None:
+        self._left -= _own_size(node)
+        if self._left < 0:
+            raise ValueError(
+                f"the schema would take more than about {_INLINE_SIZE_LIMIT:,} characters once "
+                "its $ref references are inlined"
+            )
+        if depth > _SCHEMA_DEPTH_LIMIT:
+            raise ValueError(
+                f"the schema would nest deeper than {_SCHEMA_DEPTH_LIMIT} levels once its $ref "
+                "references are inlined"
+            )
+
+
+def _own_size(node: object) -> int:
+    """About the characters of JSON a node takes, its children's apart."""
+    if isinstance(node, dict):
+        return 2 + sum(len(str(key)) + 4 for key in node)
+    if isinstance(node, list):
+        return 2 + len(node)
+    if isinstance(node, str):
+        return len(node) + 2
+    return 4
 
 
 def _mentions_local_ref(node: Any) -> bool:

@@ -27,6 +27,8 @@ def delete_table(name: str) -> str:
 
 `ToolRuntimePolicy` fields: `capability` (str label), `risk_level` (`"low" | "medium" | "high" | "critical"`), `requires_approval` (bool), `approval_reason` (str), `max_output_chars` (int or `None`, default 200 000) and `timeout_s` (float or `None`, default 120) — see [Output and time limits](#output-and-time-limits). Risk metadata travels with the tool but stays out of the schema sent to the provider — only gates see it.
 
+A tool built at run time from a JSON Schema takes the policy itself, `tool_from_schema(handler, ..., policy=ToolRuntimePolicy(risk_level="high", requires_approval=True))` (see [Tools from a JSON Schema](tools.md#tools-from-a-json-schema)); without one it is a low-risk tool that needs no approval. A tool that reaches another system on the model's behalf, an MCP server's for one, usually wants approval: its gates, approval, budget and metering are those of any other tool, and nothing in its schema can loosen them.
+
 Every tool in `ai_arch_toolkit.toolkit.tools` declares its `capability`: `"network"` or `"compute"` in the safe namespace, and `"filesystem"`, `"shell"`, `"python"` or `"network"` in `dangerous`. A test reads each tool's code and checks that the label matches what it reaches, and that nothing touching files, a shell or an evaluator sits outside `dangerous`.
 
 ---
@@ -110,10 +112,10 @@ Before any gate runs, the arguments are checked against the tool's input schema 
 | `null` | `null` | nothing |
 | `enum` | listed values | checked after coercion |
 | `minimum` / `maximum` at a parameter's top level (a `Range`, or a `schema=` override) | numbers inside the bounds, both included | checked after coercion; the refusal names the range |
-| `anyOf` | a value that already matches a branch | otherwise the first branch that coerces it (`int \| str` keeps `"1"` a string) |
-| `string`, `array`, `object`, untyped | anything | nothing |
+| `anyOf`, `oneOf`, a `type` list (`["integer", "null"]`) | a value that already matches a branch | otherwise the first branch that coerces it (`int \| str` keeps `"1"` a string); a `oneOf` is read as an `anyOf` |
+| `string`, `array`, `object`, untyped | anything | nothing, nested values included |
 
-Required arguments must be present, arguments the schema doesn't declare are refused unless the function takes `**kwargs`, and the call must bind to the function's signature. A parameter typed `X | None` without a default is optional in the schema; when the model omits it, the function receives `None`. An explicit `null` is accepted only where the parameter admits it — a `None` default, an annotation that includes `None`, or no usable annotation (`Any`, untyped); elsewhere it is a `validation_error` like any other wrong type (`width: int` refuses `null`). A failure returns `validation_error` with a message the model can act on; when one argument is at fault, `result.error.details["argument"]` names it. A string too long for Python to convert to an integer is a validation error too, never an exception.
+Required arguments must be present, arguments the schema doesn't declare are refused unless the function takes `**kwargs` and the schema's root leaves them open — `additionalProperties: false` at the root refuses them even then — and the call must bind to the function's signature. A parameter typed `X | None` without a default is optional in the schema; when the model omits it, the function receives `None`. An explicit `null` is accepted only where the parameter admits it — a `None` default, an annotation that includes `None`, or no usable annotation (`Any`, untyped); elsewhere it is a `validation_error` like any other wrong type (`width: int` refuses `null`). An argument that arrives through `**kwargs` — every argument of a [`tool_from_schema`](tools.md#tools-from-a-json-schema) tool — has no annotation to read, so its schema decides: `null` passes where the schema is untyped or names `null` among its types or branches. A failure returns `validation_error` with a message the model can act on; when one argument is at fault, `result.error.details["argument"]` names it. A string too long for Python to convert to an integer is a validation error too, never an exception.
 
 ---
 

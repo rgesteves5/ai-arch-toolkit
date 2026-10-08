@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+import threading
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from ai_arch_toolkit.core._response import ToolCall
 from ai_arch_toolkit.core._server_tools import ServerTool
 from ai_arch_toolkit.core._tools._approval import ApprovalHandler
-from ai_arch_toolkit.core._tools._definition import ToolDefinition, check_bounds
+from ai_arch_toolkit.core._tools._definition import ToolDefinition, check_bounds, name_clash
 from ai_arch_toolkit.core._tools._executor import (
     _arun_tool,
     _definition_for,
@@ -23,6 +24,10 @@ from ai_arch_toolkit.core._tools._governance import (
 )
 from ai_arch_toolkit.core._tools._result import ToolResult
 
+# One writer at a time, so no change to a group is lost. Shared by every group (writes are rare
+# and short) rather than held by each, so a group can still be copied (``copy.deepcopy``).
+_WRITING = threading.Lock()
+
 
 class ToolGroup:
     """A named collection of tools with execution-time governance.
@@ -34,6 +39,8 @@ class ToolGroup:
     blocking, dry-run), a call-count budget (``max_calls``), and ceilings on each
     tool's ``max_output_chars`` and ``timeout_s``: the stricter of the group's and
     the tool's own applies, so a group tightens its tools and never widens them.
+
+    One name, one tool. :meth:`add` and :meth:`remove` may change the group while it runs.
 
     Usage::
 
@@ -57,7 +64,9 @@ class ToolGroup:
     ) -> None:
         check_bounds(max_output_chars, timeout_s)
         self._ceiling = _Limits(max_output_chars, timeout_s)
-        self._defs: dict[str, ToolDefinition] = {}
+        # Copy-on-write: a change puts a new table here and never edits the one in place, so a
+        # reader (a turn listing the tools, a call starting) works on the table it read.
+        self._defs: Mapping[str, ToolDefinition] = {}
         for fn in fns:
             self.add(fn)
         # Approval always runs last so dangerous-blocking / dry-run short-circuit
@@ -67,13 +76,22 @@ class ToolGroup:
         self._run_state = RunState()
         self._redactor = default_redactor()
 
-    def add(self, fn: Callable[..., Any]) -> None:
-        """Add a function to the group; adding a tool the group holds changes nothing.
+    def add(self, fn: Callable[..., Any], *, replace: bool = False) -> None:
+        """Add a tool to the group; adding a tool the group holds changes nothing.
+
+        The group may change while it runs: the next turn lists the tools the group holds then,
+        and a call already running ends with the tool it started with. ``max_calls`` keeps
+        counting.
+
+        Args:
+            fn: A ``@tool`` function, a :func:`tool_from_schema` tool, or a plain callable.
+            replace: Put ``fn`` in the place of the tool the group holds under its name.
 
         Raises:
             TypeError: If ``fn`` is a provider-hosted :class:`ServerTool` (pass it to the LLM
                 next to the group instead) or is not callable.
-            ValueError: If the group holds another tool with the same name.
+            ValueError: If the group holds another tool with the same name and ``replace`` is
+                false, or the name is not portable (see :class:`ToolSchema`).
         """
         if isinstance(fn, ServerTool):
             msg = (
@@ -87,15 +105,34 @@ class ToolGroup:
             raise TypeError(msg)
         definition = _definition_for(fn)
         name = definition.schema.name
-        held = self._defs.get(name)
-        # Equal, not identical: each read of ``obj.method`` makes a new bound method.
-        if held is not None and held.fn != definition.fn:
-            msg = (
-                f"ToolGroup already holds a tool named {name!r}: under one name, the model "
-                "could not choose between them. Give one another name with @tool(name=...)."
-            )
-            raise ValueError(msg)
-        self._defs[name] = definition
+        with _WRITING:
+            held = self._defs.get(name)
+            # Equal, not identical: each read of ``obj.method`` makes a new bound method.
+            if held is not None and held.fn == definition.fn:
+                return
+            if held is not None and not replace:
+                msg = (
+                    f"{name_clash(name)} To swap the tool the group holds, add(..., replace=True)."
+                )
+                raise ValueError(msg)
+            self._defs = {**self._defs, name: definition}
+
+    def remove(self, name: str) -> ToolDefinition:
+        """Take the tool named ``name`` out of the group, and return its definition.
+
+        As with :meth:`add`, a call already running ends with the tool it started with.
+
+        Raises:
+            KeyError: The group holds no tool named ``name``.
+        """
+        with _WRITING:
+            if name not in self._defs:
+                msg = f"ToolGroup holds no tool named {name!r}"
+                raise KeyError(msg)
+            kept = dict(self._defs)
+            removed = kept.pop(name)
+            self._defs = kept
+        return removed
 
     @property
     def tools(self) -> list[Callable[..., Any]]:

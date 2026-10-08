@@ -24,7 +24,11 @@ from ai_arch_toolkit.core._response import ToolCall, Usage
 from ai_arch_toolkit.core._sync import _run_sync
 from ai_arch_toolkit.core._tools._approval import ApprovalHandler
 from ai_arch_toolkit.core._tools._billing import Billed, billing
-from ai_arch_toolkit.core._tools._definition import ToolDefinition, ToolRuntimePolicy
+from ai_arch_toolkit.core._tools._definition import (
+    ToolDefinition,
+    ToolRuntimePolicy,
+    one_per_name,
+)
 from ai_arch_toolkit.core._tools._governance import (
     ApprovalGate,
     ExecutionContext,
@@ -48,20 +52,23 @@ logger = logging.getLogger(__name__)
 # --- Resolution ---------------------------------------------------------------
 
 
-def _resolve_fn(tool_call: ToolCall, tools: list[Callable[..., Any]]) -> Callable[..., Any]:
-    """Find the callable matching a tool call name.
+def _tool_name(fn: Callable[..., Any]) -> str:
+    """The name a tool is called by: its definition's, else its function's (a partial's too)."""
+    definition = getattr(fn, "__tool_definition__", None)
+    return definition.schema.name if definition is not None else callable_name(fn)
 
-    Matches by ``__tool_definition__.schema.name`` first, then falls back to the
-    function name for plain (undecorated) callables, a ``functools.partial``'s included.
+
+def _resolve_fn(tool_call: ToolCall, tools: list[Callable[..., Any]]) -> Callable[..., Any]:
+    """Find the callable a tool call names.
+
+    Raises:
+        ValueError: Two different tools in ``tools`` share a name (D62); the same tool met
+            again counts once.
+        KeyError: No tool has the call's name.
     """
-    for fn in tools:
-        definition = getattr(fn, "__tool_definition__", None)
-        if definition is not None and definition.schema.name == tool_call.name:
-            return fn
-    for fn in tools:
-        if hasattr(fn, "__tool_definition__"):
-            continue
-        if callable_name(fn) == tool_call.name:
+    named = one_per_name((_tool_name(fn), fn, fn) for fn in tools)
+    for fn in named:
+        if _tool_name(fn) == tool_call.name:
             return fn
     msg = f"Unknown tool: {tool_call.name!r}"
     raise KeyError(msg)
@@ -567,7 +574,11 @@ def execute_tool(
     *,
     approval_handler: ApprovalHandler | None = None,
 ) -> ToolResult:
-    """Execute a tool call synchronously, returning a structured ``ToolResult``."""
+    """Execute a tool call synchronously, returning a structured ``ToolResult``.
+
+    Raises:
+        ValueError: Two different tools in ``tools`` share a name; nothing runs.
+    """
     try:
         definition = _resolve_definition(tool_call, tools)
     except KeyError:
@@ -592,7 +603,11 @@ async def async_execute_tool(
     *,
     approval_handler: ApprovalHandler | None = None,
 ) -> ToolResult:
-    """Execute a tool call asynchronously, returning a structured ``ToolResult``."""
+    """Execute a tool call asynchronously, returning a structured ``ToolResult``.
+
+    Raises:
+        ValueError: Two different tools in ``tools`` share a name; nothing runs.
+    """
     try:
         definition = _resolve_definition(tool_call, tools)
     except KeyError:

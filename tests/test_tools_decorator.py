@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import re
+
+import pytest
+
+from ai_arch_toolkit.core._tools import ToolGroup, prepare_tools
 from ai_arch_toolkit.core._tools._decorator import tool
-from ai_arch_toolkit.core._tools._definition import ToolDefinition
+from ai_arch_toolkit.core._tools._definition import ToolDefinition, ToolSchema
 
 
 class TestToolDecorator:
@@ -116,3 +121,67 @@ class TestToolDecorator:
         assert props["y"]["default"] == 5
         assert "x" in fn.__tool_definition__.schema.input_schema["required"]
         assert "y" not in fn.__tool_definition__.schema.input_schema["required"]
+
+
+class TestSchemaOverrides:
+    """``schema=`` maps a parameter to keywords; a complete schema belongs to tool_from_schema."""
+
+    def test_a_complete_schema_is_a_type_error(self):
+        complete = {"type": "object", "properties": {"city": {"type": "string"}}}
+
+        with pytest.raises(TypeError, match="tool_from_schema") as raised:
+            tool(schema=complete)  # type: ignore[arg-type]
+
+        assert "'type'" in str(raised.value)
+
+    @pytest.mark.parametrize("schema", [["city"], "city", {"city": "string"}])
+    def test_anything_but_a_mapping_of_mappings_is_a_type_error(self, schema):
+        with pytest.raises(TypeError, match="schema="):
+            tool(schema=schema)
+
+    def test_the_error_comes_before_the_function_is_decorated(self):
+        with pytest.raises(TypeError):
+
+            @tool(schema={"properties": {"city": {}}, "required": ["city"]})  # type: ignore[dict-item]
+            def get_weather(city: str) -> str:
+                """Get weather."""
+                return city
+
+
+class TestPortableNames:
+    """One name rule, ``^[A-Za-z_][A-Za-z0-9_-]{0,63}$``, the one every provider and MCP take."""
+
+    @pytest.mark.parametrize("name", ["a.b", "1a", "a" * 65, "get weather", "ação"])
+    def test_a_decorator_name_outside_the_rule_is_a_value_error(self, name):
+        with pytest.raises(ValueError, match="portable"):
+
+            @tool(name=name)
+            def fn() -> str:
+                """Do stuff."""
+                return "ok"
+
+    @pytest.mark.parametrize("name", ["a.b", "1a", "a" * 65])
+    def test_a_tool_schema_checks_its_name(self, name):
+        with pytest.raises(ValueError, match=re.escape(repr(name))):
+            ToolSchema(name=name)
+
+    def test_the_longest_portable_name_is_accepted(self):
+        assert ToolSchema(name="_" + "a" * 63).name == "_" + "a" * 63
+
+    def test_a_lambda_is_a_value_error_wherever_it_becomes_a_tool(self):
+        with pytest.raises(ValueError, match="'<lambda>'"):
+            ToolGroup(lambda x: x)
+        with pytest.raises(ValueError, match="'<lambda>'"):
+            prepare_tools([lambda x: x])
+
+    def test_prepare_tools_checks_the_name_of_a_dict(self):
+        with pytest.raises(ValueError, match=re.escape("'a.b'")):
+            prepare_tools([{"name": "a.b", "input_schema": {"type": "object"}}])
+
+    def test_every_tool_the_package_ships_has_a_portable_name(self):
+        from tests.toolkit.tool_catalog import TOOLS
+
+        names = [fn.__tool_definition__.schema.name for fn in TOOLS.values()]
+
+        assert len(names) > 100
+        assert [n for n in names if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]{0,63}", n)] == []

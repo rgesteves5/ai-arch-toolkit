@@ -11,14 +11,22 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from ai_arch_toolkit import LLM, ToolGroup, cache, run_tools, system, tool, user
-from tests.integration.conftest import skip_no_anthropic, skip_no_gemini, skip_no_openai
+from ai_arch_toolkit import LLM, ToolGroup, cache, run_tools, system, tool, tool_from_schema, user
+from tests.integration.conftest import (
+    skip_no_anthropic,
+    skip_no_gemini,
+    skip_no_meta,
+    skip_no_openai,
+    skip_no_xai,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.live_api]
 
 ANTHROPIC = "claude-haiku-4-5"
 OPENAI = "gpt-4.1-mini"
 GEMINI = "gemini-2.5-flash"
+XAI = "grok-4.3"  # the cheapest Grok (test_provider_hardening_live.py)
+META = "muse-spark-1.3"  # Meta tunes it for temperature=1.0 (https://dev.meta.ai/docs/reasoning)
 
 
 @tool
@@ -218,3 +226,143 @@ async def test_untyped_and_tuple_parameters_round_trip_through_run_tools() -> No
     results = await run_tools(response, group)
     by_name = {r["name"]: r["content"] for r in results}
     assert by_name == {"locate": "lat=38.7 lon=-9.1", "inspect_value": "dict"}, response.tool_calls
+
+
+# --- C02f (D62, C02.7): MCP-shaped schemas from tool_from_schema, as each provider gets them ---
+# The tool sends the schema as it came, its local references inlined. A provider that refuses one
+# of these gets a rule in its adapter, with its source, instead of a schema cleaned for everyone.
+
+MCP_ISSUE: dict[str, Any] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "create_issue",
+    "type": "object",
+    "properties": {
+        "title": {"type": "string", "title": "Title", "description": "The issue's title."},
+        "priority": {
+            "title": "Priority",
+            "description": "From 1 (urgent) to 5, or the words low or high.",
+            "oneOf": [
+                {"type": "integer", "minimum": 1, "maximum": 5},
+                {"type": "string", "enum": ["low", "high"]},
+            ],
+        },
+        "labels": {"type": "array", "items": {"$ref": "#/$defs/Label"}, "default": []},
+    },
+    "required": ["title", "priority"],
+    "additionalProperties": False,
+    "x-mcp-header": "Api-Version",
+    "$defs": {"Label": {"type": "string", "title": "Label", "enum": ["bug", "docs"]}},
+}
+
+# A recursive reference stays one: the provider receives the $defs table at the root.
+MCP_TREE: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "path": {"type": "string", "description": "The folder to list."},
+        "filter": {"$ref": "#/$defs/Filter", "description": "Optional filter tree."},
+    },
+    "required": ["path"],
+    "$defs": {
+        "Filter": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "any": {"type": "array", "items": {"$ref": "#/$defs/Filter"}},
+            },
+        }
+    },
+}
+
+# Keys that are not Python names, as MCP servers send them (the reason the handler takes a dict).
+# The schema fits Gemini's OpenAPI subset, so it goes in `parameters`, whose names google-genai
+# documents as [A-Za-z_][A-Za-z0-9_]{0,63} (FunctionDeclaration): "x-request-id" breaks that rule.
+MCP_HEADERS: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "from": {"type": "string", "description": "Who sends the message."},
+        "x-request-id": {"type": "string", "description": "The request id to echo."},
+    },
+    "required": ["from", "x-request-id"],
+    "additionalProperties": False,
+}
+
+TOOL_MODELS = [
+    pytest.param(ANTHROPIC, {}, marks=skip_no_anthropic, id="anthropic"),
+    pytest.param(OPENAI, {}, marks=skip_no_openai, id="openai"),
+    pytest.param(GEMINI, {}, marks=skip_no_gemini, id="gemini"),
+    pytest.param(XAI, {}, marks=skip_no_xai, id="xai"),
+    pytest.param(META, {"temperature": 1.0}, marks=skip_no_meta, id="meta"),
+]
+
+
+async def _call_once(
+    model: str, options: dict[str, Any], prompt: str, schema: dict[str, Any], name: str
+) -> list[dict[str, Any]]:
+    """Ask ``model`` to call a ``tool_from_schema`` tool, run the call, and return what it got."""
+    received: list[dict[str, Any]] = []
+
+    def handler(arguments: dict[str, Any]) -> str:
+        received.append(arguments)
+        return "done"
+
+    group = ToolGroup(
+        tool_from_schema(handler, name=name, description=prompt, input_schema=schema)
+    )
+    async with LLM(model) as llm:
+        response = await llm.complete(
+            f"{prompt} Call the {name} tool once, then stop.",
+            tools=group,
+            max_tokens=1024,
+            **options,
+        )
+    results = await run_tools(response, group)
+
+    assert [call.name for call in response.tool_calls] == [name], response.text
+    assert [result["content"] for result in results] == ["done"], results
+    return received
+
+
+@pytest.mark.parametrize(("model", "options"), TOOL_MODELS)
+@pytest.mark.timeout(120)
+async def test_an_mcp_shaped_schema_is_accepted_and_called(
+    model: str, options: dict[str, Any]
+) -> None:
+    received = await _call_once(
+        model,
+        options,
+        "Create an issue titled 'Login fails' with priority 2 and the label bug.",
+        MCP_ISSUE,
+        "create_issue",
+    )
+
+    assert received[0]["title"] == "Login fails", received
+    assert received[0]["priority"] == 2, received
+    assert received[0].get("labels") == ["bug"], received
+
+
+@pytest.mark.parametrize(("model", "options"), TOOL_MODELS)
+@pytest.mark.timeout(120)
+async def test_a_recursive_reference_with_its_table_is_accepted_and_called(
+    model: str, options: dict[str, Any]
+) -> None:
+    received = await _call_once(
+        model, options, "List the folder /docs, with no filter.", MCP_TREE, "list_folder"
+    )
+
+    assert received[0]["path"] == "/docs", received
+
+
+@pytest.mark.parametrize(("model", "options"), TOOL_MODELS)
+@pytest.mark.timeout(120)
+async def test_argument_names_that_are_not_python_names_are_accepted_and_called(
+    model: str, options: dict[str, Any]
+) -> None:
+    received = await _call_once(
+        model,
+        options,
+        "Send a message from alice with the request id r-1.",
+        MCP_HEADERS,
+        "send_message",
+    )
+
+    assert received == [{"from": "alice", "x-request-id": "r-1"}], received

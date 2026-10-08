@@ -3,17 +3,21 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import functools
+import threading
 
 import pytest
 
-from ai_arch_toolkit.core._response import ToolCall
+from ai_arch_toolkit.core._response import Response, ToolCall
 from ai_arch_toolkit.core._server_tools import code_execution, web_search
+from ai_arch_toolkit.core._tools import prepare_tools
 from ai_arch_toolkit.core._tools._approval import ApprovalDecision
 from ai_arch_toolkit.core._tools._decorator import tool
 from ai_arch_toolkit.core._tools._executor import execute_tool
 from ai_arch_toolkit.core._tools._governance import DangerousToolGate, DryRunGate
 from ai_arch_toolkit.core._tools._group import ToolGroup
+from ai_arch_toolkit.toolkit import run_tools
 
 
 @tool
@@ -149,6 +153,200 @@ class TestOneToolPerName:
         assert len(group) == 1
         result = group.execute(ToolCall(id="tc_1", name="forecast", input={"city": "Porto"}))
         assert result.value == "Sun in Porto"
+
+
+class TestChangingTheGroup:
+    """``add(replace=)`` and ``remove()`` write a new table: what is running keeps the old one."""
+
+    def test_replace_puts_the_new_tool_under_the_name(self):
+        @tool(name="get_weather")
+        def rainy_weather(city: str) -> str:
+            """Another weather tool."""
+            return f"Rain in {city}"
+
+        group = ToolGroup(get_weather, search)
+        group.add(rainy_weather, replace=True)
+
+        result = group.execute(ToolCall(id="tc_1", name="get_weather", input={"city": "Porto"}))
+        assert result.value == "Rain in Porto"
+        assert group.tools == [rainy_weather, search]
+
+    def test_replace_adds_a_tool_the_group_does_not_hold(self):
+        group = ToolGroup(get_weather)
+        group.add(search, replace=True)
+
+        assert group.tools == [get_weather, search]
+
+    def test_remove_returns_the_definition_and_the_name_becomes_unknown(self):
+        group = ToolGroup(get_weather, search)
+
+        removed = group.remove("get_weather")
+
+        assert removed is get_weather.__tool_definition__
+        assert "get_weather" not in group and len(group) == 1
+        result = group.execute(ToolCall(id="tc_1", name="get_weather", input={"city": "Porto"}))
+        assert result.error is not None and result.error.type == "unknown_tool"
+
+    def test_removing_a_name_the_group_does_not_hold_is_a_key_error(self):
+        group = ToolGroup(get_weather)
+
+        with pytest.raises(KeyError, match="'search'"):
+            group.remove("search")
+        assert group.tools == [get_weather]
+
+    async def test_a_running_call_finishes_with_the_tool_it_started_with(self):
+        started, release = asyncio.Event(), asyncio.Event()
+
+        @tool
+        async def wait_for_release() -> str:
+            """Wait until the test releases the call."""
+            started.set()
+            await release.wait()
+            return "finished"
+
+        group = ToolGroup(wait_for_release)
+        running = asyncio.create_task(
+            group.async_execute(ToolCall(id="tc_1", name="wait_for_release", input={}))
+        )
+        await started.wait()
+
+        group.remove("wait_for_release")
+        release.set()
+        result = await running
+
+        assert result.ok and result.value == "finished"
+        assert "wait_for_release" not in group
+
+    def test_the_call_budget_does_not_restart_when_the_group_changes(self):
+        group = ToolGroup(get_weather, max_calls=1)
+        assert group.execute(ToolCall(id="t1", name="get_weather", input={"city": "a"})).ok
+
+        group.add(search)
+        group.remove("get_weather")
+        blocked = group.execute(ToolCall(id="t2", name="search", input={"query": "q"}))
+
+        assert blocked.error is not None and blocked.error.type == "max_calls_exceeded"
+
+    def test_definitions_read_before_a_change_stay_as_they_were(self):
+        group = ToolGroup(get_weather)
+        before = group.runtime_definitions
+
+        group.add(search)
+        group.remove("get_weather")
+
+        assert [d.schema.name for d in before] == ["get_weather"]
+        assert [d["name"] for d in group.definitions] == ["search"]
+
+    def test_a_copied_group_changes_on_its_own(self):
+        group = ToolGroup(get_weather)
+
+        copied = copy.deepcopy(group)
+        copied.add(search)
+
+        assert group.tools == [get_weather]
+        assert [d["name"] for d in copied.definitions] == ["get_weather", "search"]
+
+    def test_threads_adding_at_once_lose_no_tool(self):
+        def make(index: int):
+            @tool(name=f"tool_{index}")
+            def numbered() -> str:
+                """A numbered tool."""
+                return str(index)
+
+            return numbered
+
+        made = [make(i) for i in range(64)]
+        group = ToolGroup()
+        barrier = threading.Barrier(len(made))
+
+        def add(fn) -> None:
+            barrier.wait()
+            group.add(fn)
+
+        threads = [threading.Thread(target=add, args=(fn,)) for fn in made]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        assert len(group) == len(made)
+
+
+class TestOneToolPerNameAcrossListsAndGroups:
+    """D62 (C02.8): a name the model could not choose by is refused before sending or running."""
+
+    def test_prepare_tools_refuses_two_tools_with_one_name_in_a_list(self):
+        @tool(name="get_weather")
+        def other_weather(city: str) -> str:
+            """Another weather tool."""
+            return city
+
+        with pytest.raises(ValueError, match="'get_weather'"):
+            prepare_tools([get_weather, other_weather])
+
+    def test_prepare_tools_refuses_one_name_in_two_groups(self):
+        @tool(name="search")
+        def other_search(query: str) -> str:
+            """Another search."""
+            return query
+
+        with pytest.raises(ValueError, match="'search'"):
+            prepare_tools([ToolGroup(search), ToolGroup(other_search)])
+
+    def test_prepare_tools_refuses_a_dict_and_a_tool_with_one_name(self):
+        wire = {"name": "search", "description": "", "input_schema": {"type": "object"}}
+
+        with pytest.raises(ValueError, match="'search'"):
+            prepare_tools([wire, search])
+
+    def test_the_same_tool_met_again_is_sent_once(self):
+        wire = {"name": "raw", "description": "", "input_schema": {"type": "object"}}
+
+        sent = prepare_tools(
+            [get_weather, ToolGroup(get_weather, search), get_weather, wire, dict(wire)]
+        )
+
+        assert sent is not None
+        assert [d["name"] for d in sent] == ["get_weather", "search", "raw"]
+
+    def test_execute_tool_refuses_two_tools_with_one_name_before_running(self):
+        ran: list[str] = []
+
+        @tool(name="get_weather")
+        def recording_weather(city: str) -> str:
+            """Another weather tool."""
+            ran.append(city)
+            return city
+
+        with pytest.raises(ValueError, match="'get_weather'"):
+            execute_tool(
+                ToolCall(id="tc_1", name="get_weather", input={"city": "Porto"}),
+                [recording_weather, get_weather],
+            )
+        assert ran == []
+
+    async def test_run_tools_refuses_a_plain_function_named_like_a_tool_before_running(self):
+        ran: list[str] = []
+
+        def plain(query: str) -> str:
+            """A plain function that will carry the decorated search tool's name."""
+            ran.append(query)
+            return query
+
+        plain.__name__ = "search"
+        response = Response(tool_calls=(ToolCall(id="tc_1", name="search", input={"query": "q"}),))
+
+        with pytest.raises(ValueError, match="'search'"):
+            await run_tools(response, [plain, search])
+        assert ran == []
+
+    def test_the_same_tool_twice_in_a_list_runs_once(self):
+        result = execute_tool(
+            ToolCall(id="tc_1", name="get_weather", input={"city": "Porto"}),
+            [get_weather, get_weather],
+        )
+
+        assert result.value == "Sunny in Porto"
 
 
 class TestWrappedTools:

@@ -147,6 +147,7 @@ from ai_arch_toolkit.core._tools import (
     infer_schema,
     prepare_tools,
     tool,
+    tool_from_schema,
     tool_schema,
 )
 from ai_arch_toolkit.core._trace import (
@@ -329,6 +330,7 @@ __all__ = [
     "system",
     "tokens_to_chars",
     "tool",
+    "tool_from_schema",
     "tool_result",
     "tool_schema",
     "user",

@@ -2,7 +2,7 @@
 
 Tools let an LLM call your Python functions. The toolkit gives you three things:
 
-1. The **`@tool`** decorator — turn any typed function into a tool (JSON Schema is generated for you).
+1. The **`@tool`** decorator — turn any typed function into a tool (JSON Schema is generated for you); **`tool_from_schema`** builds one from a JSON Schema that arrives as data (an MCP server's, for one).
 2. **`ToolGroup`** — a governed collection that validates, executes, and structures results.
 3. A library of **130 pre-built tools** across 31 domains, ready to drop into a group.
 
@@ -80,9 +80,44 @@ Full `@tool` signature:
 )
 ```
 
-`schema=` does not replace the inferred input schema: it maps a parameter's name to JSON Schema keywords merged into what was inferred for that parameter — `@tool(schema={"unit": {"enum": ["km", "mi"]}})` on `get_distance` keeps `unit`'s type, description and default and adds the `enum`, which the executor then checks.
+`schema=` does not replace the inferred input schema: it maps a parameter's name to JSON Schema keywords merged into what was inferred for that parameter — `@tool(schema={"unit": {"enum": ["km", "mi"]}})` on `get_distance` keeps `unit`'s type, description and default and adds the `enum`, which the executor then checks. Anything else raises `TypeError` when the decorator is applied: a complete schema (`{"type": "object", "properties": ...}`) would otherwise become parameters named `type` and `properties`. A tool described by a complete schema is built with [`tool_from_schema`](#tools-from-a-json-schema).
+
+A tool name is 1 to 64 letters, digits, `_` or `-`, and starts with a letter or `_` (`^[A-Za-z_][A-Za-z0-9_-]{0,63}$`): the names Anthropic, OpenAI, Gemini, xAI, Meta and MCP all accept, since `LLM(fallback=...)` may move a run to another provider. Any other name (`a.b`, `1a`, 65 characters, a `lambda`'s `<lambda>`) raises `ValueError` where the tool is made: `@tool`, `tool_from_schema`, `ToolGroup(...)`, or `prepare_tools` for a plain callable or a tool dict.
 
 Gemini function declarations take an OpenAPI subset of JSON Schema that has no `prefixItems` or `$defs`/`$ref`. A schema outside it (a fixed-length `tuple` parameter, or a `schema=` override with references) is sent through Gemini's `parameters_json_schema` field instead, unchanged.
+
+### Tools from a JSON Schema
+
+A tool whose definition arrives as data — from an MCP server, an OpenAPI document, or the app's own configuration — has a name, a description and a JSON Schema, but no Python signature. `tool_from_schema` builds it, and the result is a tool like any `@tool` function: a `ToolGroup`, `llm.complete(tools=...)`, `execute_tool` and `run_tools` take it as they are, and its calls go through the same governed executor (validation, gates, approval, `max_calls`, metering).
+
+```python
+from typing import Any
+
+from ai_arch_toolkit import ToolGroup, ToolRuntimePolicy, tool_from_schema
+
+async def search(arguments: dict[str, Any]) -> str:
+    return await github.search_issues(arguments["q"], limit=arguments.get("limit", 10))
+
+search_tool = tool_from_schema(
+    search,
+    name="github_search",
+    description="Search issues.",
+    input_schema={
+        "type": "object",
+        "properties": {"q": {"type": "string"}, "limit": {"type": ["integer", "null"]}},
+        "required": ["q"],
+        "additionalProperties": False,
+    },
+    policy=ToolRuntimePolicy(capability="github", risk_level="high", requires_approval=True),
+)
+group = ToolGroup(search_tool, approval_handler=ask)
+```
+
+- **The handler** receives the arguments in one `dict`, so a key need not be a Python name (`"x-api-version"`, `"from"`). An `async def` handler runs on the caller's loop, a synchronous one in a thread of its own (its `timeout_s` holds, as for `@tool`). It returns the tool's value, or a `ToolResult`, which passes intact. One that cannot answer raises `ToolFailure` with its type (`not_found`, `validation_error`, `upstream`, `rate_limited`); any other exception becomes a `runtime_error` with its message redacted.
+- **Validation** is the one `@tool` gets, before any gate or approval (see [Argument validation](safety.md#argument-validation)): root arguments are coerced (`"3"` for an `integer`, through `anyOf`, `oneOf` or a `type` list too), `additionalProperties: false` at the root refuses an unknown key, and `null` passes only where the schema admits it. Nested values are left as they came, for the handler — or the server behind it — to check.
+- **The schema** is copied and sent as it came, `title`, `$schema`, `default` and `x-*` keys included, with its local `#/$defs/...` references inlined (a recursive one stays a reference, with its `$defs` table at the root).
+- **`ValueError`** when the tool is made: a name outside the rule above, a schema that is not JSON (`NaN`, a set), a root that is not `"type": "object"`, a `$ref` outside the schema (`https://...`, another file — never fetched), or references whose inlining would make the schema larger than about 1,000,000 characters or deeper than 100 levels. A hostile schema fails in milliseconds.
+- `policy` takes the same `ToolRuntimePolicy` `@tool` builds from its keywords; the default is a low-risk tool that needs no approval.
 
 ---
 
@@ -98,9 +133,13 @@ group = ToolGroup(get_distance, delete_table)
 group.definitions          # provider-safe tool schemas to send to the LLM
 group.tools                # the registered callables
 group.add(another_tool)    # register one more
+group.add(new_version, replace=True)   # swap the tool held under its name
+group.remove("delete_table")           # -> its ToolDefinition; KeyError if absent
 ```
 
-One name, one tool: the model calls a tool by its name, so another tool under a name the group already holds raises `ValueError` (give one of them another name with `@tool(name=...)`); adding a tool the group already holds changes nothing. A wrapper made with `functools.wraps` around a `@tool` function carries the tool's definition, its name and policy included, and the group runs the wrapper.
+One name, one tool: the model calls a tool by its name, so another tool under a name the group already holds raises `ValueError` (give one of them another name with `@tool(name=...)`, or pass `replace=True` to swap it); adding a tool the group already holds changes nothing. A wrapper made with `functools.wraps` around a `@tool` function carries the tool's definition, its name and policy included, and the group runs the wrapper. The same rule holds across a list and the groups in it: `prepare_tools` (so `llm.complete(tools=[a, b])`), `execute_tool` and `run_tools` raise `ValueError` for two different tools with one name before anything is sent or runs, and send or count once a tool that appears twice.
+
+A group may change while it is in use, as tools arrive from an MCP server or leave with it: `add` and `remove` put a new table in place instead of editing the one being read, so the next read sees the change — the next ReAct turn offers the new set of tools — and a call already running ends with the tool it started with. `max_calls` keeps counting across changes. An empty `ToolGroup()` is a group like any other: an `Agent` given one keeps it, and tools added later reach it.
 
 Constructor:
 
@@ -148,7 +187,7 @@ results = run_tools_sync(response, group)        # list[dict] — tool_result me
 # feed `results` back into the next llm.complete(...) call
 ```
 
-`run_tools()` accepts either a `ToolGroup` or a plain `list[Callable]`. A `ToolGroup` runs every call through its own governance — its gates, `approval_handler`, and `max_calls` budget, exactly as `group.execute()` does — so `approval_handler=` is only for a plain list: passing it together with a group raises `ValueError`. Every tool name in the response is checked before any call runs: an unknown name raises `KeyError` and nothing executes, so a response never half-runs.
+`run_tools()` accepts either a `ToolGroup` or a plain `list[Callable]`. A `ToolGroup` runs every call through its own governance — its gates, `approval_handler`, and `max_calls` budget, exactly as `group.execute()` does — so `approval_handler=` is only for a plain list: passing it together with a group raises `ValueError`. Every tool name in the response is checked before any call runs: an unknown name raises `KeyError`, and a list holding two different tools with one name raises `ValueError`, and nothing executes, so a response never half-runs.
 
 ---
 

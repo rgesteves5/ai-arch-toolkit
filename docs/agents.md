@@ -40,6 +40,14 @@ print(f"cost: ${result.cost:.4f}  tokens: {result.report.total_tokens}")
 `Agent` compiles the `Flow` **once** in its constructor, so a single agent can be
 run on many tasks without recompiling.
 
+The agent holds its `ToolGroup` by reference, an empty one included: a group that
+starts empty and is filled later (tools that arrive from an MCP server, say) is the
+group the agent uses. A tool added to or removed from the group while the agent runs
+(`group.add(...)`, `group.remove(name)`) is offered from the next ReAct turn on; the
+`{tools}` catalog of a planner prompt and ReWOO's tool table are read when the agent
+is built. An empty per-phase group (`deps={"executor_tools": ToolGroup()}`) gives
+that phase no tools; it never falls back to the agent's.
+
 ## ReasoningSpec
 
 A frozen, keyword-only dataclass. Every field has a default — `ReasoningSpec()`
