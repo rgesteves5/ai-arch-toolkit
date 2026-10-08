@@ -132,27 +132,52 @@ Both declare their limits as `Range` bounds, show each result whole, and leave o
 
 ## Scholarly & research
 
+The literature and identifier tools declare their limits as `Range` bounds. A search numbers its
+results and ends with the window's footer: the total the source gives, and the call for the next
+page (`[results 1-5 of 4321 | next: start=5]`), or why the rest cannot be read here (each source
+pages only so deep: arXiv 30,000 results, Crossref, DataCite, PubMed and ROR 10,000, Semantic
+Scholar 1,000). A record tool (`arxiv_paper`, `crossref_work` …) gives the whole record, its
+abstract and every author, reference or link, window by window (`offset`, `max_chars`); a search
+shows a long list's first names and says which record tool lists them all.
+
 **Papers** — `_arxiv.py`, `_pubmed.py`, `_europe_pmc.py`
 
-- `arxiv_search` — Search arXiv papers via the public arXiv API
-- `arxiv_paper` — Get metadata for a specific arXiv paper by ID
-- `pubmed_search` — Search PubMed articles via the public NCBI E-utilities API
-- `pubmed_article` — Get metadata for a specific PubMed article by PMID
-- `europe_pmc_search` — Search Europe PMC articles via the public REST API
-- `europe_pmc_article` — Get Europe PMC metadata for a PMID, PMCID, DOI, or source ID
-- `europe_pmc_citations` — Get articles that cite a Europe PMC record
+- `arxiv_search` — Search arXiv papers, each with its whole summary (`start` to page; arXiv asks
+  for 3 s between requests, which the tools keep)
+- `arxiv_paper` — An arXiv paper's record: summary, every author with the affiliations,
+  categories, journal reference, DOI and links
+- `pubmed_search` — Search PubMed articles via NCBI E-utilities; zero results say which phrases
+  PubMed did not find
+- `pubmed_article` — A PubMed article's record by PMID: the abstract by section, every author with
+  the affiliations, MeSH headings (major topics marked), keywords and publication types
+- `europe_pmc_search` — Search Europe PMC (PubMed, PMC, preprints, patents …); pages by cursor, the
+  footer giving the next `cursor_mark` and `offset`
+- `europe_pmc_article` — An article's Europe PMC record by PMID, PMCID, DOI or `SOURCE/ID`
+  (`MED/26017442`): abstract, authors, MeSH, keywords and every full-text link
+- `europe_pmc_citations` — The articles that cite a Europe PMC record, page by page (`page`), with
+  the total; a record Europe PMC does not have is `not_found`
 
 **Academic graph & metadata** — `_semantic_scholar.py`, `_crossref.py`, `_ror.py`, `_datacite.py`
 
-- `semantic_scholar_search` — Search Semantic Scholar papers via the public Academic Graph API (an optional free key in `SEMANTIC_SCHOLAR_API_KEY` gives 1 request per second; without it, callers share one limit that is often spent)
-- `semantic_scholar_paper` — Get detailed metadata for a Semantic Scholar paper
-- `semantic_scholar_citations` — Get papers that cite a Semantic Scholar paper
-- `crossref_search` — Search Crossref works by title, DOI, topic, or citation fragment
-- `crossref_work` — Get Crossref metadata for a specific DOI
-- `ror_search` — Search ROR research organizations
-- `ror_organization` — Get ROR organization metadata
-- `datacite_search` — Search DataCite DOI metadata for datasets, software, text, and other research outputs
-- `datacite_doi` — Get DataCite metadata for a specific DOI
+- `semantic_scholar_search` — Search Semantic Scholar papers by the words of their titles and
+  abstracts (a DOI or arXiv ID goes to `semantic_scholar_paper`); an optional free key in
+  `SEMANTIC_SCHOLAR_API_KEY` gives 1 request per second; without it, callers share one limit that
+  is often spent
+- `semantic_scholar_paper` — A paper's record by Semantic Scholar ID, DOI, arXiv ID, PMID or
+  prefixed ID: abstract, every author, counts, and the identifiers as `semantic_scholar_paper` takes
+  them (`DOI:…`, `ARXIV:…`, `PMID:…`, `CorpusId:…`)
+- `semantic_scholar_citations` — The papers that cite a paper, each with every sentence that cites
+  it, why, and whether the citation is influential; the footer says when more are available
+- `crossref_search` — Search Crossref works by title, topic, author or a citation's words
+- `crossref_work` — A work's Crossref record by DOI: abstract, every author with the affiliations
+  and ORCID iD, licenses, full-text links and the references
+- `ror_search` — Search ROR research organizations, ROR's pages of 20 (`page`), every location
+- `ror_organization` — An organization's ROR record: every name (with type and language),
+  location (with coordinates and GeoNames ID), link, external ID and relationship
+- `datacite_search` — Search DataCite DOI records for datasets, software, texts and other research
+  outputs; `resource_type` takes a resourceTypeGeneral as written (`JournalArticle`, `Dataset`)
+- `datacite_doi` — A DOI's DataCite record: every title, creator with the affiliations,
+  description (by type), subject, right and related identifier
 
 **Books** — `_open_library.py`
 
@@ -300,8 +325,12 @@ source sent, and codes come with the labels the answer brings.
 
 **Security** — `_nvd.py`
 
-- `nvd_cve_search` — Search CVEs in the NVD 2.0 API by keyword, CVE, CPE, severity, or publication date
-- `nvd_cve` — Get NVD metadata for a specific CVE ID
+- `nvd_cve_search` — Search CVEs in the NVD 2.0 API by keyword, CVE, CPE, CVSS v3 severity or
+  publication date (a range of at most 120 days, NVD's limit), numbered, with the total; each with
+  its whole description and one score per CVSS version (`CVSS 3.1: 10.0 CRITICAL`)
+- `nvd_cve` — A CVE's NVD record: the description, every CVSS score with its version, scorer and
+  vector, the weaknesses, every affected CPE with its version range, and every reference with its
+  tags, window by window
 
 ---
 

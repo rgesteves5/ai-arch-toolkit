@@ -27,6 +27,7 @@ from typing import Any, Literal
 from tests.toolkit import biodata_answers as bio
 from tests.toolkit import data_bodies, geo_answers, wiki_pages, youtube_fakes
 from tests.toolkit import health_pages as health
+from tests.toolkit import literature_answers as lit
 from tests.toolkit.wiki_pages import MISSING_PAGE
 from tests.toolkit.youtube_fakes import LOADER, FakeTranscript, FakeTranscriptList
 
@@ -511,6 +512,129 @@ WINDOW_CASES: dict[str, Case] = {
         ),
     ),
     **_DATA_NEWS_WINDOWS,
+    # T06: literature and identifiers. A search's next call reads the source's next page; a
+    # record's, the next characters of the same record.
+    "arxiv_search": Case(
+        args={"query": "agents", "max_results": 2},
+        answers=(
+            Answer(body=lit.arxiv_feed(lit.arxiv_entry("1"), lit.arxiv_entry("2"), total=5)),
+            Answer(body=lit.arxiv_feed(lit.arxiv_entry("3"), lit.arxiv_entry("4"), total=5)),
+        ),
+    ),
+    "arxiv_paper": Case(
+        args={"max_chars": 500}, answers=(Answer(body=lit.arxiv_feed(lit.arxiv_long(), total=1)),)
+    ),
+    "crossref_search": Case(
+        args={"query": "agents", "max_results": 2},
+        answers=(
+            Answer(
+                body=lit.crossref_list(lit.crossref_item("10.1/a"), lit.crossref_item(), total=5)
+            ),
+            Answer(
+                body=lit.crossref_list(lit.crossref_item("10.1/c"), lit.crossref_item(), total=5)
+            ),
+        ),
+    ),
+    "crossref_work": Case(
+        args={"max_chars": 500},
+        answers=(Answer(body=lit.crossref_work(lit.crossref_item(references=40))),),
+    ),
+    "datacite_search": Case(
+        args={"query": "data", "max_results": 2},
+        answers=(
+            Answer(
+                body=lit.datacite_list(lit.datacite_item("10.1/a"), lit.datacite_item(), total=5)
+            ),
+            Answer(
+                body=lit.datacite_list(
+                    lit.datacite_item("10.1/c"), lit.datacite_item(), total=5, page=2
+                )
+            ),
+        ),
+    ),
+    "datacite_doi": Case(
+        args={"max_chars": 500}, answers=(Answer(body=lit.datacite_record(lit.datacite_item())),)
+    ),
+    "europe_pmc_search": Case(
+        args={"query": "learning", "max_results": 2},
+        answers=(
+            Answer(body=lit.epmc_search(lit.epmc_result("1"), lit.epmc_result("2"), hit_count=5)),
+            Answer(
+                body=lit.epmc_search(
+                    lit.epmc_result("3"), lit.epmc_result("4"), hit_count=5, next_cursor="AoK"
+                )
+            ),
+        ),
+    ),
+    "europe_pmc_article": Case(
+        args={"max_chars": 500},
+        answers=(Answer(body=lit.epmc_search(lit.epmc_result(authors=40), hit_count=1)),),
+    ),
+    "europe_pmc_citations": Case(
+        args={"max_results": 2},
+        answers=(
+            Answer(
+                body=lit.epmc_citations(
+                    lit.epmc_citation("1"), lit.epmc_citation("2"), hit_count=5
+                )
+            ),
+            Answer(
+                body=lit.epmc_citations(
+                    lit.epmc_citation("3"), lit.epmc_citation("4"), hit_count=5
+                )
+            ),
+        ),
+    ),
+    # Each PubMed page is an ESearch, then an EFetch of its PMIDs.
+    "pubmed_search": Case(
+        args={"query": "learning", "max_results": 2},
+        answers=(
+            Answer(body=lit.esearch(["1", "2"], count=5)),
+            Answer(body=lit.pubmed_set(lit.pubmed_article("1"), lit.pubmed_article("2"))),
+            Answer(body=lit.esearch(["3", "4"], count=5, start=2)),
+            Answer(body=lit.pubmed_set(lit.pubmed_article("3"), lit.pubmed_article("4"))),
+        ),
+    ),
+    "pubmed_article": Case(
+        args={"max_chars": 500},
+        answers=(Answer(body=lit.pubmed_set(lit.pubmed_article(authors=40))),),
+    ),
+    "semantic_scholar_search": Case(
+        args={"query": "learning", "max_results": 2},
+        answers=(
+            Answer(body=lit.s2_search(lit.s2_paper("a"), lit.s2_paper("b"), total=5)),
+            Answer(body=lit.s2_search(lit.s2_paper("c"), lit.s2_paper("d"), total=5, offset=2)),
+        ),
+    ),
+    "semantic_scholar_paper": Case(
+        args={"max_chars": 500}, answers=(Answer(body=lit.s2_paper(authors=60)),)
+    ),
+    "semantic_scholar_citations": Case(
+        args={"max_results": 2},
+        answers=(
+            Answer(body=lit.s2_citations(lit.s2_citation("a"), lit.s2_citation("b"), more=True)),
+            Answer(body=lit.s2_citations(lit.s2_citation("c"), lit.s2_citation("d"), offset=2)),
+        ),
+    ),
+    # ROR's pages hold 20 organizations.
+    "ror_search": Case(
+        args={"query": "university"},
+        answers=tuple(
+            Answer(body=lit.ror_page(*lit.ror_orgs(20, first=start), total=45))
+            for start in (0, 20)
+        ),
+    ),
+    "ror_organization": Case(args={"max_chars": 500}, answers=(Answer(body=lit.ror_org()),)),
+    "nvd_cve_search": Case(
+        args={"query": "log4j", "max_results": 2},
+        answers=(
+            Answer(body=lit.nvd_page(lit.nvd_item("CVE-2021-1"), lit.nvd_item(), total=5)),
+            Answer(body=lit.nvd_page(lit.nvd_item("CVE-2021-3"), lit.nvd_item(), total=5)),
+        ),
+    ),
+    "nvd_cve": Case(
+        args={"max_chars": 500}, answers=(Answer(body=lit.nvd_page(lit.nvd_item(), total=1)),)
+    ),
 }
 
 
@@ -582,6 +706,23 @@ NOT_FOUND_CASES: dict[str, Case] = {
     # series of an unknown indicator or country with its error 120, in a 200 (2026-09-29).
     "who_indicator": Case(args={}, answers=_answers({"value": []})),
     "world_bank_series": Case(args={}, answers=_answers(data_bodies.WORLD_BANK_INVALID_VALUE)),
+    # arXiv answers an unknown ID with an empty feed
+    # (https://info.arxiv.org/help/api/user-manual.html).
+    "arxiv_paper": Case(args={}, answers=(Answer(body=lit.arxiv_feed(total=0)),)),
+    # Europe PMC answers an unknown identifier with no results; its citation list, with none,
+    # and the record's search then finds nothing.
+    "europe_pmc_article": Case(args={}, answers=(Answer(body=lit.epmc_search(hit_count=0)),)),
+    "europe_pmc_citations": Case(
+        args={},
+        answers=(
+            Answer(body=lit.epmc_citations(hit_count=0)),
+            Answer(body=lit.epmc_search(hit_count=0)),
+        ),
+    ),
+    # EFetch answers an unknown PMID with an empty article set.
+    "pubmed_article": Case(args={}, answers=(Answer(body=lit.pubmed_set()),)),
+    # NVD answers an unknown CVE ID with no vulnerabilities.
+    "nvd_cve": Case(args={}, answers=(Answer(body=lit.nvd_page(total=0)),)),
     "read_file": Case(args={"path": "missing.txt"}),
     "csv_read": Case(args={"path": "missing.csv"}),
     "list_directory": Case(args={"path": "missing"}),
@@ -749,4 +890,30 @@ ZERO_CASES: dict[str, ZeroCase] = {
     ),
     "earthquake_search": ZeroCase(args={}, answers=(Answer(body="0"),), says="2024-01-01"),
     **_DATA_NEWS_ZEROS,
+    "arxiv_search": ZeroCase(
+        args={"query": "zzqqxx"}, answers=(Answer(body=lit.arxiv_feed(total=0)),), says="zzqqxx"
+    ),
+    "crossref_search": ZeroCase(
+        args={"query": "zzqqxx"}, answers=(Answer(body=lit.crossref_list(total=0)),), says="zzqqxx"
+    ),
+    "datacite_search": ZeroCase(
+        args={"query": "zzqqxx"}, answers=(Answer(body=lit.datacite_list(total=0)),), says="zzqqxx"
+    ),
+    "europe_pmc_search": ZeroCase(
+        args={"query": "zzqqxx"},
+        answers=(Answer(body=lit.epmc_search(hit_count=0)),),
+        says="zzqqxx",
+    ),
+    "pubmed_search": ZeroCase(
+        args={"query": "zzqqxx"}, answers=(Answer(body=lit.ESEARCH_NOTHING),), says="zzqqxx"
+    ),
+    "semantic_scholar_search": ZeroCase(
+        args={"query": "zzqqxx"}, answers=(Answer(body=lit.s2_search(total=0)),), says="zzqqxx"
+    ),
+    "ror_search": ZeroCase(
+        args={"query": "zzqqxx"}, answers=(Answer(body=lit.ror_page(total=0)),), says="zzqqxx"
+    ),
+    "nvd_cve_search": ZeroCase(
+        args={"query": "zzqqxx"}, answers=(Answer(body=lit.nvd_page(total=0)),), says="zzqqxx"
+    ),
 }

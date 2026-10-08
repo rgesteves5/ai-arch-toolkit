@@ -1,4 +1,11 @@
-"""PubMed tools — public biomedical literature search and metadata lookup."""
+"""PubMed tools: search articles, and read one article's record by PMID (T06).
+
+ESearch says how many articles match (``count``) and pages by ``retstart`` through the first
+10,000 (https://www.nlm.nih.gov/pubs/techbull/so22/so22_updated_pubmed_e_utilities.html:
+``retstart + retmax <= 10,000``); EFetch gives each article's XML
+(https://www.ncbi.nlm.nih.gov/books/NBK25499/). An article's record gives its whole abstract
+and every author, MeSH heading and keyword, through the window (D39).
+"""
 
 from __future__ import annotations
 
@@ -6,11 +13,19 @@ import html
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import date
-from typing import Any
+from typing import Annotated, Any
 
-from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.core import Range, ToolResult, tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
-from ai_arch_toolkit.toolkit.tools._http import Api, HttpError, Reply
+from ai_arch_toolkit.toolkit.tools._http import Api, Reply
+from ai_arch_toolkit.toolkit.tools._records import (
+    DEFAULT_CHARS,
+    MAX_CHARS,
+    call,
+    names,
+    record,
+)
+from ai_arch_toolkit.toolkit.tools._window import list_window
 
 
 def _esearch_error(reply: Reply) -> str | None:
@@ -28,7 +43,8 @@ def _esearch_error(reply: Reply) -> str | None:
     return _clean_text(str(error)) if error else None
 
 
-# NCBI asks clients without an API key for at most three requests a second.
+# NCBI asks clients without an API key for at most three requests a second
+# (https://ncbiinsights.ncbi.nlm.nih.gov/2017/11/02/new-api-keys-for-the-e-utilities/).
 _EUTILS = Api(
     base="https://eutils.ncbi.nlm.nih.gov/entrez/eutils",
     name="NCBI E-utilities",
@@ -36,104 +52,125 @@ _EUTILS = Api(
     params={"tool": "ai_arch_toolkit"},
     error_reader=_esearch_error,
 )
-_MAX_RESULTS_LIMIT = 20
-_ABSTRACT_MAX_CHARS = 900
+# ESearch reaches the first 10,000 records of a query.
+_DEPTH = 10_000
 _SORT_VALUES = {
     "relevance": "relevance",
     "pub_date": "pub date",
     "first_author": "first author",
     "journal": "journal",
 }
+_MONTHS = {
+    name: f"{number:02d}"
+    for number, name in enumerate(
+        ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"),
+        start=1,
+    )
+}
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class _PubmedArticle:
-    """Normalized metadata for a PubMed article."""
+    """A PubMed article, as EFetch gives it."""
 
     pmid: str
+    pmcid: str
     doi: str
     title: str
     authors: tuple[str, ...]
+    authors_in_full: tuple[str, ...]
     journal: str
     published: str
-    abstract: str
+    abstract: tuple[str, ...]
     mesh_terms: tuple[str, ...]
     publication_types: tuple[str, ...]
     keywords: tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _Search:
+    """ESearch's page: the PMIDs, how many match, and the phrases it did not find."""
+
+    ids: list[str]
+    count: int | None
+    not_found: tuple[str, ...]
+
+
 @tool(capability="network")
 def pubmed_search(
     query: str,
-    max_results: int = 5,
-    start: int = 0,
+    max_results: Annotated[int, Range(1, 20)] = 5,
+    start: Annotated[int, Range(0, _DEPTH - 1)] = 0,
     from_date: str = "",
     to_date: str = "",
     sort: str = "relevance",
-) -> str:
-    """Search PubMed using the public NCBI E-utilities API.
+) -> ToolResult:
+    """Search PubMed articles, numbered, with the total.
 
     Args:
         query: PubMed search text or native PubMed query syntax.
-        max_results: Number of articles to return (1-20). Defaults to 5.
-        start: Zero-based result offset for pagination. Defaults to 0.
-        from_date: Optional publication date lower bound as YYYY-MM-DD.
-        to_date: Optional publication date upper bound as YYYY-MM-DD.
-        sort: Sort order: relevance, pub_date, first_author, or journal.
+        max_results: How many articles to list.
+        start: How many results to skip; the footer gives the next start.
+        from_date: The earliest publication date, YYYY-MM-DD.
+        to_date: The latest publication date, YYYY-MM-DD.
+        sort: relevance, pub_date, first_author or journal.
 
     Raises:
-        ToolFailure: validation_error when the query is empty, ``start`` is negative, ``sort``
-            is unknown or a date is not YYYY-MM-DD or out of order; upstream when ESearch
-            reports an error for the query.
+        ToolFailure: validation_error when the query is empty, ``sort`` is unknown or a date is
+            not YYYY-MM-DD or out of order; upstream when ESearch reports an error for the query.
     """
     query = query.strip()
     if not query:
         raise ToolFailure("validation_error", "query cannot be empty; give PubMed search text.")
-    if start < 0:
-        raise ToolFailure(
-            "validation_error", f"start must be greater than or equal to 0 (got {start})."
-        )
-
     sort = sort.strip() or "relevance"
     if sort not in _SORT_VALUES:
         raise ToolFailure(
             "validation_error",
             f"unknown sort {sort!r}; use one of relevance, pub_date, first_author, journal.",
         )
-
-    date_params = _build_date_params(from_date, to_date)
-
-    max_results = max(1, min(max_results, _MAX_RESULTS_LIMIT))
+    # The last page within ESearch's reach asks for what is left of it.
+    count = max_results if start + max_results <= _DEPTH else _DEPTH - start
     params = {
         "db": "pubmed",
         "term": query,
         "retmode": "json",
         "retstart": str(start),
-        "retmax": str(max_results),
+        "retmax": str(count),
         "sort": _SORT_VALUES[sort],
+        **_build_date_params(from_date, to_date),
     }
-    params.update(date_params)
-
-    pmids = _EUTILS.get_json("esearch.fcgi", params=params, parse=_pmids)
-    if not pmids:
-        return f"No PubMed results for: {query!r}"
-    articles = _articles(pmids)
-    if not articles:
-        return f"No PubMed article metadata found for: {query!r}"
-
-    return f"PubMed results for {query!r}:\n" + _format_articles(articles, include_abstract=False)
+    found = _EUTILS.get_json("esearch.fcgi", params=params, parse=_search)
+    if not found.ids and start == 0:
+        missed = f" PubMed did not find: {', '.join(found.not_found)}." if found.not_found else ""
+        return ToolResult.success(f"No PubMed articles match {query!r}.{missed}")
+    articles = {article.pmid: article for article in _articles(found.ids)} if found.ids else {}
+    blocks = [
+        _result_block(start + n, pmid, articles.get(pmid)) for n, pmid in enumerate(found.ids, 1)
+    ]
+    end = start + len(found.ids)
+    more = found.count is not None and end < found.count
+    next_call = {"start": end} if found.ids and more and end < _DEPTH else None
+    window = list_window(blocks, first=start + 1, total=found.count, next_call=next_call)
+    return window.result(heading=f"PubMed articles that match {query!r}:")
 
 
 @tool(capability="network")
-def pubmed_article(pmid: str) -> str:
-    """Fetch PubMed metadata for a specific article by PMID.
+def pubmed_article(
+    pmid: str,
+    offset: Annotated[int, Range(0)] = 0,
+    max_chars: Annotated[int, Range(500, MAX_CHARS)] = DEFAULT_CHARS,
+) -> ToolResult:
+    """Read a PubMed article's record by PMID: its whole abstract, every author with the
+    affiliations, the MeSH headings, the keywords and the publication types.
 
     Args:
-        pmid: PubMed identifier, e.g. "26017442".
+        pmid: A PubMed identifier, e.g. "26017442".
+        offset: Where to start, in characters of the record; the footer gives the next offset.
+        max_chars: How many characters to return.
 
     Raises:
         ToolFailure: validation_error when ``pmid`` is not all digits; not_found when PubMed
-            has no article with it.
+            has no article with it; upstream when EFetch reports an error.
     """
     normalized = pmid.strip()
     if not normalized.isdigit():
@@ -141,19 +178,13 @@ def pubmed_article(pmid: str) -> str:
             "validation_error",
             f"invalid PMID {pmid!r}; a PMID is digits only, e.g. '26017442'.",
         )
-
     articles = _articles([normalized])
     if not articles:
         raise ToolFailure(
             "not_found", f"no PubMed article with PMID {normalized}; search with pubmed_search."
         )
-
-    return f"PubMed article {normalized}:\n" + _format_articles(
-        articles,
-        include_index=False,
-        include_abstract=True,
-        include_terms=True,
-    )
+    heading = f"PubMed article {normalized}:"
+    return record(_record_text(articles[0]), heading=heading, offset=offset, max_chars=max_chars)
 
 
 def _build_date_params(from_date: str, to_date: str) -> dict[str, str]:
@@ -171,12 +202,12 @@ def _build_date_params(from_date: str, to_date: str) -> dict[str, str]:
             raise ToolFailure(
                 "validation_error", f"invalid from_date {from_date!r}; use YYYY-MM-DD."
             )
-        params["mindate"] = _format_ncbi_date(parsed_start)
+        params["mindate"] = f"{parsed_start:%Y/%m/%d}"
     if to_date:
         parsed_end = _parse_date(to_date)
         if parsed_end is None:
             raise ToolFailure("validation_error", f"invalid to_date {to_date!r}; use YYYY-MM-DD.")
-        params["maxdate"] = _format_ncbi_date(parsed_end)
+        params["maxdate"] = f"{parsed_end:%Y/%m/%d}"
     if parsed_start and parsed_end and parsed_start > parsed_end:
         raise ToolFailure(
             "validation_error",
@@ -192,13 +223,18 @@ def _parse_date(value: str) -> date | None:
         return None
 
 
-def _format_ncbi_date(value: date) -> str:
-    return f"{value:%Y/%m/%d}"
-
-
-def _pmids(data: dict[str, Any]) -> list[str]:
-    id_list = data.get("esearchresult", {}).get("idlist", [])
-    return [str(pmid).strip() for pmid in id_list if str(pmid).strip()]
+def _search(data: dict[str, Any]) -> _Search:
+    result = data.get("esearchresult", {})
+    ids = [str(pmid).strip() for pmid in result.get("idlist", []) if str(pmid).strip()]
+    count = str(result.get("count", "")).strip()
+    notes = result.get("warninglist") if isinstance(result.get("warninglist"), dict) else {}
+    errors = result.get("errorlist") if isinstance(result.get("errorlist"), dict) else {}
+    missed = [
+        *(notes.get("quotedphrasesnotfound") or []),
+        *(errors.get("phrasesnotfound") or []),
+    ]
+    not_found = tuple(text for item in missed if (text := _clean_text(str(item))))
+    return _Search(ids=ids, count=int(count) if count.isdigit() else None, not_found=not_found)
 
 
 def _articles(pmids: list[str]) -> list[_PubmedArticle]:
@@ -207,57 +243,56 @@ def _articles(pmids: list[str]) -> list[_PubmedArticle]:
 
 
 def _parse_pubmed_xml(xml_text: str) -> list[_PubmedArticle]:
-    try:
-        root = ET.fromstring(xml_text)
-    except ET.ParseError as e:
-        raise HttpError(f"could not parse article XML: {e}") from e
-    articles: list[_PubmedArticle] = []
-    for node in root.findall(".//PubmedArticle"):
-        article = _parse_article(node)
-        if article:
-            articles.append(article)
-    return articles
+    """The articles of an EFetch answer; one that reports an error is that error.
+
+    Raises:
+        ToolFailure: upstream when EFetch answers an ``eFetchResult`` with an ``ERROR``.
+    """
+    root = ET.fromstring(xml_text)
+    if root.tag == "eFetchResult":
+        said = _clean_text(root.findtext("ERROR") or "") or "no articles and no reason"
+        msg = f"PubMed EFetch error: {said}; try again later, or check the PMID with pubmed_search"
+        raise ToolFailure("upstream", msg, retryable=True)
+    return [
+        article for node in root.findall(".//PubmedArticle") if (article := _parse_article(node))
+    ]
 
 
 def _parse_article(node: ET.Element) -> _PubmedArticle | None:
     pmid = _text(node.find("./MedlineCitation/PMID"))
-    if not pmid:
-        return None
-
     article = node.find("./MedlineCitation/Article")
-    if article is None:
+    if not pmid or article is None:
         return None
-
+    people = article.findall("./AuthorList/Author")
     return _PubmedArticle(
         pmid=pmid,
+        pmcid=_article_id(node, "pmc"),
         doi=_article_id(node, "doi"),
         title=_clean_text(_element_text(article.find("./ArticleTitle"))) or "(untitled)",
-        authors=_authors(article),
+        authors=tuple(name for author in people if (name := _author_name(author))),
+        authors_in_full=tuple(name for author in people if (name := _author_in_full(author))),
         journal=_journal(article),
         published=_published_date(article),
         abstract=_abstract(article),
         mesh_terms=_mesh_terms(node),
-        publication_types=_publication_types(article),
-        keywords=_keywords(node),
+        publication_types=_texts(article.findall("./PublicationTypeList/PublicationType")),
+        keywords=_texts(node.findall("./MedlineCitation/KeywordList/Keyword")),
     )
 
 
-def _authors(article: ET.Element) -> tuple[str, ...]:
-    authors: list[str] = []
-    for author in article.findall("./AuthorList/Author"):
-        collective = _text(author.find("./CollectiveName"))
-        if collective:
-            authors.append(collective)
-            continue
+def _author_name(author: ET.Element) -> str:
+    collective = _text(author.find("./CollectiveName"))
+    if collective:
+        return collective
+    given = _text(author.find("./ForeName")) or _text(author.find("./Initials"))
+    return " ".join(part for part in (given, _text(author.find("./LastName"))) if part)
 
-        last = _text(author.find("./LastName"))
-        fore = _text(author.find("./ForeName"))
-        initials = _text(author.find("./Initials"))
-        given = fore or initials
-        name = " ".join(part for part in (given, last) if part)
-        if name:
-            authors.append(name)
-    return tuple(authors)
+
+def _author_in_full(author: ET.Element) -> str:
+    """An author with the affiliations."""
+    name = _author_name(author)
+    places = _texts(author.findall("./AffiliationInfo/Affiliation"))
+    return f"{name} ({'; '.join(places)})" if name and places else name
 
 
 def _journal(article: ET.Element) -> str:
@@ -270,99 +305,55 @@ def _journal(article: ET.Element) -> str:
 
 def _published_date(article: ET.Element) -> str:
     article_date = article.find("./ArticleDate")
-    if article_date is not None:
-        formatted = _date_from_node(article_date)
-        if formatted:
-            return formatted
-
+    if article_date is not None and (formatted := _date_from_node(article_date)):
+        return formatted
     pub_date = article.find("./Journal/JournalIssue/PubDate")
-    if pub_date is not None:
-        return _date_from_node(pub_date)
-    return ""
+    return _date_from_node(pub_date) if pub_date is not None else ""
 
 
 def _date_from_node(node: ET.Element) -> str:
+    """A PubMed date in ISO 8601 (year, month and day as far as given); a ``MedlineDate``
+    ("2015 Spring") as written."""
     year = _text(node.find("./Year"))
+    if not year:
+        return _text(node.find("./MedlineDate"))
     month = _normalize_month(_text(node.find("./Month")))
     day = _text(node.find("./Day")).zfill(2)
-    medline_date = _text(node.find("./MedlineDate"))
-
-    parts = [year]
-    if month:
-        parts.append(month)
-    if day != "00":
+    parts = [year, month] if month else [year]
+    if month and day != "00":
         parts.append(day)
-    if year:
-        return "-".join(parts)
-    return medline_date
+    return "-".join(parts)
 
 
 def _normalize_month(value: str) -> str:
-    if not value:
-        return ""
     if value.isdigit():
-        month = int(value)
-        if 1 <= month <= 12:
-            return str(month).zfill(2)
-        return ""
-    month_names = {
-        "jan": "01",
-        "feb": "02",
-        "mar": "03",
-        "apr": "04",
-        "may": "05",
-        "jun": "06",
-        "jul": "07",
-        "aug": "08",
-        "sep": "09",
-        "oct": "10",
-        "nov": "11",
-        "dec": "12",
-    }
-    return month_names.get(value[:3].lower(), "")
+        return f"{int(value):02d}" if 1 <= int(value) <= 12 else ""
+    return _MONTHS.get(value[:3].lower(), "")
 
 
-def _abstract(article: ET.Element) -> str:
+def _abstract(article: ET.Element) -> tuple[str, ...]:
+    """The abstract's parts, each with its label (BACKGROUND, METHODS …) when it has one."""
     parts: list[str] = []
     for abstract_text in article.findall("./Abstract/AbstractText"):
         text = _clean_text(_element_text(abstract_text))
-        if not text:
-            continue
-        label = abstract_text.attrib.get("Label", "").strip()
-        if label:
-            parts.append(f"{label}: {text}")
-        else:
-            parts.append(text)
-    return " ".join(parts)
+        if text:
+            label = abstract_text.attrib.get("Label", "").strip()
+            parts.append(f"{label}: {text}" if label else text)
+    return tuple(parts)
 
 
 def _mesh_terms(node: ET.Element) -> tuple[str, ...]:
+    """Each MeSH heading, marked when it is a major topic, with its qualifiers."""
     terms: list[str] = []
     for heading in node.findall("./MedlineCitation/MeshHeadingList/MeshHeading"):
-        descriptor = _text(heading.find("./DescriptorName"))
-        qualifiers = [_text(q) for q in heading.findall("./QualifierName")]
-        qualifiers = [q for q in qualifiers if q]
-        if descriptor and qualifiers:
-            terms.append(f"{descriptor} ({', '.join(qualifiers)})")
-        elif descriptor:
-            terms.append(descriptor)
+        descriptor = heading.find("./DescriptorName")
+        name = _text(descriptor)
+        if not name or descriptor is None:
+            continue
+        details = ["major"] if descriptor.attrib.get("MajorTopicYN") == "Y" else []
+        details += _texts(heading.findall("./QualifierName"))
+        terms.append(f"{name} ({'; '.join(details)})" if details else name)
     return tuple(terms)
-
-
-def _publication_types(article: ET.Element) -> tuple[str, ...]:
-    return tuple(
-        _text(publication_type)
-        for publication_type in article.findall("./PublicationTypeList/PublicationType")
-        if _text(publication_type)
-    )
-
-
-def _keywords(node: ET.Element) -> tuple[str, ...]:
-    return tuple(
-        _text(keyword)
-        for keyword in node.findall("./MedlineCitation/KeywordList/Keyword")
-        if _text(keyword)
-    )
 
 
 def _article_id(node: ET.Element, id_type: str) -> str:
@@ -372,47 +363,50 @@ def _article_id(node: ET.Element, id_type: str) -> str:
     return ""
 
 
-def _format_articles(
-    articles: list[_PubmedArticle],
-    *,
-    include_index: bool = True,
-    include_abstract: bool = False,
-    include_terms: bool = False,
-) -> str:
-    blocks: list[str] = []
-    for index, article in enumerate(articles, start=1):
-        title = f"{index}. {article.title}" if include_index else article.title
-        lines = [title]
-
-        meta: list[str] = [f"PMID: {article.pmid}"]
-        if article.doi:
-            meta.append(f"DOI: {article.doi}")
-        if article.published:
-            meta.append(f"published: {article.published}")
-        lines.append("   " + " | ".join(meta))
-
-        if article.authors:
-            lines.append(f"   Authors: {_format_authors(article.authors)}")
-        if article.journal:
-            lines.append(f"   Journal: {article.journal}")
-        if include_abstract and article.abstract:
-            lines.append(f"   Abstract: {_truncate(article.abstract, _ABSTRACT_MAX_CHARS)}")
-        if include_terms and article.publication_types:
-            lines.append("   Publication types: " + ", ".join(article.publication_types[:8]))
-        if include_terms and article.mesh_terms:
-            lines.append("   MeSH: " + ", ".join(article.mesh_terms[:12]))
-        if include_terms and article.keywords:
-            lines.append("   Keywords: " + ", ".join(article.keywords[:12]))
-        lines.append(f"   URL: https://pubmed.ncbi.nlm.nih.gov/{article.pmid}/")
-
-        blocks.append("\n".join(lines))
-    return "\n\n".join(blocks)
+def _ids(article: _PubmedArticle) -> str:
+    labelled = (("PMID", article.pmid), ("PMCID", article.pmcid), ("DOI", article.doi))
+    meta = [f"{label}: {value}" for label, value in labelled if value]
+    if article.published:
+        meta.append(f"published: {article.published}")
+    return " | ".join(meta)
 
 
-def _format_authors(authors: tuple[str, ...]) -> str:
-    if len(authors) <= 8:
-        return ", ".join(authors)
-    return ", ".join(authors[:8]) + f", ... (+{len(authors) - 8} more)"
+def _result_block(number: int, pmid: str, article: _PubmedArticle | None) -> str:
+    if article is None:
+        missing = f"PubMed returned no record for it; try pubmed_article({pmid!r})"
+        return f"{number}. PMID {pmid}: {missing}"
+    lines = [_ids(article)]
+    if article.authors:
+        whole = call("pubmed_article", article.pmid)
+        lines.append(f"Authors: {names(article.authors, whole=whole)}")
+    if article.journal:
+        lines.append(f"Journal: {article.journal}")
+    return "\n".join([f"{number}. {article.title}", *(f"   {line}" for line in lines)])
+
+
+def _record_text(article: _PubmedArticle) -> str:
+    """The whole record: the abstract before the lists, which can run long."""
+    venue = [f"Journal: {article.journal}"] if article.journal else []
+    if article.publication_types:
+        venue.append(f"Publication types: {', '.join(article.publication_types)}")
+    lines = [article.title, _ids(article), " | ".join(venue)]
+    if len(article.abstract) == 1:
+        lines.append(f"Abstract: {article.abstract[0]}")
+    elif article.abstract:
+        lines += ["Abstract:", *article.abstract]
+    if article.authors_in_full:
+        authors = article.authors_in_full
+        lines.append(f"Authors ({len(authors)}): {', '.join(authors)}")
+    if article.mesh_terms:
+        lines.append(f"MeSH: {', '.join(article.mesh_terms)}")
+    if article.keywords:
+        lines.append(f"Keywords: {', '.join(article.keywords)}")
+    lines.append(f"URL: https://pubmed.ncbi.nlm.nih.gov/{article.pmid}/")
+    return "\n".join(line for line in lines if line) + "\n"
+
+
+def _texts(nodes: list[ET.Element]) -> tuple[str, ...]:
+    return tuple(text for node in nodes if (text := _text(node)))
 
 
 def _text(node: ET.Element | None) -> str:
@@ -429,9 +423,3 @@ def _element_text(node: ET.Element | None) -> str:
 
 def _clean_text(text: str) -> str:
     return " ".join(html.unescape(text).split())
-
-
-def _truncate(text: str, max_chars: int) -> str:
-    if len(text) <= max_chars:
-        return text
-    return text[: max_chars - 15].rstrip() + " ... [truncated]"

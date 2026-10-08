@@ -1,176 +1,208 @@
-"""Tests for toolkit/tools/_semantic_scholar.py."""
+"""Tests for toolkit/tools/_semantic_scholar.py (T06)."""
 
 from __future__ import annotations
 
-import urllib.error
-from unittest.mock import patch
+import json
+from typing import Any
+from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qs, urlparse
 
 import pytest
 
-from ai_arch_toolkit.core._tools._result import ToolError, ToolFailure
+from ai_arch_toolkit.core import ToolCall, ToolGroup, ToolResult
+from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._semantic_scholar import (
     semantic_scholar_citations,
     semantic_scholar_paper,
     semantic_scholar_search,
 )
 from tests.toolkit.http_fakes import HTTP_OPEN, http_error, respond
+from tests.toolkit.literature_answers import (
+    S2_UNACCEPTABLE,
+    S2_UNRECOGNIZED,
+    s2_citation,
+    s2_citations,
+    s2_paper,
+    s2_search,
+)
+
+_ID = "649def34f8be52c8b66281af98ae884c09aef38b"
 
 
-def _failure(call, *args, **kwargs) -> ToolError:
-    """The ToolError ``call`` raises."""
+def _text(result: ToolResult) -> str:
+    assert isinstance(result, ToolResult) and result.ok, result
+    assert isinstance(result.value, str)
+    return result.value
+
+
+def _sent(mock_urlopen: MagicMock) -> tuple[str, dict[str, list[str]]]:
+    url = urlparse(mock_urlopen.call_args.args[0].full_url)
+    return url.path, parse_qs(url.query)
+
+
+def _failure(fn: Any, *args: Any, **kwargs: Any) -> ToolFailure:
     with pytest.raises(ToolFailure) as caught:
-        call(*args, **kwargs)
-    return caught.value.error
-
-
-_PAPER = {
-    "paperId": "649def34f8be52c8b66281af98ae884c09aef38b",
-    "corpusId": 13756489,
-    "title": "Attention Is All You Need",
-    "abstract": "The dominant sequence transduction models are based on recurrence.",
-    "year": 2017,
-    "venue": "NeurIPS",
-    "publicationVenue": {"name": "Neural Information Processing Systems"},
-    "publicationTypes": ["Conference"],
-    "publicationDate": "2017-06-12",
-    "url": "https://www.semanticscholar.org/paper/example",
-    "externalIds": {
-        "DOI": "10.48550/arXiv.1706.03762",
-        "ArXiv": "1706.03762",
-        "CorpusId": 13756489,
-    },
-    "authors": [{"name": "Ashish Vaswani"}, {"name": "Noam Shazeer"}],
-    "citationCount": 123456,
-    "referenceCount": 50,
-    "influentialCitationCount": 25000,
-    "openAccessPdf": {"url": "https://arxiv.org/pdf/1706.03762"},
-    "fieldsOfStudy": ["Computer Science"],
-    "s2FieldsOfStudy": [{"category": "Machine Learning"}],
-}
-
-_SEARCH_RESPONSE = {"data": [_PAPER]}
-_EMPTY_RESPONSE = {"data": []}
-_CITATION_RESPONSE = {
-    "data": [
-        {
-            "contexts": ["This work follows the Transformer architecture."],
-            "intents": ["background", "methodology"],
-            "isInfluential": True,
-            "citingPaper": {
-                **_PAPER,
-                "paperId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                "title": "BERT: Pre-training of Deep Bidirectional Transformers",
-                "year": 2019,
-                "citationCount": 90000,
-            },
-        }
-    ]
-}
-
-
-def _called_request(mock_urlopen):
-    return mock_urlopen.call_args.args[0]
-
-
-def _called_params(mock_urlopen) -> dict[str, list[str]]:
-    return parse_qs(urlparse(_called_request(mock_urlopen).full_url).query)
+        fn(*args, **kwargs)
+    return caught.value
 
 
 class TestSemanticScholarSearch:
     @patch(HTTP_OPEN)
-    def test_returns_results(self, mock_urlopen):
-        mock_urlopen.return_value = respond(_SEARCH_RESPONSE)
+    def test_a_page_says_the_total_and_the_next_start(self, mock_urlopen):
+        mock_urlopen.return_value = respond(s2_search(s2_paper("a"), s2_paper("b"), total=4321))
 
-        result = semantic_scholar_search("attention", max_results=2)
+        result = semantic_scholar_search("transformers", max_results=2)
 
-        assert "Semantic Scholar results for 'attention'" in result
-        assert "Attention Is All You Need" in result
-        assert "paperId: 649def34f8be52c8b66281af98ae884c09aef38b" in result
-        assert "year: 2017 | published: 2017-06-12" in result
-        assert "Ashish Vaswani, Noam Shazeer" in result
-        assert "Venue: Neural Information Processing Systems" in result
-        assert "Citations: 123456" in result
-        assert "DOI: 10.48550/arXiv.1706.03762" in result
-        assert "Open PDF: https://arxiv.org/pdf/1706.03762" in result
-        assert "Abstract:" not in result
-
-        params = _called_params(mock_urlopen)
-        assert params["query"] == ["attention"]
+        text = _text(result)
+        assert text.splitlines()[:8] == [
+            "Semantic Scholar papers that match 'transformers':",
+            "1. Attention Is All You Need",
+            "   paperId: a | year: 2017 | published: 2017-06-12",
+            "   Authors: Ashish Vaswani, Noam Shazeer",
+            "   Venue: Neural Information Processing Systems",
+            "   Citations: 123456 | Influential citations: 25000 | References: 50",
+            "   IDs: DOI:10.48550/arXiv.1706.03762 | ARXIV:1706.03762 | PMID:26017442 | "
+            "CorpusId:13756489",
+            "   Open PDF: https://arxiv.org/pdf/1706.03762",
+        ]
+        assert text.endswith("[results 1-2 of 4321 | next: start=2]")
+        path, params = _sent(mock_urlopen)
+        assert path.endswith("/paper/search")
+        assert params["query"] == ["transformers"]
         assert params["limit"] == ["2"]
         assert params["offset"] == ["0"]
-        assert "paperId" in params["fields"][0]
 
     @patch(HTTP_OPEN)
-    def test_filters_year_venue_start_and_caps_max_results(self, mock_urlopen):
-        mock_urlopen.return_value = respond(_EMPTY_RESPONSE)
+    def test_the_last_batch_has_no_next_and_says_end(self, mock_urlopen):
+        mock_urlopen.return_value = respond(s2_search(s2_paper("c"), total=3, offset=2))
 
-        semantic_scholar_search(
-            "language agents", max_results=99, start=40, year="2024", venue="ACL"
+        text = _text(semantic_scholar_search("transformers", max_results=2, start=2))
+
+        assert text.splitlines()[1] == "3. Attention Is All You Need"
+        assert text.endswith("[results 3-3 of 3 | end]")
+
+    @patch(HTTP_OPEN)
+    def test_relevance_search_reaches_the_first_1000_results(self, mock_urlopen):
+        # offset + limit is at most 1,000 since 2023-10-31 (https://github.com/allenai/s2-folks/
+        # blob/main/API_RELEASE_NOTES.md): the last page asks for what is left.
+        mock_urlopen.return_value = respond(
+            s2_search(s2_paper("a"), s2_paper("b"), total=50_000, offset=997)
         )
 
-        params = _called_params(mock_urlopen)
-        assert params["query"] == ["language agents"]
-        assert params["limit"] == ["20"]
-        assert params["offset"] == ["40"]
-        assert params["year"] == ["2024"]
-        assert params["venue"] == ["ACL"]
+        text = _text(semantic_scholar_search("transformers", max_results=5, start=997))
+
+        assert _sent(mock_urlopen)[1]["limit"] == ["2"]
+        assert text.endswith("[results 998-999 of 50000 | the rest cannot be read here]")
 
     @patch(HTTP_OPEN)
-    def test_no_results(self, mock_urlopen):
-        mock_urlopen.return_value = respond(_EMPTY_RESPONSE)
+    def test_a_long_author_list_says_how_many_more_and_where(self, mock_urlopen):
+        mock_urlopen.return_value = respond(s2_search(s2_paper(authors=11), total=1))
 
-        result = semantic_scholar_search("no such paper")
+        text = _text(semantic_scholar_search("transformers"))
 
-        assert "No Semantic Scholar results" in result
+        assert f"(+3 more; semantic_scholar_paper('{_ID}') lists all)" in text
 
+    @pytest.mark.parametrize(
+        "query", ["10.1038/nature14539", "https://doi.org/10.1038/nature14539", "1706.03762"]
+    )
     @patch(HTTP_OPEN)
-    def test_invalid_options_do_not_call_api(self, mock_urlopen):
-        error = _failure(semantic_scholar_search, "")
-        assert error.type == "validation_error"
-        assert "query cannot be empty" in error.message
-        error = _failure(semantic_scholar_search, "test", start=-1)
-        assert error.type == "validation_error"
-        assert "start must be greater than or equal to 0" in error.message
+    def test_an_identifier_is_looked_up_with_the_paper_tool_not_searched(
+        self, mock_urlopen, query
+    ):
+        # The search takes plain text, "no special query syntax" (the API's documentation).
+        failure = _failure(semantic_scholar_search, query)
+
+        assert failure.error.type == "validation_error"
+        assert f"semantic_scholar_paper({query!r})" in failure.error.message
         mock_urlopen.assert_not_called()
 
     @patch(HTTP_OPEN)
-    def test_rate_limit(self, mock_urlopen):
-        mock_urlopen.side_effect = urllib.error.HTTPError(
-            url="https://api.semanticscholar.org/graph/v1/paper/search",
-            code=429,
-            msg="Too Many Requests",
-            hdrs=None,
-            fp=None,
+    def test_zero_results_say_so_with_the_query(self, mock_urlopen):
+        mock_urlopen.return_value = respond(s2_search(total=0))
+
+        assert _text(semantic_scholar_search("zzqq")) == (
+            "No Semantic Scholar papers match 'zzqq'."
         )
 
-        error = _failure(semantic_scholar_search, "test")
+    @patch(HTTP_OPEN)
+    def test_filters_year_venue_and_start(self, mock_urlopen):
+        mock_urlopen.return_value = respond(s2_search(total=0, offset=40))
 
-        assert error.type == "rate_limited"
-        assert error.retryable
-        assert "rate limited" in error.message
+        semantic_scholar_search("agents", max_results=20, start=40, year="2020-2024", venue="ACL")
+
+        params = _sent(mock_urlopen)[1]
+        assert params["limit"] == ["20"]
+        assert params["offset"] == ["40"]
+        assert params["year"] == ["2020-2024"]
+        assert params["venue"] == ["ACL"]
+
+    @pytest.mark.parametrize("year", ["twenty", "2020-21", "20200"])
+    @patch(HTTP_OPEN)
+    def test_a_year_the_api_does_not_take_is_refused_before_the_request(self, mock_urlopen, year):
+        failure = _failure(semantic_scholar_search, "agents", year=year)
+
+        assert failure.error.type == "validation_error"
+        assert "invalid year" in failure.error.message
+        mock_urlopen.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("max_results", "start", "kept"),
+        [(20, 998, True), (21, 0, False), (0, 0, False), (5, 999, False)],
+    )
+    @patch(HTTP_OPEN)
+    def test_the_limits_are_the_schemas(self, mock_urlopen, max_results, start, kept):
+        mock_urlopen.return_value = respond(s2_search(total=0))
+        call = ToolCall(
+            id="c1",
+            name="semantic_scholar_search",
+            input={"query": "x", "max_results": max_results, "start": start},
+        )
+
+        assert ToolGroup(semantic_scholar_search).execute(call).ok is kept
+
+    @patch(HTTP_OPEN)
+    def test_an_unacceptable_parameter_is_the_callers_to_fix(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(
+            400, "Bad Request", body=json.dumps(S2_UNACCEPTABLE).encode()
+        )
+
+        failure = _failure(semantic_scholar_search, "test")
+
+        assert failure.error.type == "validation_error"
+        assert failure.error.message == (
+            "Semantic Scholar refused the request: Unacceptable query params: [year=twenty]; "
+            "correct that parameter"
+        )
+
+    @patch(HTTP_OPEN)
+    def test_another_refusal_keeps_the_sources_words(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(
+            400, "Bad Request", body=json.dumps(S2_UNRECOGNIZED).encode()
+        )
+
+        failure = _failure(semantic_scholar_search, "test")
+
+        assert failure.error.type == "upstream"
+        assert (
+            failure.error.message == "HTTP error 400: Unrecognized or unsupported fields: [nope]"
+        )
 
     @patch(HTTP_OPEN)
     def test_a_429_without_a_key_says_how_to_get_one(self, mock_urlopen, monkeypatch):
         monkeypatch.delenv("SEMANTIC_SCHOLAR_API_KEY", raising=False)
-        mock_urlopen.side_effect = urllib.error.HTTPError(
-            url="https://api.semanticscholar.org/graph/v1/paper/search",
-            code=429,
-            msg="Too Many Requests",
-            hdrs=None,
-            fp=None,
-        )
+        mock_urlopen.side_effect = http_error(429, "Too Many Requests")
 
-        error = _failure(semantic_scholar_search, "test")
+        failure = _failure(semantic_scholar_search, "test")
 
-        assert error.type == "rate_limited"
-        assert "Set SEMANTIC_SCHOLAR_API_KEY" in error.message
-        assert "https://www.semanticscholar.org/product/api#api-key-form" in error.message
+        assert failure.error.type == "rate_limited"
+        assert failure.error.retryable
+        assert "Set SEMANTIC_SCHOLAR_API_KEY" in failure.error.message
+        assert "https://www.semanticscholar.org/product/api#api-key-form" in failure.error.message
 
     @patch(HTTP_OPEN)
     def test_a_key_in_the_environment_goes_in_x_api_key(self, mock_urlopen, monkeypatch):
         monkeypatch.setenv("SEMANTIC_SCHOLAR_API_KEY", "s2-key")
-        mock_urlopen.return_value = respond({"total": 0, "data": []})
+        mock_urlopen.return_value = respond(s2_search(total=0))
 
         semantic_scholar_search("test")
 
@@ -179,7 +211,7 @@ class TestSemanticScholarSearch:
     @patch(HTTP_OPEN)
     def test_without_a_key_no_key_header_goes(self, mock_urlopen, monkeypatch):
         monkeypatch.delenv("SEMANTIC_SCHOLAR_API_KEY", raising=False)
-        mock_urlopen.return_value = respond({"total": 0, "data": []})
+        mock_urlopen.return_value = respond(s2_search(total=0))
 
         semantic_scholar_search("test")
 
@@ -189,149 +221,194 @@ class TestSemanticScholarSearch:
     def test_a_404_on_the_search_is_an_endpoint_that_moved_not_an_empty_result(self, mock_urlopen):
         mock_urlopen.side_effect = http_error(404, "Not Found")
 
-        error = _failure(semantic_scholar_search, "test")
+        failure = _failure(semantic_scholar_search, "test")
 
-        assert error.type == "upstream"
-        assert error.message.startswith("Semantic Scholar: endpoint not found (HTTP 404)")
-
-    @patch(HTTP_OPEN)
-    def test_a_refused_request_keeps_the_sources_words(self, mock_urlopen):
-        body = b'{"error": "Unrecognized or unsupported fields: [nope]"}'
-        mock_urlopen.side_effect = http_error(400, "Bad Request", body=body)
-
-        error = _failure(semantic_scholar_search, "test")
-
-        assert error.type == "upstream"
-        assert error.message == "HTTP error 400: Unrecognized or unsupported fields: [nope]"
+        assert failure.error.type == "upstream"
+        assert failure.error.message.startswith("Semantic Scholar: endpoint not found (HTTP 404)")
 
     @patch(HTTP_OPEN)
     def test_parse_failure(self, mock_urlopen):
         mock_urlopen.return_value = respond("not json")
 
-        error = _failure(semantic_scholar_search, "test")
+        failure = _failure(semantic_scholar_search, "test")
 
-        assert error.type == "upstream"
-        assert "could not parse" in error.message
+        assert failure.error.type == "upstream"
+        assert "could not parse" in failure.error.message
 
 
 class TestSemanticScholarPaper:
     @patch(HTTP_OPEN)
-    def test_returns_paper_by_doi_url(self, mock_urlopen):
-        mock_urlopen.return_value = respond(_PAPER)
+    def test_the_record_is_whole(self, mock_urlopen):
+        mock_urlopen.return_value = respond(s2_paper(authors=11))
 
-        result = semantic_scholar_paper("https://doi.org/10.48550/arXiv.1706.03762")
+        text = _text(semantic_scholar_paper("https://doi.org/10.48550/arXiv.1706.03762"))
 
-        assert result.startswith("Semantic Scholar paper DOI:10.48550/arXiv.1706.03762:")
-        assert "Attention Is All You Need" in result
-        assert "Abstract: The dominant sequence transduction models" in result
-        assert "Fields: Computer Science, Machine Learning" in result
-        assert "Publication types: Conference" in result
-        assert "1. Attention" not in result
-
-        request = _called_request(mock_urlopen)
-        assert urlparse(request.full_url).path.endswith("/DOI:10.48550%2FarXiv.1706.03762")
-
-    @patch(HTTP_OPEN)
-    def test_normalizes_arxiv_url_and_pmid(self, mock_urlopen):
-        mock_urlopen.return_value = respond(_PAPER)
-
-        semantic_scholar_paper("https://arxiv.org/pdf/1706.03762v7.pdf")
-        assert urlparse(_called_request(mock_urlopen).full_url).path.endswith(
-            "/ARXIV:1706.03762v7"
+        lines = text.splitlines()
+        assert lines[:7] == [
+            "Semantic Scholar paper DOI:10.48550/arXiv.1706.03762:",
+            "Attention Is All You Need",
+            f"paperId: {_ID} | year: 2017 | published: 2017-06-12",
+            "Venue: Neural Information Processing Systems",
+            "Citations: 123456 | Influential citations: 25000 | References: 50",
+            "IDs: DOI:10.48550/arXiv.1706.03762 | ARXIV:1706.03762 | PMID:26017442 | "
+            "CorpusId:13756489",
+            "Publication types: Conference | Fields: Computer Science, Machine Learning",
+        ]
+        assert "Abstract: The dominant sequence transduction models" in text
+        assert "Authors (11): Ashish Vaswani, Noam Shazeer, Author 3, " in text
+        assert "Author 11" in text
+        assert urlparse(mock_urlopen.call_args.args[0].full_url).path.endswith(
+            "/DOI:10.48550%2FarXiv.1706.03762"
         )
 
-        mock_urlopen.return_value = respond(_PAPER)
-        semantic_scholar_paper("26017442")
-        assert urlparse(_called_request(mock_urlopen).full_url).path.endswith("/PMID:26017442")
-
     @patch(HTTP_OPEN)
-    def test_invalid_paper_id(self, mock_urlopen):
-        error = _failure(semantic_scholar_paper, "")
+    def test_a_long_abstract_reads_on_through_the_window(self, mock_urlopen):
+        long = "A sentence of the abstract. " * 100
+        mock_urlopen.side_effect = [respond(s2_paper(abstract=long)) for _ in range(2)]
 
-        assert error.type == "validation_error"
-        assert "invalid paper_id" in error.message
+        first = semantic_scholar_paper(_ID, max_chars=1000)
+        last = first.metadata["window"]["last"]
+        second = semantic_scholar_paper(_ID, max_chars=1000, offset=last)
+
+        assert _text(first).endswith(f"next: offset={last}]")
+        assert second.metadata["window"]["first"] == last
+
+    @pytest.mark.parametrize(
+        ("given", "path"),
+        [
+            ("https://arxiv.org/pdf/1706.03762v7.pdf", "/ARXIV:1706.03762v7"),
+            ("26017442", "/PMID:26017442"),
+            ("CorpusId:13756489", "/CorpusId:13756489"),
+            ("doi:10.1/x", "/DOI:10.1%2Fx"),
+            ("PMCID:PMC4567", "/PMCID:PMC4567"),
+            (_ID, f"/{_ID}"),
+        ],
+    )
+    @patch(HTTP_OPEN)
+    def test_the_identifier_forms_it_takes(self, mock_urlopen, given, path):
+        mock_urlopen.return_value = respond(s2_paper())
+
+        semantic_scholar_paper(given)
+
+        assert urlparse(mock_urlopen.call_args.args[0].full_url).path.endswith(path)
+
+    @pytest.mark.parametrize("given", ["", "PMID:abc", "CorpusId:x"])
+    @patch(HTTP_OPEN)
+    def test_invalid_paper_id(self, mock_urlopen, given):
+        failure = _failure(semantic_scholar_paper, given)
+
+        assert failure.error.type == "validation_error"
+        assert "invalid paper_id" in failure.error.message
         mock_urlopen.assert_not_called()
 
     @patch(HTTP_OPEN)
     def test_not_found(self, mock_urlopen):
-        mock_urlopen.side_effect = urllib.error.HTTPError(
-            url="https://api.semanticscholar.org/graph/v1/paper/missing",
-            code=404,
-            msg="Not Found",
-            hdrs=None,
-            fp=None,
+        mock_urlopen.side_effect = http_error(
+            404, "Not Found", body=b'{"error": "Paper with id missing not found"}'
         )
 
-        error = _failure(semantic_scholar_paper, "missing")
+        failure = _failure(semantic_scholar_paper, "missing")
 
-        assert error.type == "not_found"
-        assert error.message == (
+        assert failure.error.type == "not_found"
+        assert failure.error.message == (
             "no Semantic Scholar paper with ID missing; search with semantic_scholar_search."
         )
-        assert not error.retryable
 
     @patch(HTTP_OPEN)
     def test_another_error_status_stays_the_sources_failure(self, mock_urlopen):
-        mock_urlopen.side_effect = urllib.error.HTTPError(
-            url="https://api.semanticscholar.org/graph/v1/paper/x",
-            code=500,
-            msg="Internal Server Error",
-            hdrs=None,
-            fp=None,
-        )
+        mock_urlopen.side_effect = http_error(500, "Internal Server Error")
 
-        error = _failure(semantic_scholar_paper, "x")
+        failure = _failure(semantic_scholar_paper, "x")
 
-        assert error.type == "upstream"
-        assert error.retryable
+        assert failure.error.type == "upstream"
+        assert failure.error.retryable
 
 
 class TestSemanticScholarCitations:
     @patch(HTTP_OPEN)
-    def test_returns_citations(self, mock_urlopen):
-        mock_urlopen.return_value = respond(_CITATION_RESPONSE)
+    def test_a_page_says_there_is_more_and_the_next_start(self, mock_urlopen):
+        mock_urlopen.return_value = respond(
+            s2_citations(s2_citation("c1", contexts=3), s2_citation("c2"), offset=10, more=True)
+        )
 
-        result = semantic_scholar_citations("ARXIV:1706.03762", max_results=2, start=5)
+        result = semantic_scholar_citations(_ID, max_results=2, start=10)
 
-        assert "Semantic Scholar citations for ARXIV:1706.03762" in result
-        assert "BERT: Pre-training" in result
-        assert "Citation: influential | intents: background, methodology" in result
-        assert "Context: This work follows the Transformer architecture." in result
-
-        params = _called_params(mock_urlopen)
+        text = _text(result)
+        assert text.splitlines()[0] == f"Papers in Semantic Scholar that cite {_ID}:"
+        assert text.splitlines()[1] == "11. A Paper That Cites It"
+        assert "   Citation: influential | intents: background, methodology" in text
+        for n in (1, 2, 3):  # every context, whole
+            assert f'   Context: "Context {n} of the citation, following the Transformer."' in text
+        assert text.endswith("[results 11-12 | next: start=12]")
+        path, params = _sent(mock_urlopen)
+        assert path.endswith(f"/paper/{_ID}/citations")
+        assert params["offset"] == ["10"]
         assert params["limit"] == ["2"]
-        assert params["offset"] == ["5"]
-        assert "citingPaper.title" in params["fields"][0]
 
     @patch(HTTP_OPEN)
-    def test_rejects_negative_start(self, mock_urlopen):
-        error = _failure(semantic_scholar_citations, "ARXIV:1706.03762", start=-1)
+    def test_the_last_batch_says_end(self, mock_urlopen):
+        mock_urlopen.return_value = respond(s2_citations(s2_citation(), offset=4))
 
-        assert error.type == "validation_error"
-        assert "start must be greater than or equal to 0" in error.message
-        mock_urlopen.assert_not_called()
+        text = _text(semantic_scholar_citations(_ID, max_results=2, start=4))
+
+        assert text.endswith("[results 5-5 | end]")
 
     @patch(HTTP_OPEN)
-    def test_no_citations(self, mock_urlopen):
-        mock_urlopen.return_value = respond(_EMPTY_RESPONSE)
+    def test_no_citations_say_so(self, mock_urlopen):
+        mock_urlopen.return_value = respond(s2_citations())
 
-        result = semantic_scholar_citations("ARXIV:1706.03762")
+        assert _text(semantic_scholar_citations(_ID)) == (
+            f"No papers in Semantic Scholar cite {_ID}."
+        )
 
-        assert "No Semantic Scholar citations" in result
+    @pytest.mark.parametrize(
+        ("max_results", "start", "kept"),
+        [(20, 9_979, True), (21, 0, False), (5, 9_999, False), (5, -1, False)],
+    )
+    @patch(HTTP_OPEN)
+    def test_the_limits_are_the_schemas(self, mock_urlopen, max_results, start, kept):
+        mock_urlopen.return_value = respond(s2_citations())
+        call = ToolCall(
+            id="c1",
+            name="semantic_scholar_citations",
+            input={"paper_id": _ID, "max_results": max_results, "start": start},
+        )
+
+        assert ToolGroup(semantic_scholar_citations).execute(call).ok is kept
 
     @patch(HTTP_OPEN)
     def test_citations_of_an_unknown_paper_are_not_found(self, mock_urlopen):
-        mock_urlopen.side_effect = urllib.error.HTTPError(
-            url="https://api.semanticscholar.org/graph/v1/paper/missing/citations",
-            code=404,
-            msg="Not Found",
-            hdrs=None,
-            fp=None,
-        )
+        mock_urlopen.side_effect = http_error(404, "Not Found")
 
-        error = _failure(semantic_scholar_citations, "missing")
+        failure = _failure(semantic_scholar_citations, "missing")
 
-        assert error.type == "not_found"
-        assert error.message == (
-            "no Semantic Scholar paper with ID missing; search with semantic_scholar_search."
-        )
+        assert failure.error.type == "not_found"
+        assert "semantic_scholar_search" in failure.error.message
+
+
+@patch(HTTP_OPEN)
+def test_citations_past_the_apis_reach_say_the_rest_cannot_be_read_here(mock_urlopen):
+    # Citations page through offset + limit < 10,000: past it, the paper's own count says how
+    # many there are, instead of a footer that says "end" while Semantic Scholar has more.
+    mock_urlopen.side_effect = [
+        respond(s2_citations(s2_citation("a"), s2_citation("b"), offset=9_997, more=True)),
+        respond({"paperId": _ID, "citationCount": 123456}),
+    ]
+
+    text = _text(semantic_scholar_citations(_ID, max_results=2, start=9_997))
+
+    assert text.endswith("[results 9998-9999 of 123456 | the rest cannot be read here]")
+    assert parse_qs(urlparse(mock_urlopen.call_args.args[0].full_url).query)["fields"] == [
+        "citationCount"
+    ]
+
+
+@patch(HTTP_OPEN)
+def test_a_paper_without_an_id_names_no_call_that_would_fail(mock_urlopen):
+    paper = s2_paper(authors=11) | {"paperId": None}
+    mock_urlopen.return_value = respond(s2_search(paper, total=1))
+
+    text = _text(semantic_scholar_search("transformers"))
+
+    assert "Author 8 (+3 more)" in text
+    assert "semantic_scholar_paper(''" not in text

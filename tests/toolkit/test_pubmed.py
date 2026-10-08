@@ -1,216 +1,185 @@
-"""Tests for toolkit/tools/_pubmed.py."""
+"""Tests for toolkit/tools/_pubmed.py (T06)."""
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from typing import Any
+from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qs, urlparse
 
 import pytest
 
+from ai_arch_toolkit.core import ToolCall, ToolGroup, ToolResult
 from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._pubmed import pubmed_article, pubmed_search
 from tests.toolkit.http_fakes import HTTP_OPEN, http_error, respond
-
-_ESEARCH_RESULT = {"esearchresult": {"idlist": ["26017442"]}}
-_EMPTY_SEARCH_RESULT = {"esearchresult": {"idlist": []}}
-_ARTICLE_XML = """\
-<?xml version="1.0" encoding="UTF-8"?>
-<PubmedArticleSet>
-  <PubmedArticle>
-    <MedlineCitation>
-      <PMID>26017442</PMID>
-      <Article>
-        <Journal>
-          <Title>Nature</Title>
-          <JournalIssue>
-            <PubDate>
-              <Year>2015</Year>
-              <Month>May</Month>
-              <Day>28</Day>
-            </PubDate>
-          </JournalIssue>
-        </Journal>
-        <ArticleTitle>Deep <i>learning</i></ArticleTitle>
-        <Abstract>
-          <AbstractText Label="BACKGROUND">
-            Deep learning allows computational models.
-          </AbstractText>
-          <AbstractText>It is useful in many domains.</AbstractText>
-        </Abstract>
-        <AuthorList>
-          <Author>
-            <ForeName>Yann</ForeName>
-            <LastName>LeCun</LastName>
-            <Initials>Y</Initials>
-          </Author>
-          <Author>
-            <ForeName>Yoshua</ForeName>
-            <LastName>Bengio</LastName>
-          </Author>
-        </AuthorList>
-        <PublicationTypeList>
-          <PublicationType>Journal Article</PublicationType>
-          <PublicationType>Review</PublicationType>
-        </PublicationTypeList>
-      </Article>
-      <MeshHeadingList>
-        <MeshHeading>
-          <DescriptorName>Machine Learning</DescriptorName>
-          <QualifierName>methods</QualifierName>
-        </MeshHeading>
-        <MeshHeading>
-          <DescriptorName>Neural Networks, Computer</DescriptorName>
-        </MeshHeading>
-      </MeshHeadingList>
-      <KeywordList>
-        <Keyword>deep learning</Keyword>
-        <Keyword>neural networks</Keyword>
-      </KeywordList>
-    </MedlineCitation>
-    <PubmedData>
-      <ArticleIdList>
-        <ArticleId IdType="pubmed">26017442</ArticleId>
-        <ArticleId IdType="doi">10.1038/nature14539</ArticleId>
-      </ArticleIdList>
-    </PubmedData>
-  </PubmedArticle>
-</PubmedArticleSet>
-"""
-
-_EMPTY_ARTICLE_XML = """\
-<?xml version="1.0" encoding="UTF-8"?>
-<PubmedArticleSet/>
-"""
+from tests.toolkit.literature_answers import (
+    EFETCH_ERROR,
+    ESEARCH_ERROR,
+    ESEARCH_NOTHING,
+    NCBI_RATE_LIMITED,
+    esearch,
+    pubmed_set,
+)
+from tests.toolkit.literature_answers import pubmed_article as article_xml
 
 
-def _failure(call, *args, **kwargs):
-    """The ToolError ``call`` raises."""
+def _text(result: ToolResult) -> str:
+    assert isinstance(result, ToolResult) and result.ok, result
+    assert isinstance(result.value, str)
+    return result.value
+
+
+def _sent(mock_urlopen: MagicMock, call: int) -> tuple[str, dict[str, list[str]]]:
+    url = urlparse(mock_urlopen.call_args_list[call].args[0].full_url)
+    return url.path, parse_qs(url.query)
+
+
+def _failure(fn: Any, *args: Any, **kwargs: Any) -> ToolFailure:
     with pytest.raises(ToolFailure) as caught:
-        call(*args, **kwargs)
-    return caught.value.error
-
-
-def _called_request(mock_urlopen, index: int = 0):
-    return mock_urlopen.call_args_list[index].args[0]
-
-
-def _called_params(mock_urlopen, index: int = 0) -> dict[str, list[str]]:
-    return parse_qs(urlparse(_called_request(mock_urlopen, index).full_url).query)
+        fn(*args, **kwargs)
+    return caught.value
 
 
 class TestPubmedSearch:
     @patch(HTTP_OPEN)
-    def test_returns_results(self, mock_urlopen):
-        mock_urlopen.side_effect = [respond(_ESEARCH_RESULT), respond(_ARTICLE_XML)]
+    def test_a_page_says_the_total_and_the_next_start(self, mock_urlopen):
+        mock_urlopen.side_effect = [
+            respond(esearch(["1", "2"], count=4321)),
+            respond(pubmed_set(article_xml("1"), article_xml("2"))),
+        ]
 
         result = pubmed_search("deep learning", max_results=2)
 
-        assert "PubMed results for 'deep learning'" in result
-        assert "Deep learning" in result
-        assert "PMID: 26017442 | DOI: 10.1038/nature14539 | published: 2015-05-28" in result
-        assert "Yann LeCun, Yoshua Bengio" in result
-        assert "Journal: Nature" in result
-        assert "https://pubmed.ncbi.nlm.nih.gov/26017442/" in result
-        assert "Abstract:" not in result
-
-        search_params = _called_params(mock_urlopen, 0)
-        assert search_params["db"] == ["pubmed"]
-        assert search_params["term"] == ["deep learning"]
-        assert search_params["retmode"] == ["json"]
-        assert search_params["retstart"] == ["0"]
-        assert search_params["retmax"] == ["2"]
-        assert search_params["sort"] == ["relevance"]
-        assert search_params["tool"] == ["ai_arch_toolkit"]
-
-        fetch_params = _called_params(mock_urlopen, 1)
-        assert fetch_params["id"] == ["26017442"]
-        assert fetch_params["retmode"] == ["xml"]
+        text = _text(result)
+        assert text.splitlines()[:5] == [
+            "PubMed articles that match 'deep learning':",
+            "1. Deep learning",
+            "   PMID: 1 | PMCID: PMC4567 | DOI: 10.1038/nature14539 | published: 2015-05-28",
+            "   Authors: Yann LeCun, Yoshua Bengio",
+            "   Journal: Nature",
+        ]
+        assert text.endswith("[results 1-2 of 4321 | next: start=2]")
+        path, params = _sent(mock_urlopen, 0)
+        assert path.endswith("/esearch.fcgi")
+        assert params["term"] == ["deep learning"]
+        assert params["retstart"] == ["0"]
+        assert params["retmax"] == ["2"]
+        assert params["sort"] == ["relevance"]
+        path, params = _sent(mock_urlopen, 1)
+        assert path.endswith("/efetch.fcgi")
+        assert params["id"] == ["1,2"]
 
     @patch(HTTP_OPEN)
-    def test_filters_dates_sort_start_and_caps_max_results(self, mock_urlopen):
-        mock_urlopen.return_value = respond(_EMPTY_SEARCH_RESULT)
+    def test_long_author_lists_say_how_many_more_and_where(self, mock_urlopen):
+        mock_urlopen.side_effect = [
+            respond(esearch(["1"], count=1)),
+            respond(pubmed_set(article_xml("1", authors=11))),
+        ]
+
+        text = _text(pubmed_search("deep learning"))
+
+        assert "(+3 more; pubmed_article('1') lists all)" in text
+        assert "MeSH" not in text  # the record lists them all
+
+    @patch(HTTP_OPEN)
+    def test_an_article_efetch_does_not_return_keeps_its_place(self, mock_urlopen):
+        mock_urlopen.side_effect = [
+            respond(esearch(["1", "2"], count=2)),
+            respond(pubmed_set(article_xml("2"))),
+        ]
+
+        text = _text(pubmed_search("deep learning", max_results=2))
+
+        assert "1. PMID 1: PubMed returned no record for it; try pubmed_article('1')" in text
+        assert "2. Deep learning" in text
+
+    @patch(HTTP_OPEN)
+    def test_esearch_reaches_the_first_10000_records(self, mock_urlopen):
+        # retstart + retmax <= 10,000 (https://www.nlm.nih.gov/pubs/techbull/so22/
+        # so22_updated_pubmed_e_utilities.html): the last page asks for what is left.
+        mock_urlopen.side_effect = [
+            respond(esearch(["1", "2"], count=50_000, start=9_998)),
+            respond(pubmed_set(article_xml("1"), article_xml("2"))),
+        ]
+
+        text = _text(pubmed_search("deep learning", max_results=5, start=9_998))
+
+        assert _sent(mock_urlopen, 0)[1]["retmax"] == ["2"]
+        assert text.endswith("[results 9999-10000 of 50000 | the rest cannot be read here]")
+
+    @patch(HTTP_OPEN)
+    def test_zero_results_say_so_with_the_query_and_what_pubmed_did_not_find(self, mock_urlopen):
+        mock_urlopen.return_value = respond(ESEARCH_NOTHING)
+
+        text = _text(pubmed_search('"zzqqxxnotaword"'))
+
+        assert text == (
+            'No PubMed articles match \'"zzqqxxnotaword"\'. PubMed did not find: "zzqqxxnotaword".'
+        )
+        assert mock_urlopen.call_count == 1
+
+    @patch(HTTP_OPEN)
+    def test_filters_dates_sort_and_start(self, mock_urlopen):
+        mock_urlopen.return_value = respond(esearch([], count=0, start=40))
 
         pubmed_search(
-            '"large language models"[Title/Abstract]',
-            max_results=99,
+            "deep learning",
+            max_results=20,
             start=40,
             from_date="2024-01-01",
-            to_date="2024-12-31",
+            to_date="2024-01-31",
             sort="pub_date",
         )
 
-        params = _called_params(mock_urlopen)
-        assert params["term"] == ['"large language models"[Title/Abstract]']
+        params = _sent(mock_urlopen, 0)[1]
         assert params["retmax"] == ["20"]
         assert params["retstart"] == ["40"]
         assert params["sort"] == ["pub date"]
         assert params["datetype"] == ["pdat"]
         assert params["mindate"] == ["2024/01/01"]
-        assert params["maxdate"] == ["2024/12/31"]
-        assert mock_urlopen.call_count == 1
+        assert params["maxdate"] == ["2024/01/31"]
 
+    @pytest.mark.parametrize(
+        ("max_results", "start", "kept"),
+        [(20, 9_999, True), (21, 0, False), (0, 0, False), (5, 10_000, False)],
+    )
     @patch(HTTP_OPEN)
-    def test_no_results(self, mock_urlopen):
-        mock_urlopen.return_value = respond(_EMPTY_SEARCH_RESULT)
+    def test_the_limits_are_the_schemas(self, mock_urlopen, max_results, start, kept):
+        mock_urlopen.return_value = respond(esearch([], count=0))
+        call = ToolCall(
+            id="c1",
+            name="pubmed_search",
+            input={"query": "x", "max_results": max_results, "start": start},
+        )
 
-        result = pubmed_search("no such paper")
+        assert ToolGroup(pubmed_search).execute(call).ok is kept
 
-        assert "No PubMed results" in result
-
+    @pytest.mark.parametrize(
+        ("kwargs", "words"),
+        [
+            ({"query": " "}, "query cannot be empty"),
+            ({"query": "x", "sort": "date"}, "unknown sort 'date'"),
+            ({"query": "x", "from_date": "2024/01/01"}, "invalid from_date"),
+            ({"query": "x", "from_date": "2024-02-01", "to_date": "2024-01-01"}, "is after"),
+        ],
+    )
     @patch(HTTP_OPEN)
-    def test_invalid_options_do_not_call_api(self, mock_urlopen):
-        for kwargs, words in (
-            ({"query": ""}, "query cannot be empty"),
-            ({"query": "test", "start": -1}, "start must be greater than or equal to 0"),
-            ({"query": "test", "from_date": "01-01-2024"}, "invalid from_date"),
-            ({"query": "test", "to_date": "2024/12/31"}, "invalid to_date"),
-            (
-                {"query": "test", "from_date": "2024-02-01", "to_date": "2024-01-01"},
-                "is after to_date",
-            ),
-            ({"query": "test", "sort": "best"}, "unknown sort"),
-        ):
-            error = _failure(pubmed_search, **kwargs)
-            assert error.type == "validation_error"
-            assert words in error.message
+    def test_invalid_options_do_not_call_api(self, mock_urlopen, kwargs, words):
+        failure = _failure(pubmed_search, **kwargs)
+
+        assert failure.error.type == "validation_error"
+        assert words in failure.error.message
         mock_urlopen.assert_not_called()
-
-    @patch(HTTP_OPEN)
-    def test_api_failure(self, mock_urlopen):
-        mock_urlopen.side_effect = TimeoutError()
-
-        error = _failure(pubmed_search, "test")
-
-        assert error.type == "upstream"
-        assert error.retryable
-        assert "timed out" in error.message.lower()
-
-    @patch(HTTP_OPEN)
-    def test_search_parse_failure(self, mock_urlopen):
-        mock_urlopen.return_value = respond("not json")
-
-        error = _failure(pubmed_search, "test")
-
-        assert error.type == "upstream"
-        assert "could not parse API response" in error.message
 
     @patch(HTTP_OPEN)
     def test_an_error_the_search_reports_is_the_tools_error(self, mock_urlopen):
         # Sent with HTTP 200 (eutils.ncbi.nlm.nih.gov, 2026-09-29); it used to read as no results.
-        mock_urlopen.return_value = respond(
-            {
-                "header": {"type": "esearch", "version": "0.3"},
-                "esearchresult": {
-                    "ERROR": "Search Backend failed: An error occurred while processing request. "
-                    "Details: Empty Term in the request"
-                },
-            }
-        )
+        mock_urlopen.return_value = respond(ESEARCH_ERROR)
 
-        error = _failure(pubmed_search, "(((")
+        failure = _failure(pubmed_search, "(((")
 
-        assert error.type == "upstream"
-        assert error.message == (
+        assert failure.error.type == "upstream"
+        assert failure.error.message == (
             "Search Backend failed: An error occurred while processing "
             "request. Details: Empty Term in the request"
         )
@@ -220,83 +189,96 @@ class TestPubmedSearch:
     def test_a_404_on_the_search_is_an_endpoint_not_found(self, mock_urlopen):
         mock_urlopen.side_effect = http_error(404, "Not Found")
 
-        error = _failure(pubmed_search, "test")
+        failure = _failure(pubmed_search, "test")
 
-        assert error.type == "upstream"
-        assert "NCBI E-utilities: endpoint not found (HTTP 404)" in error.message
+        assert failure.error.type == "upstream"
+        assert "NCBI E-utilities: endpoint not found (HTTP 404)" in failure.error.message
 
     @patch(HTTP_OPEN)
     def test_ncbi_s_rate_limit_keeps_its_words(self, mock_urlopen):
-        body = b'{"error":"API rate limit exceeded","api-key":"1.2.3.4","count":"4","limit":"3"}'
-        mock_urlopen.side_effect = http_error(429, "Too Many Requests", body=body)
+        mock_urlopen.side_effect = http_error(429, "Too Many Requests", body=NCBI_RATE_LIMITED)
 
-        error = _failure(pubmed_search, "test")
+        failure = _failure(pubmed_search, "test")
 
-        assert error.type == "rate_limited"
-        assert error.retryable
-        assert "API rate limit exceeded" in error.message
-
-    @patch(HTTP_OPEN)
-    def test_a_query_that_matches_nothing_is_no_error(self, mock_urlopen):
-        mock_urlopen.return_value = respond(
-            {
-                "header": {"type": "esearch", "version": "0.3"},
-                "esearchresult": {
-                    "count": "0",
-                    "idlist": [],
-                    "warninglist": {
-                        "quotedphrasesnotfound": ['"zzqqxxnotaword"'],
-                        "outputmessages": ["No items found."],
-                    },
-                },
-            }
-        )
-
-        assert pubmed_search("zzqqxxnotaword") == "No PubMed results for: 'zzqqxxnotaword'"
+        assert failure.error.type == "rate_limited"
+        assert failure.error.retryable
+        assert "API rate limit exceeded" in failure.error.message
 
     @patch(HTTP_OPEN)
     def test_article_xml_parse_failure(self, mock_urlopen):
-        mock_urlopen.side_effect = [respond(_ESEARCH_RESULT), respond("<not xml")]
+        mock_urlopen.side_effect = [respond(esearch(["1"], count=1)), respond("<not xml")]
 
-        error = _failure(pubmed_search, "test")
+        failure = _failure(pubmed_search, "test")
 
-        assert error.type == "upstream"
-        assert "could not parse article XML" in error.message
+        assert failure.error.type == "upstream"
+        assert "could not parse" in failure.error.message
 
 
 class TestPubmedArticle:
     @patch(HTTP_OPEN)
-    def test_returns_article_by_pmid(self, mock_urlopen):
-        mock_urlopen.return_value = respond(_ARTICLE_XML)
+    def test_the_record_is_whole(self, mock_urlopen):
+        mock_urlopen.return_value = respond(pubmed_set(article_xml(authors=11)))
 
-        result = pubmed_article("26017442")
+        text = _text(pubmed_article("26017442"))
 
-        assert result.startswith("PubMed article 26017442:")
-        assert "Deep learning" in result
-        assert "Abstract: BACKGROUND: Deep learning allows computational models." in result
-        assert "It is useful in many domains." in result
-        assert "Publication types: Journal Article, Review" in result
-        assert "MeSH: Machine Learning (methods), Neural Networks, Computer" in result
-        assert "Keywords: deep learning, neural networks" in result
-        assert "1. Deep learning" not in result
-
-        params = _called_params(mock_urlopen)
+        lines = text.splitlines()
+        assert lines[:7] == [
+            "PubMed article 26017442:",
+            "Deep learning",
+            "PMID: 26017442 | PMCID: PMC4567 | DOI: 10.1038/nature14539 | published: 2015-05-28",
+            "Journal: Nature | Publication types: Journal Article, Review",
+            "Abstract:",
+            "BACKGROUND: Deep learning allows computational models.",
+            "CONCLUSIONS: It is useful in many domains.",
+        ]
+        assert "Authors (11): Yann LeCun (Facebook AI Research), Yoshua Bengio, " in text
+        assert "Given Author11" in text
+        assert "MeSH: Machine Learning (major; methods), Neural Networks, Computer" in text
+        assert "Keywords: deep learning, neural networks" in text
+        assert text.endswith("URL: https://pubmed.ncbi.nlm.nih.gov/26017442/\n")
+        params = _sent(mock_urlopen, 0)[1]
         assert params["id"] == ["26017442"]
+        assert params["retmode"] == ["xml"]
+
+    @patch(HTTP_OPEN)
+    def test_a_long_abstract_reads_on_through_the_window(self, mock_urlopen):
+        long = "A sentence of the abstract. " * 100
+        mock_urlopen.side_effect = [
+            respond(pubmed_set(article_xml(abstract=long))) for _ in range(2)
+        ]
+
+        first = pubmed_article("26017442", max_chars=1000)
+        last = first.metadata["window"]["last"]
+        second = pubmed_article("26017442", max_chars=1000, offset=last)
+
+        assert _text(first).endswith(f"next: offset={last}]")
+        assert second.metadata["window"]["first"] == last
 
     @patch(HTTP_OPEN)
     def test_invalid_pmid(self, mock_urlopen):
-        error = _failure(pubmed_article, "PMID 26017442")
+        failure = _failure(pubmed_article, "PMID 1")
 
-        assert error.type == "validation_error"
-        assert "invalid PMID" in error.message
+        assert failure.error.type == "validation_error"
         mock_urlopen.assert_not_called()
 
     @patch(HTTP_OPEN)
     def test_not_found(self, mock_urlopen):
-        mock_urlopen.return_value = respond(_EMPTY_ARTICLE_XML)
+        mock_urlopen.return_value = respond(pubmed_set())
 
-        error = _failure(pubmed_article, "999999999")
+        failure = _failure(pubmed_article, "99999999")
 
-        assert error.type == "not_found"
-        assert "no PubMed article with PMID 999999999" in error.message
-        assert "pubmed_search" in error.message
+        assert failure.error.type == "not_found"
+        assert "pubmed_search" in failure.error.message
+
+    @patch(HTTP_OPEN)
+    def test_an_error_efetch_reports_is_the_error_not_a_missing_article(self, mock_urlopen):
+        mock_urlopen.return_value = respond(EFETCH_ERROR)
+
+        failure = _failure(pubmed_article, "26017442")
+
+        assert failure.error.type == "upstream"
+        assert failure.error.retryable
+        assert failure.error.message == (
+            "PubMed EFetch error: Unable to obtain query #1; try again later, or check the "
+            "PMID with pubmed_search"
+        )

@@ -1,4 +1,11 @@
-"""arXiv tools — public paper search and metadata lookup."""
+"""arXiv tools: search papers, and read one paper's record (T06).
+
+The API answers an Atom feed whose OpenSearch elements say how many papers match
+(``totalResults``) and where the page starts (``startIndex``); a search pages by ``start``
+through the first 30,000 results (https://info.arxiv.org/help/api/user-manual.html, "Paging").
+A search shows each paper's whole summary; a paper's record gives every field and every author,
+through the window (D39).
+"""
 
 from __future__ import annotations
 
@@ -6,10 +13,19 @@ import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import date
+from typing import Annotated
 
-from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.core import Range, ToolResult, tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._http import Api, Reply
+from ai_arch_toolkit.toolkit.tools._records import (
+    DEFAULT_CHARS,
+    MAX_CHARS,
+    call,
+    names,
+    record,
+)
+from ai_arch_toolkit.toolkit.tools._window import list_window
 
 
 def _feed_error(reply: Reply) -> ToolFailure | str | None:
@@ -45,9 +61,15 @@ def _rejected(error: str) -> ToolFailure:
     return ToolFailure("validation_error", msg)
 
 
-_API = Api(base="https://export.arxiv.org/api/query", name="arXiv", error_reader=_feed_error)
-_MAX_RESULTS_LIMIT = 20
-_SUMMARY_MAX_CHARS = 700
+# arXiv asks for "a 3 second delay" between calls (https://info.arxiv.org/help/api/user-manual.html).
+_API = Api(
+    base="https://export.arxiv.org/api/query",
+    name="arXiv",
+    min_interval_s=3.0,
+    error_reader=_feed_error,
+)
+# A search reaches the first 30,000 results (the user manual, "Paging").
+_DEPTH = 30_000
 _VALID_CATEGORIES = re.compile(r"^[A-Za-z0-9.-]+$")
 _ADVANCED_QUERY_TOKENS = (
     "all:",
@@ -66,16 +88,23 @@ _ADVANCED_QUERY_TOKENS = (
 )
 _ATOM = "{http://www.w3.org/2005/Atom}"
 _ARXIV = "{http://arxiv.org/schemas/atom}"
+_OPENSEARCH = "{http://a9.com/-/spec/opensearch/1.1/}"
 _ERROR_ID_RE = re.compile(r"^https?://arxiv\.org/api/errors(?:#.*)?$")
+
+
+@dataclass(frozen=True, slots=True)
+class _Author:
+    name: str
+    affiliations: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class _ArxivPaper:
-    """Normalized metadata for an arXiv entry."""
+    """An arXiv entry, as the feed gives it."""
 
     paper_id: str
     title: str
-    authors: tuple[str, ...]
+    authors: tuple[_Author, ...]
     summary: str
     published: str
     updated: str
@@ -88,28 +117,38 @@ class _ArxivPaper:
     comment: str | None
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _Feed:
+    """A feed's papers, how many entries it held (papers or not), and how many papers match in
+    all (``None`` when it does not say)."""
+
+    papers: list[_ArxivPaper]
+    entries: int
+    total: int | None
+
+
 @tool(capability="network")
 def arxiv_search(
     query: str,
-    max_results: int = 5,
-    start: int = 0,
+    max_results: Annotated[int, Range(1, 20)] = 5,
+    start: Annotated[int, Range(0, _DEPTH - 1)] = 0,
     category: str = "",
     sort_by: str = "relevance",
     sort_order: str = "descending",
     from_date: str = "",
     to_date: str = "",
-) -> str:
-    """Search arXiv papers using the public arXiv API.
+) -> ToolResult:
+    """Search arXiv papers: each with its whole summary, numbered, with the total.
 
     Args:
         query: Search text or arXiv API query syntax, e.g. "LLM agents" or "ti:agent".
-        max_results: Number of papers to return (1-20). Defaults to 5.
-        start: Zero-based result offset for pagination. Defaults to 0.
-        category: Optional arXiv category filter, e.g. "cs.AI" or "stat.ML".
-        sort_by: Sort field: relevance, lastUpdatedDate, or submittedDate.
-        sort_order: Sort order: ascending or descending.
-        from_date: Optional submitted date lower bound as YYYY-MM-DD.
-        to_date: Optional submitted date upper bound as YYYY-MM-DD.
+        max_results: How many papers to list.
+        start: How many results to skip; the footer gives the next start.
+        category: An arXiv category to keep, e.g. "cs.AI" or "stat.ML".
+        sort_by: relevance, lastUpdatedDate or submittedDate.
+        sort_order: ascending or descending.
+        from_date: The earliest submission date, YYYY-MM-DD.
+        to_date: The latest submission date, YYYY-MM-DD.
 
     Raises:
         ToolFailure: validation_error when an argument is invalid or arXiv rejects the query;
@@ -119,37 +158,35 @@ def arxiv_search(
     if not query:
         msg = "query cannot be empty; pass search text such as 'LLM agents' or 'ti:agent'."
         raise ToolFailure("validation_error", msg)
-
-    max_results = max(1, min(max_results, _MAX_RESULTS_LIMIT))
-    if start < 0:
-        msg = f"start must be greater than or equal to 0, got {start}."
-        raise ToolFailure("validation_error", msg)
     sort_by = sort_by.strip() or "relevance"
     sort_order = sort_order.strip() or "descending"
-
     _validate_search_options(category, sort_by, sort_order)
-    search_query = _build_search_query(query, category, from_date, to_date)
-
+    # The last page within arXiv's reach asks for what is left of it.
+    count = max_results if start + max_results <= _DEPTH else _DEPTH - start
     params = {
-        "search_query": search_query,
+        "search_query": _build_search_query(query, category, from_date, to_date),
         "start": str(start),
-        "max_results": str(max_results),
+        "max_results": str(count),
         "sortBy": sort_by,
         "sortOrder": sort_order,
     }
-    papers = _API.get_text(params=params, parse=_parse_atom)
-    if not papers:
-        return f"No arXiv results for: {query!r}"
-
-    return f"arXiv results for {query!r}:\n" + _format_papers(papers)
+    found = _API.get_text(params=params, parse=_parse_atom)
+    return _search_answer(found, query, start, max_results)
 
 
 @tool(capability="network")
-def arxiv_paper(arxiv_id: str) -> str:
-    """Fetch metadata for a specific arXiv paper by ID.
+def arxiv_paper(
+    arxiv_id: str,
+    offset: Annotated[int, Range(0)] = 0,
+    max_chars: Annotated[int, Range(500, MAX_CHARS)] = DEFAULT_CHARS,
+) -> ToolResult:
+    """Read an arXiv paper's record: its whole summary, every author with the affiliations,
+    the categories, the journal reference, the DOI and the links.
 
     Args:
-        arxiv_id: arXiv identifier, e.g. "1706.03762", "1706.03762v1", or an arXiv URL.
+        arxiv_id: An arXiv ID, e.g. "1706.03762" or "1706.03762v1", or an arXiv URL.
+        offset: Where to start, in characters of the record; the footer gives the next offset.
+        max_chars: How many characters to return.
 
     Raises:
         ToolFailure: validation_error when the ID is malformed (here or by arXiv); not_found
@@ -159,14 +196,31 @@ def arxiv_paper(arxiv_id: str) -> str:
     if not paper_id:
         msg = f"invalid arXiv ID {arxiv_id!r}; an arXiv ID looks like 1706.03762 or 1706.03762v1."
         raise ToolFailure("validation_error", msg)
-
     params = {"id_list": paper_id, "start": "0", "max_results": "1"}
-    papers = _API.get_text(params=params, parse=_parse_atom)
+    papers = _API.get_text(params=params, parse=_parse_atom).papers
     if not papers:
         msg = f"no arXiv paper with ID {paper_id}; search with arxiv_search."
         raise ToolFailure("not_found", msg)
+    text = _record_text(papers[0])
+    return record(text, heading=f"arXiv paper {paper_id}:", offset=offset, max_chars=max_chars)
 
-    return f"arXiv paper {paper_id}:\n" + _format_papers(papers, include_index=False)
+
+def _search_answer(found: _Feed, query: str, start: int, max_results: int) -> ToolResult:
+    if not found.papers and start == 0:
+        return ToolResult.success(f"No arXiv papers match {query!r}.")
+    if not found.entries and found.total is not None and start < found.total:
+        msg = (
+            f"arXiv sent an empty page at start={start} though it counts {found.total} results; "
+            "send the same call again (its API sends empty pages at times)"
+        )
+        raise ToolFailure("upstream", msg, retryable=True)
+    blocks = [_result_block(start + n, paper) for n, paper in enumerate(found.papers, start=1)]
+    end = start + found.entries  # an entry that held no paper still took its place
+    # A feed without its total may have more after a full page.
+    more = found.entries >= max_results if found.total is None else end < found.total
+    next_call = {"start": end} if found.entries and more and end < _DEPTH else None
+    window = list_window(blocks, first=start + 1, total=found.total, next_call=next_call)
+    return window.result(heading=f"arXiv papers that match {query!r}:")
 
 
 def _validate_search_options(category: str, sort_by: str, sort_order: str) -> None:
@@ -204,6 +258,7 @@ def _build_search_query(
 
 
 def _build_submitted_date_filter(from_date: str, to_date: str) -> str:
+    """The ``submittedDate:[… TO …]`` filter, in GMT to the minute (the user manual)."""
     from_date = from_date.strip()
     to_date = to_date.strip()
     if not from_date and not to_date:
@@ -246,45 +301,59 @@ def _escape_arxiv_phrase(query: str) -> str:
     return query.replace('"', '\\"')
 
 
-def _parse_atom(xml_text: str) -> list[_ArxivPaper]:
+def _parse_atom(xml_text: str) -> _Feed:
     root = ET.fromstring(xml_text)
     papers: list[_ArxivPaper] = []
-    for entry in root.findall(f"{_ATOM}entry"):
+    entries = root.findall(f"{_ATOM}entry")
+    for entry in entries:
         if error := _entry_error(entry):
             raise _rejected(error)
-        entry_id = _text(entry, "id")
-        paper_id = _id_from_abs_url(entry_id)
-        abs_url = _normalize_abs_url(entry_id, paper_id)
-        pdf_url = _pdf_url(entry, paper_id)
-        primary_category = _primary_category(entry)
-        categories = tuple(
-            category.attrib.get("term", "")
-            for category in entry.findall(f"{_ATOM}category")
-            if category.attrib.get("term")
-        )
+        if paper := _paper(entry):
+            papers.append(paper)
+    total = (root.findtext(f"{_OPENSEARCH}totalResults") or "").strip()
+    return _Feed(
+        papers=papers, entries=len(entries), total=int(total) if total.isdigit() else None
+    )
 
-        papers.append(
-            _ArxivPaper(
-                paper_id=paper_id,
-                title=_normalize_text(_text(entry, "title")),
-                authors=tuple(
-                    _normalize_text(_text(author, "name"))
-                    for author in entry.findall(f"{_ATOM}author")
-                    if _text(author, "name")
-                ),
-                summary=_normalize_text(_text(entry, "summary")),
-                published=_date_only(_text(entry, "published")),
-                updated=_date_only(_text(entry, "updated")),
-                primary_category=primary_category,
-                categories=categories,
-                abs_url=abs_url,
-                pdf_url=pdf_url,
-                doi=_optional_text(entry, f"{_ARXIV}doi"),
-                journal_ref=_optional_text(entry, f"{_ARXIV}journal_ref"),
-                comment=_optional_text(entry, f"{_ARXIV}comment"),
-            )
-        )
-    return papers
+
+def _paper(entry: ET.Element) -> _ArxivPaper | None:
+    """The paper an entry holds; ``None`` for an entry with no title and no summary."""
+    title = _normalize_text(_text(entry, "title"))
+    summary = _normalize_text(_text(entry, "summary"))
+    if not title and not summary:
+        return None
+    entry_id = _text(entry, "id")
+    paper_id = _id_from_abs_url(entry_id)
+    return _ArxivPaper(
+        paper_id=paper_id,
+        title=title or "(untitled)",
+        authors=tuple(_authors(entry)),
+        summary=summary,
+        published=_date_only(_text(entry, "published")),
+        updated=_date_only(_text(entry, "updated")),
+        primary_category=_primary_category(entry),
+        categories=tuple(
+            term
+            for category in entry.findall(f"{_ATOM}category")
+            if (term := category.attrib.get("term", ""))
+        ),
+        abs_url=_normalize_abs_url(entry_id, paper_id),
+        pdf_url=_pdf_url(entry, paper_id),
+        doi=_optional_text(entry, f"{_ARXIV}doi"),
+        journal_ref=_optional_text(entry, f"{_ARXIV}journal_ref"),
+        comment=_optional_text(entry, f"{_ARXIV}comment"),
+    )
+
+
+def _authors(entry: ET.Element) -> list[_Author]:
+    authors: list[_Author] = []
+    for author in entry.findall(f"{_ATOM}author"):
+        name = _normalize_text(_text(author, "name"))
+        if name:
+            places = author.findall(f"{_ARXIV}affiliation")
+            affiliations = tuple(_normalize_text(place.text or "") for place in places)
+            authors.append(_Author(name, tuple(a for a in affiliations if a)))
+    return authors
 
 
 def _entry_error(entry: ET.Element) -> str | None:
@@ -355,42 +424,60 @@ def _normalize_arxiv_id(arxiv_id: str) -> str:
     return value
 
 
-def _format_papers(papers: list[_ArxivPaper], include_index: bool = True) -> str:
-    blocks: list[str] = []
-    for index, paper in enumerate(papers, start=1):
-        title = f"{index}. {paper.title}" if include_index else paper.title
-        lines = [title]
-        meta = [f"arXiv: {paper.paper_id}"]
-        if paper.primary_category:
-            meta.append(paper.primary_category)
-        if paper.published:
-            meta.append(f"published: {paper.published}")
-        if paper.updated and paper.updated != paper.published:
-            meta.append(f"updated: {paper.updated}")
-        lines.append("   " + " | ".join(meta))
-
-        if paper.authors:
-            lines.append(f"   Authors: {_format_authors(paper.authors)}")
-        if paper.summary:
-            lines.append(f"   Summary: {_truncate(paper.summary, _SUMMARY_MAX_CHARS)}")
-        if paper.comment:
-            lines.append(f"   Comment: {paper.comment}")
-        if paper.journal_ref:
-            lines.append(f"   Journal: {paper.journal_ref}")
-        if paper.doi:
-            lines.append(f"   DOI: {paper.doi}")
-
-        links = [link for link in (paper.abs_url, paper.pdf_url) if link]
-        if links:
-            lines.append("   Links: " + " | ".join(links))
-        blocks.append("\n".join(lines))
-    return "\n\n".join(blocks)
+def _meta(paper: _ArxivPaper) -> str:
+    meta = [f"arXiv: {paper.paper_id}"]
+    if paper.primary_category:
+        meta.append(paper.primary_category)
+    if paper.published:
+        meta.append(f"published: {paper.published}")
+    if paper.updated and paper.updated != paper.published:
+        meta.append(f"updated: {paper.updated}")
+    return " | ".join(meta)
 
 
-def _format_authors(authors: tuple[str, ...]) -> str:
-    if len(authors) <= 8:
-        return ", ".join(authors)
-    return ", ".join(authors[:8]) + f", ... (+{len(authors) - 8} more)"
+def _notes(paper: _ArxivPaper) -> list[str]:
+    """The comment, the journal reference and the DOI, one line each, when given."""
+    labelled = (("Comment", paper.comment), ("Journal", paper.journal_ref), ("DOI", paper.doi))
+    return [f"{label}: {value}" for label, value in labelled if value]
+
+
+def _links(paper: _ArxivPaper) -> str:
+    return " | ".join(link for link in (paper.abs_url, paper.pdf_url) if link)
+
+
+def _result_block(number: int, paper: _ArxivPaper) -> str:
+    """A search result: the paper, its whole summary, and the first authors."""
+    lines = [f"{number}. {paper.title}", _meta(paper)]
+    if paper.authors:
+        whole = call("arxiv_paper", paper.paper_id)
+        lines.append(f"Authors: {names([a.name for a in paper.authors], whole=whole)}")
+    if paper.summary:
+        lines.append(f"Summary: {paper.summary}")
+    lines.extend(_notes(paper))
+    if links := _links(paper):
+        lines.append(f"Links: {links}")
+    return "\n".join([lines[0], *(f"   {line}" for line in lines[1:])])
+
+
+def _record_text(paper: _ArxivPaper) -> str:
+    """The whole record: the summary before the author list, which can run to thousands."""
+    lines = [paper.title, _meta(paper)]
+    if paper.categories:
+        primary = paper.primary_category
+        tagged = [f"{c} (primary)" if c == primary else c for c in paper.categories]
+        lines.append(f"Categories: {', '.join(tagged)}")
+    if paper.summary:
+        lines.append(f"Summary: {paper.summary}")
+    if paper.authors:
+        people = [
+            f"{a.name} ({'; '.join(a.affiliations)})" if a.affiliations else a.name
+            for a in paper.authors
+        ]
+        lines.append(f"Authors ({len(people)}): {', '.join(people)}")
+    lines.extend(_notes(paper))
+    if links := _links(paper):
+        lines.append(f"Links: {links}")
+    return "\n".join(lines) + "\n"
 
 
 def _normalize_text(text: str) -> str:
@@ -401,9 +488,3 @@ def _date_only(value: str) -> str:
     if "T" in value:
         return value.split("T", 1)[0]
     return value
-
-
-def _truncate(text: str, max_chars: int) -> str:
-    if len(text) <= max_chars:
-        return text
-    return text[: max_chars - 15].rstrip() + " ... [truncated]"

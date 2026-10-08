@@ -14,16 +14,5 @@
   "src/ai_arch_toolkit/toolkit/agents/flows/_tot.py:tot_flow:C901": 11,
   "src/ai_arch_toolkit/toolkit/memory/_tools.py:memory_tools:C901": 12,
   "src/ai_arch_toolkit/toolkit/prompts/_layouts.py:JsonLayout._render_object:C901": 15,
-  "src/ai_arch_toolkit/toolkit/prompts/_layouts.py:JsonLayout.render:C901": 11,
-  "src/ai_arch_toolkit/toolkit/tools/_arxiv.py:_format_papers:C901": 11,
-  "src/ai_arch_toolkit/toolkit/tools/_crossref.py:_format_works:C901": 17,
-  "src/ai_arch_toolkit/toolkit/tools/_crossref.py:_format_works:PLR0912": 16,
-  "src/ai_arch_toolkit/toolkit/tools/_datacite.py:_format_dois:C901": 11,
-  "src/ai_arch_toolkit/toolkit/tools/_europe_pmc.py:_format_articles:C901": 17,
-  "src/ai_arch_toolkit/toolkit/tools/_europe_pmc.py:_format_articles:PLR0912": 16,
-  "src/ai_arch_toolkit/toolkit/tools/_nvd.py:_format_cves:C901": 11,
-  "src/ai_arch_toolkit/toolkit/tools/_semantic_scholar.py:_format_papers:C901": 15,
-  "src/ai_arch_toolkit/toolkit/tools/_semantic_scholar.py:_format_papers:PLR0912": 14,
-  "src/ai_arch_toolkit/toolkit/tools/_semantic_scholar.py:_normalize_paper_id:C901": 16,
-  "src/ai_arch_toolkit/toolkit/tools/_semantic_scholar.py:_normalize_paper_id:PLR0912": 15
+  "src/ai_arch_toolkit/toolkit/prompts/_layouts.py:JsonLayout.render:C901": 11
 }

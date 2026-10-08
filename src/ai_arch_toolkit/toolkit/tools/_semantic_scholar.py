@@ -1,14 +1,49 @@
-"""Semantic Scholar tools — public academic graph search and citation lookup."""
+"""Semantic Scholar tools: search papers, read one paper's record, and list the papers that
+cite one (T06).
+
+The relevance search takes plain text, "no special query syntax", says how many papers match
+(``total``) and gives the next ``offset`` (``next``) while there is one, through the first 1,000
+results; a paper's citations page the same way, through the first 10,000, without a total
+(https://api.semanticscholar.org/api-docs/graph; the 1,000 since 2023-10-31,
+https://github.com/allenai/s2-folks/blob/main/API_RELEASE_NOTES.md). A paper's record gives
+its whole abstract and every author, through the window (D39).
+"""
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Annotated, Any
 
-from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.core import Range, ToolResult, tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
-from ai_arch_toolkit.toolkit.tools._http import Api
+from ai_arch_toolkit.toolkit.tools._http import Api, Reply
+from ai_arch_toolkit.toolkit.tools._records import (
+    DEFAULT_CHARS,
+    MAX_CHARS,
+    call,
+    doi_of,
+    names,
+    record,
+)
+from ai_arch_toolkit.toolkit.tools._window import list_window
+
+
+def _s2_error(reply: Reply) -> ToolFailure | None:
+    """A parameter Semantic Scholar refuses; ``None`` for any other answer (the door reads its
+    ``error`` text).
+
+    A 400's ``error`` is "Unrecognized or unsupported fields: […]", "Unacceptable query params:
+    […]" or a message of its own (the API's Error400 schema): the second names an argument the
+    caller gave, a ``validation_error``; the first is the tool's fields, the source's to say.
+    """
+    error = reply.body.get("error") if isinstance(reply.body, dict) else None
+    said = " ".join(str(error).split()) if error else ""
+    if reply.status != 400 or not said.startswith("Unacceptable query params"):
+        return None
+    msg = f"Semantic Scholar refused the request: {said}; correct that parameter"
+    return ToolFailure("validation_error", msg)
+
 
 # Without a key, every caller shares one limit, spent on 2026-10-04 (a 429 at the first request);
 # a free key gives its holder 1 request per second, in the x-api-key header
@@ -21,11 +56,36 @@ _API = Api(
     key_env="SEMANTIC_SCHOLAR_API_KEY",
     key_header="x-api-key",
     key_url="https://www.semanticscholar.org/product/api#api-key-form",
+    error_reader=_s2_error,
 )
-_MAX_RESULTS_LIMIT = 20
-_ABSTRACT_MAX_CHARS = 900
+# The relevance search reaches offset + limit = 999 (under 1,000); citations, 9,999.
+_SEARCH_DEPTH = 999
+_CITATION_DEPTH = 9_999
 _ARXIV_ID_RE = re.compile(r"^\d{4}\.\d{4,5}(v\d+)?$")
 _ARXIV_URL_RE = re.compile(r"arxiv\.org/(?:abs|pdf)/([^?#]+)", re.IGNORECASE)
+_YEAR_RE = re.compile(r"^(?:\d{4}|\d{4}-|-\d{4}|\d{4}-\d{4})$")
+# The prefixes the paper endpoints take, by the lower-case name a caller may write.
+_PREFIXES = {
+    "doi": "DOI",
+    "arxiv": "ARXIV",
+    "pmid": "PMID",
+    "pmcid": "PMCID",
+    "corpusid": "CorpusId",
+    "url": "URL",
+    "mag": "MAG",
+    "acl": "ACL",
+}
+_NUMERIC = frozenset({"PMID", "CorpusId"})
+# externalIds keys, and the prefix the paper endpoints take for each.
+_ID_PREFIXES = {
+    "DOI": "DOI",
+    "ArXiv": "ARXIV",
+    "PubMed": "PMID",
+    "PubMedCentral": "PMCID",
+    "CorpusId": "CorpusId",
+    "MAG": "MAG",
+    "ACL": "ACL",
+}
 _PAPER_FIELDS = ",".join(
     [
         "paperId",
@@ -56,7 +116,6 @@ _CITATION_FIELDS = ",".join(
         "citingPaper.paperId",
         "citingPaper.corpusId",
         "citingPaper.title",
-        "citingPaper.abstract",
         "citingPaper.year",
         "citingPaper.venue",
         "citingPaper.publicationDate",
@@ -66,17 +125,15 @@ _CITATION_FIELDS = ",".join(
         "citingPaper.citationCount",
         "citingPaper.referenceCount",
         "citingPaper.openAccessPdf",
-        "citingPaper.fieldsOfStudy",
     ]
 )
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class _SemanticScholarPaper:
-    """Normalized metadata for a Semantic Scholar paper."""
+class _Paper:
+    """A Semantic Scholar paper, as the graph gives it."""
 
     paper_id: str
-    corpus_id: str
     title: str
     authors: tuple[str, ...]
     abstract: str
@@ -84,7 +141,7 @@ class _SemanticScholarPaper:
     venue: str
     publication_date: str
     url: str
-    external_ids: tuple[tuple[str, str], ...]
+    external_ids: tuple[str, ...]
     citation_count: int | None
     reference_count: int | None
     influential_citation_count: int | None
@@ -94,73 +151,96 @@ class _SemanticScholarPaper:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class _SemanticScholarCitation:
-    """Normalized citation edge from Semantic Scholar."""
+class _Citation:
+    """A citing paper, with the sentences that cite and why."""
 
-    paper: _SemanticScholarPaper
+    paper: _Paper
     contexts: tuple[str, ...]
     intents: tuple[str, ...]
     is_influential: bool
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _Batch[T]:
+    """A batch: its items, the total when the API gives one, and the next offset."""
+
+    items: list[T]
+    total: int | None = None
+    next_offset: int | None = None
+
+
 @tool(capability="network")
 def semantic_scholar_search(
     query: str,
-    max_results: int = 5,
-    start: int = 0,
+    max_results: Annotated[int, Range(1, 20)] = 5,
+    start: Annotated[int, Range(0, _SEARCH_DEPTH - 1)] = 0,
     year: str = "",
     venue: str = "",
-) -> str:
-    """Search Semantic Scholar papers using the public Academic Graph API.
+) -> ToolResult:
+    """Search Semantic Scholar papers by the words of their titles and abstracts, numbered, with
+    the total.
+
+    A keyword search: look a paper up by DOI, arXiv ID or PMID with semantic_scholar_paper.
 
     Args:
-        query: Search text, such as a title, topic, author, DOI, or citation fragment.
-        max_results: Number of papers to return (1-20). Defaults to 5.
-        start: Zero-based result offset for pagination. Defaults to 0.
-        year: Optional year filter accepted by Semantic Scholar, e.g. "2024" or "2020-2024".
-        venue: Optional venue filter, e.g. "NeurIPS" or "Nature".
+        query: Plain search text, such as a title, a topic or an author.
+        max_results: How many papers to list.
+        start: How many results to skip; the footer gives the next start.
+        year: A publication year or range: "2019", "2016-2020", "2010-" or "-2015".
+        venue: A venue to keep, e.g. "NeurIPS" or "Nature".
 
     Raises:
-        ToolFailure: validation_error when the query is empty or ``start`` is negative.
+        ToolFailure: validation_error when the query is empty or an identifier, or ``year`` is
+            not a year or a range of years.
     """
     query = query.strip()
     if not query:
         raise ToolFailure(
-            "validation_error", "query cannot be empty; give a title, topic, author or DOI."
+            "validation_error", "query cannot be empty; give a title, topic or author."
         )
-    if start < 0:
-        raise ToolFailure(
-            "validation_error", f"start must be greater than or equal to 0 (got {start})."
+    if doi_of(query) or _ARXIV_ID_RE.fullmatch(query) or _ARXIV_URL_RE.search(query):
+        msg = (
+            f"{query!r} is an identifier, and this search matches words: look the paper up with "
+            f"semantic_scholar_paper({query!r})"
         )
-
-    max_results = max(1, min(max_results, _MAX_RESULTS_LIMIT))
-    params = {
-        "query": query,
-        "limit": str(max_results),
-        "offset": str(start),
-        "fields": _PAPER_FIELDS,
-    }
+        raise ToolFailure("validation_error", msg)
+    if year.strip() and not _YEAR_RE.fullmatch(year.strip()):
+        msg = f"invalid year {year!r}; give 2019, 2016-2020, 2010- or -2015"
+        raise ToolFailure("validation_error", msg)
+    # The last page within the search's reach asks for what is left of it.
+    limit = max_results if start + max_results <= _SEARCH_DEPTH else _SEARCH_DEPTH - start
+    params = {"query": query, "limit": str(limit), "offset": str(start), "fields": _PAPER_FIELDS}
     if year.strip():
         params["year"] = year.strip()
     if venue.strip():
         params["venue"] = venue.strip()
-
-    papers = _API.get_json("paper", "search", params=params, parse=_papers)
-    if not papers:
-        return f"No Semantic Scholar results for: {query!r}"
-
-    return f"Semantic Scholar results for {query!r}:\n" + _format_papers(
-        papers,
-        include_abstract=False,
+    found = _API.get_json("paper", "search", params=params, parse=_papers)
+    if not found.items and start == 0:
+        return ToolResult.success(f"No Semantic Scholar papers match {query!r}.")
+    blocks = [_paper_block(start + n, p) for n, p in enumerate(found.items, start=1)]
+    window = list_window(
+        blocks,
+        first=start + 1,
+        total=found.total,
+        next_call=_onward(found, _SEARCH_DEPTH),
     )
+    return window.result(heading=f"Semantic Scholar papers that match {query!r}:")
 
 
 @tool(capability="network")
-def semantic_scholar_paper(paper_id: str) -> str:
-    """Fetch detailed Semantic Scholar metadata for a paper.
+def semantic_scholar_paper(
+    paper_id: str,
+    offset: Annotated[int, Range(0)] = 0,
+    max_chars: Annotated[int, Range(500, MAX_CHARS)] = DEFAULT_CHARS,
+) -> ToolResult:
+    """Read a paper's Semantic Scholar record: its whole abstract, every author, the counts,
+    the identifiers, the fields of study and the open PDF.
 
     Args:
-        paper_id: Semantic Scholar paper ID, DOI/DOI URL, arXiv ID/URL, PMID, or prefixed ID.
+        paper_id: A Semantic Scholar paper ID, a DOI or DOI URL, an arXiv ID or URL, a PMID, or a
+            prefixed ID such as "CorpusId:13756489" or "PMCID:PMC4567".
+        offset: Where to start, in characters of the record; the footer gives the next offset.
+        max_chars: How many characters to return.
 
     Raises:
         ToolFailure: validation_error when ``paper_id`` is empty or malformed; not_found when
@@ -171,51 +251,35 @@ def semantic_scholar_paper(paper_id: str) -> str:
         "paper",
         normalized,
         params={"fields": _PAPER_FIELDS},
-        parse=_parse_paper,
+        parse=_one_paper,
         missing=_missing(normalized),
     )
-    if paper is None:
-        raise ToolFailure("not_found", _missing(normalized))
-
-    return f"Semantic Scholar paper {normalized}:\n" + _format_papers(
-        [paper],
-        include_index=False,
-        include_abstract=True,
-        include_details=True,
-    )
+    heading = f"Semantic Scholar paper {normalized}:"
+    return record(_record_text(paper), heading=heading, offset=offset, max_chars=max_chars)
 
 
 @tool(capability="network")
 def semantic_scholar_citations(
     paper_id: str,
-    max_results: int = 10,
-    start: int = 0,
-) -> str:
-    """Fetch papers that cite a Semantic Scholar paper.
+    max_results: Annotated[int, Range(1, 20)] = 10,
+    start: Annotated[int, Range(0, _CITATION_DEPTH - 1)] = 0,
+) -> ToolResult:
+    """List the papers that cite a paper, numbered, each with every sentence that cites it.
 
     Args:
-        paper_id: Semantic Scholar paper ID, DOI/DOI URL, arXiv ID/URL, PMID, or prefixed ID.
-        max_results: Number of citing papers to return (1-20). Defaults to 10.
-        start: Zero-based result offset for pagination. Defaults to 0.
+        paper_id: A Semantic Scholar paper ID, a DOI or DOI URL, an arXiv ID or URL, a PMID, or a
+            prefixed ID such as "CorpusId:13756489".
+        max_results: How many citing papers to list.
+        start: How many citing papers to skip; the footer gives the next start.
 
     Raises:
-        ToolFailure: validation_error when ``paper_id`` is empty or malformed or ``start`` is
-            negative; not_found when Semantic Scholar has no paper with that ID.
+        ToolFailure: validation_error when ``paper_id`` is empty or malformed; not_found when
+            Semantic Scholar has no paper with that ID.
     """
     normalized = _paper_id(paper_id)
-    if start < 0:
-        raise ToolFailure(
-            "validation_error", f"start must be greater than or equal to 0 (got {start})."
-        )
-
-    max_results = max(1, min(max_results, _MAX_RESULTS_LIMIT))
-    params = {
-        "limit": str(max_results),
-        "offset": str(start),
-        "fields": _CITATION_FIELDS,
-    }
-
-    citations = _API.get_json(
+    limit = max_results if start + max_results <= _CITATION_DEPTH else _CITATION_DEPTH - start
+    params = {"limit": str(limit), "offset": str(start), "fields": _CITATION_FIELDS}
+    found = _API.get_json(
         "paper",
         normalized,
         "citations",
@@ -223,23 +287,51 @@ def semantic_scholar_citations(
         parse=_citations,
         missing=_missing(normalized),
     )
-
-    if not citations:
-        return f"No Semantic Scholar citations found for: {normalized}"
-
-    return f"Semantic Scholar citations for {normalized}:\n" + _format_citations(citations)
-
-
-def _papers(data: dict[str, Any]) -> list[_SemanticScholarPaper]:
-    items = data.get("data", [])
-    papers = [_parse_paper(item) for item in items if isinstance(item, dict)]
-    return [paper for paper in papers if paper is not None]
+    if not found.items and start == 0:
+        return ToolResult.success(f"No papers in Semantic Scholar cite {normalized}.")
+    blocks = [_citation_block(start + n, c) for n, c in enumerate(found.items, start=1)]
+    next_call = _onward(found, _CITATION_DEPTH)
+    # Past the API's reach, the paper's count says how many cannot be read here.
+    beyond = next_call is None and found.next_offset is not None
+    total = _citation_count(normalized) if beyond else None
+    window = list_window(blocks, first=start + 1, total=total, next_call=next_call)
+    return window.result(heading=f"Papers in Semantic Scholar that cite {normalized}:")
 
 
-def _citations(data: dict[str, Any]) -> list[_SemanticScholarCitation]:
-    items = data.get("data", [])
-    citations = [_parse_citation(item) for item in items if isinstance(item, dict)]
-    return [citation for citation in citations if citation is not None]
+def _citation_count(paper_id: str) -> int | None:
+    """How many papers cite ``paper_id``, as its record counts them."""
+    return _API.get_json(
+        "paper",
+        paper_id,
+        params={"fields": "citationCount"},
+        parse=lambda data: _int_or_none(data.get("citationCount")),
+        missing=_missing(paper_id),
+    )
+
+
+def _onward[T](found: _Batch[T], depth: int) -> dict[str, object] | None:
+    """The next call while the API gives a next offset within its reach."""
+    if not found.items or found.next_offset is None or found.next_offset >= depth:
+        return None
+    return {"start": found.next_offset}
+
+
+def _papers(data: dict[str, Any]) -> _Batch[_Paper]:
+    items = [paper for item in data.get("data", []) if (paper := _parse_paper(item))]
+    total, onward = _int_or_none(data.get("total")), _int_or_none(data.get("next"))
+    return _Batch(items=items, total=total, next_offset=onward)
+
+
+def _one_paper(data: dict[str, Any]) -> _Paper:
+    paper = _parse_paper(data)
+    if paper is None:
+        raise TypeError("expected a paper with a paperId or a title")
+    return paper
+
+
+def _citations(data: dict[str, Any]) -> _Batch[_Citation]:
+    items = [citation for item in data.get("data", []) if (citation := _parse_citation(item))]
+    return _Batch(items=items, next_offset=_int_or_none(data.get("next")))
 
 
 def _paper_id(value: str) -> str:
@@ -261,79 +353,49 @@ def _missing(paper_id: str) -> str:
 
 
 def _normalize_paper_id(value: str) -> str:
+    """``value`` as the paper endpoints take it: a paperId as it is, any other ID with its
+    prefix (``DOI:``, ``ARXIV:``, ``PMID:``, ``CorpusId:`` …); empty when it is malformed."""
     paper_id = value.strip()
     if not paper_id:
         return ""
-
-    lower = paper_id.lower()
-    for prefix in (
-        "https://doi.org/",
-        "http://doi.org/",
-        "https://dx.doi.org/",
-        "http://dx.doi.org/",
-    ):
-        if lower.startswith(prefix):
-            return f"DOI:{paper_id[len(prefix) :].strip()}"
-
-    arxiv_match = _ARXIV_URL_RE.search(paper_id)
-    if arxiv_match:
-        return f"ARXIV:{_strip_arxiv_pdf_suffix(arxiv_match.group(1).strip())}"
-
-    if lower.startswith("doi:"):
-        return "DOI:" + paper_id[4:].strip()
-    if lower.startswith("arxiv:"):
-        return "ARXIV:" + _strip_arxiv_pdf_suffix(paper_id[6:].strip())
-    if lower.startswith("pmid:"):
-        pmid = paper_id[5:].strip()
-        return f"PMID:{pmid}" if pmid.isdigit() else ""
-    if lower.startswith("pmcid:"):
-        pmcid = paper_id[6:].strip()
-        return f"PMCID:{pmcid}" if pmcid else ""
-    if lower.startswith("corpusid:"):
-        corpus_id = paper_id[9:].strip()
-        return f"CorpusId:{corpus_id}" if corpus_id.isdigit() else ""
-    if lower.startswith("url:"):
-        url = paper_id[4:].strip()
-        return f"URL:{url}" if url else ""
-    if lower.startswith(("mag:", "acl:", "pubmedcentral:")):
-        prefix, raw_id = paper_id.split(":", 1)
-        raw_id = raw_id.strip()
-        return f"{prefix.upper()}:{raw_id}" if raw_id else ""
-    if lower.startswith(("http://", "https://")):
+    if doi := doi_of(paper_id):
+        return f"DOI:{doi}"
+    if arxiv := _ARXIV_URL_RE.search(paper_id):
+        return f"ARXIV:{arxiv[1].strip().removesuffix('.pdf')}"
+    prefix, colon, rest = paper_id.partition(":")
+    canonical = _PREFIXES.get(prefix.strip().lower()) if colon else None
+    if canonical is not None:
+        rest = rest.strip().removesuffix(".pdf") if canonical == "ARXIV" else rest.strip()
+        valid = bool(rest) and (canonical not in _NUMERIC or rest.isdigit())
+        return f"{canonical}:{rest}" if valid else ""
+    if paper_id.lower().startswith(("http://", "https://")):
         return f"URL:{paper_id}"
-    if paper_id.lower().startswith("10.") and "/" in paper_id and " " not in paper_id:
-        return f"DOI:{paper_id}"
     if _ARXIV_ID_RE.fullmatch(paper_id):
         return f"ARXIV:{paper_id}"
-    if paper_id.isdigit():
-        return f"PMID:{paper_id}"
-
-    return paper_id
+    return f"PMID:{paper_id}" if paper_id.isdigit() else paper_id
 
 
-def _strip_arxiv_pdf_suffix(value: str) -> str:
-    if value.lower().endswith(".pdf"):
-        return value[:-4]
-    return value
-
-
-def _parse_paper(data: dict[str, Any]) -> _SemanticScholarPaper | None:
-    paper_id = str(data.get("paperId", "")).strip()
-    title = str(data.get("title", "")).strip()
+def _parse_paper(data: Any) -> _Paper | None:
+    if not isinstance(data, dict):
+        return None
+    paper_id = _string(data.get("paperId"))
+    title = _string(data.get("title"))
     if not paper_id and not title:
         return None
-
-    return _SemanticScholarPaper(
+    return _Paper(
         paper_id=paper_id,
-        corpus_id=_string_or_empty(data.get("corpusId")),
         title=title or "(untitled)",
-        authors=_authors(data),
-        abstract=str(data.get("abstract", "") or "").strip(),
+        authors=tuple(
+            name
+            for author in data.get("authors") or []
+            if isinstance(author, dict) and (name := _string(author.get("name")))
+        ),
+        abstract=_string(data.get("abstract")),
         year=_int_or_none(data.get("year")),
         venue=_venue(data),
-        publication_date=str(data.get("publicationDate", "") or "").strip(),
-        url=str(data.get("url", "") or "").strip(),
-        external_ids=_external_ids(data),
+        publication_date=_string(data.get("publicationDate")),
+        url=_string(data.get("url")),
+        external_ids=_external_ids(data.get("externalIds")),
         citation_count=_int_or_none(data.get("citationCount")),
         reference_count=_int_or_none(data.get("referenceCount")),
         influential_citation_count=_int_or_none(data.get("influentialCitationCount")),
@@ -343,14 +405,11 @@ def _parse_paper(data: dict[str, Any]) -> _SemanticScholarPaper | None:
     )
 
 
-def _parse_citation(data: dict[str, Any]) -> _SemanticScholarCitation | None:
-    paper_data = data.get("citingPaper")
-    if not isinstance(paper_data, dict):
-        return None
-    paper = _parse_paper(paper_data)
+def _parse_citation(data: Any) -> _Citation | None:
+    paper = _parse_paper(data.get("citingPaper")) if isinstance(data, dict) else None
     if paper is None:
         return None
-    return _SemanticScholarCitation(
+    return _Citation(
         paper=paper,
         contexts=_string_tuple(data.get("contexts")),
         intents=_string_tuple(data.get("intents")),
@@ -358,167 +417,129 @@ def _parse_citation(data: dict[str, Any]) -> _SemanticScholarCitation | None:
     )
 
 
-def _authors(data: dict[str, Any]) -> tuple[str, ...]:
-    authors: list[str] = []
-    for author in data.get("authors", []):
-        if isinstance(author, dict):
-            name = str(author.get("name", "") or "").strip()
-            if name:
-                authors.append(name)
-    return tuple(authors)
-
-
 def _venue(data: dict[str, Any]) -> str:
     publication_venue = data.get("publicationVenue")
-    if isinstance(publication_venue, dict):
-        name = str(publication_venue.get("name", "") or "").strip()
-        if name:
-            return name
-    return str(data.get("venue", "") or "").strip()
+    if isinstance(publication_venue, dict) and (name := _string(publication_venue.get("name"))):
+        return name
+    return _string(data.get("venue"))
 
 
-def _external_ids(data: dict[str, Any]) -> tuple[tuple[str, str], ...]:
-    external_ids = data.get("externalIds")
-    if not isinstance(external_ids, dict):
+def _external_ids(value: Any) -> tuple[str, ...]:
+    """The paper's identifiers that the paper endpoints take, written as they take them
+    (``DOI:10.…``, ``ARXIV:…``); the others (DBLP keys and the like) no tool takes."""
+    if not isinstance(value, dict):
         return ()
-    pairs: list[tuple[str, str]] = []
-    for key, value in external_ids.items():
-        if value is None:
-            continue
-        if isinstance(value, list):
-            text = ", ".join(str(item).strip() for item in value if str(item).strip())
-        else:
-            text = str(value).strip()
-        if text:
-            pairs.append((str(key).strip(), text))
-    return tuple(pairs)
+    found = {
+        prefix: text
+        for key, raw in value.items()
+        if (prefix := _ID_PREFIXES.get(str(key))) and (text := _string(raw))
+    }
+    return tuple(
+        f"{prefix}:{found[prefix]}" for prefix in _ID_PREFIXES.values() if prefix in found
+    )
 
 
 def _open_access_pdf(data: dict[str, Any]) -> str:
     pdf = data.get("openAccessPdf")
-    if not isinstance(pdf, dict):
-        return ""
-    return str(pdf.get("url", "") or "").strip()
+    return _string(pdf.get("url")) if isinstance(pdf, dict) else ""
 
 
 def _fields_of_study(data: dict[str, Any]) -> tuple[str, ...]:
     fields = list(_string_tuple(data.get("fieldsOfStudy")))
-    for item in data.get("s2FieldsOfStudy", []) or []:
-        if not isinstance(item, dict):
-            continue
-        category = str(item.get("category", "") or "").strip()
-        if category:
-            fields.append(category)
+    fields += [
+        category
+        for item in data.get("s2FieldsOfStudy") or []
+        if isinstance(item, dict) and (category := _string(item.get("category")))
+    ]
     return tuple(dict.fromkeys(fields))
 
 
-def _format_papers(
-    papers: list[_SemanticScholarPaper],
-    *,
-    include_index: bool = True,
-    include_abstract: bool = False,
-    include_details: bool = False,
-) -> str:
-    blocks: list[str] = []
-    for index, paper in enumerate(papers, start=1):
-        title = f"{index}. {paper.title}" if include_index else paper.title
-        lines = [title]
-
-        meta: list[str] = []
-        if paper.paper_id:
-            meta.append(f"paperId: {paper.paper_id}")
-        if paper.year is not None:
-            meta.append(f"year: {paper.year}")
-        if paper.publication_date:
-            meta.append(f"published: {paper.publication_date}")
-        if meta:
-            lines.append("   " + " | ".join(meta))
-
-        if paper.authors:
-            lines.append(f"   Authors: {_format_authors(paper.authors)}")
-        if paper.venue:
-            lines.append(f"   Venue: {paper.venue}")
-        counts = _format_counts(paper)
-        if counts:
-            lines.append(f"   {counts}")
-        if paper.external_ids:
-            lines.append("   External IDs: " + _format_external_ids(paper.external_ids))
-        if include_abstract and paper.abstract:
-            lines.append(f"   Abstract: {_truncate(paper.abstract, _ABSTRACT_MAX_CHARS)}")
-        if include_details and paper.fields_of_study:
-            lines.append("   Fields: " + ", ".join(paper.fields_of_study[:8]))
-        if include_details and paper.publication_types:
-            lines.append("   Publication types: " + ", ".join(paper.publication_types[:8]))
-        if paper.open_access_pdf:
-            lines.append(f"   Open PDF: {paper.open_access_pdf}")
-        if paper.url:
-            lines.append(f"   URL: {paper.url}")
-
-        blocks.append("\n".join(lines))
-    return "\n\n".join(blocks)
+def _meta(paper: _Paper) -> str:
+    meta = [f"paperId: {paper.paper_id}"] if paper.paper_id else []
+    if paper.year is not None:
+        meta.append(f"year: {paper.year}")
+    if paper.publication_date:
+        meta.append(f"published: {paper.publication_date}")
+    return " | ".join(meta)
 
 
-def _format_citations(citations: list[_SemanticScholarCitation]) -> str:
-    blocks: list[str] = []
-    for index, citation in enumerate(citations, start=1):
-        lines = _format_papers([citation.paper], include_index=False).splitlines()
-        lines[0] = f"{index}. {lines[0]}"
-        citation_meta: list[str] = []
-        if citation.is_influential:
-            citation_meta.append("influential")
-        if citation.intents:
-            citation_meta.append("intents: " + ", ".join(citation.intents[:5]))
-        if citation_meta:
-            lines.append("   Citation: " + " | ".join(citation_meta))
-        if citation.contexts:
-            lines.append(f"   Context: {_truncate(citation.contexts[0], 260)}")
-        blocks.append("\n".join(lines))
-    return "\n\n".join(blocks)
+def _counts(paper: _Paper) -> str:
+    labelled = (
+        ("Citations", paper.citation_count),
+        ("Influential citations", paper.influential_citation_count),
+        ("References", paper.reference_count),
+    )
+    return " | ".join(f"{label}: {count}" for label, count in labelled if count is not None)
 
 
-def _format_counts(paper: _SemanticScholarPaper) -> str:
-    counts: list[str] = []
-    if paper.citation_count is not None:
-        counts.append(f"Citations: {paper.citation_count}")
-    if paper.influential_citation_count is not None:
-        counts.append(f"Influential citations: {paper.influential_citation_count}")
-    if paper.reference_count is not None:
-        counts.append(f"References: {paper.reference_count}")
-    return " | ".join(counts)
+def _paper_lines(paper: _Paper) -> list[str]:
+    """A paper in a list: what tells it apart, and the first authors."""
+    lines = [_meta(paper)]
+    if paper.authors:
+        whole = call("semantic_scholar_paper", paper.paper_id)
+        lines.append(f"Authors: {names(paper.authors, whole=whole)}")
+    lines += [f"Venue: {paper.venue}" if paper.venue else "", _counts(paper)]
+    if paper.external_ids:
+        lines.append(f"IDs: {' | '.join(paper.external_ids)}")
+    if paper.open_access_pdf:
+        lines.append(f"Open PDF: {paper.open_access_pdf}")
+    return [line for line in lines if line]
 
 
-def _format_external_ids(external_ids: tuple[tuple[str, str], ...]) -> str:
-    preferred = {"DOI", "ArXiv", "PubMed", "PMID", "PMCID", "ACL", "DBLP", "CorpusId"}
-    ordered = [item for item in external_ids if item[0] in preferred]
-    ordered.extend(item for item in external_ids if item[0] not in preferred)
-    return " | ".join(f"{key}: {value}" for key, value in ordered[:8])
+def _paper_block(number: int, paper: _Paper) -> str:
+    return "\n".join([f"{number}. {paper.title}", *(f"   {line}" for line in _paper_lines(paper))])
 
 
-def _format_authors(authors: tuple[str, ...]) -> str:
-    if len(authors) <= 8:
-        return ", ".join(authors)
-    return ", ".join(authors[:8]) + f", ... (+{len(authors) - 8} more)"
+def _citation_block(number: int, citation: _Citation) -> str:
+    lines = _paper_lines(citation.paper)
+    why = ["influential"] if citation.is_influential else []
+    if citation.intents:
+        why.append(f"intents: {', '.join(citation.intents)}")
+    if why:
+        lines.append(f"Citation: {' | '.join(why)}")
+    lines += [f'Context: "{context}"' for context in citation.contexts]
+    return "\n".join([f"{number}. {citation.paper.title}", *(f"   {line}" for line in lines)])
+
+
+def _record_text(paper: _Paper) -> str:
+    """The whole record: the abstract before the author list, which can run long."""
+    lines = [paper.title, _meta(paper), f"Venue: {paper.venue}" if paper.venue else ""]
+    lines.append(_counts(paper))
+    if paper.external_ids:
+        lines.append(f"IDs: {' | '.join(paper.external_ids)}")
+    kinds = []
+    if paper.publication_types:
+        kinds.append(f"Publication types: {', '.join(paper.publication_types)}")
+    if paper.fields_of_study:
+        kinds.append(f"Fields: {', '.join(paper.fields_of_study)}")
+    lines.append(" | ".join(kinds))
+    if paper.abstract:
+        lines.append(f"Abstract: {paper.abstract}")
+    if paper.authors:
+        lines.append(f"Authors ({len(paper.authors)}): {', '.join(paper.authors)}")
+    if paper.open_access_pdf:
+        lines.append(f"Open PDF: {paper.open_access_pdf}")
+    if paper.url:
+        lines.append(f"URL: {paper.url}")
+    return "\n".join(line for line in lines if line) + "\n"
 
 
 def _string_tuple(value: Any) -> tuple[str, ...]:
     if not isinstance(value, list):
         return ()
-    return tuple(str(item).strip() for item in value if str(item).strip())
+    return tuple(text for item in value if (text := _string(item)))
 
 
-def _string_or_empty(value: Any) -> str:
+def _string(value: Any) -> str:
     if value is None:
         return ""
-    return str(value).strip()
+    return " ".join(str(value).split())
 
 
 def _int_or_none(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
     if isinstance(value, int):
         return value
-    return None
-
-
-def _truncate(text: str, max_chars: int) -> str:
-    if len(text) <= max_chars:
-        return text
-    return text[: max_chars - 15].rstrip() + " ... [truncated]"
+    text = _string(value)
+    return int(text) if text.isdigit() else None

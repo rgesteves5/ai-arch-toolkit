@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 
 from ai_arch_toolkit.core import ToolFailureType
 from tests.toolkit import geo_answers
+from tests.toolkit import literature_answers as lit
 from tests.toolkit.contract_cases import Body
 from tests.toolkit.data_bodies import WORLD_BANK_INVALID_VALUE
 
@@ -264,6 +265,103 @@ ERROR_BODIES: dict[str, tuple[ErrorBody, ...]] = {
             type="not_found",
             says="Open Library deleted /works/OL1000619W",
             tools=_LIBRARY_ITEMS,
+        ),
+    ),
+    "_arxiv": (
+        ErrorBody(
+            source="live, 2026-09-30 (https://info.arxiv.org/help/api/user-manual.html#34-errors)",
+            status=400,
+            body=lit.ARXIV_ERROR_FEED,
+            type="validation_error",
+            says="Invalid query string: '( ( )'",
+        ),
+    ),
+    "_crossref": (
+        ErrorBody(
+            source="https://github.com/CrossRef/cayenne (src/cayenne/api/v1/validate.clj)",
+            status=400,
+            body=lit.CROSSREF_REFUSED,
+            type="validation_error",
+            says="Type specified as journal but must be one of",
+        ),
+    ),
+    "_datacite": (
+        ErrorBody(
+            source="https://support.datacite.org/docs/api-error-codes (JSON:API error objects)",
+            status=400,
+            body=lit.DATACITE_REFUSED,
+            type="validation_error",
+            says="DataCite refused the request: Bad Request",
+        ),
+        ErrorBody(
+            source="https://support.datacite.org/docs/api-error-codes (JSON:API error objects)",
+            status=429,
+            body=lit.DATACITE_RATE_LIMITED,
+            type="rate_limited",
+            says="Your request has been rate limited",
+        ),
+    ),
+    "_europe_pmc": (
+        ErrorBody(
+            source=(
+                "recorded in K-Dense-AI/scientific-agent-skills (paper-lookup/references/"
+                "europepmc.md); https://europepmc.org/RestfulWebService"
+            ),
+            status=200,
+            body=lit.EPMC_ERROR,
+            type="upstream",
+            says="Invalid page size provided. Valid size is between 1 and 1000",
+        ),
+    ),
+    "_pubmed": (
+        ErrorBody(
+            source="live, 2026-09-29 (https://eutils.ncbi.nlm.nih.gov/eutils/dtd/20060628/esearch.dtd)",
+            status=200,
+            body=lit.ESEARCH_ERROR,
+            type="upstream",
+            says="Search Backend failed",
+            tools=frozenset({"pubmed_search"}),
+        ),
+        ErrorBody(
+            source="https://ncbiinsights.ncbi.nlm.nih.gov/2017/11/02/new-api-keys-for-the-e-utilities/",
+            status=429,
+            body=lit.NCBI_RATE_LIMITED,
+            type="rate_limited",
+            says="API rate limit exceeded",
+        ),
+    ),
+    "_semantic_scholar": (
+        ErrorBody(
+            source="https://api.semanticscholar.org/api-docs/graph (Error400)",
+            status=400,
+            body=lit.S2_UNACCEPTABLE,
+            type="validation_error",
+            says="Unacceptable query params: [year=twenty]",
+        ),
+        ErrorBody(
+            source="https://api.semanticscholar.org/api-docs/graph (Error400)",
+            status=400,
+            body=lit.S2_UNRECOGNIZED,
+            type="upstream",
+            says="Unrecognized or unsupported fields: [nope]",
+        ),
+    ),
+    "_ror": (
+        ErrorBody(
+            source="https://github.com/ror-community/ror-api (rorapi/common/queries.py, validate)",
+            status=400,
+            body=lit.ROR_REFUSED,
+            type="validation_error",
+            says="filter key 'colour' is illegal",
+        ),
+    ),
+    "_nvd": (
+        ErrorBody(
+            source="https://nvd.nist.gov/developers/start-here (the response header message)",
+            status=404,
+            headers={"message": lit.NVD_REFUSED_REASON},
+            type="validation_error",
+            says=lit.NVD_REFUSED_REASON,
         ),
     ),
     "_air_quality": (

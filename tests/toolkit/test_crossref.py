@@ -1,113 +1,137 @@
-"""Tests for toolkit/tools/_crossref.py."""
+"""Tests for toolkit/tools/_crossref.py (T06)."""
 
 from __future__ import annotations
 
-import urllib.error
-from unittest.mock import patch
+import json
+from typing import Any
+from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qs, urlparse
 
 import pytest
 
+from ai_arch_toolkit.core import ToolCall, ToolGroup, ToolResult
 from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._crossref import crossref_search, crossref_work
 from tests.toolkit.http_fakes import HTTP_OPEN, http_error, respond
-
-_WORK = {
-    "DOI": "10.5555/example",
-    "title": ["Attention Is All You Need"],
-    "subtitle": ["Transformer paper"],
-    "author": [
-        {"given": "Ashish", "family": "Vaswani"},
-        {"name": "Noam Shazeer"},
-    ],
-    "issued": {"date-parts": [[2017, 6, 12]]},
-    "container-title": ["Advances in Neural Information Processing Systems"],
-    "publisher": "NeurIPS",
-    "type": "proceedings-article",
-    "URL": "https://doi.org/10.5555/example",
-    "abstract": "<jats:p>The dominant <i>sequence</i> transduction model.</jats:p>",
-    "is-referenced-by-count": 1234,
-    "license": [{"URL": "https://license.example"}],
-    "link": [{"URL": "https://content.example/full.pdf"}],
-    "reference": [
-        {
-            "author": "Smith",
-            "article-title": "Related Work",
-            "journal-title": "Journal of Tests",
-            "year": "2016",
-            "DOI": "10.5555/ref",
-        }
-    ],
-}
+from tests.toolkit.literature_answers import (
+    CROSSREF_REFUSED,
+    crossref_item,
+    crossref_list,
+)
+from tests.toolkit.literature_answers import crossref_work as work_answer
 
 
-def _called_request(mock_urlopen):
-    return mock_urlopen.call_args.args[0]
+def _text(result: ToolResult) -> str:
+    assert isinstance(result, ToolResult) and result.ok, result
+    assert isinstance(result.value, str)
+    return result.value
 
 
-def _called_params(mock_urlopen) -> dict[str, list[str]]:
-    return parse_qs(urlparse(_called_request(mock_urlopen).full_url).query)
+def _params(mock_urlopen: MagicMock) -> dict[str, list[str]]:
+    return parse_qs(urlparse(mock_urlopen.call_args.args[0].full_url).query)
+
+
+def _failure(fn: Any, *args: Any, **kwargs: Any) -> ToolFailure:
+    with pytest.raises(ToolFailure) as caught:
+        fn(*args, **kwargs)
+    return caught.value
 
 
 class TestCrossrefSearch:
     @patch(HTTP_OPEN)
-    def test_returns_results(self, mock_urlopen):
-        mock_urlopen.return_value = respond({"message": {"items": [_WORK]}})
+    def test_a_page_says_the_total_and_the_next_start(self, mock_urlopen):
+        mock_urlopen.return_value = respond(
+            crossref_list(crossref_item("10.5555/a"), crossref_item("10.5555/b"), total=4321)
+        )
 
         result = crossref_search("transformers", max_results=2)
 
-        assert "Crossref results for 'transformers'" in result
-        assert "Attention Is All You Need: Transformer paper" in result
-        assert "Ashish Vaswani, Noam Shazeer" in result
-        assert "DOI: 10.5555/example | type: proceedings-article" in result
-        assert "published: 2017-06-12" in result
-        assert "Venue: Advances in Neural Information Processing Systems" in result
-        assert "Publisher: NeurIPS" in result
-        assert "Referenced by: 1234" in result
-        assert "https://doi.org/10.5555/example" in result
-        assert "https://license.example" in result
-        assert "https://content.example/full.pdf" in result
-        assert "Abstract:" not in result
-
-        params = _called_params(mock_urlopen)
+        text = _text(result)
+        assert text.splitlines()[:6] == [
+            "Crossref works that match 'transformers':",
+            "1. Attention Is All You Need: Transformer paper",
+            "   DOI: 10.5555/a | type: proceedings-article | published: 2017-06-12",
+            "   Authors: Ashish Vaswani, Noam Shazeer",
+            "   Venue: Advances in Neural Information Processing Systems | Publisher: NeurIPS",
+            "   Cited by: 1234 works in Crossref",
+        ]
+        assert text.endswith("[results 1-2 of 4321 | next: start=2]")
+        params = _params(mock_urlopen)
         assert params["query"] == ["transformers"]
         assert params["rows"] == ["2"]
         assert params["offset"] == ["0"]
 
     @patch(HTTP_OPEN)
-    def test_filters_dates_type_start_and_caps_max_results(self, mock_urlopen):
-        mock_urlopen.return_value = respond({"message": {"items": []}})
+    def test_a_long_author_list_says_how_many_more_and_where(self, mock_urlopen):
+        mock_urlopen.return_value = respond(crossref_list(crossref_item(authors=11), total=1))
+
+        text = _text(crossref_search("transformers"))
+
+        assert "(+3 more; crossref_work('10.5555/example') lists all)" in text
+        assert "License" not in text and "Links" not in text  # the record lists them all
+
+    @patch(HTTP_OPEN)
+    def test_past_crossrefs_offset_limit_the_rest_cannot_be_read_here(self, mock_urlopen):
+        # Offsets for /works are limited to 10K (https://github.com/CrossRef/rest-api-doc).
+        mock_urlopen.return_value = respond(
+            crossref_list(crossref_item("10.5555/a"), crossref_item("10.5555/b"), total=50_000)
+        )
+
+        text = _text(crossref_search("transformers", max_results=2, start=10_000))
+
+        assert text.endswith("[results 10001-10002 of 50000 | the rest cannot be read here]")
+
+    @patch(HTTP_OPEN)
+    def test_zero_results_say_so_with_the_query(self, mock_urlopen):
+        mock_urlopen.return_value = respond(crossref_list(total=0))
+
+        assert _text(crossref_search("no such paper")) == (
+            "No Crossref works match 'no such paper'."
+        )
+
+    @patch(HTTP_OPEN)
+    def test_filters_dates_type_and_start(self, mock_urlopen):
+        mock_urlopen.return_value = respond(crossref_list(total=0))
 
         crossref_search(
             "language agents",
-            max_results=99,
+            max_results=20,
             start=40,
             from_date="2024-01-01",
-            to_date="2024-12-31",
+            to_date="2024-01-31",
             type_filter="journal-article",
         )
 
-        params = _called_params(mock_urlopen)
-        assert params["query"] == ["language agents"]
+        params = _params(mock_urlopen)
         assert params["rows"] == ["20"]
         assert params["offset"] == ["40"]
         assert params["filter"] == [
-            "from-pub-date:2024-01-01,until-pub-date:2024-12-31,type:journal-article"
+            "from-pub-date:2024-01-01,until-pub-date:2024-01-31,type:journal-article"
         ]
 
+    @pytest.mark.parametrize(
+        ("max_results", "start", "kept"),
+        [(20, 10_000, True), (21, 0, False), (0, 0, False), (5, 10_001, False), (5, -1, False)],
+    )
     @patch(HTTP_OPEN)
-    def test_no_results(self, mock_urlopen):
-        mock_urlopen.return_value = respond({"message": {"items": []}})
+    def test_the_limits_are_the_schemas(self, mock_urlopen, max_results, start, kept):
+        mock_urlopen.return_value = respond(crossref_list(total=0))
+        call = ToolCall(
+            id="c1",
+            name="crossref_search",
+            input={"query": "x", "max_results": max_results, "start": start},
+        )
 
-        result = crossref_search("no such paper")
+        result = ToolGroup(crossref_search).execute(call)
 
-        assert "No Crossref results" in result
+        assert result.ok is kept
+        if not kept:
+            assert result.error is not None and result.error.type == "validation_error"
 
     @pytest.mark.parametrize(
         ("kwargs", "words"),
         [
             ({"query": ""}, "query cannot be empty"),
-            ({"query": "test", "start": -1}, "start must be greater than or equal to 0"),
             ({"query": "test", "from_date": "01-01-2024"}, "invalid from_date"),
             ({"query": "test", "to_date": "2024-13-01"}, "invalid to_date"),
             (
@@ -119,33 +143,43 @@ class TestCrossrefSearch:
     )
     @patch(HTTP_OPEN)
     def test_invalid_options_do_not_call_api(self, mock_urlopen, kwargs, words):
-        with pytest.raises(ToolFailure) as caught:
-            crossref_search(**kwargs)
+        failure = _failure(crossref_search, **kwargs)
 
-        assert caught.value.error.type == "validation_error"
-        assert words in caught.value.error.message
+        assert failure.error.type == "validation_error"
+        assert words in failure.error.message
         mock_urlopen.assert_not_called()
+
+    @patch(HTTP_OPEN)
+    def test_a_refused_filter_says_crossrefs_reason(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(
+            400, "Bad Request", body=json.dumps(CROSSREF_REFUSED).encode()
+        )
+
+        failure = _failure(crossref_search, "test", type_filter="journal")
+
+        assert failure.error.type == "validation_error"
+        assert failure.error.message == (
+            "Crossref refused the request: Type specified as journal but must be one of: "
+            "book-section, monograph; correct that parameter"
+        )
 
     @patch(HTTP_OPEN)
     def test_api_failure(self, mock_urlopen):
         mock_urlopen.side_effect = TimeoutError()
 
-        with pytest.raises(ToolFailure) as caught:
-            crossref_search("test")
+        failure = _failure(crossref_search, "test")
 
-        assert caught.value.error.type == "upstream"
-        assert caught.value.error.retryable
-        assert "timed out" in caught.value.error.message.lower()
+        assert failure.error.type == "upstream"
+        assert failure.error.retryable
 
     @patch(HTTP_OPEN)
     def test_404_is_endpoint_not_found(self, mock_urlopen):
         mock_urlopen.side_effect = http_error(404, "Not Found", body=b"Resource not found.")
 
-        with pytest.raises(ToolFailure) as caught:
-            crossref_search("test")
+        failure = _failure(crossref_search, "test")
 
-        assert caught.value.error.type == "upstream"
-        assert caught.value.error.message == (
+        assert failure.error.type == "upstream"
+        assert failure.error.message == (
             "Crossref: endpoint not found (HTTP 404); the API may have changed: "
             "Resource not found."
         )
@@ -154,70 +188,122 @@ class TestCrossrefSearch:
     def test_parse_failure(self, mock_urlopen):
         mock_urlopen.return_value = respond(b"not json")
 
-        with pytest.raises(ToolFailure) as caught:
-            crossref_search("test")
+        failure = _failure(crossref_search, "test")
 
-        assert caught.value.error.type == "upstream"
-        assert "could not parse" in caught.value.error.message
+        assert failure.error.type == "upstream"
+        assert "could not parse" in failure.error.message
 
 
 class TestCrossrefWork:
     @patch(HTTP_OPEN)
-    def test_returns_work_by_doi_url(self, mock_urlopen):
-        mock_urlopen.return_value = respond({"message": _WORK})
+    def test_the_record_is_whole(self, mock_urlopen):
+        mock_urlopen.return_value = respond(work_answer(crossref_item(authors=11, references=7)))
 
-        result = crossref_work("https://doi.org/10.5555/example")
+        text = _text(crossref_work("https://doi.org/10.5555/example"))
 
-        assert result.startswith("Crossref work 10.5555/example:")
-        assert "Attention Is All You Need: Transformer paper" in result
-        assert "Abstract: The dominant sequence transduction model." in result
-        assert "References (1 deposited):" in result
-        assert "Smith; Related Work; Journal of Tests; 2016; 10.5555/ref" in result
-        assert "1. Attention" not in result
+        lines = text.splitlines()
+        assert lines[:8] == [
+            "Crossref work 10.5555/example:",
+            "Attention Is All You Need: Transformer paper",
+            "DOI: 10.5555/example | type: proceedings-article | published: 2017-06-12",
+            "Venue: Advances in Neural Information Processing Systems | Publisher: NeurIPS",
+            "Cited by: 1234 works in Crossref | References: 7 deposited",
+            "URL: https://doi.org/10.5555/example",
+            "Abstract: The dominant sequence transduction model.",
+            "Authors (11): Ashish Vaswani (Google Brain; ORCID 0000-0002-1825-0097), "
+            "Noam Shazeer, Given Family 3, Given Family 4, Given Family 5, Given Family 6, "
+            "Given Family 7, Given Family 8, Given Family 9, Given Family 10, Given Family 11",
+        ]
+        assert (
+            "License: https://creativecommons.org/licenses/by/4.0/ (vor, from 2017-06-12)" in text
+        )
+        assert "Links: https://content.example/full.pdf (application/pdf, text-mining)" in text
+        assert "References (7):" in text
+        assert "- Smith; Related Work 7; Journal of Tests; 2016; DOI: 10.5555/ref7" in text
+        assert "[chars" not in text
+        assert urlparse(mock_urlopen.call_args.args[0].full_url).path.endswith(
+            "/10.5555%2Fexample"
+        )
 
-        request = _called_request(mock_urlopen)
-        assert urlparse(request.full_url).path.endswith("/10.5555%2Fexample")
+    @patch(HTTP_OPEN)
+    def test_a_long_record_reads_on_through_the_window(self, mock_urlopen):
+        mock_urlopen.side_effect = [
+            respond(work_answer(crossref_item(references=80))) for _ in range(2)
+        ]
+
+        first = crossref_work("10.5555/example", max_chars=1000)
+        last = first.metadata["window"]["last"]
+        second = crossref_work("10.5555/example", max_chars=1000, offset=last)
+
+        assert _text(first).endswith(f"next: offset={last}]")
+        assert "Abstract:" in _text(first)
+        assert second.metadata["window"]["first"] == last
+        assert "Abstract:" not in _text(second)
+
+    @patch(HTTP_OPEN)
+    def test_deposited_references_the_record_does_not_carry_are_said(self, mock_urlopen):
+        item = crossref_item(references=0) | {"reference-count": 45}
+        mock_urlopen.return_value = respond(work_answer(item))
+
+        text = _text(crossref_work("10.5555/example"))
+
+        assert "References: 45 deposited, none listed in Crossref's record" in text
 
     @patch(HTTP_OPEN)
     def test_accepts_doi_prefix(self, mock_urlopen):
-        mock_urlopen.return_value = respond({"message": _WORK})
+        mock_urlopen.return_value = respond(work_answer(crossref_item()))
 
-        result = crossref_work("doi:10.5555/example")
+        text = _text(crossref_work("doi:10.5555/example"))
 
-        assert result.startswith("Crossref work 10.5555/example:")
+        assert text.startswith("Crossref work 10.5555/example:")
 
     @patch(HTTP_OPEN)
     def test_invalid_doi(self, mock_urlopen):
-        with pytest.raises(ToolFailure) as caught:
-            crossref_work("bad doi")
+        failure = _failure(crossref_work, "bad doi")
 
-        assert caught.value.error.type == "validation_error"
-        assert "invalid DOI 'bad doi'" in caught.value.error.message
+        assert failure.error.type == "validation_error"
+        assert "invalid DOI 'bad doi'" in failure.error.message
         mock_urlopen.assert_not_called()
 
     @patch(HTTP_OPEN)
     def test_not_found(self, mock_urlopen):
-        mock_urlopen.side_effect = urllib.error.HTTPError(
-            url="https://api.crossref.org/works/10.5555%2Fmissing",
-            code=404,
-            msg="Not Found",
-            hdrs=None,
-            fp=None,
-        )
+        mock_urlopen.side_effect = http_error(404, "Not Found", body=b"Resource not found.")
 
-        with pytest.raises(ToolFailure) as caught:
-            crossref_work("10.5555/missing")
+        failure = _failure(crossref_work, "10.5555/missing")
 
-        assert caught.value.error.type == "not_found"
-        assert caught.value.error.message == (
-            "no Crossref work with DOI 10.5555/missing; search with crossref_search."
+        assert failure.error.type == "not_found"
+        assert failure.error.message == (
+            "no Crossref work with DOI 10.5555/missing; search with crossref_search, or look "
+            "the DOI up with datacite_doi."
         )
 
     @patch(HTTP_OPEN)
     def test_other_statuses_propagate(self, mock_urlopen):
         mock_urlopen.side_effect = http_error(429, "Too Many Requests")
 
-        with pytest.raises(ToolFailure) as caught:
-            crossref_work("10.5555/example")
+        failure = _failure(crossref_work, "10.5555/example")
 
-        assert caught.value.error.type == "rate_limited"
+        assert failure.error.type == "rate_limited"
+
+
+@patch(HTTP_OPEN)
+def test_a_null_list_in_one_work_does_not_fail_the_search(mock_urlopen):
+    odd = crossref_item("10.1/odd") | {"author": None, "reference": None, "license": None}
+    odd["link"] = None
+    mock_urlopen.return_value = respond(crossref_list(crossref_item(), odd, total=2))
+
+    text = _text(crossref_search("transformers", max_results=2))
+
+    assert "2. Attention Is All You Need: Transformer paper" in text
+
+
+@patch(HTTP_OPEN)
+def test_a_work_without_a_doi_names_no_call_that_would_fail(mock_urlopen):
+    mock_urlopen.return_value = respond(
+        crossref_list(crossref_item(authors=11) | {"DOI": None}, total=1)
+    )
+
+    text = _text(crossref_search("transformers"))
+
+    assert "Given Family 8 (+3 more)" in text
+    assert "crossref_work(''" not in text
