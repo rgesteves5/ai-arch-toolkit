@@ -199,7 +199,7 @@ filesystem access, arbitrary URL fetching, and Python execution require explicit
 | Scholarly & research | `_arxiv.py`, `_pubmed.py`, `_europe_pmc.py`, `_semantic_scholar.py`, `_crossref.py`, `_ror.py`, `_datacite.py`, `_open_library.py`, `_internet_archive.py` |
 | Biomedical & chemistry | `_uniprot.py`, `_pdb.py`, `_chembl.py`, `_rxnorm_dailymed.py`, `_clinical_trials.py` |
 | Earth, life & public data | `_gbif.py`, `_open_food_facts.py`, `_openfda_food.py`, `_foodon.py`, `_earthquake.py`, `_eonet.py`, `_world_bank.py`, `_who_gho.py`, `_eurostat.py`, `_nvd.py` |
-| `tools.dangerous` (opt-in) | `_filesystem.py`, `_shell.py`, `_python.py`, `_web.py`, and `csv_read` from `_json.py`: filesystem, shell, Python execution, arbitrary URL fetching |
+| `tools.dangerous` (opt-in) | `_filesystem.py`, `_shell.py`, `_python.py`, `_web.py`, and `csv_read` from `_json.py`: filesystem, shell, Python execution, arbitrary URL fetching; `_filesystem_policy.py` (`FilesystemPolicy`, `PathScopeGate`) and `_filesystem_write.py` (`filesystem_tools`: the reads and the writes bound to a policy's folders) |
 
 All use `@tool` decorator from core/. One that cannot answer raises a typed `ToolFailure`, which the executor returns as a failed `ToolResult`.
 

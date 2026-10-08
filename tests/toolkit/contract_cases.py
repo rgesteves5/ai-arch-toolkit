@@ -106,6 +106,7 @@ _OTHERS = """
     http_get ip_lookup math_eval osm_reverse_geocode python_repl run_command scrape_text
     text_stats timezone_convert timezone_lookup unit_convert world_bank_countries
     world_bank_sources world_bank_topics
+    write_file append_file make_directory move_path
 """
 KINDS: dict[str, Kind] = {
     **dict.fromkeys(_LOOKUPS.split(), "lookup"),
@@ -113,10 +114,10 @@ KINDS: dict[str, Kind] = {
     **dict.fromkeys(_OTHERS.split(), "other"),
 }
 
-# The 38 tools that never cut what they return (plan, annex A), and those that stopped cutting
+# The 38 tools that never cut what they return (plan, annex A), those that stopped cutting
 # when their module was migrated (tavily_search: its source serves one page, and its excerpts
-# come whole, C08): point 1, the window, does not apply. Every other tool cuts, and owes a window
-# until a case proves it.
+# come whole, C08), and the write tools, whose answer is one line (C07): point 1, the window,
+# does not apply. Every other tool cuts, and owes a window until a case proves it.
 _WHOLE = """
     air_quality_current base64_decode base64_encode chembl_molecule chembl_target country_info
     date_add date_diff date_format datetime_now distance_between earthquake_count
@@ -125,6 +126,7 @@ _WHOLE = """
     pdb_chemical_component pdb_entry pdb_ligands rxnorm_concept tavily_search text_stats
     timezone_convert timezone_lookup unit_convert uniprot_sequence who_indicator
     open_food_facts_compare open_food_facts_product world_bank_indicator
+    write_file append_file make_directory move_path
 """
 WHOLE = frozenset(_WHOLE.split())
 

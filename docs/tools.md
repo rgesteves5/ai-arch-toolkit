@@ -269,9 +269,9 @@ The domains at a glance:
 | Scholarly & research | papers (arXiv, PubMed, Europe PMC), academic graph & metadata (Semantic Scholar, Crossref, ROR, DataCite), books (Open Library), digital archives (Internet Archive) |
 | Biomedical & chemistry | proteins & structures (UniProt, PDB), chemistry & bioactivity (ChEMBL), medication labels (RxNorm, DailyMed), clinical studies (ClinicalTrials.gov) |
 | Earth, life & public data | biodiversity (GBIF), food products (Open Food Facts), food safety & ontology (openFDA, FoodOn), natural events (USGS, NASA EONET), official statistics (World Bank, WHO, Eurostat), security (NVD) |
-| Dangerous (opt-in) | filesystem, shell, Python, web |
+| Dangerous (opt-in) | filesystem (reads, and writes bound to a policy), shell, Python, web |
 
-**→ Full per-tool list: [Tools Catalog](tools-catalog.md).** The filesystem/shell/Python/web tools execute real side effects and must be gated — see [Tool Governance & Safety](safety.md#dangerous-tools).
+**→ Full per-tool list: [Tools Catalog](tools-catalog.md).** The filesystem/shell/Python/web tools execute real side effects and must be gated — see [Tool Governance & Safety](safety.md#dangerous-tools). The file tools to give an agent come from `filesystem_tools(policy)`, bound to the folders a `FilesystemPolicy` allows; see [Filesystem scope](safety.md#filesystem-scope).
 
 ---
 

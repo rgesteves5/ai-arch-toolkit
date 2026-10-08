@@ -30,6 +30,7 @@ type GovernanceOutcome = Literal[
     "max_calls_exceeded",
     "dry_run",
     "budget_exceeded",
+    "permission_denied",
 ]
 
 

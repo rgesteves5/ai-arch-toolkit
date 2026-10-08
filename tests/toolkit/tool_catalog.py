@@ -2,15 +2,22 @@
 
 The tools are found in the modules of ``toolkit.tools`` (``pkgutil`` and ``__tool_definition__``),
 so a new tool is held to the invariants (``test_tool_invariants.py``) and the contract
-(``test_tool_contract.py``) without being listed anywhere.
+(``test_tool_contract.py``) without being listed anywhere. The tools a factory makes are not in a
+module: the write tools of ``filesystem_tools`` are built here, bound to a folder of their own
+(C07.3); its bound reads share their names with the module's, and ``test_filesystem_write.py``
+holds them to the same hostile arguments.
 """
 
 from __future__ import annotations
 
+import atexit
 import importlib
 import inspect
 import pkgutil
+import shutil
+import tempfile
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any, get_args
 
 from ai_arch_toolkit.core import ToolFailure, ToolFailureType, ToolResult
@@ -39,7 +46,18 @@ def _tools() -> dict[str, Callable[..., Any]]:
     return found
 
 
-TOOLS = _tools()
+def _made() -> dict[str, Callable[..., Any]]:
+    """The write tools of ``filesystem_tools``, bound to a temporary folder, removed at exit:
+    whatever the tests make them write lands there."""
+    folder = Path(tempfile.mkdtemp(prefix="tool-catalog-"))
+    atexit.register(shutil.rmtree, folder, ignore_errors=True)
+    policy = DANGEROUS.FilesystemPolicy(write_roots=(folder,), cwd=folder)
+    return {fn.__name__: fn for fn in DANGEROUS.filesystem_tools(policy)}
+
+
+# The tools a factory of ``dangerous`` makes, by name: no module exports them.
+MADE = _made()
+TOOLS = {**_tools(), **MADE}
 
 
 def capability(name: str) -> str | None:
@@ -85,6 +103,11 @@ _BENIGN_BY_TOOL: dict[tuple[str, str], Any] = {
     ("list_directory", "pattern"): "*",
     ("search_files", "directory"): ".",
     ("search_files", "pattern"): "needle",
+    ("write_file", "path"): "written.txt",
+    ("append_file", "path"): "written.txt",
+    ("make_directory", "path"): "made",
+    ("move_path", "source"): "written.txt",
+    ("move_path", "destination"): "moved.txt",
     ("json_extract", "path"): "a[0]",
     ("regex_search", "pattern"): "a",
     ("date_diff", "start"): "2024-01-01",

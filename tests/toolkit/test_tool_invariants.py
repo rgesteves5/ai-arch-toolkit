@@ -47,6 +47,7 @@ from tests.toolkit.http_fakes import respond
 from tests.toolkit.tool_catalog import (
     CALLED,
     DANGEROUS,
+    MADE,
     NETWORK,
     PACKAGE,
     SAFE,
@@ -60,13 +61,23 @@ from tests.toolkit.tool_catalog import (
 # --- 1. Exports --------------------------------------------------------------------------------
 
 
+def _exported_tools(namespace: ModuleType) -> set[str]:
+    """The names in ``__all__`` that are tools (``dangerous`` exports the policy's names too)."""
+    return {
+        name for name in namespace.__all__ if hasattr(vars(namespace)[name], "__tool_definition__")
+    }
+
+
 def test_every_tool_is_exported_by_exactly_one_namespace_under_its_schema_name() -> None:
-    safe, dangerous = set(SAFE.__all__), set(DANGEROUS.__all__)
+    safe, dangerous = _exported_tools(SAFE), _exported_tools(DANGEROUS)
 
     assert not safe & dangerous
-    assert set(TOOLS) == safe | dangerous
+    # A tool a factory of ``dangerous`` makes (filesystem_tools, C07) is exported by no module.
+    assert set(TOOLS) == safe | dangerous | set(MADE)
+    assert not set(MADE) & (safe | dangerous)
     for name, fn in TOOLS.items():
-        assert vars(SAFE if name in safe else DANGEROUS)[name] is fn
+        if name not in MADE:
+            assert vars(SAFE if name in safe else DANGEROUS)[name] is fn
         assert fn.__tool_definition__.schema.name == name
 
 
@@ -157,7 +168,9 @@ def _reached_capability(origins: set[str]) -> str:
 @pytest.mark.parametrize("name", sorted(TOOLS))
 def test_the_declared_capability_is_what_the_code_reaches(name: str) -> None:
     fn = TOOLS[name]
-    reached = _reached_capability(_reached(sys.modules[fn.__module__], name))
+    # A tool a factory makes is defined inside a function of its module: the walk starts there.
+    defined_in = fn.__qualname__.partition(".")[0]
+    reached = _reached_capability(_reached(sys.modules[fn.__module__], defined_in))
     declared = capability(name)
 
     # python_repl evaluates code in a sandbox: it reaches nothing, and declares what it runs.
@@ -168,7 +181,7 @@ def test_the_declared_capability_is_what_the_code_reaches(name: str) -> None:
         allowed.add(("compute", "shell"))
     assert declared == reached or (declared, reached) in allowed
     if declared in _LOCAL_ONLY:
-        assert name in DANGEROUS.__all__
+        assert name in DANGEROUS.__all__ or name in MADE
 
 
 def test_the_capability_detector_sees_through_helpers_and_constants() -> None:

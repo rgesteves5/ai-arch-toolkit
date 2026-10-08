@@ -1,26 +1,39 @@
-"""Filesystem tools — read files, list directories, search content (T09).
+"""Filesystem tools — read files, list directories, search content (T09), and the same three
+bound to a ``FilesystemPolicy``'s read roots (C07).
 
 Every long answer goes through the window (D39): a file is read window by window, by characters
 from its start; a listing and a search come a page at a time. A search gives each line's offset,
 which ``read_file`` takes, so a match found is a call away from the text around it. Files are read
 a chunk at a time, so neither a huge file nor one long line ever lands in memory whole.
+
+The bound reads (``bound_reads``) keep the names, schemas and answers of the module's three. They
+check each path with the policy first, open each file from its root down without following a link,
+refuse a listing pattern that climbs out with ``..``, and leave out an entry whose target is
+outside the roots.
 """
 
 from __future__ import annotations
 
 import errno
+import functools
 import io
 import itertools
 import os
 import re
 import stat
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, TextIO
+from typing import Annotated, Any, TextIO
 
 from ai_arch_toolkit.core import Range, ToolResult, tool
 from ai_arch_toolkit.core._tools._result import ToolFailure, line_cut
+from ai_arch_toolkit.toolkit.tools._filesystem_policy import (
+    FilesystemAction,
+    FilesystemPolicy,
+    FilesystemPolicyError,
+    open_beneath,
+)
 from ai_arch_toolkit.toolkit.tools._window import Window, list_window
 
 _DEFAULT_MAX_LINES = 200
@@ -76,9 +89,12 @@ _BAD_PATH_ERRNOS = frozenset({errno.ENAMETOOLONG, errno.EINVAL})
 def path_failure(error: OSError | ValueError, action: str, path: str) -> ToolFailure:
     """The failure for an error the filesystem raised while ``action``-ing ``path``.
 
-    A path that does not exist is not_found; a malformed one (a null byte, a name too long) is a
-    validation_error; a permission refusal or any other OS error is upstream.
+    A path a ``FilesystemPolicy`` refuses is permission_denied, in the policy's words; one that
+    does not exist is not_found; a malformed one (a null byte, a name too long) is a
+    validation_error; the OS's permission refusal or any other OS error is upstream.
     """
+    if isinstance(error, FilesystemPolicyError):
+        return ToolFailure("permission_denied", str(error))
     if isinstance(error, FileNotFoundError | NotADirectoryError):
         msg = f"no such file or directory: {path!r}; list_directory shows what is there."
         return ToolFailure("not_found", msg)
@@ -92,15 +108,42 @@ def path_failure(error: OSError | ValueError, action: str, path: str) -> ToolFai
     return ToolFailure("upstream", msg)
 
 
+def checked(
+    policy: FilesystemPolicy, path: object, action: FilesystemAction, *, argument: str = "path"
+) -> Path:
+    """The canonical ``path``, if ``policy`` lets ``action`` reach it: the tool's own check,
+    right before its system call (D64, C07.1).
+
+    Raises:
+        ToolFailure: validation_error when ``path`` is not text or is malformed;
+            permission_denied when the policy refuses it; what ``path_failure`` says when it
+            cannot be resolved.
+    """
+    if not isinstance(path, str):
+        msg = f"{argument} must be a path, as text; got {type(path).__name__}."
+        raise ToolFailure("validation_error", msg)
+    try:
+        return policy.check(path, action)
+    except (OSError, ValueError) as e:
+        raise path_failure(e, "reach", path) from e
+
+
+def governed(reason: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """The ``@tool`` of a filesystem tool: dangerous, high risk, approved call by call (D4)."""
+    return tool(
+        capability="filesystem", risk_level="high", requires_approval=True, approval_reason=reason
+    )
+
+
+_READ_REASON = "Reading local files can expose secrets or private data."
+_LIST_REASON = "Listing local directories can reveal private file names and layout."
+_SEARCH_REASON = "Searching local file contents can expose secrets or private data."
+
+
 # --- read_file ---------------------------------------------------------------------------------
 
 
-@tool(
-    capability="filesystem",
-    risk_level="high",
-    requires_approval=True,
-    approval_reason="Reading local files can expose secrets or private data.",
-)
+@governed(_READ_REASON)
 def read_file(
     path: str,
     offset: Annotated[int, Range(0)] = 0,
@@ -124,23 +167,27 @@ def read_file(
             regular file or is malformed; upstream when the OS refuses or fails the read.
     """
     try:
-        return _file_window(Path(path).expanduser(), path, offset, max_lines).result()
+        p = Path(path).expanduser()
+        if not _is_regular_file(p):
+            raise ToolFailure("validation_error", _not_a_file(path))
+        # newline="": the offsets are those of the file's own characters, line ends included.
+        with p.open(encoding="utf-8", errors="replace", newline="") as handle:
+            return _file_window(handle, offset, max_lines).result()
     except (OSError, ValueError) as e:
         raise path_failure(e, "read", path) from e
 
 
-def _file_window(p: Path, path: str, offset: int, max_lines: int) -> Window:
-    """The window of ``p`` from ``offset``, and the file's size when what is left after it is
-    within ``_COUNT_CHARS`` (counted without holding it)."""
-    if not _is_regular_file(p):
-        msg = f"{path!r} is not a regular file; list_directory lists a directory."
-        raise ToolFailure("validation_error", msg)
-    # newline="": the offsets are those of the file's own characters, line ends included.
-    with p.open(encoding="utf-8", errors="replace", newline="") as handle:
-        start = _skip(handle, offset)
-        piece = handle.read(_WINDOW_CHARS + 1)
-        rest = _skip(handle, _COUNT_CHARS)
-        total = start + len(piece) + rest if not handle.read(1) else None
+def _not_a_file(path: str) -> str:
+    return f"{path!r} is not a regular file; list_directory lists a directory."
+
+
+def _file_window(handle: TextIO, offset: int, max_lines: int) -> Window:
+    """The window of the file ``handle`` reads, from ``offset``, and the file's size when what
+    is left after it is within ``_COUNT_CHARS`` (counted without holding it)."""
+    start = _skip(handle, offset)
+    piece = handle.read(_WINDOW_CHARS + 1)
+    rest = _skip(handle, _COUNT_CHARS)
+    total = start + len(piece) + rest if not handle.read(1) else None
     end = start + _window_end(piece, max_lines)
     return Window(
         body=piece[: end - start],
@@ -182,12 +229,7 @@ def _window_end(piece: str, max_lines: int) -> int:
 # --- list_directory ----------------------------------------------------------------------------
 
 
-@tool(
-    capability="filesystem",
-    risk_level="high",
-    requires_approval=True,
-    approval_reason="Listing local directories can reveal private file names and layout.",
-)
+@governed(_LIST_REASON)
 def list_directory(
     path: str = ".",
     pattern: str = "*",
@@ -205,7 +247,18 @@ def list_directory(
             directory, is malformed, or ``pattern`` is unusable or matches too much; upstream
             when the OS refuses or fails the listing.
     """
-    p = Path(path).expanduser()
+    return _listing(Path(path).expanduser(), path, pattern, offset, shows=_anything)
+
+
+def _anything(_entry: Path) -> bool:
+    return True
+
+
+def _listing(
+    p: Path, path: str, pattern: str, offset: int, *, shows: Callable[[Path], bool]
+) -> ToolResult:
+    """The page from ``offset`` of the entries of ``p`` that ``pattern`` matches and ``shows``
+    lets through."""
     try:
         is_directory = _is_directory(p)
         if is_directory:
@@ -215,7 +268,7 @@ def list_directory(
         raise path_failure(e, "list", path) from e
     if not is_directory:
         raise ToolFailure("validation_error", _not_a_directory(path))
-    entries = _entries(p, path, pattern)
+    entries = [entry for entry in _entries(p, path, pattern) if shows(entry)]
     if not entries:
         return ToolResult.success(f"No entries matching {pattern!r} in {path}")
     page = entries[offset : offset + _PAGE_ENTRIES]
@@ -296,12 +349,7 @@ def _human_size(size: int) -> str:
 # --- search_files ------------------------------------------------------------------------------
 
 
-@tool(
-    capability="filesystem",
-    risk_level="high",
-    requires_approval=True,
-    approval_reason="Searching local file contents can expose secrets or private data.",
-)
+@governed(_SEARCH_REASON)
 def search_files(
     directory: str,
     pattern: str,
@@ -326,10 +374,26 @@ def search_files(
             not a directory or is malformed, or ``pattern`` is empty; upstream when the OS
             refuses or fails the search.
     """
+    _check_pattern(pattern)
+    scan = _Scan(Path(directory).expanduser(), Path(directory), _open_binary)
+    return _search(scan, directory, pattern, max_results, offset)
+
+
+def _check_pattern(pattern: str) -> None:
     if not pattern:
         raise ToolFailure("validation_error", "pattern cannot be empty; give the text to find.")
-    root = Path(directory).expanduser()
-    scan = _Scan(root, Path(directory))
+
+
+def _open_binary(path: Path) -> io.BufferedReader:
+    return path.open("rb")
+
+
+def _search(
+    scan: _Scan, directory: str, pattern: str, max_results: int, offset: int
+) -> ToolResult:
+    """The page from ``offset`` of the lines under the scan's root (``directory`` as given)
+    that contain ``pattern``."""
+    root = scan.root
     try:
         if not _is_directory(root):
             raise ToolFailure("validation_error", _not_a_directory(directory))
@@ -399,14 +463,17 @@ def _search_answer(
 
 
 class _Scan:
-    """How far a search went: the characters and the files it read, the file where its budget
-    ran out, and the folders and files it could not read. Paths are shown as the search's
-    ``directory`` names them, so ``read_file`` takes each as it is."""
+    """How a search opens its files (``opener``) and how far it went: the characters and the
+    files it read, the file where its budget ran out, and the folders and files it could not
+    read. Paths are shown as the search's ``directory`` names them, so ``read_file`` takes each
+    as it is."""
 
-    __slots__ = ("_base", "_root", "chars", "files", "stopped_in", "unread")
+    __slots__ = ("_base", "chars", "files", "opener", "root", "stopped_in", "unread")
 
-    def __init__(self, root: Path, base: Path) -> None:
-        self._root, self._base = root, base
+    def __init__(
+        self, root: Path, base: Path, opener: Callable[[Path], io.BufferedReader]
+    ) -> None:
+        self.root, self._base, self.opener = root, base, opener
         self.chars = 0
         self.files = 0
         self.stopped_in: Path | None = None
@@ -414,7 +481,7 @@ class _Scan:
 
     def shown(self, path: Path) -> Path:
         """``path`` (under the root) as the search shows it: under ``directory``, as given."""
-        return self._base / path.relative_to(self._root)
+        return self._base / path.relative_to(self.root)
 
     def limit(self) -> str:
         """The budget, and how many files it went to."""
@@ -496,7 +563,7 @@ def _matching_lines(
     binary file), none from where it stops being UTF-8 text, and none past the scan budget (the
     file is then where the search stopped). A file that cannot be read is noted in ``scan``."""
     try:
-        with path.open("rb") as raw:
+        with scan.opener(path) as raw:
             if b"\0" in raw.peek(_SNIFF)[:_SNIFF]:
                 return
             scan.files += 1
@@ -558,3 +625,96 @@ def _line(number: int, start: int, end: int, piece: str, first: tuple[int, str])
     return _Line(
         number=number, offset=start + indent, text=line.strip(), length=length, part=False
     )
+
+
+# --- Bound to a policy (C07) -------------------------------------------------------------------
+
+
+def bound_reads(policy: FilesystemPolicy) -> tuple[Callable[..., ToolResult], ...]:
+    """``read_file``, ``list_directory`` and ``search_files``, bound to ``policy``'s read roots.
+
+    Each keeps its name, schema, docstring and governance. A relative path starts from the
+    policy's ``cwd``; each path is checked right before it is used, and the answer names it
+    canonical. A file is opened from its root down, never through a link. A listing refuses a
+    pattern that climbs out with ``..`` and leaves out an entry whose target is outside the read
+    roots; a search reads no file outside them.
+    """
+
+    def read(path: str, offset: int = 0, max_lines: int = _DEFAULT_MAX_LINES) -> ToolResult:
+        canonical = checked(policy, path, "read")
+        try:
+            raw = _open_within(policy, canonical)
+            with io.TextIOWrapper(raw, encoding="utf-8", errors="replace", newline="") as handle:
+                return _file_window(handle, offset, max_lines).result()
+        except _NotRegular as e:
+            raise ToolFailure("validation_error", _not_a_file(str(canonical))) from e
+        except (OSError, ValueError) as e:
+            raise path_failure(e, "read", str(canonical)) from e
+
+    def listing(path: str = ".", pattern: str = "*", offset: int = 0) -> ToolResult:
+        if ".." in pattern.replace("\\", "/").split("/"):
+            msg = (
+                f"pattern {pattern!r} climbs out of the folder with '..', which this policy "
+                "does not follow; list the other folder by its own path."
+            )
+            raise ToolFailure("permission_denied", msg)
+        canonical = checked(policy, path, "read")
+        shows = functools.partial(_within, policy)
+        return _listing(canonical, str(canonical), pattern, offset, shows=shows)
+
+    def search(
+        directory: str, pattern: str, max_results: int = _DEFAULT_MAX_RESULTS, offset: int = 0
+    ) -> ToolResult:
+        _check_pattern(pattern)
+        canonical = checked(policy, directory, "read", argument="directory")
+        scan = _Scan(canonical, canonical, functools.partial(_found_within, policy))
+        return _search(scan, str(canonical), pattern, max_results, offset)
+
+    return (
+        _like(read_file, _READ_REASON, read),
+        _like(list_directory, _LIST_REASON, listing),
+        _like(search_files, _SEARCH_REASON, search),
+    )
+
+
+def _like(
+    original: Callable[..., ToolResult], reason: str, body: Callable[..., ToolResult]
+) -> Callable[..., ToolResult]:
+    """``body`` as a tool with ``original``'s name, signature, docstring and governance."""
+    return governed(reason)(functools.wraps(original)(body))
+
+
+class _NotRegular(OSError):
+    """What a bound read opened is not a regular file (a folder, a pipe, a device)."""
+
+
+def _open_within(policy: FilesystemPolicy, canonical: Path) -> io.BufferedReader:
+    """The regular file at ``canonical``, opened from its read root down.
+
+    Raises:
+        _NotRegular: It is not a regular file.
+        FilesystemPolicyError: A link took the place of a folder, or of the file.
+        OSError: It cannot be opened.
+    """
+    descriptor = open_beneath(policy, canonical, "read", os.O_RDONLY)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise _NotRegular(errno.EISDIR, "not a regular file", str(canonical))
+        return open(descriptor, "rb")
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _found_within(policy: FilesystemPolicy, path: Path) -> io.BufferedReader:
+    """The file a search found at ``path`` (a link resolved), if inside the read roots."""
+    return _open_within(policy, policy.check(path, "read"))
+
+
+def _within(policy: FilesystemPolicy, entry: Path) -> bool:
+    """Whether the target of ``entry`` is inside the read roots."""
+    try:
+        policy.check(entry, "read")
+    except (OSError, ValueError):
+        return False
+    return True

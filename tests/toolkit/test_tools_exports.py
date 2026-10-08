@@ -20,6 +20,17 @@ DANGEROUS_TOOL_NAMES = frozenset(
     }
 )
 
+# The scope the file tools are bound to (C07): a policy, its gate and the factory.
+FILESYSTEM_SCOPE_NAMES = frozenset(
+    {
+        "FilesystemAction",
+        "FilesystemPolicy",
+        "FilesystemPolicyError",
+        "PathScopeGate",
+        "filesystem_tools",
+    }
+)
+
 # name -> (capability, risk_level)
 DANGEROUS_TOOL_RISK = {
     "csv_read": ("filesystem", "high"),
@@ -40,9 +51,15 @@ def test_default_tools_do_not_export_dangerous_tools() -> None:
 
 
 def test_dangerous_tools_are_explicit_opt_in_exports() -> None:
-    assert set(dangerous.__all__) == DANGEROUS_TOOL_NAMES
-    for name in DANGEROUS_TOOL_NAMES:
+    assert set(dangerous.__all__) == DANGEROUS_TOOL_NAMES | FILESYSTEM_SCOPE_NAMES
+    for name in DANGEROUS_TOOL_NAMES | FILESYSTEM_SCOPE_NAMES:
         assert hasattr(dangerous, name)
+
+
+def test_the_filesystem_scope_is_only_in_the_dangerous_namespace() -> None:
+    assert FILESYSTEM_SCOPE_NAMES.isdisjoint(safe_tools.__all__)
+    for name in FILESYSTEM_SCOPE_NAMES:
+        assert not hasattr(safe_tools, name)
 
 
 @pytest.mark.parametrize("name", sorted(DANGEROUS_TOOL_NAMES))

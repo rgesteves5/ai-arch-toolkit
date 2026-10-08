@@ -7,9 +7,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-type ToolFailureType = Literal["not_found", "validation_error", "upstream", "rate_limited"]
+type ToolFailureType = Literal[
+    "not_found", "validation_error", "upstream", "rate_limited", "permission_denied"
+]
 """What a tool that could not answer says happened (D37, D42): what it was asked for does not
-exist, an argument is wrong, the source failed, or the source is rate limiting."""
+exist, an argument is wrong, the source failed, the source is rate limiting, or a policy does not
+let the tool reach what it was asked for (a path outside a ``FilesystemPolicy``'s folders, D64:
+the word the ``PathScopeGate`` uses too)."""
 
 
 @dataclass(frozen=True, slots=True)

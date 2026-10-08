@@ -83,9 +83,9 @@ A **`ToolError`** is structured so an agent (or your retry logic) can reason abo
 
 The executor draws the `type` of its own failures from a fixed set:
 
-- **Governance blocks** — `"dangerous_tool_blocked"`, `"approval_denied"`, `"max_calls_exceeded"`. A budget denial is not among them: it is raised, not returned (see [Cumulative budgets](#cumulative-budgets)).
+- **Governance blocks** — `"dangerous_tool_blocked"`, `"approval_denied"`, `"max_calls_exceeded"`, and `"permission_denied"` from the [`PathScopeGate`](#filesystem-scope). A budget denial is not among them: it is raised, not returned (see [Cumulative budgets](#cumulative-budgets)).
 - **Resolution / execution** — `"unknown_tool"` (no matching function), `"validation_error"` (arguments that don't fit the tool's schema or signature — see [Argument validation](#argument-validation)), `"runtime_error"` (any exception raised by the tool itself, `TypeError` included; `retryable=True`), `"timeout"` (the tool did not finish within its `timeout_s`; `retryable=True`).
-- **The tool's own** — a tool that cannot answer raises `ToolFailure(type, message, retryable=..., details=...)`, and the result carries its type: `"not_found"`, `"validation_error"` (the same type as a schema failure: for the agent, the same matter), `"upstream"` or `"rate_limited"`. The toolkit's tools all do; the HTTP door's failures are `rate_limited` for a 429 and `upstream` otherwise, retryable for a 5xx, a timeout or a network error. The executor never repeats a call by itself.
+- **The tool's own** — a tool that cannot answer raises `ToolFailure(type, message, retryable=..., details=...)`, and the result carries its type: `"not_found"`, `"validation_error"` (the same type as a schema failure: for the agent, the same matter), `"upstream"`, `"rate_limited"` or `"permission_denied"` (a path a [`FilesystemPolicy`](#filesystem-scope) refuses: the gate's word too). The toolkit's tools all do; the HTTP door's failures are `rate_limited` for a 429 and `upstream` otherwise, retryable for a 5xx, a timeout or a network error. The executor never repeats a call by itself.
 
 `run_tools()` and the ReAct flow send a failed call's result back with `is_error`: the Anthropic adapter passes it as the `tool_result` block's `is_error`, the Gemini adapter puts the result under the `error` key of the function response, and the other providers read the `Tool error [type]: …` text.
 
@@ -139,9 +139,10 @@ The tools in `ai_arch_toolkit.toolkit.tools.dangerous` execute real side effects
 | `run_command` | `"shell"` | `"critical"` |
 | `python_repl` | `"python"` | `"high"` |
 | `csv_read`, `read_file`, `list_directory`, `search_files` | `"filesystem"` | `"high"` |
+| `write_file`, `append_file`, `make_directory`, `move_path` (from [`filesystem_tools`](#filesystem-scope)) | `"filesystem"` | `"high"` |
 | `http_get`, `scrape_text` | `"network"` | `"high"` |
 
-Run through a `ToolGroup`, `execute_tool()` / `async_execute_tool()`, `run_tools()` or an agent without an `approval_handler`, every call to them with valid arguments returns `approval_denied` (invalid arguments return `validation_error` first); supply a handler to let them run (see [Human approval](#human-approval)). Calling the function directly (`read_file("notes.txt")`) bypasses governance entirely.
+Run through a `ToolGroup`, `execute_tool()` / `async_execute_tool()`, `run_tools()` or an agent without an `approval_handler`, every call to them with valid arguments returns `approval_denied` (invalid arguments return `validation_error` first); supply a handler to let them run (see [Human approval](#human-approval)). Calling the function directly (`read_file("notes.txt")`) bypasses governance entirely; a tool of `filesystem_tools` still checks its paths with its policy.
 
 `DangerousToolGate` blocks tools by name before approval is even requested — use it to switch them off outright:
 
@@ -161,6 +162,63 @@ result.error.message # "The tool 'run_command' did not run: it is marked dangero
 The message is written for the person the model repeats it to.
 
 `DangerousToolGate(*, blocked, allow=False)` — names in `blocked` are refused; set `allow=True` to turn the gate into a no-op (e.g. flip it per environment).
+
+### Filesystem scope
+
+The module-level `read_file`, `list_directory` and `search_files` read any path the process can. To keep an agent's files inside chosen folders, give it the tools of `filesystem_tools(policy)` instead, bound to a `FilesystemPolicy`:
+
+```python
+from pathlib import Path
+
+from ai_arch_toolkit import ToolGroup
+from ai_arch_toolkit.toolkit.tools.dangerous import (
+    FilesystemPolicy,
+    PathScopeGate,
+    filesystem_tools,
+)
+
+policy = FilesystemPolicy(
+    read_roots=(Path("docs"), Path("notes")),
+    write_roots=(Path("notes"),),
+    cwd=Path("notes"),          # where the agent's relative paths start (default: the working directory)
+    max_write_bytes=1_048_576,  # the most one write or append carries (the default)
+)
+group = ToolGroup(
+    *filesystem_tools(policy),
+    gates=[PathScopeGate(policy)],
+    approval_handler=review,    # your handler, as in Human approval
+)
+```
+
+Each root must be an existing folder, and is stored canonical; a relative root or `cwd` is taken from the process's working directory when the policy is built, and the agent's relative paths start from `cwd`. With `read_roots`, the factory gives `read_file`, `list_directory` and `search_files`, with the names, schemas and approval of the module-level ones; with `write_roots`, `write_file`, `append_file`, `make_directory` and `move_path`. No tool deletes: `delete_roots` is there for an app's or an MCP server's own tools, mapped in the gate. Every one of them needs approval, call by call.
+
+**One check, in two places.** `policy.check(path, action)` gives the path canonical, or raises `FilesystemPolicyError` (a `PermissionError`). A relative path starts from `cwd`, `~` is expanded, and only `os.path.realpath(strict=os.path.ALLOW_MISSING)` resolves links and `..`, so a path that does not exist yet resolves as far as it does. Then:
+
+- to read, the target must be inside a read root;
+- to write (or delete), the folder that holds the path must be inside a root of that action. The last part is not resolved: it is never a link, `.` or `..`. A root, or a folder that holds one, is never created, moved or replaced;
+- case is never folded: on a case-insensitive disk, a path spelled in another case than its root is refused, never let through.
+
+The `PathScopeGate` runs the check before anyone is asked. A refused call is a `permission_denied` block, never approved, run or metered, with what was refused under `result.metadata["audit"]["filesystem"]`. An allowed call goes on with its paths canonical, so the approver, and a `DryRunGate` placed after the gate, see the paths that will be touched.
+
+The tool runs the same check again right before it acts. That closes what the gate cannot see: a path the approver changed (`modified_args`), a folder swapped for a link while a person decided, and a run without the gate (`execute_tool()` and `run_tools()` with a list of tools add only the approval gate). The tool's refusal is the same word, `ToolFailure("permission_denied", …)`, and it counts as a call that ran.
+
+The gate knows each tool's path arguments from a map. By default it holds the seven tools: `path`, `directory` for `search_files`, and `source` and `destination` for `move_path`. `PathScopeGate(policy, paths={"my_tool": {"target": "write"}})` adds a tool, or replaces one tool's map. An omitted argument takes its schema default (`list_directory()` lists the policy's `cwd`); one without a default is refused. A tool declared `capability="filesystem"` that the map does not name, `csv_read` or an MCP server's file tool, is blocked.
+
+**How the tools touch files.** After the check, a tool opens what it touches from its root down, one folder at a time with `O_DIRECTORY | O_NOFOLLOW`, and acts inside the folder it opened. A link put in the place of a folder, or of the file, after the check fails the call with `permission_denied` instead of leading outside.
+
+- `write_file` writes a temporary file in the target's folder (`O_CREAT | O_EXCL | O_NOFOLLOW`, mode `0o666` under the umask) and syncs it. The file then takes the target's name in one step, and the folder is synced. Without `overwrite` that step is `os.link`, which refuses a name that exists, so of two writes racing to one new path, one wins and the other fails; with it, `os.replace`, and the file keeps the old one's permission bits. A reader never sees half a file. The text is written in UTF-8 with its line ends as given; `content` that is not text is a `validation_error`.
+- `append_file` adds to a regular file that has no other hard link. It is not atomic.
+- `move_path` only renames, so it never copies: a move to another volume is refused.
+- No open waits on a pipe or a device: every open is non-blocking.
+
+Limits to know:
+
+- **POSIX only for writes.** On Windows, `filesystem_tools` with `write_roots` raises `NotImplementedError` when it is built. The bound reads work there, but they open the path as it is, so the time between the check and the open stays open.
+- **Not a sandbox.** `run_command` reaches any file the process can: keep it out of a group a policy is meant to bound. A module-level read tool has no check of its own: in a group with the gate it gets canonical paths, but a path an approver changes reaches it as it is. Use the factory's tools.
+- **Hard links.** A path cannot tell a hard link from a file, so a hard link inside a root to a file outside it reads like any file there. `append_file` refuses a file with other links, and `write_file` with `overwrite` replaces the name, so the other link keeps the old file.
+- **A new file.** `overwrite` writes a new file: other hard links keep the old one, and its ACLs, extended attributes and owner are not carried over.
+- **Leftovers.** A process killed during a write can leave a `.ai-arch-*.tmp` file in the target's folder.
+- **The approver sees arguments.** The approval request shows the call's arguments, the whole `content` included; a preview of the change is planned.
 
 ### Web search tools
 
