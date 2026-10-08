@@ -14,6 +14,7 @@ client, the efforts, the error codes, ``tool_choice`` only ``auto``, function to
 
 from __future__ import annotations
 
+import dataclasses
 import warnings
 from typing import Any, cast
 
@@ -22,7 +23,14 @@ from ai_arch_toolkit.core._images import ImageRequest
 from ai_arch_toolkit.core._middleware import Request
 from ai_arch_toolkit.core._model_id import lookup
 from ai_arch_toolkit.core._providers import OWN_BASE_URLS
-from ai_arch_toolkit.core._providers._base import Options, Prepared, parse_options
+from ai_arch_toolkit.core._providers._base import (
+    DRAWS_WITHOUT_TOOLS,
+    AdapterFacts,
+    Options,
+    Prepared,
+    ordered_efforts,
+    parse_options,
+)
 from ai_arch_toolkit.core._providers._imports import require_sdk
 
 with require_sdk("meta"):
@@ -111,6 +119,16 @@ _PROFILE = ResponsesProfile(
 )
 
 
+def _image_rules_of(model: str) -> ImageModel | None:
+    found = lookup(model, {}, _IMAGE_FAMILIES)
+    return found.value if found is not None else None
+
+
+def _efforts_of(model: str) -> frozenset[str]:
+    found = lookup(model, _MODEL_EFFORTS)
+    return found.value if found is not None else _EFFORTS
+
+
 def _input_items(
     messages: list[dict[str, Any]], model: str = "muse-spark"
 ) -> list[ResponseInputItemParam]:
@@ -159,8 +177,21 @@ class MetaProvider(ResponsesProvider):
     # ------------------------------------------------------------------
 
     def _image_rules(self) -> ImageModel | None:
-        found = lookup(self._model, {}, _IMAGE_FAMILIES)
-        return found.value if found is not None else None
+        return _image_rules_of(self._model)
+
+    @classmethod
+    def model_facts(cls, model: str) -> AdapterFacts:
+        """Muse Image takes no tools; Muse Spark gets the profile's facts (only ``auto``, and
+        ``none`` sent as no tools) and its efforts, without ``"none"``: it always reasons (D13).
+        """
+        if _image_rules_of(model) is not None:
+            return DRAWS_WITHOUT_TOOLS
+        efforts = _efforts_of(model)
+        return dataclasses.replace(
+            _PROFILE.facts(),
+            thinking_mode="optional" if "none" in efforts else "always",
+            thinking_efforts=ordered_efforts(efforts),
+        )
 
     def prepare(self, request: Request) -> Prepared[Params]:
         if self._image_rules() is not None and request.tools:
@@ -210,8 +241,7 @@ class MetaProvider(ResponsesProvider):
         reasoning: Reasoning = {}
         effort = options.thinking_effort
         if effort is not None:
-            found = lookup(self._model, _MODEL_EFFORTS)
-            efforts = found.value if found is not None else _EFFORTS
+            efforts = _efforts_of(self._model)
             if effort not in efforts:
                 raise RequestError(
                     f"{self._model} takes thinking_effort in {sorted(efforts)}, not {effort!r}"

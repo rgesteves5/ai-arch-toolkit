@@ -27,6 +27,22 @@ def test_core_exports_pricing() -> None:
     assert cost is None
 
 
+@pytest.mark.parametrize("module", [core, ai_arch_toolkit], ids=lambda m: m.__name__)
+@pytest.mark.parametrize(
+    "name", ["ModelCapabilities", "ModelCatalog", "Provenance", "model_catalog"]
+)
+def test_the_model_catalog_is_exported(module: ModuleType, name: str) -> None:
+    assert name in module.__all__, f"{name} is missing from {module.__name__}.__all__"
+    assert getattr(module, name) is getattr(core, name)
+
+
+def test_the_model_catalog_is_apart_from_pricing() -> None:
+    caps = core.model_catalog.get("claude-haiku-4-5-20251001")  # a dated snapshot
+    assert caps is not None and caps.model == "claude-haiku-4-5"
+    assert core.model_catalog.get("claude-haiku-4-5-turbo") is None  # a variant is another model
+    assert core.pricing.get("claude-haiku-4-5") is not None
+
+
 # Everything needed to write a custom gate for ToolGroup(gates=[...]) without reaching into `_…`.
 _GATE_SURFACE = [
     "ExecutionContext",

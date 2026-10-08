@@ -4,6 +4,10 @@ This page lists the 35 model IDs tracked by the live probe inventory
 (`scripts/model_probe_models.toml`), what framework features were verified against them, and
 which of them read images, by their providers' pages.
 
+For each model's limits, modalities, tools and reasoning in code, with a source and a date per
+fact, use the [Model Catalog](model-catalog.md) (`model_catalog`). This page records the live
+runs that check them.
+
 The baseline below comes from the manual live probe runner:
 
 ```bash

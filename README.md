@@ -279,6 +279,7 @@ Browse `docs/` for guides, or jump straight to:
 - [`docs/framework-overview.md`](docs/framework-overview.md)
 - [`docs/flow-architecture.md`](docs/flow-architecture.md)
 - [`docs/graph.md`](docs/graph.md)
+- [`docs/model-catalog.md`](docs/model-catalog.md) — each model's limits and capabilities through the toolkit, with sources
 - [`docs/model-compatibility.md`](docs/model-compatibility.md)
 - [`CHANGELOG.md`](CHANGELOG.md) — what's new
 

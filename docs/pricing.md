@@ -60,6 +60,10 @@ pricing.register("llama3", ModelPricing(), match="prefix")
 pricing.list_models()
 ```
 
+The registry knows rates only. A model's limits, modalities, tools and reasoning, each with its
+source, are the [Model Catalog](model-catalog.md)'s (`model_catalog`): a separate registry,
+which never matches a family prefix, so a price for `llama3` by prefix has no catalog entry.
+
 ### Promotional prices
 
 A price can say the last day it applies and the price from the day after. The registry reads the

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import dataclasses
 import json
 import logging
 import warnings
@@ -17,8 +18,12 @@ from ai_arch_toolkit.core._middleware import Request
 from ai_arch_toolkit.core._model_id import lookup
 from ai_arch_toolkit.core._providers import OWN_BASE_URLS
 from ai_arch_toolkit.core._providers._base import (
+    CONTENT_PARTS,
     DEFAULT_THINKING_BUDGET,
+    DRAWS_WITHOUT_TOOLS,
+    EVERY_TOOL_CHOICE,
     THINKING_EFFORT_BUDGETS,
+    AdapterFacts,
     BaseProvider,
     CallPieces,
     Done,
@@ -30,6 +35,7 @@ from ai_arch_toolkit.core._providers._base import (
     image_prompt,
     merge_system_prompts,
     on_request,
+    ordered_efforts,
     parse_options,
     parse_structured,
     refused_or_unread,
@@ -110,6 +116,22 @@ class _Profile:
     budget: tuple[int, int] | None = None
     can_disable: bool = False
 
+    def facts(self) -> AdapterFacts:
+        """Its thinking facts: a Gemini 3 model thinks unasked at a level, a Gemini 2.5 model
+        takes a budget its effort maps to. Whether a 2.5 model that can stop thinking thinks
+        unasked is not in the table."""
+        if self.budget is None:
+            return AdapterFacts(
+                thinking_mode="always",
+                thinking_efforts=ordered_efforts(self.levels),
+                thinking_budget=False,
+            )
+        return AdapterFacts(
+            thinking_mode=None if self.can_disable else "always",
+            thinking_efforts=ordered_efforts(THINKING_EFFORT_BUDGETS),
+            thinking_budget=True,
+        )
+
 
 # Thinking controls per model (https://ai.google.dev/gemini-api/docs/generate-content/thinking);
 # the Gemini 3 levels also in https://ai.google.dev/gemini-api/docs/thinking.
@@ -169,6 +191,16 @@ _IMAGE_MODELS: dict[str, _ImageProfile] = {
         ratios=_RATIOS, sizes={"1K": 1120, "2K": 1120, "4K": 2000}, output_limit=32_768
     ),
 }
+
+
+def _profile_of(model: str) -> _Profile:
+    found = lookup(model, _PROFILES)
+    return found.value if found is not None else _CURRENT
+
+
+def _image_profile_of(model: str) -> _ImageProfile | None:
+    found = lookup(model, _IMAGE_MODELS)
+    return found.value if found is not None else None
 
 
 # ---------------------------------------------------------------------------
@@ -546,8 +578,24 @@ class GeminiProvider(
         return self._client.aio.models
 
     def _profile(self) -> _Profile:
-        found = lookup(self._model, _PROFILES)
-        return found.value if found is not None else _CURRENT
+        return _profile_of(self._model)
+
+    @classmethod
+    def model_facts(cls, model: str) -> AdapterFacts:
+        """An image model takes no tools; a chat model takes every tool choice, the server tools
+        of ``_SERVER_TOOLS`` and its profile's thinking."""
+        if _image_profile_of(model) is not None:
+            return DRAWS_WITHOUT_TOOLS
+        return dataclasses.replace(
+            _profile_of(model).facts(),
+            tools=True,
+            tool_choice_modes=EVERY_TOOL_CHOICE,
+            structured_output=True,
+            json_mode=True,
+            streaming=True,
+            server_tools=frozenset(_SERVER_TOOLS),
+            input_modalities=CONTENT_PARTS,
+        )
 
     async def count_tokens(
         self,
@@ -571,8 +619,7 @@ class GeminiProvider(
     # ------------------------------------------------------------------
 
     def _image_profile(self) -> _ImageProfile | None:
-        found = lookup(self._model, _IMAGE_MODELS)
-        return found.value if found is not None else None
+        return _image_profile_of(self._model)
 
     def image_token_bound(self, image: ImageRequest) -> int | None:
         """One image's tokens at the size asked, or at the largest the model takes."""

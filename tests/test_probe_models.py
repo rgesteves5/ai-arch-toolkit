@@ -3,15 +3,18 @@ from __future__ import annotations
 import json
 import struct
 import zlib
+from datetime import date
 from pathlib import Path
 
 import pytest
 from scripts.probe_models import (
+    Classification,
     ModelProbeConfig,
     ProbeAssertionError,
     ProbeResult,
     _probe_vision,
     _sanitize_error_message,
+    catalog_fragment,
     classify_exception,
     load_model_configs,
     red_square_png,
@@ -21,6 +24,7 @@ from scripts.probe_models import (
     select_scenarios,
 )
 
+from ai_arch_toolkit.core import ModelCatalog, Provenance
 from ai_arch_toolkit.core._content import ImagePart
 from ai_arch_toolkit.core._exceptions import APIError, RateLimitError
 from ai_arch_toolkit.core._response import Response
@@ -213,3 +217,56 @@ async def test_the_vision_probe_fails_when_the_model_does_not_see_red() -> None:
 
     with pytest.raises(ProbeAssertionError, match="Expected red"):
         await _probe_vision(llm)
+
+
+def _result(
+    model: str, provider: str, scenario: str, classification: Classification
+) -> ProbeResult:
+    return ProbeResult(
+        model=model,
+        provider=provider,
+        scenario=scenario,
+        ok=classification == "ok",
+        classification=classification,
+        latency_s=0.1,
+    )
+
+
+def test_the_catalog_fragment_states_only_what_a_run_proved(tmp_path: Path) -> None:
+    """C06d: a pass states the fact true, a refusal as unsupported false; a rate limit, a timeout
+    or a wrong answer states nothing. The fragment loads into a catalog as probe facts."""
+    results = [
+        _result("gpt-test", "openai", "tools_loop", "ok"),
+        _result("gpt-test", "openai", "structured", "unsupported_capability"),
+        _result("gpt-test", "openai", "json_mode", "rate_limit"),
+        _result("gpt-test", "openai", "stream", "timeout"),
+        _result("gpt-test", "openai", "plain", "ok"),  # no catalog fact
+        _result("grok-test", "xai", "tools_loop", "unexpected_response"),
+    ]
+    path = tmp_path / "run.catalog.toml"
+    path.write_text(
+        catalog_fragment(results, verified_at=date(2026, 10, 8), ref="probe run 20261008T0000Z"),
+        encoding="utf-8",
+    )
+    catalog = ModelCatalog(defaults=False)
+
+    catalog.load(path)
+
+    found = catalog.get("gpt-test", provider="openai")
+    assert found is not None
+    assert (found.tools, found.structured_output) == (True, False)
+    assert found.json_mode is None and found.streaming is None
+    assert found.provenance("tools") == Provenance(
+        kind="probe", ref="probe run 20261008T0000Z", verified_at=date(2026, 10, 8)
+    )
+    assert catalog.get("grok-test", provider="xai") is None  # it proved nothing
+
+
+def test_an_empty_run_gives_a_fragment_that_loads_empty(tmp_path: Path) -> None:
+    path = tmp_path / "run.catalog.toml"
+    path.write_text(catalog_fragment([], verified_at=date(2026, 10, 8), ref="run"), "utf-8")
+    catalog = ModelCatalog(defaults=False)
+
+    catalog.load(path)
+
+    assert catalog.entries() == []

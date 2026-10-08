@@ -35,6 +35,7 @@ are the recommended entry point, `Agent` (see [Toolkit — Agents](#toolkit-agen
 | `RateLimitMiddleware`, `TracingMiddleware` | `_rate_limit.py`, `_telemetry.py` | Built-in middleware for rate limiting and tracing |
 | `RetryConfig` | `_retry.py` | Exponential backoff configuration |
 | `pricing` | `_pricing.py` | Per-model pricing registry singleton |
+| `model_catalog`, `ModelCatalog`, `ModelCapabilities`, `Provenance` | `_model_catalog.py` | What each model takes through its adapter (limits, modalities, tools, reasoning), each fact with its source; `None` is unknown ([Model Catalog](model-catalog.md)) |
 | `count_tokens_local()`, `count_tokens_local_batch()`, `chars_to_tokens()`, `tokens_to_chars()` | `_tokens.py` | Local token estimation helpers |
 | `ServerTool`, `code_execution()`, `web_search()` | `_server_tools.py` | Provider-hosted tools |
 | `BatchRequest`, `BatchResult` | `_batch.py` | Batch API types |

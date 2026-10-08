@@ -14,10 +14,10 @@ import re
 import uuid
 import warnings
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Callable, Hashable, Iterator, Mapping
+from collections.abc import AsyncIterator, Callable, Hashable, Iterable, Iterator, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass, field, fields
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from ai_arch_toolkit.core._content import CachePart, ImagePart
 from ai_arch_toolkit.core._exceptions import (
@@ -201,6 +201,84 @@ class LoopAwareClientCache:
         await client.close()
 
 
+# ---------------------------------------------------------------------------
+# What an adapter does with a model (D63): the model catalog's kind="adapter" facts
+# ---------------------------------------------------------------------------
+
+type ThinkingMode = Literal["none", "optional", "always"]
+type ToolChoiceMode = Literal["auto", "none", "required", "named"]
+type InputModality = Literal["text", "image", "pdf", "audio", "video"]
+
+# The reasoning efforts, weakest first: the order a model's efforts are listed in.
+EFFORT_ORDER = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+EVERY_TOOL_CHOICE: frozenset[ToolChoiceMode] = frozenset({"auto", "none", "required", "named"})
+# The inputs the toolkit's content parts carry: text, ``ImagePart`` and ``DocumentPart`` (a PDF).
+# No part carries audio or video.
+CONTENT_PARTS: frozenset[InputModality] = frozenset({"text", "image", "pdf"})
+
+
+def ordered_efforts(efforts: Iterable[str]) -> tuple[str, ...]:
+    """``efforts`` weakest first, by :data:`EFFORT_ORDER`."""
+    return tuple(sorted(efforts, key=EFFORT_ORDER.index))
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AdapterFacts:
+    """What an adapter does with one model, read from its own tables: ``None`` where they say
+    nothing. The model catalog takes them as ``kind="adapter"`` facts; an adapter never reads
+    the catalog (D63).
+
+    Attributes:
+        tools: It sends function tools to the model.
+        tool_choice_modes: The ``tool_choice`` forms it takes (``"named"``: a tool's name).
+        structured_output: It sends ``output_schema``.
+        json_mode: It takes ``json_mode`` (natively, or as an instruction).
+        streaming: It streams the model's answers.
+        thinking_mode: ``"none"``: the model does not reason, and ``thinking`` is refused;
+            ``"optional"``: it reasons when asked; ``"always"``: it reasons unasked (an effort
+            may lower it, and ``"none"`` among its efforts stops it).
+        thinking_efforts: The ``thinking_effort`` values it takes, weakest first.
+        thinking_budget: It takes a ``thinking_budget`` in tokens.
+        server_tools: The server tools it sends, by ``ServerTool.type``.
+        input_modalities: The inputs it sends to the model; the catalog narrows a published
+            list to them.
+    """
+
+    tools: bool | None = None
+    tool_choice_modes: frozenset[ToolChoiceMode] | None = None
+    structured_output: bool | None = None
+    json_mode: bool | None = None
+    streaming: bool | None = None
+    thinking_mode: ThinkingMode | None = None
+    thinking_efforts: tuple[str, ...] | None = None
+    thinking_budget: bool | None = None
+    server_tools: frozenset[str] | None = None
+    input_modalities: frozenset[InputModality] | None = None
+
+
+# An image model no completion reaches: it only draws, from a prompt and input images (an image
+# generation takes text and image parts only, ``image_prompt``).
+DRAWS_ONLY = AdapterFacts(
+    tools=False,
+    tool_choice_modes=frozenset(),
+    structured_output=False,
+    json_mode=False,
+    streaming=False,
+    thinking_mode="none",
+    thinking_efforts=(),
+    thinking_budget=False,
+    server_tools=frozenset(),
+    input_modalities=frozenset({"text", "image"}),
+)
+# An image model that also completes, but takes no tools.
+DRAWS_WITHOUT_TOOLS = AdapterFacts(
+    tools=False,
+    tool_choice_modes=frozenset(),
+    server_tools=frozenset(),
+    input_modalities=frozenset({"text", "image"}),
+)
+
+
 @dataclass(frozen=True, slots=True)
 class Prepared[R]:
     """A request ready to send: the SDK's arguments, and what assembling its answer needs."""
@@ -239,6 +317,12 @@ class BaseProvider[P, F](ABC):
     """
 
     _model: str
+
+    @classmethod
+    def model_facts(cls, model: str) -> AdapterFacts:
+        """What this adapter does with ``model``, read from its own tables: pure, with no client
+        and no catalog (D63). An adapter with no rules per model says nothing."""
+        return AdapterFacts()
 
     @abstractmethod
     def prepare(self, request: Request) -> P:

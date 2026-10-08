@@ -30,7 +30,15 @@ from ai_arch_toolkit.core._middleware import Request
 from ai_arch_toolkit.core._model_id import lookup
 from ai_arch_toolkit.core._pricing import _estimate_response_cost
 from ai_arch_toolkit.core._providers import OWN_BASE_URLS
-from ai_arch_toolkit.core._providers._base import Options, Prepared, parse_options
+from ai_arch_toolkit.core._providers._base import (
+    DRAWS_ONLY,
+    AdapterFacts,
+    Options,
+    Prepared,
+    ThinkingMode,
+    ordered_efforts,
+    parse_options,
+)
 from ai_arch_toolkit.core._providers._imports import require_sdk
 from ai_arch_toolkit.core._response import Response, Usage
 
@@ -123,6 +131,12 @@ class _Model:
             return False
         effort = effort or self.default_effort
         return "none" not in self.efforts if effort is None else effort != "none"
+
+    def thinking_mode(self) -> ThinkingMode:
+        """``"none"`` without efforts, ``"always"`` when a request without one reasons."""
+        if not self.efforts:
+            return "none"
+        return "always" if self.reasons_at(None) else "optional"
 
 
 # Each model's efforts, and the effort a request without one runs at, were measured live on the
@@ -257,6 +271,11 @@ def _image_rules(model: str) -> ImageModel | None:
     return found.value if found is not None else None
 
 
+def _rules_of(model: str) -> _Model:
+    found = lookup(model, _MODELS)
+    return found.value if found is not None else _CURRENT
+
+
 def _image_tool(config: Mapping[str, Any]) -> ImageGeneration:
     """The hosted image generation tool for ``image_generation()``'s config, checked against its
     image model's rules (https://developers.openai.com/api/docs/guides/tools-image-generation)."""
@@ -387,11 +406,23 @@ class OpenAIProvider(ResponsesProvider):
         )
 
     def _rules(self) -> _Model:
-        found = lookup(self._model, _MODELS)
-        return found.value if found is not None else _CURRENT
+        return _rules_of(self._model)
 
     def _image_rules(self) -> ImageModel | None:
         return _image_rules(self._model)
+
+    @classmethod
+    def model_facts(cls, model: str) -> AdapterFacts:
+        """From the model tables: an image model only draws (``prepare`` refuses it); a chat
+        model gets the profile's facts and its row's efforts (``_MODELS``)."""
+        if _image_rules(model) is not None:
+            return DRAWS_ONLY
+        rules = _rules_of(model)
+        return dataclasses.replace(
+            _PROFILE.facts(),
+            thinking_mode=rules.thinking_mode(),
+            thinking_efforts=ordered_efforts(rules.efforts),
+        )
 
     def _input_items(self, messages: list[dict[str, Any]]) -> list[ResponseInputItemParam]:
         """Responses input items, replaying the reasoning of this model's family only."""

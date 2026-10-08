@@ -33,6 +33,9 @@ from ai_arch_toolkit.core._exceptions import (
 )
 from ai_arch_toolkit.core._model_id import family, snapshot_base
 from ai_arch_toolkit.core._providers._base import (
+    CONTENT_PARTS,
+    EVERY_TOOL_CHOICE,
+    AdapterFacts,
     BaseProvider,
     CallPieces,
     Done,
@@ -166,6 +169,24 @@ class ResponsesProfile:
         own id without a snapshot suffix. Another provider's ids never fall into one of this
         profile's families, so its responses are never replayed here."""
         return family(model, self.families) or snapshot_base(model) or model
+
+    def facts(self) -> AdapterFacts:
+        """What every chat model of the provider gets here (D63): function tools, the tool
+        choices it takes, structured output, JSON mode, streams, its hosted tools and the content
+        parts. Each adapter adds its model's reasoning."""
+        hosted = set(self.hosted_tools) | ({"image_generation"} if self.image_tool else set())
+        return AdapterFacts(
+            tools=True,
+            tool_choice_modes=EVERY_TOOL_CHOICE
+            if self.takes_tool_choice
+            else frozenset({"auto", "none"}),  # "none" is sent as no tools
+            structured_output=True,
+            json_mode=True,
+            streaming=True,
+            thinking_budget=False,
+            server_tools=frozenset(hosted),
+            input_modalities=CONTENT_PARTS,
+        )
 
 
 # ---------------------------------------------------------------------------

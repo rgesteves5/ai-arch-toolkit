@@ -18,7 +18,7 @@ import tomllib
 import zlib
 from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -33,6 +33,7 @@ from ai_arch_toolkit import (
     user,
 )
 from ai_arch_toolkit.core._exceptions import RateLimitError
+from ai_arch_toolkit.core._model_catalog import CATALOG_VERSION
 
 type ScenarioName = Literal[
     "plain", "tools_loop", "structured", "json_mode", "stream", "thinking", "vision"
@@ -66,6 +67,16 @@ SUITES: dict[str, tuple[ScenarioName, ...]] = {
 }
 DEFAULT_MODELS_PATH = Path("scripts/model_probe_models.toml")
 DEFAULT_OUTPUT_DIR = Path("scripts/output/model-probes")
+
+# The model catalog fact each scenario proves through the adapter (C06d). A run writes them as a
+# local fragment next to its report, to compare with the adapter's facts or to load with
+# model_catalog.load(); never into the seed, which holds only published facts (D63).
+CATALOG_FACTS: dict[str, str] = {
+    "tools_loop": "tools",
+    "structured": "structured_output",
+    "json_mode": "json_mode",
+    "stream": "streaming",
+}
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -264,6 +275,37 @@ def render_markdown_report(results: Sequence[ProbeResult], *, started_at: str) -
             )
 
     return "\n".join(lines).rstrip() + "\n"
+
+
+def catalog_fragment(results: Sequence[ProbeResult], *, verified_at: date, ref: str) -> str:
+    """A model catalog file of what a run proved, as ``kind = "probe"`` facts.
+
+    A scenario that passed states its fact true and one the provider refused as unsupported
+    states it false; any other outcome (a rate limit, a timeout, a wrong answer) states nothing.
+    """
+    stated: dict[tuple[str, str], dict[str, bool]] = {}
+    for result in results:
+        fact = CATALOG_FACTS.get(result.scenario)
+        value = _proved(result)
+        if fact is not None and value is not None and result.provider:
+            stated.setdefault((result.provider, result.model), {})[fact] = value
+    source = (
+        f'{{ kind = "probe", ref = {json.dumps(ref)}, verified_at = {verified_at.isoformat()} }}'
+    )
+    lines = [f"catalog_version = {CATALOG_VERSION}"]
+    for (provider, model), facts in sorted(stated.items()):
+        lines += ["", f"[{json.dumps(provider)}.{json.dumps(model)}]"]
+        lines += [f"{name} = {str(value).lower()}" for name, value in sorted(facts.items())]
+        lines.append(f"source = {source}")
+    return "\n".join(lines) + "\n"
+
+
+def _proved(result: ProbeResult) -> bool | None:
+    if result.ok:
+        return True
+    if result.classification == "unsupported_capability":
+        return False
+    return None
 
 
 async def run_probe(
@@ -517,6 +559,7 @@ async def _main_async(args: argparse.Namespace) -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     jsonl_path = args.output_dir / f"{run_id}.jsonl"
     markdown_path = args.output_dir / f"{run_id}.md"
+    catalog_path = args.output_dir / f"{run_id}.catalog.toml"
 
     results: list[ProbeResult] = []
     progress = sys.stderr if args.json else sys.stdout
@@ -552,6 +595,10 @@ async def _main_async(args: argparse.Namespace) -> int:
         render_markdown_report(results, started_at=started_at),
         encoding="utf-8",
     )
+    catalog_path.write_text(
+        catalog_fragment(results, verified_at=datetime.now(UTC).date(), ref=f"probe run {run_id}"),
+        encoding="utf-8",
+    )
 
     failed = sum(1 for result in results if not result.ok)
     summary = {
@@ -559,6 +606,7 @@ async def _main_async(args: argparse.Namespace) -> int:
         "failed": failed,
         "jsonl_path": str(jsonl_path),
         "markdown_path": str(markdown_path),
+        "catalog_path": str(catalog_path),
     }
     if args.json:
         print(json.dumps(summary, sort_keys=True))
@@ -568,6 +616,7 @@ async def _main_async(args: argparse.Namespace) -> int:
         print(f"  failed: {summary['failed']}")
         print(f"  jsonl: {jsonl_path}")
         print(f"  markdown: {markdown_path}")
+        print(f"  catalog fragment: {catalog_path}")
     return 1 if failed else 0
 
 

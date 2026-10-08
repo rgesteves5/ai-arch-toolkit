@@ -92,6 +92,7 @@ Core primitives for the Flow orchestration system:
 | `_moderation.py` | `Moderator`, `ModerationResult`, `ModerationError` |
 | `_retry.py` | `RetryConfig` + `with_retry()` for exponential backoff |
 | `_pricing.py` | `PricingRegistry` with `_default_pricing.toml`, `pricing` singleton |
+| `_model_catalog.py` | `ModelCatalog` with `_default_catalog.toml` and each adapter's `model_facts`, `model_catalog` singleton ([Model Catalog](model-catalog.md)) |
 | `_server_tools.py` | `ServerTool`, `code_execution()`, `web_search()` for provider-hosted tools |
 | `_batch.py` | `BatchRequest`, `BatchResult` for batch API jobs |
 | `_sync.py` | `_run_sync()` and `_stream_sync()` helpers used by LLM and agents |
@@ -262,6 +263,7 @@ src/ai_arch_toolkit/
 │   ├── _moderation.py   # Moderator protocol and result types
 │   ├── _retry.py        # RetryConfig, exponential backoff
 │   ├── _pricing.py      # Model pricing registry
+│   ├── _model_catalog.py # Model limits and capabilities, with sources
 │   ├── _server_tools.py # Provider-hosted tools
 │   ├── _batch.py        # Batch API types
 │   ├── _sync.py         # Async-to-sync bridging
@@ -315,6 +317,7 @@ Supporting directories:
 | **Middleware** | `before`/`after` hooks on every LLM call. |
 | **Retry** | `RetryConfig` with exponential backoff. |
 | **Pricing** | Per-model pricing registry with cost tracking on `Response`. |
+| **Model catalog** | Per-model limits, modalities, tools and reasoning through the adapter, each fact with its source and date. |
 | **Batch** | `LLM.batch_submit()` / `batch_status()` / `batch_results()` plus `BatchRequest` / `BatchResult` types. |
 | **Flows** | Composable Step orchestration — sequential, cyclic, DAG modes with Policy and Trace. |
 | **Agent flows** | Built-in flow factories for ReAct-style loops, planners, tree search, and generate-review workflows — with per-phase LLM/tool/prompt overrides via `Agent`/`ReasoningSpec` and agent manifests. |

@@ -61,6 +61,12 @@ from ai_arch_toolkit.core._metering._scope import (
     open_span,
 )
 from ai_arch_toolkit.core._middleware import Middleware, Request
+from ai_arch_toolkit.core._model_catalog import (
+    ModelCapabilities,
+    ModelCatalog,
+    Provenance,
+    model_catalog,
+)
 from ai_arch_toolkit.core._moderation import ModerationError, ModerationResult, Moderator
 from ai_arch_toolkit.core._policy import OnExhausted, OnLowConfidence, OnTimeout, Policy
 from ai_arch_toolkit.core._pricing import ModelPricing, PricingRegistry, ToolPricing, pricing
@@ -221,6 +227,8 @@ __all__ = [
     "MeterScope",
     "MeterSnapshot",
     "Middleware",
+    "ModelCapabilities",
+    "ModelCatalog",
     "ModelPricing",
     "ModerationError",
     "ModerationResult",
@@ -238,6 +246,7 @@ __all__ = [
     "PolicyDecision",
     "Pricer",
     "PricingRegistry",
+    "Provenance",
     "ProviderError",
     "ProviderTimeout",
     "Range",
@@ -310,6 +319,7 @@ __all__ = [
     "inference_limit",
     "is_local_url",
     "llm_events_to",
+    "model_catalog",
     "open_span",
     "prepare_tools",
     "pricing",

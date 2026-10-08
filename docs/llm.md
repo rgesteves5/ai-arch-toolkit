@@ -311,6 +311,11 @@ per-family correction factor (`correction=` overrides it), the last two assume a
 per token (`chars_to_tokens` also applies the factor of its `model=`). Use them for pre-flight
 budget checks, not billing.
 
+To check a count against the model's limits before sending, read them from the
+[Model Catalog](model-catalog.md) (`model_catalog.get(model).context_window`, or the input and
+output limits where the provider gives them apart). The `LLM` never reads the catalog: an option
+a model does not take still raises `RequestError` from its adapter.
+
 ---
 
 ## Batch API
@@ -443,4 +448,4 @@ signatures the same way). See
 
 ---
 
-See also: [Tools](tools.md) · [Middleware](middleware.md) · [Pricing & Cost Tracking](pricing.md) · [Flow Architecture](flow-architecture.md) for using an `LLM` inside agent flows.
+See also: [Tools](tools.md) · [Middleware](middleware.md) · [Pricing & Cost Tracking](pricing.md) · [Model Catalog](model-catalog.md) · [Flow Architecture](flow-architecture.md) for using an `LLM` inside agent flows.

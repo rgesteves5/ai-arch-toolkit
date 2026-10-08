@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import warnings
@@ -21,8 +22,11 @@ from ai_arch_toolkit.core._middleware import Request
 from ai_arch_toolkit.core._model_id import lookup
 from ai_arch_toolkit.core._providers import OWN_BASE_URLS
 from ai_arch_toolkit.core._providers._base import (
+    CONTENT_PARTS,
     DEFAULT_THINKING_BUDGET,
+    EVERY_TOOL_CHOICE,
     THINKING_EFFORT_BUDGETS,
+    AdapterFacts,
     BaseProvider,
     CallPieces,
     Done,
@@ -35,6 +39,7 @@ from ai_arch_toolkit.core._providers._base import (
     mark_dispatched,
     merge_system_prompts,
     on_request,
+    ordered_efforts,
     parse_options,
     parse_structured,
     parse_tool_args,
@@ -170,6 +175,11 @@ _PROFILES: dict[str, _Profile] = {
 }
 
 
+def _profile_of(model: str) -> _Profile:
+    found = lookup(model, _PROFILES)
+    return found.value if found is not None else _CURRENT
+
+
 # ---------------------------------------------------------------------------
 # Request
 # ---------------------------------------------------------------------------
@@ -223,18 +233,24 @@ def _tool_to_sdk(tool: dict[str, Any]) -> ToolParam:
     }
 
 
+# The server tools, each with its name, at the version every current model takes; their config
+# belongs to C05 (https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool,
+# https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool).
+_SERVER_TOOLS: dict[str, ToolUnionParam] = {
+    "web_search": {"type": "web_search_20250305", "name": "web_search"},
+    "code_execution": {"type": "code_execution_20250825", "name": "code_execution"},
+}
+
+
 def _server_tool(tool: dict[str, Any]) -> ToolUnionParam:
-    """A server tool with its name, at the version every current model takes; its config
-    belongs to C05 (https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool,
-    https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool)."""
+    """The server tool ``tool`` names, without a config (C05)."""
     config = sorted(set(tool) - {"_server_tool", "type"})
     if config:
         raise RequestError(f"server tool {tool['type']!r}: config {config} is not supported yet")
-    if tool["type"] == "web_search":
-        return {"type": "web_search_20250305", "name": "web_search"}
-    if tool["type"] == "code_execution":
-        return {"type": "code_execution_20250825", "name": "code_execution"}
-    raise RequestError(f"Anthropic has no server tool {tool['type']!r} in this adapter")
+    found = _SERVER_TOOLS.get(tool["type"])
+    if found is None:
+        raise RequestError(f"Anthropic has no server tool {tool['type']!r} in this adapter")
+    return copy.copy(found)
 
 
 def _tool_choice(choice: str) -> ToolChoiceParam:
@@ -550,8 +566,31 @@ class AnthropicProvider(LoopAwareClientCache, BaseProvider[Prepared[Params], Mes
         return self._client.messages
 
     def _profile(self) -> _Profile:
-        found = lookup(self._model, _PROFILES)
-        return found.value if found is not None else _CURRENT
+        return _profile_of(self._model)
+
+    @classmethod
+    def model_facts(cls, model: str) -> AdapterFacts:
+        """From the profile table: an adaptive model takes an effort and no budget, an older one
+        a budget its effort maps to, and the forced tool choices where it takes them. Whether an
+        adaptive model thinks unasked is not in the table, so ``thinking_mode`` stays unknown."""
+        profile = _profile_of(model)
+        extended = profile.thinking == "extended"
+        return AdapterFacts(
+            tools=True,
+            tool_choice_modes=EVERY_TOOL_CHOICE
+            if profile.forced_tools
+            else frozenset({"auto", "none"}),
+            structured_output=True,
+            json_mode=True,  # an instruction in the system prompt
+            streaming=True,
+            thinking_mode="optional" if extended else None,
+            thinking_efforts=ordered_efforts(
+                THINKING_EFFORT_BUDGETS if extended else profile.efforts
+            ),
+            thinking_budget=extended,
+            server_tools=frozenset(_SERVER_TOOLS),
+            input_modalities=CONTENT_PARTS,
+        )
 
     async def count_tokens(
         self,

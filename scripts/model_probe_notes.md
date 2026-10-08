@@ -160,3 +160,16 @@ Keep entries factual: model ID, scenario, observed error, and the local action t
     `/v1/images/generations`.
   - A stateless second turn replaying the call with `result: null` works.
   - `/v1/images/generations` returns `b64_json`, with the usage in tokens.
+
+## 2026-10-08
+
+- Each run now writes a third file, `<run_id>.catalog.toml`, next to its JSONL and Markdown
+  reports: what the run proved, as model catalog facts of `kind = "probe"` dated the day of the
+  run (C06d). A scenario that passed states its fact true (`tools_loop` → `tools`,
+  `structured` → `structured_output`, `json_mode` → `json_mode`, `stream` → `streaming`); one
+  classified `unsupported_capability` states it false; any other outcome states nothing.
+- The fragment is local, like the reports. Compare it with the adapter's facts
+  (`model_catalog.get(model)`, `kind="adapter"`): a disagreement is an adapter table to fix,
+  which fixes the catalog too (D63). An app may load it with `model_catalog.load(path)`. It
+  never goes into `src/ai_arch_toolkit/core/_default_catalog.toml`, which holds only what the
+  providers publish.

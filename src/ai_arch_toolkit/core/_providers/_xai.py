@@ -26,6 +26,9 @@ from ai_arch_toolkit.core._images import ImageRequest
 from ai_arch_toolkit.core._middleware import Request
 from ai_arch_toolkit.core._model_id import family, lookup
 from ai_arch_toolkit.core._providers._base import (
+    DRAWS_ONLY,
+    EVERY_TOOL_CHOICE,
+    AdapterFacts,
     BaseProvider,
     CallPieces,
     Done,
@@ -37,6 +40,7 @@ from ai_arch_toolkit.core._providers._base import (
     image_prompt,
     mark_dispatched,
     merge_system_prompts,
+    ordered_efforts,
     parse_options,
     parse_structured,
     parse_tool_args,
@@ -179,6 +183,11 @@ _PROFILES: dict[str, _Profile] = {
         ("grok-3", "grok-4-fast-non-reasoning", "grok-4-1-fast-non-reasoning"), _PLAIN
     ),
 }
+
+
+def _profile_of(model: str) -> _Profile:
+    found = lookup(model, _PROFILES)
+    return found.value if found is not None else _CURRENT
 
 
 # ---------------------------------------------------------------------------
@@ -524,8 +533,29 @@ class XAIProvider(LoopAwareClientCache, BaseProvider[_Call, _Final]):
         )
 
     def _profile(self) -> _Profile:
-        found = lookup(self._model, _PROFILES)
-        return found.value if found is not None else _CURRENT
+        return _profile_of(self._model)
+
+    @classmethod
+    def model_facts(cls, model: str) -> AdapterFacts:
+        """An image model only draws (``prepare`` refuses it). A chat model reasons unasked when
+        its profile says it reasons; the multi-agent model takes no client tools, and its effort
+        picks the agents. No server tool and no document reaches xAI from this adapter."""
+        if family(model, _IMAGE_FAMILIES):
+            return DRAWS_ONLY
+        profile = _profile_of(model)
+        agents = profile.multi_agent
+        return AdapterFacts(
+            tools=not agents,
+            tool_choice_modes=frozenset() if agents else EVERY_TOOL_CHOICE,
+            structured_output=True,
+            json_mode=True,
+            streaming=True,
+            thinking_mode="always" if profile.reasons else "none",
+            thinking_efforts=ordered_efforts(_AGENTS if agents else profile.efforts),
+            thinking_budget=False,
+            server_tools=frozenset(),  # until C05 sends them
+            input_modalities=frozenset({"text", "image"}),  # documents are dropped
+        )
 
     # ------------------------------------------------------------------
     # The contract
