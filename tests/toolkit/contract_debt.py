@@ -15,7 +15,7 @@ def _owes(*points: str) -> frozenset[str]:
 
 
 # Definitions of the copied cut helpers (``_truncate``, ``_trim``) left in ``toolkit/tools``.
-CUT_HELPERS = 14
+CUT_HELPERS = 12
 
 DEBT: dict[str, frozenset[str]] = {
     "air_quality_forecast": _owes("window", "limits"),
@@ -65,9 +65,6 @@ DEBT: dict[str, frozenset[str]] = {
     "get_weather": _owes("errors", "not_found"),
     "get_weather_by_coords": _owes("errors"),
     "hacker_news": _owes("window", "errors", "limits"),
-    "http_get": _owes("window", "limits"),
-    "internet_archive_item": _owes("window", "errors"),
-    "internet_archive_search": _owes("window", "errors", "zero", "limits"),
     "ip_lookup": _owes("errors"),
     "json_extract": _owes("not_found"),
     "list_directory": _owes("window"),
@@ -77,9 +74,6 @@ DEBT: dict[str, frozenset[str]] = {
     "open_food_facts_nutrition": _owes("window", "errors", "not_found"),
     "open_food_facts_product": _owes("window", "errors", "not_found"),
     "open_food_facts_search": _owes("window", "errors", "zero", "limits"),
-    "open_library_isbn": _owes("window", "errors"),
-    "open_library_search": _owes("window", "errors", "zero", "limits"),
-    "open_library_work": _owes("window", "errors"),
     "openfda_food_recall": _owes("errors"),
     "openfda_food_recall_search": _owes("window", "errors", "zero", "limits"),
     "osm_reverse_geocode": _owes("window", "errors", "limits"),
@@ -102,7 +96,6 @@ DEBT: dict[str, frozenset[str]] = {
     "rxnorm_drug_search": _owes("window", "errors", "zero"),
     "rxnorm_ndcs": _owes("window", "errors"),
     "rxnorm_related": _owes("window", "errors", "limits"),
-    "scrape_text": _owes("window", "limits"),
     "search_files": _owes("window", "zero", "limits"),
     "semantic_scholar_citations": _owes("window", "errors", "limits"),
     "semantic_scholar_paper": _owes("window", "errors"),
@@ -126,7 +119,4 @@ DEBT: dict[str, frozenset[str]] = {
     "world_bank_series": _owes("window", "errors", "not_found", "limits"),
     "world_bank_sources": _owes("window", "errors", "limits"),
     "world_bank_topics": _owes("window", "errors", "limits"),
-    "youtube_transcript": _owes("window", "not_found", "limits"),
-    "youtube_transcript_languages": _owes("window", "not_found"),
-    "youtube_transcript_search": _owes("window", "not_found", "limits"),
 }

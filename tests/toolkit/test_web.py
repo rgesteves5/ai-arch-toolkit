@@ -1,16 +1,45 @@
-"""Tests for toolkit/tools/_web.py."""
+"""Tests for toolkit/tools/_web.py: any page, read window by window (T09)."""
 
 from __future__ import annotations
 
 from io import BytesIO
-from unittest.mock import patch
+from typing import Any
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ai_arch_toolkit.core import ApprovalDecision, ApprovalRequest, ToolCall, ToolGroup
+from ai_arch_toolkit.core import (
+    ApprovalDecision,
+    ApprovalRequest,
+    ToolCall,
+    ToolGroup,
+    ToolResult,
+)
 from ai_arch_toolkit.core._tools._result import ToolFailure
+from ai_arch_toolkit.toolkit.tools import _web
 from ai_arch_toolkit.toolkit.tools._web import http_get, scrape_text
 from tests.toolkit.http_fakes import HTTP_OPEN, respond
+
+
+def _text(result: ToolResult | str) -> str:
+    return result.value if isinstance(result, ToolResult) else result
+
+
+def _window(result: ToolResult | str) -> dict[str, Any]:
+    assert isinstance(result, ToolResult)
+    return result.metadata["window"]
+
+
+def _approve_all(request: ApprovalRequest) -> ApprovalDecision:
+    return ApprovalDecision.approve()
+
+
+def _rows(count: int) -> str:
+    return "".join(f"row {n}\n" for n in range(count))
+
+
+# Lines of one to four bytes a character, so a window's end in characters is not one in bytes.
+_MIXED = "".join(f"linha {n}: café, 20 €, 🙂 {'x' * (n % 7)}\n" for n in range(120))
 
 
 def _invalid_url(fn, url):
@@ -34,38 +63,129 @@ class TestHttpGet:
     def test_fetches_content(self, mock_urlopen):
         mock_urlopen.return_value = respond("Hello World")
         result = http_get("https://example.com")
-        assert result == "Hello World"
+        assert _text(result) == "Hello World"
 
     @patch(HTTP_OPEN)
-    def test_truncation(self, mock_urlopen):
-        mock_urlopen.return_value = respond("x" * 500)
-        result = http_get("https://example.com", max_chars=100)
-        assert "Truncated" in result
-        assert len(result) < 500
+    def test_following_the_footers_rebuilds_the_whole_text(self, mock_urlopen):
+        mock_urlopen.side_effect = lambda request, timeout: respond(_MIXED)
+        parts: list[str] = []
+        offset: int | None = 0
+        calls = 0
+
+        while offset is not None:
+            result = http_get("https://example.com", max_chars=300, offset=offset)
+            window = _window(result)
+            parts.append(_text(result)[: window["last"] - window["first"]])
+            assert window["first"] == offset
+            offset = (window["next_call"] or {}).get("offset")
+            calls += 1
+
+        assert "".join(parts) == _MIXED
+        assert calls > 5
+        assert window["total"] == len(_MIXED)  # the last window read the page to its end
+
+    @pytest.mark.parametrize("page", ["🙂" * 40, " " * 500 + "late text"])
+    @patch(HTTP_OPEN)
+    def test_the_smallest_window_still_reads_on_to_the_end(self, mock_urlopen, page):
+        # Four bytes a character, one character a window; or a start that is only spaces.
+        mock_urlopen.side_effect = lambda request, timeout: respond(page)
+        parts: list[str] = []
+        offset: int | None = 0
+
+        while offset is not None and len(parts) <= len(page):
+            result = http_get("https://example.com", max_chars=1, offset=offset)
+            window = _window(result)
+            parts.append(_text(result)[: window["last"] - window["first"]])
+            offset = (window["next_call"] or {}).get("offset")
+
+        assert "".join(parts) == page
 
     @patch(HTTP_OPEN)
-    def test_a_negative_or_huge_max_chars_is_clamped(self, mock_urlopen):
-        mock_urlopen.return_value = respond("x" * 300_000)
-        assert http_get("https://example.com", max_chars=-1).startswith("x\n\n[Truncated")
-
-        mock_urlopen.return_value = respond("x" * 300_000)
-        result = http_get("https://example.com", max_chars=10**9)
-        assert result.startswith("x" * 100_000 + "\n\n[Truncated")
-
-    @patch(HTTP_OPEN)
-    def test_reads_no_more_of_the_body_than_it_can_return(self, mock_urlopen):
-        body = respond("x" * 3_000_000)
+    def test_a_cut_page_names_the_next_offset_and_reads_no_more_than_it_needs(self, mock_urlopen):
+        body = respond(_rows(100_000))
         mock_urlopen.return_value = body
 
-        http_get("https://example.com", max_chars=100)
+        result = http_get("https://example.com", max_chars=100)
 
+        window = _window(result)
+        assert _text(result).startswith("row 0\nrow 1\n")
+        assert window["total"] is None  # the page goes on: its length is not known yet
+        assert _text(result).endswith(
+            f"[chars 0-{window['last']} | next: offset={window['last']}]"
+        )
         assert body.bytes_read <= 4 * 100 + 1
+
+        body = respond(_rows(100_000))
+        mock_urlopen.return_value = body
+
+        http_get("https://example.com", max_chars=100, offset=1000)
+
+        assert body.bytes_read <= 4 * 1100 + 1
+
+    @patch(HTTP_OPEN)
+    def test_a_page_read_whole_gives_its_length(self, mock_urlopen):
+        mock_urlopen.return_value = respond(_rows(10))
+
+        result = http_get("https://example.com", max_chars=30, offset=42)
+
+        assert _window(result)["total"] == 60
+        assert _text(result) == "row 7\nrow 8\nrow 9\n[chars 42-60 of 60 | end]"
+
+    @patch(HTTP_OPEN)
+    def test_find_returns_the_passages_around_a_term(self, mock_urlopen):
+        page = _rows(2000) + "the needle is here\n" + "tail\n" * 50
+        mock_urlopen.return_value = respond(page)
+
+        text = _text(http_get("https://example.com", find="NEEDLE"))
+
+        assert "the needle is here" in text
+        assert text.startswith("[at char ")
+        assert text.endswith('[matches 1-1 of 1 for "NEEDLE" | end]')
+
+    @patch(HTTP_OPEN)
+    def test_a_page_longer_than_what_http_get_reads_says_so(self, mock_urlopen, monkeypatch):
+        monkeypatch.setattr(_web, "_READ_BYTES", 200)
+        mock_urlopen.return_value = respond(_rows(100))
+
+        result = http_get("https://example.com", max_chars=100, offset=150)
+
+        lines = _text(result).splitlines()
+        assert lines[0] == (
+            "(https://example.com goes on past its first 200 bytes, all http_get reads)"
+        )
+        assert lines[-1] == "[chars 150-200 | end]"
+        assert _window(result)["next_call"] is None
+
+    @patch(HTTP_OPEN)
+    def test_an_empty_answer_says_so(self, mock_urlopen):
+        mock_urlopen.return_value = respond("")
+
+        assert _text(http_get("https://example.com")) == (
+            "The answer from https://example.com has no text."
+        )
+
+    @pytest.mark.parametrize(("max_chars", "kept"), [(1, True), (0, False), (100_001, False)])
+    @patch(HTTP_OPEN)
+    def test_max_chars_is_refused_outside_its_limits_through_the_executor(
+        self, mock_urlopen, max_chars, kept
+    ):
+        mock_urlopen.return_value = respond("Hello")
+        call = ToolCall(
+            id="c1", name="http_get", input={"url": "https://example.com", "max_chars": max_chars}
+        )
+
+        result = ToolGroup(http_get, approval_handler=_approve_all).execute(call)
+
+        assert result.ok is kept
+        if not kept:
+            assert result.error is not None
+            assert result.error.type == "validation_error"
 
     @patch(HTTP_OPEN)
     def test_plain_http_is_still_fetched(self, mock_urlopen):
         mock_urlopen.return_value = respond("Hello")
 
-        assert http_get("http://example.com/") == "Hello"
+        assert _text(http_get("http://example.com/")) == "Hello"
         assert mock_urlopen.call_args.args[0].full_url == "http://example.com/"
 
     @patch(HTTP_OPEN)
@@ -122,18 +242,59 @@ class TestScrapeText:
     def test_strips_html(self, mock_urlopen):
         html = "<html><body><p>Hello</p><script>evil()</script><p>World</p></body></html>"
         mock_urlopen.return_value = respond(html)
-        result = scrape_text("https://example.com")
-        assert "Hello" in result
-        assert "World" in result
-        assert "<p>" not in result
+        result = _text(scrape_text("https://example.com"))
+        assert result == "Hello\nWorld"
         assert "evil()" not in result
 
     @patch(HTTP_OPEN)
-    def test_truncation(self, mock_urlopen):
-        html = "<p>" + "word " * 2000 + "</p>"
+    def test_following_the_footers_rebuilds_the_visible_text(self, mock_urlopen):
+        html = "<html><body>" + "".join(f"<p>Para {n}: café.</p>" for n in range(200)) + "</body>"
+        mock_urlopen.side_effect = lambda request, timeout: respond(html)
+        whole = "\n".join(f"Para {n}: café." for n in range(200))
+        parts: list[str] = []
+        offset: int | None = 0
+
+        while offset is not None:
+            result = scrape_text("https://example.com", max_chars=250, offset=offset)
+            window = _window(result)
+            parts.append(_text(result)[: window["last"] - window["first"]])
+            offset = (window["next_call"] or {}).get("offset")
+
+        assert "".join(parts) == whole
+        assert window["total"] == len(whole)
+
+    @patch(HTTP_OPEN)
+    def test_find_returns_the_passages_around_a_term(self, mock_urlopen):
+        html = "".join(f"<p>Para {n}.</p>" for n in range(500)) + "<p>The answer is 42.</p>"
         mock_urlopen.return_value = respond(html)
-        result = scrape_text("https://example.com", max_chars=100)
-        assert "Truncated" in result
+
+        text = _text(scrape_text("https://example.com", find="answer"))
+
+        assert "The answer is 42." in text
+        assert text.endswith('[matches 1-1 of 1 for "answer" | end]')
+
+    @patch(HTTP_OPEN)
+    def test_html_longer_than_what_scrape_text_reads_says_so(self, mock_urlopen, monkeypatch):
+        monkeypatch.setattr(_web, "_SCRAPE_MAX_BYTES", 200)
+        mock_urlopen.return_value = respond("".join(f"<p>Para {n}.</p>" for n in range(100)))
+
+        result = scrape_text("https://example.com")
+
+        lines = _text(result).splitlines()
+        assert lines[0] == (
+            "(only the first 200 bytes of https://example.com's HTML were read: "
+            "its text stops there)"
+        )
+        assert lines[1] == "Para 0."
+        assert _window(result)["next_call"] is None
+
+    @patch(HTTP_OPEN)
+    def test_a_page_without_visible_text_says_so(self, mock_urlopen):
+        mock_urlopen.return_value = respond("<html><script>x()</script></html>")
+
+        assert _text(scrape_text("https://example.com")) == (
+            "The page at https://example.com has no visible text."
+        )
 
 
 class TestHttpGetGovernance:
@@ -166,3 +327,35 @@ class TestHttpGetGovernance:
         assert [(r.tool_name, r.capability, r.risk_level) for r in requests] == [
             ("http_get", "network", "high")
         ]
+
+    def test_the_window_does_not_change_the_web_tools_governance(self) -> None:
+        for fn in (http_get, scrape_text):
+            policy = fn.__tool_definition__.policy
+            assert (policy.capability, policy.risk_level, policy.requires_approval) == (
+                "network",
+                "high",
+                True,
+            )
+
+    @patch(HTTP_OPEN)
+    def test_reading_on_is_approved_call_by_call(self, mock_urlopen: MagicMock) -> None:
+        mock_urlopen.side_effect = lambda request, timeout: respond(_rows(100))
+        asked: list[ApprovalRequest] = []
+
+        def approve(request: ApprovalRequest) -> ApprovalDecision:
+            asked.append(request)
+            return ApprovalDecision.approve()
+
+        group = ToolGroup(http_get, approval_handler=approve)
+        url = "https://example.com"
+        first = group.execute(
+            ToolCall(id="c1", name="http_get", input={"url": url, "max_chars": 50})
+        )
+        onward = first.metadata["window"]["next_call"]
+        second = group.execute(
+            ToolCall(id="c2", name="http_get", input={"url": url, "max_chars": 50, **onward})
+        )
+
+        assert second.ok
+        assert second.metadata["window"]["first"] == first.metadata["window"]["last"]
+        assert len(asked) == 2

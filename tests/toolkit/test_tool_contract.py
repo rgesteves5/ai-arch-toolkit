@@ -15,7 +15,8 @@ read from the tool itself:
 A point that fails is debt, listed in ``contract_debt.py``: the test fails when a tool owes a point
 the list does not name (the list only shrinks) and when it keeps one the list still names (delete
 the line). The network is the canned answers' (``_http._open``), behind a fresh throttle for each
-check; sockets are blocked.
+check, and a library a tool reaches without the door is the case's stand-in (``patches``); sockets
+are blocked.
 """
 
 from __future__ import annotations
@@ -112,9 +113,12 @@ def _opener(answers: tuple[Answer, ...]) -> Callable[[urllib.request.Request, fl
 
 def _serve(monkeypatch: pytest.MonkeyPatch, case: Case) -> None:
     """The source answers ``case``'s answers, behind a throttle of its own (a rest one answer
-    asks for does not reach the next check), and ``case``'s files are on disk."""
+    asks for does not reach the next check), ``case``'s patches are in place and its files are
+    on disk."""
     monkeypatch.setattr(_http, "_THROTTLE", _http._Throttle(sleep=lambda _seconds: None))
     monkeypatch.setattr(_http, "_open", _opener(case.answers))
+    for target, value in case.patches.items():
+        monkeypatch.setattr(target, value)
     for relative, content in case.files.items():
         path = Path.cwd() / relative
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -570,6 +574,16 @@ def listing(query: str = "zzqq") -> str:
     return f"Results for {query!r}:\n"
 
 
+def _library() -> str:
+    return "the real library"
+
+
+@tool(capability="compute")
+def through_a_library() -> str:
+    """Answer what a library outside the HTTP door says."""
+    return _library()
+
+
 @tool(capability="compute")
 def lookup(key: str = "x") -> str:
     """Look up one item.
@@ -643,6 +657,13 @@ class TestTheChecks:
         assert not errors_kept(lookup, [said, other], monkeypatch)
         assert not errors_kept(refusing, [said], monkeypatch)
         assert not errors_kept(lookup, [], monkeypatch)
+
+    def test_a_cases_patches_stand_in_for_a_source_reached_without_the_door(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        case = Case(args={}, patches={f"{__name__}._library": lambda: "the canned answer"})
+
+        assert _run(through_a_library, case, monkeypatch) == "the canned answer"
 
     def test_the_next_call_reads_every_argument(self) -> None:
         assert _next_call('next: find="a, b=c", offset=16500') == {

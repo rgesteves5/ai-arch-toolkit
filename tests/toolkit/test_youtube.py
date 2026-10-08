@@ -1,23 +1,34 @@
-"""Tests for toolkit/tools/_youtube.py."""
+"""Tests for toolkit/tools/_youtube.py: transcripts read window by window (T09).
+
+The library is replaced at the module's one seam (``youtube_fakes.LOADER``).
+"""
 
 from __future__ import annotations
 
-from types import SimpleNamespace
+from typing import Any
 from unittest.mock import patch
 
 import pytest
 
+from ai_arch_toolkit.core import ToolCall, ToolGroup, ToolResult
 from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._youtube import (
     youtube_transcript,
     youtube_transcript_languages,
     youtube_transcript_search,
 )
+from tests.toolkit.youtube_fakes import (
+    LOADER,
+    FakeTranscript,
+    FakeTranscriptList,
+    library,
+    lines,
+    raising,
+    segment,
+)
 
 yt = pytest.importorskip("youtube_transcript_api")
 requests = pytest.importorskip("requests")
-
-_LOADER = "ai_arch_toolkit.toolkit.tools._youtube._load_youtube_transcript_api"
 
 
 def _failure(call):
@@ -26,115 +37,107 @@ def _failure(call):
     return caught.value.error
 
 
-class FakeYouTubeError(Exception):
-    """Fake youtube-transcript-api base error."""
+def _text(result: ToolResult | str) -> str:
+    return result.value if isinstance(result, ToolResult) else result
 
 
-class FakeTranscript:
-    def __init__(
-        self,
-        *,
-        language_code: str = "en",
-        language: str = "English",
-        is_generated: bool = False,
-        segments: list[SimpleNamespace] | None = None,
-    ) -> None:
-        self.language_code = language_code
-        self.language = language
-        self.is_generated = is_generated
-        self.is_translatable = True
-        self.translation_languages = [
-            {"language_code": "pt", "language": "Portuguese"},
-            {"language_code": "es", "language": "Spanish"},
-        ]
-        self._segments = segments or [
-            SimpleNamespace(start=1.36, duration=1.68, text="[music]"),
-            SimpleNamespace(start=18.64, duration=3.24, text="We're no strangers to love"),
-            SimpleNamespace(start=22.64, duration=4.32, text="You know the rules and so do I"),
-            SimpleNamespace(start=43.0, duration=2.12, text="Never gonna give you up"),
-        ]
-
-    def fetch(self, *, preserve_formatting: bool = False):
-        assert preserve_formatting is False
-        return self._segments
-
-    def translate(self, language_code: str):
-        return FakeTranscript(
-            language_code=language_code,
-            language="Portuguese",
-            segments=[SimpleNamespace(start=1.0, duration=2.0, text="Texto traduzido")],
-        )
+def _window(result: ToolResult | str) -> dict[str, Any]:
+    assert isinstance(result, ToolResult)
+    return result.metadata["window"]
 
 
-_DEFAULT_MANUAL = object()
-
-
-class FakeTranscriptList:
-    def __init__(self, *, manual: FakeTranscript | object | None = _DEFAULT_MANUAL) -> None:
-        self.manual = FakeTranscript() if manual is _DEFAULT_MANUAL else manual
-        self.generated = FakeTranscript(language="English (auto-generated)", is_generated=True)
-
-    def __iter__(self):
-        transcripts = [self.generated] if self.manual is None else [self.manual, self.generated]
-        return iter(transcripts)
-
-    def find_manually_created_transcript(self, languages):
-        if self.manual is None:
-            raise FakeYouTubeError("manual transcript not found")
-        return self.manual
-
-    def find_generated_transcript(self, languages):
-        return self.generated
-
-    def find_transcript(self, languages):
-        return self.manual or self.generated
-
-
-class FakeYouTubeTranscriptApi:
-    transcript_list = FakeTranscriptList()
-    requested_video_id = ""
-
-    def list(self, video_id: str):
-        type(self).requested_video_id = video_id
-        return type(self).transcript_list
-
-
-def _fake_api():
-    return FakeYouTubeTranscriptApi, FakeYouTubeError
+def _with(**transcript: Any) -> FakeTranscriptList:
+    return FakeTranscriptList(manual=FakeTranscript(**transcript))
 
 
 class TestYouTubeTranscript:
-    @patch("ai_arch_toolkit.toolkit.tools._youtube._load_youtube_transcript_api")
-    def test_returns_transcript_text(self, mock_loader):
-        mock_loader.return_value = _fake_api()
+    def test_returns_transcript_text(self):
+        load = library()
+        with patch(LOADER, load):
+            result = youtube_transcript("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
 
-        result = youtube_transcript("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+        assert _text(result) == (
+            "YouTube transcript of dQw4w9WgXcQ, en (English), manual:\n"
+            "[music]\nWe're no strangers to love\nYou know the rules and so do I\n"
+            "Never gonna give you up"
+        )
+        assert load()[0].asked == ["dQw4w9WgXcQ"]
 
-        assert result.startswith("YouTube transcript for dQw4w9WgXcQ:")
-        assert "Language: en (English) | kind: manual" in result
-        assert "We're no strangers to love" in result
-        assert FakeYouTubeTranscriptApi.requested_video_id == "dQw4w9WgXcQ"
+    @patch(LOADER, library())
+    def test_returns_segments_and_translation(self):
+        result = _text(
+            youtube_transcript("dQw4w9WgXcQ", translate_to="pt", output_format="segments")
+        )
 
-    @patch("ai_arch_toolkit.toolkit.tools._youtube._load_youtube_transcript_api")
-    def test_returns_segments_and_translation(self, mock_loader):
-        mock_loader.return_value = _fake_api()
-
-        result = youtube_transcript("dQw4w9WgXcQ", translate_to="pt", output_format="segments")
-
-        assert "Language: pt (Portuguese) | kind: manual" in result
+        assert result.startswith(
+            "YouTube transcript of dQw4w9WgXcQ, pt (Portuguese), manual, translated from en:\n"
+        )
         assert "[00:00:01.000 - 00:00:03.000] Texto traduzido" in result
 
-    @patch("ai_arch_toolkit.toolkit.tools._youtube._load_youtube_transcript_api")
-    def test_falls_back_to_generated_transcript(self, mock_loader):
-        mock_loader.return_value = _fake_api()
-        FakeYouTubeTranscriptApi.transcript_list = FakeTranscriptList(manual=None)
+    @patch(LOADER, library(FakeTranscriptList(without_manual=True)))
+    def test_falls_back_to_generated_transcript(self):
+        result = _text(youtube_transcript("dQw4w9WgXcQ", allow_generated=True))
 
-        try:
-            result = youtube_transcript("dQw4w9WgXcQ", allow_generated=True)
-        finally:
-            FakeYouTubeTranscriptApi.transcript_list = FakeTranscriptList()
+        assert result.startswith(
+            "YouTube transcript of dQw4w9WgXcQ, en (English (auto-generated)), generated:"
+        )
 
-        assert "kind: generated" in result
+    @patch(LOADER, library(_with(segments=lines(400))))
+    def test_following_the_footers_rebuilds_the_whole_transcript(self):
+        whole = "\n".join(f"line {n}" for n in range(400))
+        parts: list[str] = []
+        offset: int | None = 0
+
+        while offset is not None:
+            result = youtube_transcript("dQw4w9WgXcQ", max_chars=500, offset=offset)
+            window = _window(result)
+            body = _text(result).split("\n", 1)[1]  # under the heading
+            parts.append(body[: window["last"] - window["first"]])
+            offset = (window["next_call"] or {}).get("offset")
+
+        assert "".join(parts) == whole
+        assert len(parts) > 5
+
+    @patch(LOADER, library(_with(segments=lines(10_000))))
+    def test_a_cut_at_the_ceiling_names_the_next_offset_not_a_larger_max_chars(self):
+        # It said "Increase max_chars" even at the 50,000 ceiling.
+        text = _text(result := youtube_transcript("dQw4w9WgXcQ", max_chars=50_000))
+
+        window = _window(result)
+        assert window["total"] == len("\n".join(f"line {n}" for n in range(10_000)))
+        assert text.endswith(
+            f"[chars 0-{window['last']} of {window['total']} | next: offset={window['last']}]"
+        )
+        assert "max_chars" not in text
+
+    @pytest.mark.parametrize("output_format", ["json", "srt", "vtt"])
+    @patch(LOADER, library(_with(segments=lines(300))))
+    def test_every_format_reads_window_by_window(self, output_format):
+        first = youtube_transcript("dQw4w9WgXcQ", output_format=output_format, max_chars=400)
+        onward = _window(first)["next_call"]
+        second = youtube_transcript(
+            "dQw4w9WgXcQ", output_format=output_format, max_chars=400, **onward
+        )
+
+        assert _window(second)["first"] == _window(first)["last"]
+
+    @pytest.mark.parametrize(
+        ("max_chars", "kept"), [(1, True), (50_000, True), (0, False), (50_001, False)]
+    )
+    @patch(LOADER, library())
+    def test_max_chars_is_refused_outside_its_limits_through_the_executor(self, max_chars, kept):
+        call = ToolCall(
+            id="c1",
+            name="youtube_transcript",
+            input={"video_url_or_id": "dQw4w9WgXcQ", "max_chars": max_chars},
+        )
+
+        result = ToolGroup(youtube_transcript).execute(call)
+
+        assert result.ok is kept
+        if not kept:
+            assert result.error is not None
+            assert result.error.type == "validation_error"
 
     @pytest.mark.parametrize(
         ("call", "words"),
@@ -153,7 +156,7 @@ class TestYouTubeTranscript:
             ),
         ],
     )
-    @patch(_LOADER)
+    @patch(LOADER)
     def test_invalid_options_do_not_load_api(self, mock_loader, call, words):
         error = _failure(call)
 
@@ -161,7 +164,7 @@ class TestYouTubeTranscript:
         assert words in error.message
         mock_loader.assert_not_called()
 
-    @patch(_LOADER)
+    @patch(LOADER)
     def test_missing_optional_dependency(self, mock_loader):
         mock_loader.return_value = (None, Exception)
 
@@ -173,45 +176,102 @@ class TestYouTubeTranscript:
 
 
 class TestYouTubeTranscriptLanguages:
-    @patch("ai_arch_toolkit.toolkit.tools._youtube._load_youtube_transcript_api")
-    def test_lists_languages(self, mock_loader):
-        mock_loader.return_value = _fake_api()
+    @patch(LOADER, library())
+    def test_lists_languages(self):
+        result = _text(youtube_transcript_languages("https://youtu.be/dQw4w9WgXcQ"))
 
-        result = youtube_transcript_languages("https://youtu.be/dQw4w9WgXcQ")
+        assert result == (
+            "YouTube transcripts of dQw4w9WgXcQ:\n"
+            "- en: English (manual, translatable)\n"
+            "- en: English (auto-generated) (generated, translatable)\n"
+            "Translations (youtube_transcript translate_to=...):\n"
+            "- pt: Portuguese\n"
+            "- es: Spanish"
+        )
 
-        assert result.startswith("YouTube transcript languages for dQw4w9WgXcQ:")
-        assert "- en: English (manual, translatable)" in result
-        assert "- en: English (auto-generated) (generated, translatable)" in result
-        assert "translations: pt (Portuguese), es (Spanish)" in result
+    @patch(
+        LOADER,
+        library(_with(translations=[(f"l{n}", f"Language number {n}") for n in range(300)])),
+    )
+    def test_every_translation_is_listed_window_by_window(self):
+        # They were cut at eight, with "+N more" and no way to read the rest.
+        seen: list[str] = []
+        offset: int | None = 0
+
+        while offset is not None:
+            result = youtube_transcript_languages("dQw4w9WgXcQ", offset=offset)
+            seen += [line for line in _text(result).splitlines() if line.startswith("- l")]
+            offset = (_window(result)["next_call"] or {}).get("offset")
+
+        assert seen == [f"- l{n}: Language number {n}" for n in range(300)]
+
+    @patch(LOADER, library(FakeTranscriptList(manual=FakeTranscript(translations=()))))
+    def test_a_transcript_that_cannot_be_translated_says_so(self):
+        result = _text(youtube_transcript_languages("dQw4w9WgXcQ"))
+
+        assert "- en: English (manual, not translatable)" in result
 
 
 class TestYouTubeTranscriptSearch:
-    @patch("ai_arch_toolkit.toolkit.tools._youtube._load_youtube_transcript_api")
-    def test_search_returns_timestamped_matches(self, mock_loader):
-        mock_loader.return_value = _fake_api()
-
-        result = youtube_transcript_search(
-            "https://www.youtube.com/shorts/dQw4w9WgXcQ",
-            "never",
-            context_segments=1,
+    @patch(LOADER, library())
+    def test_search_returns_timestamped_matches(self):
+        result = _text(
+            youtube_transcript_search(
+                "https://www.youtube.com/shorts/dQw4w9WgXcQ", "never", context_segments=1
+            )
         )
 
-        assert result.startswith('YouTube transcript matches for "never" in dQw4w9WgXcQ:')
-        assert "[00:00:22.640 - 00:00:45.120]" in result
-        assert "You know the rules and so do I Never gonna give you up" in result
+        assert result == (
+            "YouTube transcript of dQw4w9WgXcQ, en (English), manual: passages that mention "
+            "'never':\n"
+            "1. [00:00:22.640 - 00:00:45.120] You know the rules and so do I Never gonna give "
+            'you up\n[matches 1-1 of 1 for "never" | end]'
+        )
 
-    @patch("ai_arch_toolkit.toolkit.tools._youtube._load_youtube_transcript_api")
-    def test_search_handles_no_matches(self, mock_loader):
-        mock_loader.return_value = _fake_api()
+    @patch(LOADER, library(_with(segments=lines(50, word="chorus"))))
+    def test_matches_page_by_offset_with_their_total(self):
+        # They ended in "... N more matches not shown", with no way to read them.
+        first = youtube_transcript_search("dQw4w9WgXcQ", "chorus", max_results=20)
+        second = youtube_transcript_search(
+            "dQw4w9WgXcQ", "chorus", max_results=20, **_window(first)["next_call"]
+        )
+        third = youtube_transcript_search("dQw4w9WgXcQ", "chorus", max_results=20, offset=40)
 
-        result = youtube_transcript_search("dQw4w9WgXcQ", "missing")
+        assert _text(first).endswith('[matches 1-20 of 50 for "chorus" | next: offset=20]')
+        assert _text(second).splitlines()[1].startswith("21. [00:00:38.000 - ")
+        assert _text(second).endswith('[matches 21-40 of 50 for "chorus" | next: offset=40]')
+        assert _text(third).endswith('[matches 41-50 of 50 for "chorus" | end]')
 
-        assert 'No matches found for "missing"' in result
+    @patch(LOADER, library())
+    def test_a_raw_call_with_a_negative_context_shows_the_match_alone(self):
+        # The executor refuses it (Range); called raw, the tool still answers.
+        text = _text(youtube_transcript_search("dQw4w9WgXcQ", "never", context_segments=-1))
+
+        assert "1. [00:00:43.000 - 00:00:45.120] Never gonna give you up" in text
+
+    @patch(LOADER, library())
+    def test_an_offset_past_the_last_match_says_so(self):
+        text = _text(youtube_transcript_search("dQw4w9WgXcQ", "never", offset=5))
+
+        assert text.endswith('[no more matches for "never" of 1 | end]')
+
+    @patch(LOADER, library())
+    def test_search_handles_no_matches(self):
+        result = _text(youtube_transcript_search("dQw4w9WgXcQ", "missing"))
+
+        assert result == (
+            "No passages of the YouTube transcript of dQw4w9WgXcQ, en (English), manual, "
+            "mention 'missing'."
+        )
 
 
 class _OfflineApi:
     def list(self, video_id: str):
         raise ConnectionError("network is unreachable")
+
+
+class FakeYouTubeError(Exception):
+    """A base error no other exception derives from."""
 
 
 @pytest.mark.parametrize(
@@ -222,7 +282,7 @@ class _OfflineApi:
         lambda: youtube_transcript_search("dQw4w9WgXcQ", "love"),
     ],
 )
-@patch(_LOADER)
+@patch(LOADER)
 def test_a_network_failure_is_a_retryable_upstream_failure(mock_loader, call):
     mock_loader.return_value = (_OfflineApi, FakeYouTubeError)
 
@@ -233,46 +293,47 @@ def test_a_network_failure_is_a_retryable_upstream_failure(mock_loader, call):
     assert "network is unreachable" in error.message
 
 
-def _raising(error: Exception):
-    """An API class whose ``list`` raises ``error``, with the library's real base error."""
-
-    class _Api:
-        def list(self, video_id: str):
-            raise error
-
-    return _Api, yt.YouTubeTranscriptApiException
-
-
-def _http_error() -> Exception:
-    return requests.HTTPError("500 Server Error")
-
-
 @pytest.mark.parametrize(
-    ("error", "kind", "words"),
+    ("error", "args", "kind", "words"),
     [
-        (yt.NoTranscriptFound("dQw4w9WgXcQ", ["en"], None), "not_found", "no transcript in en"),
-        (yt.TranscriptsDisabled("dQw4w9WgXcQ"), "not_found", "transcripts turned off"),
-        (yt.VideoUnavailable("dQw4w9WgXcQ"), "not_found", "no YouTube video dQw4w9WgXcQ"),
-        (yt.InvalidVideoId("dQw4w9WgXcQ"), "not_found", "check the URL or ID"),
-        (yt.RequestBlocked("dQw4w9WgXcQ"), "rate_limited", "blocking requests from this IP"),
-        (yt.IpBlocked("dQw4w9WgXcQ"), "rate_limited", "try again later"),
+        ("NoTranscriptFound", (["en"], None), "not_found", "no transcript in en"),
+        ("TranscriptsDisabled", (), "not_found", "transcripts turned off"),
+        ("VideoUnavailable", (), "not_found", "no YouTube video dQw4w9WgXcQ"),
+        ("InvalidVideoId", (), "not_found", "check the URL or ID"),
+        ("RequestBlocked", (), "rate_limited", "blocking requests from this IP"),
+        ("IpBlocked", (), "rate_limited", "try again later"),
         (
-            yt.YouTubeRequestFailed("dQw4w9WgXcQ", _http_error()),
+            "YouTubeRequestFailed",
+            (requests.HTTPError("500 Server Error"),),
             "upstream",
             "the request to YouTube failed: 500 Server Error",
         ),
-        (yt.AgeRestricted("dQw4w9WgXcQ"), "upstream", "YouTube gave no transcript"),
+        ("AgeRestricted", (), "upstream", "YouTube gave no transcript"),
     ],
 )
-@patch(_LOADER)
-def test_each_library_error_has_its_type(mock_loader, error, kind, words):
-    mock_loader.return_value = _raising(error)
-
-    failure = _failure(lambda: youtube_transcript("dQw4w9WgXcQ"))
+def test_each_library_error_has_its_type(error, args, kind, words):
+    with patch(LOADER, raising(error, *args)):
+        failure = _failure(lambda: youtube_transcript("dQw4w9WgXcQ"))
 
     assert failure.type == kind
     assert words in failure.message
     assert "github.com" not in failure.message  # the library's issue referral is left out
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: youtube_transcript("dQw4w9WgXcQ"),
+        lambda: youtube_transcript_languages("dQw4w9WgXcQ"),
+        lambda: youtube_transcript_search("dQw4w9WgXcQ", "love"),
+    ],
+)
+def test_a_video_that_is_not_there_is_not_found_for_every_tool(call):
+    with patch(LOADER, raising("VideoUnavailable")):
+        failure = _failure(call)
+
+    assert failure.type == "not_found"
+    assert "check the URL or ID" in failure.message
 
 
 class _UntranslatableTranscript(FakeTranscript):
@@ -280,33 +341,22 @@ class _UntranslatableTranscript(FakeTranscript):
         raise yt.TranslationLanguageNotAvailable("dQw4w9WgXcQ")
 
 
-@patch(_LOADER)
-def test_a_translation_the_transcript_lacks_is_a_validation_error(mock_loader):
+def test_a_translation_the_transcript_lacks_is_a_validation_error():
     class _Api:
         def list(self, video_id: str):
             return FakeTranscriptList(manual=_UntranslatableTranscript())
 
-    mock_loader.return_value = (_Api, yt.YouTubeTranscriptApiException)
-
-    failure = _failure(lambda: youtube_transcript("dQw4w9WgXcQ", translate_to="xx"))
+    with patch(LOADER, lambda: (_Api, yt.YouTubeTranscriptApiException)):
+        failure = _failure(lambda: youtube_transcript("dQw4w9WgXcQ", translate_to="xx"))
 
     assert failure.type == "validation_error"
     assert "cannot be translated to 'xx'" in failure.message
     assert "youtube_transcript_languages" in failure.message
 
 
-@patch(_LOADER)
-def test_a_transcript_without_text_is_a_success(mock_loader):
-    # FakeTranscript reads an empty list as "the default segments": give it one blank segment.
-    blank = FakeTranscript(segments=[SimpleNamespace(start=0.0, duration=1.0, text="")])
-
-    class _Api:
-        def list(self, video_id: str):
-            return FakeTranscriptList(manual=blank)
-
-    mock_loader.return_value = (_Api, yt.YouTubeTranscriptApiException)
-
-    assert youtube_transcript("dQw4w9WgXcQ") == (
+@patch(LOADER, library(_with(segments=[segment(0.0, 1.0, "")])))
+def test_a_transcript_without_text_is_a_success():
+    assert _text(youtube_transcript("dQw4w9WgXcQ")) == (
         "The YouTube transcript of video dQw4w9WgXcQ has no text."
     )
 
@@ -314,12 +364,8 @@ def test_a_transcript_without_text_is_a_success(mock_loader):
 @pytest.mark.parametrize(
     ("status", "retryable"), [("500 Server Error", True), ("403 Forbidden", False)]
 )
-@patch(_LOADER)
-def test_only_a_server_error_from_youtube_is_retryable(mock_loader, status, retryable):
-    mock_loader.return_value = _raising(
-        yt.YouTubeRequestFailed("dQw4w9WgXcQ", requests.HTTPError(status))
-    )
-
-    failure = _failure(lambda: youtube_transcript("dQw4w9WgXcQ"))
+def test_only_a_server_error_from_youtube_is_retryable(status, retryable):
+    with patch(LOADER, raising("YouTubeRequestFailed", requests.HTTPError(status))):
+        failure = _failure(lambda: youtube_transcript("dQw4w9WgXcQ"))
 
     assert (failure.type, failure.retryable) == ("upstream", retryable)

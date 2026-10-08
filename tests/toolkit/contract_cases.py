@@ -14,7 +14,8 @@ adds its cases here and deletes its lines from the debt.
   like a change to the debt: a tool that stops cutting moves to ``WHOLE`` only when nothing it
   returns is cut any more.
 - The ``youtube_*`` tools reach their source through ``youtube-transcript-api``, not ``_http``:
-  their points wait for a seam of their own (T09).
+  their cases put a stand-in for the library at the module's one seam (``patches``,
+  ``youtube_fakes.LOADER``; T09).
 """
 
 from __future__ import annotations
@@ -23,8 +24,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from tests.toolkit import wiki_pages
+from tests.toolkit import wiki_pages, youtube_fakes
 from tests.toolkit.wiki_pages import MISSING_PAGE
+from tests.toolkit.youtube_fakes import LOADER, FakeTranscript, FakeTranscriptList
 
 type Kind = Literal["lookup", "search", "other"]
 type Body = dict[str, Any] | list[Any] | str | bytes
@@ -47,11 +49,14 @@ class Case:
         args: Arguments that replace the tool's benign ones.
         answers: The source's answers, in turn.
         files: Files to write in the working directory first, by relative path.
+        patches: Objects to put in place first, by dotted path: the stand-in for a source the
+            tool reaches without ``_http`` (a library).
     """
 
     args: Mapping[str, Any]
     answers: tuple[Answer, ...] = ()
     files: Mapping[str, str] = field(default_factory=dict)
+    patches: Mapping[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -123,7 +128,10 @@ WHOLE = frozenset(_WHOLE.split())
 # not apply to their tools. Every other network tool owes it until its source's answers prove it.
 SOURCELESS: dict[str, str] = {
     "_web": "any URL the caller gives: no one source documents its errors",
-    "_youtube": "youtube-transcript-api, not the HTTP door: it waits for a seam of its own (T09)",
+    "_youtube": (
+        "youtube-transcript-api, not the HTTP door: the library's exceptions, not answers, say "
+        "what went wrong (test_youtube.py types each one)"
+    ),
 }
 
 # Integer parameters with no limit to declare, and why. Every other one needs a ``Range``.
@@ -143,6 +151,57 @@ def _brave_page(titles: list[str], *, more: bool) -> dict[str, Any]:
 _WIKI_LONG = wiki_pages.parse_answer("Long page", wiki_pages.long_page())
 _OUTLINED = wiki_pages.parse_answer("Long page", wiki_pages.many_sections())
 _ENTRY_LONG = wiki_pages.parse_answer(wiki_pages.ENTRY_TERM, wiki_pages.long_entry())
+
+# The web, YouTube and the archives (T09).
+_ROWS = "".join(f"row {n}\n" for n in range(300))
+_PARAGRAPHS = "".join(f"<p>Paragraph {n}.</p>" for n in range(300))
+_LONG_TRANSCRIPT = FakeTranscriptList(manual=FakeTranscript(segments=youtube_fakes.lines(300)))
+_CHORUS = FakeTranscriptList(
+    manual=FakeTranscript(segments=youtube_fakes.lines(10, word="chorus"))
+)
+_MANY_TRANSLATIONS = FakeTranscriptList(
+    manual=FakeTranscript(translations=[(f"l{n}", f"Language {n}") for n in range(400)])
+)
+
+
+def _archive_search(start: int, *, total: int) -> dict[str, Any]:
+    """A page of two advancedsearch.php results (Solr's ``response``)."""
+    docs = [{"identifier": f"item{n}", "title": f"Item {n}"} for n in (start, start + 1)]
+    return {"response": {"numFound": total, "start": start, "docs": docs}}
+
+
+_ARCHIVE_ITEM = {
+    "metadata": {"identifier": "item", "title": "Item", "mediatype": "texts"},
+    "files": [{"name": f"page{n:03d}.jpg", "format": "JPEG"} for n in range(100)],
+}
+
+
+def _library_search(start: int, *, total: int) -> dict[str, Any]:
+    """A page of two Open Library search results."""
+    docs = [{"key": f"/works/OL{n}W", "title": f"Book {n}"} for n in (start + 1, start + 2)]
+    return {"numFound": total, "start": start, "docs": docs}
+
+
+_SUBJECTS = [f"Subject {n}" for n in range(200)]
+_LIBRARY_AUTHORS = {"numFound": 1, "docs": [{"key": "OL1A", "name": "An Author"}]}
+_LIBRARY_WORK = {
+    "key": "/works/OL45883W",
+    "title": "A Work",
+    "authors": [{"author": {"key": "/authors/OL1A"}}],
+    "subjects": _SUBJECTS,
+}
+_LIBRARY_EDITION = {
+    "key": "/books/OL1M",
+    "title": "An Edition",
+    "authors": [{"key": "/authors/OL1A"}],
+    "subjects": _SUBJECTS,
+}
+
+
+def _record_twice(record: dict[str, Any]) -> tuple[Answer, ...]:
+    """A record and its authors' names, for a call and the one its footer names."""
+    return tuple(Answer(body=body) for body in (record, _LIBRARY_AUTHORS) * 2)
+
 
 WINDOW_CASES: dict[str, Case] = {
     "wiki_read": Case(
@@ -168,6 +227,35 @@ WINDOW_CASES: dict[str, Case] = {
             Answer(body=_brave_page(["Gamma", "Delta"], more=False)),
         ),
     ),
+    "http_get": Case(args={"max_chars": 200}, answers=(Answer(body=_ROWS),)),
+    "scrape_text": Case(args={"max_chars": 200}, answers=(Answer(body=_PARAGRAPHS),)),
+    "youtube_transcript": Case(
+        args={"max_chars": 300}, patches={LOADER: youtube_fakes.library(_LONG_TRANSCRIPT)}
+    ),
+    "youtube_transcript_search": Case(
+        args={"query": "chorus", "max_results": 3},
+        patches={LOADER: youtube_fakes.library(_CHORUS)},
+    ),
+    "youtube_transcript_languages": Case(
+        args={}, patches={LOADER: youtube_fakes.library(_MANY_TRANSLATIONS)}
+    ),
+    "internet_archive_search": Case(
+        args={"query": "book", "max_results": 2},
+        answers=(
+            Answer(body=_archive_search(0, total=5)),
+            Answer(body=_archive_search(2, total=5)),
+        ),
+    ),
+    "internet_archive_item": Case(args={"max_chars": 500}, answers=(Answer(body=_ARCHIVE_ITEM),)),
+    "open_library_search": Case(
+        args={"max_results": 2},
+        answers=(
+            Answer(body=_library_search(0, total=5)),
+            Answer(body=_library_search(2, total=5)),
+        ),
+    ),
+    "open_library_work": Case(args={"max_chars": 500}, answers=_record_twice(_LIBRARY_WORK)),
+    "open_library_isbn": Case(args={"max_chars": 500}, answers=_record_twice(_LIBRARY_EDITION)),
 }
 
 
@@ -226,6 +314,16 @@ NOT_FOUND_CASES: dict[str, Case] = {
     "read_file": Case(args={"path": "missing.txt"}),
     "csv_read": Case(args={"path": "missing.csv"}),
     "list_directory": Case(args={"path": "missing"}),
+    # youtube-transcript-api raises VideoUnavailable for a video YouTube does not play
+    # (https://github.com/jdepoix/youtube-transcript-api, _errors.py).
+    **{
+        name: Case(args={}, patches={LOADER: youtube_fakes.raising("VideoUnavailable")})
+        for name in (
+            "youtube_transcript",
+            "youtube_transcript_languages",
+            "youtube_transcript_search",
+        )
+    },
 }
 
 
@@ -245,6 +343,16 @@ ZERO_CASES: dict[str, ZeroCase] = {
     "tavily_search": ZeroCase(
         args={"query": "zzqqxx"},
         answers=(Answer(body={"query": "zzqqxx", "results": [], "usage": {"credits": 1}}),),
+        says="zzqqxx",
+    ),
+    "internet_archive_search": ZeroCase(
+        args={"query": "zzqqxx"},
+        answers=(Answer(body={"response": {"numFound": 0, "start": 0, "docs": []}}),),
+        says="zzqqxx",
+    ),
+    "open_library_search": ZeroCase(
+        args={"query": "zzqqxx"},
+        answers=(Answer(body={"numFound": 0, "start": 0, "docs": []}),),
         says="zzqqxx",
     ),
 }

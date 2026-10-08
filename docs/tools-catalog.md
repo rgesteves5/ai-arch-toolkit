@@ -108,9 +108,11 @@ GDELT's free API takes few requests per minute from one address: after a 429 bot
 
 **Video transcripts** — `_youtube.py`
 
-- `youtube_transcript` — Fetch public YouTube transcript text or timestamped segments
-- `youtube_transcript_languages` — List available transcript languages for a YouTube video
-- `youtube_transcript_search` — Search within a YouTube transcript and return timestamped matches
+- `youtube_transcript` — Fetch a public YouTube transcript as text, timestamped segments, JSON,
+  SRT or VTT, window by window (`offset`; 1–50 000 characters a window)
+- `youtube_transcript_languages` — A video's transcripts, and every language they translate to
+- `youtube_transcript_search` — The timestamped passages of a transcript that mention a term, with
+  their total, paged by `offset`
 
 ---
 
@@ -151,14 +153,23 @@ Both declare their limits as `Range` bounds, show each result whole, and leave o
 
 **Books** — `_open_library.py`
 
-- `open_library_search` — Search Open Library books and works
-- `open_library_work` — Get metadata for a specific Open Library work
-- `open_library_isbn` — Get edition metadata for an ISBN
+Open Library takes one request a second from a caller that sends no email; a work or an edition
+costs two, the second naming its authors.
+
+- `open_library_search` — Search Open Library books and works, numbered, with the total and the
+  next `start`; authors by name, with the key `author_key:OL…A` searches by
+- `open_library_work` — A work, whole and window by window: its authors by name, description,
+  subjects and links
+- `open_library_isbn` — The edition with an ISBN, whole and window by window: its authors by name,
+  publishers, date (ISO 8601), ISBNs and work
 
 **Digital archives** — `_internet_archive.py`
 
-- `internet_archive_search` — Search Internet Archive items with optional mediatype and collection filters
-- `internet_archive_item` — Get Internet Archive item metadata and file listings
+- `internet_archive_search` — Search Internet Archive items with optional mediatype and collection
+  filters, numbered, with the total and the next page, down to the 10 000th result (the deepest
+  the archive pages)
+- `internet_archive_item` — An item's metadata and every one of its files, whole and window by
+  window, or the passages around a term (`find=`)
 
 ---
 
@@ -278,5 +289,11 @@ These execute real side effects and live in the explicit `ai_arch_toolkit.toolki
 
 **Web** — `dangerous`
 
-- `http_get` — Fetch an http(s) URL, return raw response text (1–100 000 characters); redirects stay on the URL's host
-- `scrape_text` — Fetch web page, extract visible text (strips HTML; 1–100 000 characters); redirects stay on the URL's host
+Each call fetches the page again and asks for approval again; the footer names the call that
+reads on.
+
+- `http_get` — Fetch an http(s) URL and return the response text as it came, window by window
+  (`offset`; 1–100 000 characters a window) or the passages around a term (`find=`); it reads at
+  most the first 10 MB, and only as much as the window needs; redirects stay on the URL's host
+- `scrape_text` — Fetch a web page and return its visible text (HTML stripped), window by window
+  or the passages around a term; it reads the first 2 MB of HTML; redirects stay on the URL's host

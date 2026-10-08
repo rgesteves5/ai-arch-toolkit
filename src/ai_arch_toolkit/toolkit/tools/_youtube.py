@@ -1,20 +1,29 @@
-"""YouTube transcript tools powered by youtube-transcript-api."""
+"""YouTube transcript tools, through youtube-transcript-api, read window by window (T09; D39).
+
+The library is the source, not the HTTP door: it scrapes YouTube's watch page and its player API
+(https://github.com/jdepoix/youtube-transcript-api), and says what went wrong by the class of the
+exception it raises (``_errors.py``), which ``_transcript_failure`` types. A transcript is fetched
+whole on every call; the window's footer names the call that reads on.
+"""
 
 from __future__ import annotations
 
 import json
 import re
 import urllib.parse
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, replace
+from typing import Annotated, Any
 
-from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.core import Range, ToolResult, tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
+from ai_arch_toolkit.toolkit.tools._window import Window, page_window, text_window
 
 _VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
-_MAX_CHARS_LIMIT = 50_000
+_MAX_CHARS = 50_000
 _DEFAULT_MAX_CHARS = 12_000
 _MAX_SEARCH_RESULTS = 20
+# The languages list is short but for its translation targets (about a hundred on YouTube).
+_LANGUAGES_CHARS = 4000
 _OPTIONAL_DEP_ERROR = (
     "youtube-transcript-api is not installed. Install the optional extra with "
     "`uv sync --extra youtube` or `pip install 'ai-arch-toolkit[youtube]'`."
@@ -53,9 +62,10 @@ def youtube_transcript(
     allow_generated: bool = True,
     translate_to: str = "",
     output_format: str = "text",
-    max_chars: int = _DEFAULT_MAX_CHARS,
+    max_chars: Annotated[int, Range(1, _MAX_CHARS)] = _DEFAULT_MAX_CHARS,
     preserve_formatting: bool = False,
-) -> str:
+    offset: Annotated[int, Range(0)] = 0,
+) -> ToolResult:
     """Fetch a public YouTube transcript.
 
     Args:
@@ -65,8 +75,10 @@ def youtube_transcript(
         allow_generated: Allow auto-generated captions if manual captions are unavailable.
         translate_to: Optional target language code supported by the transcript.
         output_format: One of "text", "segments", "json", "srt", or "vtt".
-        max_chars: Maximum output characters (1-50000). Defaults to 12000.
+        max_chars: How many characters of the transcript to return.
         preserve_formatting: Preserve HTML formatting where supported by the provider.
+        offset: Where to start, in characters of the transcript; the footer gives the next
+            offset.
 
     Raises:
         ToolFailure: validation_error when the video, the languages, the output format or the
@@ -84,8 +96,7 @@ def youtube_transcript(
             f"invalid output_format {output_format!r}; use text, segments, json, srt, or vtt",
         )
 
-    max_chars = _clamp(max_chars, 1, _MAX_CHARS_LIMIT)
-    transcript, segments = _fetch_transcript(
+    transcript, segments, source = _fetch_transcript(
         video_id,
         language_codes,
         prefer_manual=prefer_manual,
@@ -95,19 +106,22 @@ def youtube_transcript(
     )
 
     if not segments:
-        return f"The YouTube transcript of video {video_id} has no text."
+        return ToolResult.success(f"The YouTube transcript of video {video_id} has no text.")
 
-    header = _transcript_header(video_id, transcript)
     body = _format_segments(segments, output_format)
-    return _limit_text(f"{header}\n{body}", max_chars)
+    window = text_window(body, offset=offset, limit=max_chars)
+    return window.result(heading=f"{_describe(video_id, transcript, source)}:")
 
 
 @tool(capability="network")
-def youtube_transcript_languages(video_url_or_id: str) -> str:
-    """List public transcript languages available for a YouTube video.
+def youtube_transcript_languages(
+    video_url_or_id: str, offset: Annotated[int, Range(0)] = 0
+) -> ToolResult:
+    """List a YouTube video's public transcripts and the languages they translate to.
 
     Args:
         video_url_or_id: YouTube video URL or 11-character video ID.
+        offset: Where to start, in characters of the list; the footer gives the next offset.
 
     Raises:
         ToolFailure: validation_error when the video URL or ID is malformed; not_found when the
@@ -127,22 +141,10 @@ def youtube_transcript_languages(video_url_or_id: str) -> str:
         raise ToolFailure("upstream", f"could not parse the transcript list: {e}") from e
 
     if not infos:
-        return f"No YouTube transcripts found for video {video_id}."
+        return ToolResult.success(f"No YouTube transcripts found for video {video_id}.")
 
-    lines = [f"YouTube transcript languages for {video_id}:"]
-    for info in infos:
-        kind = "generated" if info.is_generated else "manual"
-        translatable = "translatable" if info.is_translatable else "not translatable"
-        lines.append(f"- {info.language_code}: {info.language} ({kind}, {translatable})")
-        if info.translation_languages:
-            sample = ", ".join(
-                f"{code} ({language})" for code, language in info.translation_languages[:8]
-            )
-            extra = len(info.translation_languages) - 8
-            if extra > 0:
-                sample = f"{sample}, +{extra} more"
-            lines.append(f"  translations: {sample}")
-    return "\n".join(lines)
+    window = text_window(_languages_text(infos), offset=offset, limit=_LANGUAGES_CHARS)
+    return window.result(heading=f"YouTube transcripts of {video_id}:")
 
 
 @tool(capability="network")
@@ -152,10 +154,11 @@ def youtube_transcript_search(
     languages: str = "en",
     prefer_manual: bool = True,
     allow_generated: bool = True,
-    max_results: int = 10,
-    context_segments: int = 1,
+    max_results: Annotated[int, Range(1, _MAX_SEARCH_RESULTS)] = 10,
+    context_segments: Annotated[int, Range(0, 3)] = 1,
     preserve_formatting: bool = False,
-) -> str:
+    offset: Annotated[int, Range(0)] = 0,
+) -> ToolResult:
     """Search within a public YouTube transcript and return timestamped matches.
 
     Args:
@@ -164,9 +167,10 @@ def youtube_transcript_search(
         languages: Comma-separated preferred source language codes, e.g. "en,pt-BR".
         prefer_manual: Prefer manually-created captions over auto-generated captions.
         allow_generated: Allow auto-generated captions if manual captions are unavailable.
-        max_results: Maximum matching windows to return (1-20). Defaults to 10.
-        context_segments: Number of neighboring segments around each match (0-3).
+        max_results: How many matches to return.
+        context_segments: How many neighboring segments to show on each side of a match.
         preserve_formatting: Preserve HTML formatting where supported by the provider.
+        offset: How many matches to skip; the footer gives the next offset.
 
     Raises:
         ToolFailure: validation_error when the video, the query or the languages are invalid;
@@ -179,9 +183,7 @@ def youtube_transcript_search(
         raise ToolFailure("validation_error", "empty query; give the text to find")
     language_codes = _languages(languages)
 
-    max_results = _clamp(max_results, 1, _MAX_SEARCH_RESULTS)
-    context_segments = _clamp(context_segments, 0, 3)
-    transcript, segments = _fetch_transcript(
+    transcript, segments, _ = _fetch_transcript(
         video_id,
         language_codes,
         prefer_manual=prefer_manual,
@@ -190,29 +192,60 @@ def youtube_transcript_search(
         preserve_formatting=preserve_formatting,
     )
 
+    where = _describe(video_id, transcript, "")
     needle = query.casefold()
     matches = [
         index for index, segment in enumerate(segments) if needle in segment.text.casefold()
     ]
     if not matches:
-        return f'No matches found for "{query}" in YouTube transcript {video_id}.'
+        return ToolResult.success(f"No passages of the {where}, mention {query!r}.")
 
     lines = [
-        f'YouTube transcript matches for "{query}" in {video_id}:',
-        _transcript_meta_line(transcript),
+        f"{number}. {_passage(segments, index, context_segments)}"
+        for number, index in enumerate(matches, start=1)
     ]
-    for result_index, segment_index in enumerate(matches[:max_results], start=1):
-        start = max(0, segment_index - context_segments)
-        end = min(len(segments), segment_index + context_segments + 1)
-        window = segments[start:end]
-        start_time = _timestamp(window[0].start, decimal=True)
-        end_time = _timestamp(window[-1].end, decimal=True)
-        text = " ".join(segment.text.replace("\n", " ").strip() for segment in window)
-        lines.append(f"{result_index}. [{start_time} - {end_time}] {text}")
+    window = _matches(lines, query, offset=offset, limit=max_results)
+    return window.result(heading=f"{where}: passages that mention {query!r}:")
 
-    remaining = len(matches) - max_results
-    if remaining > 0:
-        lines.append(f"... {remaining} more matches not shown.")
+
+def _passage(segments: list[_TranscriptSegment], index: int, context: int) -> str:
+    """The match at ``index`` with ``context`` segments on each side, timestamped (the match
+    alone when ``context`` leaves nothing around it)."""
+    shown = segments[max(0, index - context) : index + context + 1] or segments[index : index + 1]
+    start_time = _timestamp(shown[0].start, decimal=True)
+    end_time = _timestamp(shown[-1].end, decimal=True)
+    text = " ".join(segment.text.replace("\n", " ").strip() for segment in shown)
+    return f"[{start_time} - {end_time}] {text}"
+
+
+def _matches(lines: list[str], query: str, *, offset: int, limit: int) -> Window:
+    """A page of the match lines, counted as matches of ``query``."""
+    page = page_window(lines, offset=offset, limit=limit)
+    if not page.body:  # past the last match
+        return Window(body="", unit="matches", first=0, last=0, total=len(lines), label=query)
+    return replace(page, unit="matches", label=query)
+
+
+def _describe(video_id: str, transcript: Any, translated_from: str) -> str:
+    """Which transcript was read: the video, the language with its code, and the kind."""
+    kind = "generated" if bool(_attr(transcript, "is_generated")) else "manual"
+    code, language = str(_attr(transcript, "language_code")), str(_attr(transcript, "language"))
+    described = f"YouTube transcript of {video_id}, {code} ({language}), {kind}"
+    return described + (f", translated from {translated_from}" if translated_from else "")
+
+
+def _languages_text(infos: list[_TranscriptInfo]) -> str:
+    """The transcripts, one a line, then every language they translate to (one list for a
+    video: YouTube offers the same targets for each transcript that translates)."""
+    lines = []
+    for info in infos:
+        kind = "generated" if info.is_generated else "manual"
+        translatable = "translatable" if info.is_translatable else "not translatable"
+        lines.append(f"- {info.language_code}: {info.language} ({kind}, {translatable})")
+    targets = dict(pair for info in infos for pair in info.translation_languages)
+    if targets:
+        lines.append("Translations (youtube_transcript translate_to=...):")
+        lines += [f"- {code}: {language}" for code, language in targets.items()]
     return "\n".join(lines)
 
 
@@ -241,8 +274,9 @@ def _fetch_transcript(
     allow_generated: bool,
     translate_to: str,
     preserve_formatting: bool,
-) -> tuple[Any, list[_TranscriptSegment]]:
-    """The chosen transcript (translated when asked) and its segments.
+) -> tuple[Any, list[_TranscriptSegment], str]:
+    """The chosen transcript (translated when asked), its segments, and the language code it
+    was translated from (empty when it was not).
 
     Raises:
         ToolFailure: For every error youtube-transcript-api or the network raises.
@@ -255,6 +289,7 @@ def _fetch_transcript(
             prefer_manual=prefer_manual,
             allow_generated=allow_generated,
         )
+        source = str(_attr(transcript, "language_code")) if translate_to else ""
         if translate_to:
             transcript = transcript.translate(translate_to)
         segments = _segments(transcript.fetch(preserve_formatting=preserve_formatting))
@@ -264,7 +299,7 @@ def _fetch_transcript(
         raise _network_failure(e) from e
     except (AttributeError, TypeError, ValueError) as e:
         raise ToolFailure("upstream", f"could not parse the transcript response: {e}") from e
-    return transcript, segments
+    return transcript, segments, source
 
 
 def _transcript_failure(
@@ -447,17 +482,6 @@ def _attr(value: Any, name: str, default: Any = "") -> Any:
     return getattr(value, name, default)
 
 
-def _transcript_header(video_id: str, transcript: Any) -> str:
-    return f"YouTube transcript for {video_id}:\n{_transcript_meta_line(transcript)}"
-
-
-def _transcript_meta_line(transcript: Any) -> str:
-    kind = "generated" if bool(_attr(transcript, "is_generated")) else "manual"
-    language = str(_attr(transcript, "language"))
-    language_code = str(_attr(transcript, "language_code"))
-    return f"Language: {language_code} ({language}) | kind: {kind}"
-
-
 def _format_segments(segments: list[_TranscriptSegment], output_format: str) -> str:
     if output_format == "json":
         return json.dumps(
@@ -515,15 +539,3 @@ def _srt_timestamp(seconds: float) -> str:
 
 def _vtt_timestamp(seconds: float) -> str:
     return _timestamp(seconds, decimal=True)
-
-
-def _limit_text(text: str, max_chars: int) -> str:
-    if len(text) <= max_chars:
-        return text
-    omitted = len(text) - max_chars
-    suffix = f"\n... truncated {omitted} characters. Increase max_chars for more transcript text."
-    return f"{text[: max(0, max_chars - len(suffix))].rstrip()}{suffix}"
-
-
-def _clamp(value: int, minimum: int, maximum: int) -> int:
-    return max(minimum, min(int(value), maximum))

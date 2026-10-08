@@ -185,9 +185,59 @@ _WEB_SEARCH = (
     ),
 )
 
+_ARCHIVE_METADATA = "https://archive.org/developers/md-read.html (extended errors; the text is"
+_LIBRARY_ITEMS = frozenset({"open_library_work", "open_library_isbn"})
 
 ERROR_BODIES: dict[str, tuple[ErrorBody, ...]] = {
     "_web_search": _WEB_SEARCH,
+    "_internet_archive": (
+        ErrorBody(
+            source="live, 2026-09-29 (https://archive.org/advancedsearch.php, HTTP 200)",
+            status=200,
+            body={"error": 'a group is empty (near char ")" at position 10)'},
+            type="upstream",
+            says='a group is empty (near char ")" at position 10)',
+            tools=frozenset({"internet_archive_search"}),
+        ),
+        ErrorBody(
+            source=f"{_ARCHIVE_METADATA} the meaning the page gives code 104)",
+            status=200,
+            body={"error": "Item was deleted", "errcode": 104},
+            type="not_found",
+            says="Item was deleted",
+            tools=frozenset({"internet_archive_item"}),
+        ),
+        ErrorBody(
+            source=f"{_ARCHIVE_METADATA} the meaning the page gives code 102)",
+            status=200,
+            body={
+                "error": "Item is unavailable (data node(s) are offline or not responding)",
+                "errcode": 102,
+            },
+            type="upstream",
+            says="Item is unavailable",
+            tools=frozenset({"internet_archive_item"}),
+        ),
+    ),
+    "_open_library": (
+        ErrorBody(
+            source=(
+                "https://openlibrary.org/developers/api (one request a second without an email; "
+                "violations are rate limited)"
+            ),
+            status=429,
+            type="rate_limited",
+            says="HTTP 429",
+        ),
+        ErrorBody(
+            source="live, 2026-09-30 (a deleted work, HTTP 200)",
+            status=200,
+            body={"key": "/works/OL1000619W", "type": {"key": "/type/delete"}, "revision": 2},
+            type="not_found",
+            says="Open Library deleted /works/OL1000619W",
+            tools=_LIBRARY_ITEMS,
+        ),
+    ),
     "_air_quality": (
         ErrorBody(
             source="https://open-meteo.com/en/docs/air-quality-api (Errors)",
