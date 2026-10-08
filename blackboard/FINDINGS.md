@@ -988,3 +988,46 @@ que o código não usa; a do `36` fala de chaves da Anthropic e do xAI que o scr
   manda nomes repetidos para `tools=[a, b]` ou `tools=[grupo1, grupo2]`, que os fornecedores
   recusam com um 400, e o `execute_tool`/`run_tools` com uma lista corre em silêncio a primeira
   que encontrar. Os fluxos dos agentes recebem um `ToolGroup` e estão protegidos.
+
+## 2026-10-08 · Frente T (T06 a T09) e vaga 1 da frente C (C02, C06, C08): visto pelo caminho
+
+Resolvidos nesta vaga, de entradas anteriores:
+
+- "Um nome, uma tool, só no `ToolGroup`" (2026-10-04) → resolvido pela C02 (D62): dois nomes
+  iguais numa lista ou entre grupos levantam `ValueError` no `prepare_tools`, no `execute_tool` e
+  no `run_tools`, antes de qualquer envio.
+
+Por decidir ou por confirmar, sem tarefa:
+
+- **Brave, quota mensal.** O 429 da quota do mês (`QUOTA_LIMITED`) sai como `rate_limited`
+  repetível, como o do segundo; a Brave não documenta os valores de `code`. Depois de um 429 sem
+  `Retry-After`, o host descansa 1 s (`cooldown_s`), o que não chega para a quota. Precisa de uma
+  verificação ao vivo do corpo e, talvez, de um leitor que distinga os dois.
+- **GBIF, o `match` v1 está obsoleto.** O `gbif_species_match` usa `/v1/species/match`, que o GBIF
+  marca como obsoleto a favor do serviço de matching v2. Pede uma ficha própria.
+- **WHO GHO, a API OData foi anunciada como obsoleta** perto do fim de 2025, e não documenta
+  `$count` (as listas pedem uma linha a mais para saber se há mais). Os comandos ao vivo da T08
+  verificam se ainda responde.
+- **USGS, `min_magnitude=0.0` por omissão** deixa de fora os sismos de magnitude negativa; e cada
+  página do `earthquake_search` pede o `count` de novo.
+- **World Bank, a pesquisa de indicadores** varre 10 a 30 páginas do catálogo por chamada; uma
+  cache pedia expiração e um reset nos testes, fora do âmbito.
+- **Fontes cujos corpos de erro vêm do código-fonte ou de gravações, não da documentação:** RCSB
+  PDB e ChEMBL (T07b), Europe PMC `errMsg` e o cabeçalho `message` da NVD (T06; as páginas da
+  Europe PMC, NCBI, NVD e Semantic Scholar não se leram daqui). Os comandos ao vivo das fichas
+  confirmam-nos.
+- **C06, o catálogo:**
+  - a tabela de perfis da Anthropic não diz que modelos adaptativos pensam sem pedir, por isso o
+    `thinking_mode` deles fica `None`;
+  - o `claude-sonnet-5-5` e o `claude-haiku-5-5` não têm preço na tabela;
+  - vários modelos da semente acabam entre Outubro e Dezembro de 2026 (gpt-image-1 a 23/10,
+    Sonnet 4.5 a 30/11, e outros a 1/12);
+  - a documentação do xAI contradiz-se sobre function calling no modelo multi-agente;
+  - a Meta documenta 1 a 10 imagens de entrada numa edição; o adaptador aceita uma.
+- **C02:** o `const` de um schema não é verificado (decisão do dono, se o quiser); o Gemini pode
+  recusar `x-request-id` como nome de parâmetro (a C02f, ao vivo, di-lo).
+- **`python_repl` e o `re`:** o mesmo congelamento do `regex_search` (D66) acontece numa regex que
+  recua dentro do código que o `python_repl` avalia; o sandbox corre no processo.
+- **O custo de ler um ficheiro enorme às janelas:** cada janela do `read_file` descodifica desde o
+  início até ao `offset`, por isso ler um ficheiro de centenas de MB inteiro custa O(N²). Fica
+  documentado na docstring; um salto por bytes em UTF-8 puro resolvia-o.

@@ -3,7 +3,7 @@
 ## Frente activa: contrato das tools
 
 - **Estado:** aberta em 2026-09-30. Fichas T00 (regras) e T01 a T09 escritas. A T01 está feita a
-  2026-10-05 (Claude, a pedido do dono, com cinco agentes nos módulos) e publicada (`8cd6c3c`); a T02 também (`afe6674`); a T04b também (`7532ba4`); a T05 também (`1e60f67`); a seguir, as T06 a T09. A T03 e a T04a
+  2026-10-05 (Claude, a pedido do dono, com cinco agentes nos módulos) e publicada (`8cd6c3c`); a T02 também (`afe6674`); a T04b também (`7532ba4`); a T05 também (`1e60f67`); as T06 a T09 estão feitas e publicadas a 2026-10-08 (sete agentes em worktrees, uma revisão independente por parte e uma ronda de correcções; `ab26f85` T06, `4480a91` T07a, `2d4b3e3` T07b, `58d4f08` T08a, `eef33ec` T08b, `6bc05a1` T09a, `ee934de` T09b, `4609eb7` as correcções), com a lista de dívida do contrato vazia. A frente fecha quando o dono correr os comandos ao vivo das fichas. A T03 e a T04a
   estão feitas: PR #71, em `main` desde 2026-09-30 (`84c0ee2`). A T01 já pode começar: a sessão
   paralela, que mexia no `_http.py` e em nove módulos, terminou (`6a34668`).
 - **Plano:** `docs/internal/tools-contract-plan.md`. **Regras:** `tasks/T00-rules.md`, que remete
@@ -35,10 +35,10 @@
 | T04a | Limites na assinatura: marcador no schema e no validador | Claude | done | nada; em série com a C02 |
 | T04b | Invariante de contrato e lista de dívida | Claude | done | T01, T02, T03, T04a |
 | T05 | Família wiki: HTML, navegação e fusão (8 tools) | Claude | done | T04b |
-| T06 | Literatura e identificadores (8 módulos, 18 tools) | — | todo | T05 |
-| T07 | Vida e saúde (9 módulos, 34 tools) | — | todo | T05 |
-| T08 | Dados, geo e notícias (13 módulos, 44 tools) | — | todo | T05 |
-| T09 | Ficheiros, web e o resto (11 módulos, 28 tools) | — | todo | T05 |
+| T06 | Literatura e identificadores (8 módulos, 18 tools) | Claude (um agente) | done | T05 |
+| T07 | Vida e saúde (9 módulos, 34 tools) | Claude (dois agentes: T07a, T07b) | done | T05 |
+| T08 | Dados, geo e notícias (13 módulos, 44 tools) | Claude (dois agentes: T08a, T08b) | done | T05 |
+| T09 | Ficheiros, web e o resto (11 módulos, 28 tools) | Claude (dois agentes: T09a, T09b) | done | T05 |
 
 ### Ordem de aplicação
 
@@ -71,30 +71,33 @@
   foram escritas antes da frente de robustez: quem pegar numa relê a sua secção de ficheiros contra
   o `main` novo (a porta `_http.py`, o `FlowOptions`, as chaves `answer`/`response` e as
   declarações dos manifestos mudaram o terreno de C02, C05, C07 e C08).
-- **Estado:** aberta em 2026-09-15. As nove fichas estão escritas; nenhuma tarefa começou. As
-  decisões da vaga 1 (C02, C06, C07, C08) foram fixadas pelo dono a 2026-10-08 (D62 a D65, todas
-  na opção recomendada).
+- **Estado:** aberta em 2026-09-15. As decisões da vaga 1 (C02, C06, C07, C08) foram fixadas
+  pelo dono a 2026-10-08 (D62 a D65, todas na opção recomendada). Feitas a 2026-10-08, com a
+  frente T, e publicadas: a C02 (`85fdb88`; C02b a C02f, a C02a já vinha da F24), a C06 (`3819abf`;
+  C06a a C06d e C06f, a C06e espera pelo C01 e pelo C05) e a C08 (`5fe6cd8`); as correcções das
+  revisões em `4609eb7`. A C07 é a seguinte: as suas tools de escrita assentam no
+  `_filesystem.py` da T09.
 - **Antes de codificar:** o dono fixa as "Decisões a fixar" de cada ficha. Cada decisão tomada entra
-  em `DECISIONS.md` a partir de D66 (as D15 a D42 foram para as frentes R e T, as D43 a D45
-  para a frente O, as D46 e D47 para a frente I, as D48 a D61 para a frente A e as D62 a D65 para a vaga 1 desta), com o número dado pelo coordenador.
+  em `DECISIONS.md` a partir de D67 (as D15 a D42 foram para as frentes R e T, as D43 a D45
+  para a frente O, as D46 e D47 para a frente I, as D48 a D61 para a frente A e as D62 a D65 para a vaga 1 desta; a D66 foi para a T09), com o número dado pelo coordenador.
 - **Origem:** o que `docs/internal/agentes-app-toolkit-review.md` pediu ao toolkit (L1, L3–L7, L9, L13
   e o ponto D) e que `docs/internal/toolkit-fix-plan.md` §4 (itens 3 e 10) deixou de fora por ser
   âmbito, não contrato partido.
 - **Base:** `main` @ `7ebf7ef`; baseline 3045 passed, 22 skipped. **Coordenador:** sessão principal.
 - **Fora da frente:** `agent_as_tool` (a delegação é uma tool da app); scheduler, cofre, descoberta
   local, router `Auto` e escolha de arquitectura (app: L2, L8, L12); sandbox de código (L10).
-- **Exemplos novos:** levam o próximo número livre (hoje 49), atribuído pelo coordenador ao aplicar.
+- **Exemplos novos:** levam o próximo número livre (hoje 50), atribuído pelo coordenador ao aplicar.
 
 | ID | Tarefa | Dono | Estado | Depende de |
 |---|---|---|---|---|
 | C01 | `Agent.stream()`: texto, thinking e tools através das estratégias | — | todo | nada |
-| C02 | API pública para tools dinâmicas (`tool_from_schema`) | — | todo | nada |
+| C02 | API pública para tools dinâmicas (`tool_from_schema`) | Claude (um agente: C02b–f) | done | nada |
 | C03 | Cliente MCP (`toolkit.mcp`, extra `mcp`) | — | todo | C02 |
 | C04 | Checkpoint e retoma de runs | — | todo | nada; aplicar depois do C01 |
 | C05 | Server tools: config no fio e `server_tools=` nas estratégias | — | todo | nada; aplicar depois do C01 |
-| C06 | Catálogo técnico de modelos no core | — | todo | nada; C06e depois do C01 e do C05 |
+| C06 | Catálogo técnico de modelos no core | Claude (um agente: C06a–d, f) | done (falta a C06e) | nada; C06e depois do C01 e do C05 |
 | C07 | Tools de escrita tipadas e `FilesystemPolicy` | — | todo | nada; C07c depois do C02 |
-| C08 | Pesquisa web local (Brave e Tavily) | — | todo | nada |
+| C08 | Pesquisa web local (Brave e Tavily): o que falta (D65) | Claude (um agente) | done | T05 |
 | C09 | `FlowSpec` e máquinas de estados | — | blocked | C04a, C04b; formas validadas na app |
 
 ### Ordem de aplicação
@@ -373,11 +376,26 @@ que ficou aberto está em "Por fazer".
 
 ## Por fazer (dono do repositório)
 
-- **nanope, depois da T05:** trocar as tools que a família wiki substituiu (`define_word`,
-  `wikipedia_search`, `wikipedia_article`, `wikipedia_related`) pelas novas, pela tabela de
-  migração do `CHANGELOG`, em `advanced_multi_purpose_configurable_agent` (`_tools.py`,
-  `_profiles.py`, README) e em `research_center/_agents.py`. Até lá, os testes de `tests/nanope`
-  que constroem as tools saltam (`tests/nanope/pending.py`) e voltam a correr sozinhos.
+- **Frente T e vaga 1 da C, ao vivo (só APIs grátis e sem chave, salvo onde se diz):** os
+  comandos de "Ao vivo, pelo dono" em cada ficha (T06, T07, T08, T09, C08). Confirmam o que a
+  documentação não deixou ver daqui: os corpos de erro da Europe PMC, da NVD, da RCSB e da ChEMBL,
+  o `[]` do Internet Archive, o `fields` do ClinicalTrials.gov, os microssegundos do `endtime` da
+  USGS, o 303 da UniProt, as flags do Eurostat e se a WHO GHO ainda responde. Pagos, com chave: a
+  C02f (o comando exacto está no fim da ficha C02, em "Ao vivo, pelo dono") e o
+  `tests/integration/test_web_search_live.py` (Brave $0,005, Tavily $0,008).
+- **Rever a D66:** o `run_command` deixou de correr em Windows (grupos de processos POSIX), e o
+  `regex_search` procura num Python filho, morto aos 5 s. O dono pode preferir outra coisa.
+- **ai-network:** passar-lhe as quebras desta vaga (a tabela de migração do `CHANGELOG`: oito tools
+  fundidas, o `ror_search` sem `max_results`, as regras dos nomes e das colisões da C02).
+- **nanope, depois das T05 a T09:** trocar as tools que saíram pelas que as substituem, pela
+  tabela de migração do `CHANGELOG`: as da família wiki (`define_word`, `wikipedia_search`,
+  `wikipedia_article`, `wikipedia_related`, T05) e as de geo e tempo (`reverse_geocode`,
+  `get_weather_by_coords`, `get_forecast_by_coords`, `weather_units`, T08). Sítios:
+  `advanced_multi_purpose_configurable_agent` (`_tools.py`, `_profiles.py`, README) e
+  `research_center/_agents.py`. As tools com janela, chamadas directamente, devolvem um
+  `ToolResult` (o texto em `.value`): o `research_center` chama `http_get` e `scrape_text` assim.
+  Até lá, os testes de `tests/nanope` que constroem as tools saltam (`tests/nanope/pending.py`)
+  e voltam a correr sozinhos.
 - **Anthropic:** quando houver créditos, correr
   `uv run pytest tests/integration/test_provider_contracts_live.py -m live_api -k anthropic -q`
   (usa o `claude-haiku-4-5`, que leva `temperature` no corpo do pedido). Confirma a correcção do

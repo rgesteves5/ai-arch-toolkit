@@ -1206,3 +1206,34 @@ Só acrescentar. Uma decisão revista ganha uma nova entrada que diz qual substi
   - o rótulo "untrusted" só nestas duas tools;
   - passar a C08 para a T09, ou deixar a dívida sem dono.
 
+
+## D66 · Comandos e regex que se podem parar: grupo de processos e processo filho (frente T, T09)
+
+- **Contexto:** a revisão da T09a achou duas formas de uma tool prender o programa:
+  - um processo que o `run_command` deixa em segundo plano (`yes X &`, `tail -f`) sobrevivia à
+    chamada, e duas threads ficavam a ler a saída dele sem fim;
+  - uma regex que recua em tempo polinomial (`a*a*b` em 20 000 caracteres, cerca de 18 minutos)
+    congelava o processo inteiro no `regex_search`, porque o motor do `re` segura o GIL, e nem o
+    prazo do executor a parava.
+- **Decisão** (do coordenador, a 2026-10-08, na ronda de correcções; o dono pode revê-la):
+  - **`run_command`:**
+    - corre o comando num grupo de processos próprio, sem entrada (`/dev/null`);
+    - uma só thread lê os dois pipes, e o grupo morre quando a chamada acaba, ou meio segundo
+      depois de a shell acabar, com uma nota que manda acabar o comando com `wait`;
+    - fica só POSIX: em Windows dá uma falha `upstream` tipada, pelo critério da C07.8 (sem
+      Windows no CI, sem prova);
+  - **`regex_search`:**
+    - cada procura corre num Python filho (`-I -S`, um script fixo que só procura), morto aos 5 s;
+    - uma regex que recua é recusada quando o tempo acaba, e o programa nunca congela; custa cerca
+      de 20 ms por chamada;
+    - um programa congelado ou embebido (sem um Python em `sys.executable`) recebe uma falha
+      `upstream` que o diz;
+    - o teste de invariantes aceita-o por nome: a tool computa e não corre nada de quem chama.
+- **Alternativas rejeitadas:**
+  - **uma verificação estática da regex**, porque, para apanhar `a*a*b`, recusa padrões comuns
+    como `\d+-\d+`, e não se prova completa;
+  - **threads para a regex**, que não se podem parar enquanto o `re` segura o GIL;
+  - **manter o Windows no `run_command`**, sem grupos de processos nem `select` sobre pipes.
+- **Consequência:**
+  - quem usava o `run_command` em Windows deixa de o ter: é uma quebra (`CHANGELOG`);
+  - o `python_repl` tem o mesmo risco com o `re` e fica nos achados.

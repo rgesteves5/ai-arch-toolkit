@@ -851,3 +851,30 @@ R01 publicada em `main` (`b3dae3f`); a R02 começa com a leitura obrigatória da
   duas médias de HTML hostil; todas corrigidas, com as baixas.
 - Gate: 6981 passed, 101 skipped; ruff, formatação e pyright limpos.
 
+
+## 2026-10-08 · Frente T feita (T06 a T09) e vaga 1 da frente C (C02, C06, C08) (Claude, a pedido do dono)
+
+- O dono fixou as decisões da vaga 1 da frente C (D62 a D65, todas na opção recomendada; a C06.1
+  depois de uma dúvida, respondida na D63), publicadas em `601e38c`, e pediu para avançar.
+- **Como correu:** dez agentes em worktrees, em paralelo: T06, T07a, T07b, T08a, T08b, T09a, T09b,
+  C02, C06 e C08 (a ficha C08 reescrita antes, pela D65). O coordenador juntou os dez diffs no
+  checkout principal, resolvendo os conflitos dos ficheiros partilhados do contrato (a lista de
+  dívida e a de qualidade só encolhem). Depois, um revisor independente por parte, e uma ronda de
+  correcções por parte, com os ficheiros repartidos para não se pisarem.
+- **Resultado:**
+  - as 123 tools cumprem o contrato, e a lista de dívida está vazia (`CUT_HELPERS` 0);
+  - oito tools fundidas noutras da mesma fonte, com a tabela de migração no `CHANGELOG`; quatro
+    delas o nanope importa, e o `tests/nanope/pending.py` e o BOARD nomeiam-nas;
+  - `tool_from_schema`, `ToolGroup.add(replace=)`/`remove`, a regra dos nomes e das colisões
+    (C02);
+  - o catálogo técnico de modelos (C06), sem nenhuma mudança no fio (provado com 2325 pedidos);
+  - a Brave e a Tavily no contrato, e o exemplo 49 (C08).
+- **As revisões** acharam um alto na T07a (unidades dos nutrientes 1000× abaixo), três altos na
+  T09a (processos deixados pelo `run_command`, páginas do `csv_read` sem limite, regex que congela
+  o processo; D66), um alto na C02 (os ramos de `oneOf` sem as chaves do pai) e cerca de vinte
+  médios. Todos corrigidos, cada um com o teste que falhava antes.
+- **Gate:** 8195 passed, 118 skipped; ruff, formatação, pyright e `uv lock --check` limpos.
+- **Publicado:** `5fe6cd8` a `4609eb7` (um commit por parte, cada um num estado com o gate
+  verde, e as correcções das revisões no último).
+- **A seguir:** o dono corre os comandos ao vivo das fichas; depois, a C07 (vaga 1 da
+  frente C) e as decisões das vagas 2 e 3.
