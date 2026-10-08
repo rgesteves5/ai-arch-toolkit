@@ -177,23 +177,30 @@ costs two, the second naming its authors.
 
 **Proteins & structures** — `_uniprot.py`, `_pdb.py`
 
-- `uniprot_search` — Search UniProtKB proteins
-- `uniprot_entry` — Get UniProtKB entry metadata by accession
-- `uniprot_features` — List UniProtKB sequence features
+- `uniprot_search` — Search UniProtKB proteins in UniProt's query syntax, with the total; the
+  footer gives the next page's `cursor` (UniProt pages by cursor, not by offset)
+- `uniprot_entry` — Read a UniProtKB entry: names, organism, sizes, dates and every annotation
+  (function, catalytic activity, location, disease, interactions …) in full, window by window
+- `uniprot_features` — List an entry's sequence features with positions and changes, by type,
+  page by page
 - `uniprot_sequence` — Get a UniProtKB protein sequence in FASTA form
-- `uniprot_crossrefs` — List UniProtKB database cross-references
-- `pdb_search` — Search RCSB PDB structures by free text
-- `pdb_entry` — Get RCSB PDB entry metadata
-- `pdb_ligands` — List non-polymer ligands for a PDB entry
-- `pdb_chemical_component` — Get RCSB chemical component metadata
+- `uniprot_crossrefs` — List an entry's cross-references with all their properties, by database,
+  page by page (PDB IDs read on with `pdb_entry`, ChEMBL IDs with `chembl_target`)
+- `pdb_search` — Search RCSB PDB structures by free text: each entry with its title, method,
+  resolution and release date (two requests a page)
+- `pdb_entry` — Read an RCSB PDB entry: title, method, resolution, dates, entities, citation
+- `pdb_ligands` — List the ligands of a PDB entry with their component IDs (two requests)
+- `pdb_chemical_component` — Read an RCSB chemical component: formula, weight, SMILES, InChIKey
 
 **Chemistry & bioactivity** — `_chembl.py`
 
-- `chembl_molecule_search` — Search ChEMBL molecules by name or synonym
-- `chembl_molecule` — Get ChEMBL molecule metadata
-- `chembl_target_search` — Search ChEMBL biological targets
-- `chembl_target` — Get ChEMBL target metadata
-- `chembl_activity_search` — Search ChEMBL bioactivity measurements
+- `chembl_molecule_search` — Search ChEMBL molecules by name or synonym, with the total
+- `chembl_molecule` — Read a ChEMBL molecule: phase (with its label), properties with units,
+  structure
+- `chembl_target_search` — Search ChEMBL biological targets, with the total
+- `chembl_target` — Read a ChEMBL target, with the UniProt accessions of its components
+- `chembl_activity_search` — Search ChEMBL bioactivity measurements of a molecule, on a target,
+  or both, with names, units and the assay
 
 **Medication labels** — `_rxnorm_dailymed.py`, `_spl.py`
 
@@ -226,10 +233,13 @@ one item per line, tables one row per line.
 
 **Biodiversity** — `_gbif.py`
 
-- `gbif_species_match` — Resolve scientific names to GBIF taxon keys
-- `gbif_species_search` — Search GBIF taxa by name, rank, or parent taxon
-- `gbif_species` — Get GBIF taxon metadata by taxon key
-- `gbif_occurrence_search` — Search GBIF species occurrence records
+- `gbif_species_match` — Resolve a scientific name to its GBIF backbone taxon (exact, fuzzy, or
+  only a higher rank, as the match says); common names go to `gbif_species_search`
+- `gbif_species_search` — Search GBIF taxa by scientific or common name, rank, or parent taxon,
+  with the total
+- `gbif_species` — Read a GBIF taxon by its key: status, common name, classification, parent
+- `gbif_occurrence_search` — Search GBIF occurrence records by taxon, country or year, with the
+  total; GBIF's search reaches the first 100,000 records
 
 **Food products** — `_open_food_facts.py`
 

@@ -1281,3 +1281,40 @@ class TestBilling:
         api.get_json("a", parse=dict)
 
         assert web.seen[0].get_header("Authorization") == "Bearer k-123"
+
+
+class TestWholeReply:
+    """``get_json_reply``: a source that pages by a header, or counts in one (UniProt, T07b)."""
+
+    def test_parse_reads_the_headers_and_the_object(self, web: _Transport) -> None:
+        web.add(
+            "https://api.example.org/v1/search?q=a",
+            {"results": [1]},
+            Link='<https://api.example.org/v1/search?q=a&cursor=c2>; rel="next"',
+            **{"X-Total-Results": "41"},
+        )
+
+        reply = API.get_json_reply("search", params={"q": "a"}, parse=lambda reply: reply)
+
+        assert reply.status == 200
+        assert reply.body == {"results": [1]}
+        assert reply.headers["x-total-results"] == "41"
+        assert reply.headers["link"].endswith('rel="next"')
+
+    def test_the_reader_still_reads_every_answer_first(self, web: _Transport) -> None:
+        web.add("https://api.example.org/v1/x", {"error": "quota spent"})
+
+        with pytest.raises(HttpError, match=r"^quota spent$"):
+            REPORTING.get_json_reply("x", parse=_refuse)
+
+    def test_an_answer_that_is_not_an_object_is_a_parse_error(self, web: _Transport) -> None:
+        web.add("https://api.example.org/v1/x", [1, 2])
+
+        with pytest.raises(HttpError, match="expected a JSON object, got an array"):
+            API.get_json_reply("x", parse=_refuse)
+
+    def test_a_shape_parse_did_not_expect_is_a_parse_error(self, web: _Transport) -> None:
+        web.add("https://api.example.org/v1/x", {"results": None})
+
+        with pytest.raises(HttpError, match="could not parse API response"):
+            API.get_json_reply("x", parse=lambda reply: len(reply.headers["missing"]))

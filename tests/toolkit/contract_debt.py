@@ -15,17 +15,12 @@ def _owes(*points: str) -> frozenset[str]:
 
 
 # Definitions of the copied cut helpers (``_truncate``, ``_trim``) left in ``toolkit/tools``.
-CUT_HELPERS = 10
+CUT_HELPERS = 9
 
 DEBT: dict[str, frozenset[str]] = {
     "air_quality_forecast": _owes("window", "limits"),
     "arxiv_paper": _owes("window", "errors", "not_found"),
     "arxiv_search": _owes("window", "errors", "zero", "limits"),
-    "chembl_activity_search": _owes("window", "errors", "zero", "limits"),
-    "chembl_molecule": _owes("errors"),
-    "chembl_molecule_search": _owes("window", "errors", "zero", "limits"),
-    "chembl_target": _owes("errors"),
-    "chembl_target_search": _owes("window", "errors", "zero", "limits"),
     "country_info": _owes("errors", "not_found"),
     "crossref_search": _owes("window", "errors", "zero", "limits"),
     "crossref_work": _owes("window", "errors"),
@@ -47,10 +42,6 @@ DEBT: dict[str, frozenset[str]] = {
     "eurostat_dataset_search": _owes("window", "errors", "zero", "limits"),
     "eurostat_dimensions": _owes("window", "limits"),
     "eurostat_series": _owes("window", "limits"),
-    "gbif_occurrence_search": _owes("window", "errors", "zero", "limits"),
-    "gbif_species": _owes("errors"),
-    "gbif_species_match": _owes("errors", "not_found"),
-    "gbif_species_search": _owes("window", "errors", "zero", "limits"),
     "gdelt_news_search": _owes("window", "errors", "zero", "limits"),
     "gdelt_timeline": _owes("window", "errors", "zero"),
     "geocode": _owes("window", "errors", "zero"),
@@ -68,10 +59,6 @@ DEBT: dict[str, frozenset[str]] = {
     "osm_search_place": _owes("window", "errors", "zero", "limits"),
     "overpass_pois": _owes("window", "errors", "zero", "limits"),
     "overpass_query": _owes("window", "errors", "zero", "limits"),
-    "pdb_chemical_component": _owes("errors"),
-    "pdb_entry": _owes("errors"),
-    "pdb_ligands": _owes("errors"),
-    "pdb_search": _owes("window", "errors", "zero", "limits"),
     "pubmed_article": _owes("window", "errors", "not_found"),
     "pubmed_search": _owes("window", "errors", "zero", "limits"),
     "read_file": _owes("window", "limits"),
@@ -85,10 +72,6 @@ DEBT: dict[str, frozenset[str]] = {
     "semantic_scholar_paper": _owes("window", "errors"),
     "semantic_scholar_search": _owes("window", "errors", "zero", "limits"),
     "timezone_lookup": _owes("errors"),
-    "uniprot_crossrefs": _owes("window", "limits"),
-    "uniprot_entry": _owes("window"),
-    "uniprot_features": _owes("window", "limits"),
-    "uniprot_search": _owes("window", "zero", "limits"),
     "weather_units": _owes("errors"),
     "who_indicator": _owes("errors", "not_found"),
     "who_indicators": _owes("window", "errors", "zero", "limits"),

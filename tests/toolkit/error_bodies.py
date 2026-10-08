@@ -346,6 +346,8 @@ ERROR_BODIES: dict[str, tuple[ErrorBody, ...]] = {
             says="Failed to convert value of type 'java.lang.String'",
         ),
     ),
+    # A 400 is a request "the client request needs modification": the caller's to fix
+    # (https://www.uniprot.org/help/rest-api-headers).
     "_uniprot": (
         ErrorBody(
             source="live, 2026-09-30 (https://rest.uniprot.org/uniprotkb/search)",
@@ -354,8 +356,76 @@ ERROR_BODIES: dict[str, tuple[ErrorBody, ...]] = {
                 "url": "http://rest.uniprot.org/uniprotkb/search",
                 "messages": ["Invalid request received. Unsupported query."],
             },
-            type="upstream",
+            type="validation_error",
             says="Unsupported query",
+        ),
+        ErrorBody(
+            source="https://www.uniprot.org/help/rest-api-headers (400 Bad request)",
+            status=400,
+            body={
+                "url": "https://rest.uniprot.org/uniprotkb/search",
+                "messages": ["'query' is a required parameter"],
+            },
+            type="validation_error",
+            says="'query' is a required parameter",
+        ),
+    ),
+    "_pdb": (
+        ErrorBody(
+            source=(
+                "the search's 400, as T02 recorded it (tests/toolkit/test_pdb.py); RCSB's own "
+                "client reads a 400's body as the reason (https://github.com/rcsb/rcsb-mcp, "
+                "src/rcsb_mcp/client.py)"
+            ),
+            status=400,
+            body={"status": 400, "message": "JSON schema validation failed for query"},
+            type="validation_error",
+            says="JSON schema validation failed for query",
+        ),
+        # GraphQL answers 200 and puts its errors in the body
+        # (https://data.rcsb.org/index.html#gql-api; https://github.com/rcsb/py-rcsb-api,
+        # rcsbapi/data/data_query.py).
+        ErrorBody(
+            source="https://data.rcsb.org/index.html#gql-api",
+            status=200,
+            body={"errors": [{"message": "Field 'x' in type 'CoreEntry' is undefined"}]},
+            type="upstream",
+            says="Field 'x' in type 'CoreEntry' is undefined",
+            tools=frozenset({"pdb_search"}),
+        ),
+    ),
+    # A refused request answers 400 with its reason in ``error_message``
+    # (https://github.com/chembl/chembl_webservices_py3, src/chembl_webservices/core/resource.py).
+    "_chembl": (
+        ErrorBody(
+            source="chembl_webservices_py3, core/resource.py (check_user_search_query)",
+            status=400,
+            body={"error_message": "Search query too short"},
+            type="validation_error",
+            says="Search query too short",
+            tools=frozenset(
+                {"chembl_molecule_search", "chembl_target_search", "chembl_activity_search"}
+            ),
+        ),
+        ErrorBody(
+            source="chembl_webservices_py3, core/resource.py (resource lookup)",
+            status=400,
+            body={"error_message": "Invalid resource lookup data provided (mismatched type)."},
+            type="validation_error",
+            says="Invalid resource lookup data provided (mismatched type)",
+            tools=frozenset({"chembl_molecule", "chembl_target"}),
+        ),
+    ),
+    # A refused request answers 400 with its reason as plain text
+    # (https://github.com/gbif/gbif-common-ws, IllegalArgumentExceptionMapper; the reason from
+    # https://github.com/gbif/checklistbank, SpeciesResource.checkDeepPaging).
+    "_gbif": (
+        ErrorBody(
+            source="gbif-common-ws IllegalArgumentExceptionMapper; checklistbank SpeciesResource",
+            status=400,
+            body="Offset is limited for this operation to 100000",
+            type="validation_error",
+            says="Offset is limited for this operation to 100000",
         ),
     ),
 }

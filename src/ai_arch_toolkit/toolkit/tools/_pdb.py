@@ -1,69 +1,142 @@
-"""RCSB PDB tools — public biomolecular structure lookup."""
+"""RCSB PDB tools: search structures, and read an entry, its ligands and a chemical component
+(T07b; D39).
+
+The Search API answers identifiers and a total, and a query that matches nothing with
+``204 No Content`` (https://search.rcsb.org/, "Empty results"). What each entry or ligand is comes
+from the Data API's GraphQL endpoint, one request for a whole page of identifiers
+(https://data.rcsb.org/index.html#gql-api), so a search costs two requests whatever its size,
+and an entry's ligands two.
+"""
 
 from __future__ import annotations
 
 import re
-from typing import Any
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Annotated, Any
 
-from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.core import Range, ToolResult, tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
-from ai_arch_toolkit.toolkit.tools._http import Api
+from ai_arch_toolkit.toolkit.tools._http import Api, Reply
+from ai_arch_toolkit.toolkit.tools._window import list_window
 
-# The Data API answers a record it does not have with a 404, so each of its calls declares the
-# record it asks for (``missing=``); both APIs give their errors' text in ``message``, which the
-# door quotes (https://data.rcsb.org/redoc/index.html, https://search.rcsb.org/#return-codes).
-_DATA = Api(base="https://data.rcsb.org/rest/v1/core", name="RCSB PDB", timeout_s=20)
-_SEARCH = Api(base="https://search.rcsb.org/rcsbsearch/v2/query", name="RCSB PDB", timeout_s=20)
-_MAX_LIMIT = 25
-_PDB_ID_RE = re.compile(r"^[A-Za-z0-9]{4}$")
-_CHEM_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,12}$")
-_TEXT_RE = re.compile(r"^[\w\s,.'()/%:+-]{1,180}$", re.UNICODE)
+
+def _rcsb_error(reply: Reply) -> ToolFailure | str | None:
+    """The error an RCSB answer explains; ``None`` for a result.
+
+    The GraphQL endpoint always answers 200 and puts its errors in ``errors``
+    (https://data.rcsb.org/index.html#gql-api; RCSB's client reads ``errors[].message``,
+    https://github.com/rcsb/py-rcsb-api, ``rcsbapi/data/data_query.py``). The REST and Search
+    APIs explain an error status in ``message``; a 400 is a request RCSB refused, which the
+    caller rephrases (RCSB's own agent tools read it so:
+    https://github.com/rcsb/rcsb-mcp, ``src/rcsb_mcp/client.py``).
+    """
+    body = reply.body
+    if not isinstance(body, dict):
+        return None
+    errors = body.get("errors")
+    if isinstance(errors, list) and errors:
+        said = "; ".join(_string(e.get("message")) for e in errors if isinstance(e, dict))
+        return f"RCSB PDB's Data API said: {said or 'the query failed'}"
+    message = _string(body.get("message"))
+    if message and reply.status == 400:
+        return ToolFailure(
+            "validation_error",
+            f"RCSB PDB refused the request: {message}; rephrase the query in plain words",
+        )
+    return None
+
+
+# The Data API answers a record it does not have with a 404, so each REST call declares the
+# record it asks for (``missing=``).
+_DATA = Api(
+    base="https://data.rcsb.org/rest/v1/core",
+    name="RCSB PDB",
+    timeout_s=20,
+    error_reader=_rcsb_error,
+)
+_GRAPHQL = Api(
+    base="https://data.rcsb.org/graphql", name="RCSB PDB", timeout_s=20, error_reader=_rcsb_error
+)
+_SEARCH = Api(
+    base="https://search.rcsb.org/rcsbsearch/v2/query",
+    name="RCSB PDB",
+    timeout_s=20,
+    error_reader=_rcsb_error,
+)
+_PDB_ID_RE = re.compile(r"[A-Za-z0-9]{4}")
+_CHEM_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,12}")
+_QUERY_CHARS = 500
+# The fields of the entries a search lists: the ones RCSB's own agent tools ask for
+# (https://github.com/rcsb/rcsb-mcp, ``src/rcsb_mcp/report/tables.py``).
+_ENTRIES_QUERY = """query($ids: [String!]!) {
+  entries(entry_ids: $ids) {
+    rcsb_id
+    struct { title }
+    exptl { method }
+    rcsb_entry_info { resolution_combined }
+    rcsb_accession_info { initial_release_date }
+  }
+}"""
+_LIGANDS_QUERY = """query($ids: [String!]!) {
+  nonpolymer_entities(entity_ids: $ids) {
+    rcsb_id
+    pdbx_entity_nonpoly { comp_id name }
+    rcsb_nonpolymer_entity { pdbx_number_of_molecules }
+  }
+}"""
 
 
 @tool(capability="network")
-def pdb_search(query: str, max_results: int = 10, start: int = 0) -> str:
-    """Search RCSB PDB structures by free text.
+def pdb_search(
+    query: str,
+    max_results: Annotated[int, Range(1, 25)] = 10,
+    start: Annotated[int, Range(0)] = 0,
+) -> ToolResult:
+    """Search RCSB PDB structures by free text, the most relevant first: each entry with its
+    title, method, resolution and release date.
 
     Args:
-        query: Text query, e.g. protein name, organism, ligand, or method.
-        max_results: Number of PDB entries to return (1-25). Defaults to 10.
-        start: Zero-based result offset. Defaults to 0.
+        query: Words to look for, e.g. a protein, an organism, a ligand or a method.
+        max_results: How many entries to list.
+        start: How many entries to skip; the footer gives the next start.
 
     Raises:
-        ToolFailure: validation_error when the query is empty, too long or has characters the
-            search does not take, or ``start`` is negative.
+        ToolFailure: validation_error when the query is empty or RCSB refuses it (with its
+            reason).
     """
-    if not _valid_text(query):
+    text = query.strip()
+    if not text:
+        raise ToolFailure("validation_error", "query cannot be empty; say what to search for")
+    if len(text) > _QUERY_CHARS or any(ord(char) < 32 for char in text):
         raise ToolFailure(
             "validation_error",
-            f"invalid query {query!r}; give 1-180 characters of words, digits and basic "
-            "punctuation, e.g. 'hemoglobin human'.",
-        )
-    if start < 0:
-        raise ToolFailure(
-            "validation_error", f"start must be greater than or equal to 0 (got {start})."
+            f"invalid query {query[:100]!r}; give up to {_QUERY_CHARS} characters on one line",
         )
     # "text" searches one attribute and needs its name; free text is "full_text":
     # https://search.rcsb.org/#search-services
     payload = {
-        "query": {
-            "type": "terminal",
-            "service": "full_text",
-            "parameters": {"value": query.strip()},
-        },
+        "query": {"type": "terminal", "service": "full_text", "parameters": {"value": text}},
         "return_type": "entry",
-        "request_options": {"paginate": {"start": start, "rows": _bounded(max_results)}},
+        "request_options": {"paginate": {"start": start, "rows": max_results}},
     }
-    # A query that matches nothing is answered 204 No Content:
-    # https://search.rcsb.org/#empty-results
-    return _SEARCH.post_json(
-        payload=payload, parse=lambda data: _search_text(data, query, start), allow_empty=True
-    )
+    hits = _SEARCH.post_json(payload=payload, parse=_hits, allow_empty=True)
+    if not hits.ids and start == 0:
+        return ToolResult.success(f"No RCSB PDB entries match {text!r}.")
+    found = _records(_ENTRIES_QUERY, "entries", hits.ids) if hits.ids else {}
+    lines = [
+        f"{start + number}. {_hit_line(entry_id, found.get(entry_id))}"
+        for number, entry_id in enumerate(hits.ids, start=1)
+    ]
+    shown = start + len(lines)
+    next_call = {"start": shown} if lines and shown < hits.total else None
+    window = list_window(lines, first=start + 1, total=hits.total, next_call=next_call)
+    return window.result(heading=f"RCSB PDB entries that match {text!r}, the most relevant first:")
 
 
 @tool(capability="network")
 def pdb_entry(pdb_id: str) -> str:
-    """Get RCSB PDB entry metadata.
+    """Read an RCSB PDB entry: its title, method, resolution, dates, entities and citation.
 
     Args:
         pdb_id: Four-character PDB ID, e.g. "1A3N".
@@ -83,40 +156,38 @@ def pdb_entry(pdb_id: str) -> str:
 
 @tool(capability="network")
 def pdb_ligands(pdb_id: str) -> str:
-    """List non-polymer ligands for a PDB entry.
+    """List the ligands (non-polymer entities) of an RCSB PDB entry, with their chemical
+    component IDs.
 
     Args:
         pdb_id: Four-character PDB ID, e.g. "1A3N".
 
     Raises:
         ToolFailure: validation_error when ``pdb_id`` is not four letters or digits; not_found
-            when the PDB has no entry with it, or no record of a ligand the entry lists.
+            when the PDB has no entry with it.
     """
     normalized = _pdb_id(pdb_id)
-    ids = _DATA.get_json("entry", normalized, parse=_nonpolymer_ids, missing=_no_entry(normalized))
-    ligands = [
-        _DATA.get_json(
-            "nonpolymer_entity",
-            normalized,
-            entity_id,
-            parse=_ligand,
-            missing=(
-                f"RCSB PDB entry {normalized} lists nonpolymer entity {entity_id} but has no "
-                f"record of it; see the entry with pdb_entry"
-            ),
-        )
-        for entity_id in ids
+    entities = _DATA.get_json(
+        "entry", normalized, parse=_nonpolymer_ids, missing=_no_entry(normalized)
+    )
+    if not entities:
+        return f"RCSB PDB entry {normalized} has no ligands."
+    ids = tuple(f"{normalized}_{entity}" for entity in entities)
+    found = _records(_LIGANDS_QUERY, "nonpolymer_entities", ids)
+    lines = [
+        f"Ligands of RCSB PDB entry {normalized} (read one with pdb_chemical_component):",
+        *(
+            f"{number}. {_ligand_line(entity, found.get(entity_id))}"
+            for number, (entity, entity_id) in enumerate(zip(entities, ids, strict=True), 1)
+        ),
     ]
-    if not ligands:
-        return f"No RCSB PDB ligands found for {normalized}."
-    lines = [f"RCSB PDB ligands for {normalized}:"]
-    lines.extend(f"{index}. {ligand}" for index, ligand in enumerate(ligands, start=1))
     return "\n".join(lines)
 
 
 @tool(capability="network")
 def pdb_chemical_component(component_id: str) -> str:
-    """Get RCSB chemical component metadata for a ligand/residue.
+    """Read an RCSB chemical component (a ligand or residue): name, type, formula, weight and
+    structure descriptors.
 
     Args:
         component_id: Chemical component ID, e.g. "ATP", "HEM", or "NAG".
@@ -129,8 +200,8 @@ def pdb_chemical_component(component_id: str) -> str:
     if not _CHEM_ID_RE.fullmatch(normalized):
         raise ToolFailure(
             "validation_error",
-            f"invalid component_id {component_id!r}; a chemical component ID is 1-12 letters "
-            "or digits, e.g. 'ATP' or 'HEM'.",
+            f"invalid component_id {component_id[:100]!r}; a chemical component ID is 1-12 "
+            "letters or digits, e.g. 'ATP' or 'HEM'",
         )
     return _DATA.get_json(
         "chemcomp",
@@ -143,6 +214,49 @@ def pdb_chemical_component(component_id: str) -> str:
     )
 
 
+# --- Requests ----------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class _Hits:
+    """A page of search hits: their identifiers, in order, and the total."""
+
+    ids: tuple[str, ...]
+    total: int
+
+
+def _hits(data: dict[str, Any]) -> _Hits:
+    """The identifiers and total of a search answer (``{}`` for a 204: none)."""
+    ids = tuple(
+        _string(item.get("identifier"))
+        for item in data.get("result_set") or []
+        if isinstance(item, dict) and _string(item.get("identifier"))
+    )
+    total = data.get("total_count")
+    return _Hits(ids=ids, total=total if isinstance(total, int) else len(ids))
+
+
+def _records(query: str, field: str, ids: tuple[str, ...]) -> Mapping[str, dict[str, Any]]:
+    """The Data API's records for ``ids``, by ``rcsb_id``, in one GraphQL request; an ID it has
+    no record of is left out."""
+
+    def by_id(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        found = (data.get("data") or {}).get(field) or []
+        return {
+            _string(item.get("rcsb_id")): item
+            for item in found
+            if isinstance(item, dict) and _string(item.get("rcsb_id"))
+        }
+
+    payload = {"query": query, "variables": {"ids": list(ids)}}
+    return _GRAPHQL.post_json(payload=payload, parse=by_id)
+
+
+def _nonpolymer_ids(entry: dict[str, Any]) -> list[str]:
+    ids = (entry.get("rcsb_entry_container_identifiers") or {}).get("non_polymer_entity_ids")
+    return [_string(entity) for entity in ids or [] if _string(entity)]
+
+
 def _no_entry(pdb_id: str) -> str:
     return f"RCSB PDB has no entry {pdb_id}; find entries with pdb_search"
 
@@ -153,101 +267,113 @@ def _pdb_id(pdb_id: str) -> str:
     if not _PDB_ID_RE.fullmatch(normalized):
         raise ToolFailure(
             "validation_error",
-            f"invalid pdb_id {pdb_id!r}; a PDB ID is four letters or digits, e.g. '1A3N'; "
-            "find one with pdb_search.",
+            f"invalid pdb_id {pdb_id[:100]!r}; a PDB ID is four letters or digits, e.g. "
+            "'1A3N'; find one with pdb_search",
         )
     return normalized
 
 
-def _search_text(data: dict[str, Any], query: str, start: int) -> str:
-    results = data.get("result_set", [])
-    if not isinstance(results, list) or not results:
-        return f"No RCSB PDB entries found for {query!r}."
-    total = _string(data.get("total_count")) or "?"
-    lines = [
-        f"RCSB PDB entries for {query!r} (returned {len(results)}, total {total}, start {start}):"
+# --- Answers -----------------------------------------------------------------------------------
+
+
+def _hit_line(entry_id: str, record: dict[str, Any] | None) -> str:
+    if record is None:
+        return f"{entry_id}: (no record in the Data API; try pdb_entry)"
+    parts = [
+        f"{entry_id}: {_nested(record, 'struct', 'title') or '(no title)'}",
+        _methods(record),
+        _resolution(record),
     ]
-    for index, item in enumerate(results, start=1):
-        if not isinstance(item, dict):
-            continue
-        identifier = _string(item.get("identifier"))
-        score = _string(item.get("score"))
-        lines.append(f"{index}. {identifier} | score: {score or '?'}")
-    return "\n".join(lines)
+    released = _date(_nested(record, "rcsb_accession_info", "initial_release_date"))
+    parts.append(f"released {released}" if released else "")
+    return " | ".join(part for part in parts if part)
+
+
+def _ligand_line(entity: str, record: dict[str, Any] | None) -> str:
+    if record is None:
+        return f"entity {entity}: no record in the Data API"
+    component = _nested(record, "pdbx_entity_nonpoly", "comp_id") or "?"
+    name = _nested(record, "pdbx_entity_nonpoly", "name") or "(no name)"
+    copies = _nested(record, "rcsb_nonpolymer_entity", "pdbx_number_of_molecules")
+    return f"{component}: {name} | entity {entity}" + (f" | {copies} copies" if copies else "")
 
 
 def _entry_text(data: dict[str, Any], pdb_id: str) -> str:
-    title = _nested(data, "struct", "title")
-    info = data.get("rcsb_entry_info", {})
-    ids = data.get("rcsb_entry_container_identifiers", {})
-    lines = [f"RCSB PDB entry {pdb_id}:", title or "(no title)"]
-    lines.append(
-        "   "
-        + " | ".join(
-            [
-                f"method: {_join(info.get('experimental_method')) or '?'}",
-                f"resolution: {_string(info.get('resolution_combined')) or '?'}",
-                f"polymer entities: {_string(info.get('polymer_entity_count')) or '?'}",
-            ]
-        )
-    )
-    polymer_ids = _list_text(ids.get("polymer_entity_ids"))
-    nonpolymer_ids = _list_text(ids.get("non_polymer_entity_ids"))
-    assembly_ids = _list_text(ids.get("assembly_ids"))
-    if polymer_ids:
-        lines.append(f"   polymer entity IDs: {polymer_ids}")
-    if nonpolymer_ids:
-        lines.append(f"   non-polymer entity IDs: {nonpolymer_ids}")
-    if assembly_ids:
-        lines.append(f"   assembly IDs: {assembly_ids}")
-    citation = _first(data.get("citation"))
-    if isinstance(citation, dict):
-        citation_title = _string(citation.get("title"))
-        year = _string(citation.get("year"))
-        if citation_title:
-            lines.append(f"   citation: {citation_title} ({year or '?'})")
+    info = data.get("rcsb_entry_info") or {}
+    method = _methods(data) or _join(info.get("experimental_method")) or "?"
+    resolution = _resolution(data)
+    deposited = _date(_nested(data, "rcsb_accession_info", "deposit_date")) or "?"
+    released = _date(_nested(data, "rcsb_accession_info", "initial_release_date")) or "?"
+    polymers = _string(info.get("polymer_entity_count")) or "?"
+    ligands = _string(info.get("nonpolymer_entity_count")) or "?"
+    lines = [
+        f"RCSB PDB entry {pdb_id}:",
+        _nested(data, "struct", "title") or "(no title)",
+        f"Method: {method}" + (f" | resolution: {resolution}" if resolution else ""),
+        f"Deposited: {deposited} | released: {released}",
+        f"Entities: {polymers} polymer, {ligands} non-polymer (list them with pdb_ligands)",
+    ]
+    citation = _citation(data.get("rcsb_primary_citation"))
+    if citation:
+        lines.append(f"Citation: {citation}")
     return "\n".join(lines)
 
 
-def _nonpolymer_ids(entry: dict[str, Any]) -> list[str]:
-    ids = entry.get("rcsb_entry_container_identifiers", {}).get("non_polymer_entity_ids")
-    return [str(entity_id) for entity_id in _as_list(ids)]
-
-
-def _ligand(ligand: dict[str, Any]) -> str:
-    comp = _nested(ligand, "pdbx_entity_nonpoly", "comp_id")
-    name = _nested(ligand, "pdbx_entity_nonpoly", "name")
-    entity_id = _nested(ligand, "rcsb_nonpolymer_entity_container_identifiers", "entity_id")
-    return f"{comp} — {name} | entity_id: {entity_id}"
+def _citation(citation: object) -> str:
+    """The primary citation, with the DOI and the PubMed ID other tools read."""
+    if not isinstance(citation, dict):
+        return ""
+    title = _string(citation.get("title")).rstrip(".")
+    where = ", ".join(
+        part
+        for part in (_string(citation.get("rcsb_journal_abbrev")), _string(citation.get("year")))
+        if part
+    )
+    doi = _string(citation.get("pdbx_database_id_DOI"))
+    pubmed = _string(citation.get("pdbx_database_id_PubMed"))
+    ids = ", ".join(part for part in (doi and f"DOI {doi}", pubmed and f"PubMed {pubmed}") if part)
+    return ". ".join(part for part in (title, where, ids) if part)
 
 
 def _component_text(data: dict[str, Any], component_id: str) -> str:
-    chem = data.get("chem_comp", {})
-    desc = data.get("rcsb_chem_comp_descriptor", {})
-    lines = [f"RCSB chemical component {component_id}:"]
-    lines.append(f"{_string(chem.get('name')) or '(no name)'}")
-    lines.append(
-        "   "
-        + " | ".join(
-            [
-                f"type: {_string(chem.get('type')) or '?'}",
-                f"formula: {_string(chem.get('formula')) or '?'}",
-                f"weight: {_string(chem.get('formula_weight')) or '?'}",
-            ]
-        )
-    )
-    smiles = _string(desc.get("SMILES_stereo")) or _string(desc.get("SMILES"))
+    chem = data.get("chem_comp") or {}
+    descriptors = data.get("rcsb_chem_comp_descriptor") or {}
+    weight = _string(chem.get("formula_weight"))
+    lines = [
+        f"RCSB chemical component {component_id}:",
+        _string(chem.get("name")) or "(no name)",
+        f"Type: {_string(chem.get('type')) or '?'} | formula: "
+        f"{_string(chem.get('formula')) or '?'} | weight: {f'{weight} Da' if weight else '?'}",
+    ]
+    smiles = _string(descriptors.get("SMILES_stereo")) or _string(descriptors.get("SMILES"))
     if smiles:
-        lines.append(f"   SMILES: {smiles}")
+        lines.append(f"SMILES: {smiles}")
+    if inchikey := _string(descriptors.get("InChIKey")):
+        lines.append(f"InChIKey: {inchikey}")
     return "\n".join(lines)
 
 
-def _valid_text(value: str) -> bool:
-    return bool(_TEXT_RE.fullmatch(value.strip()))
+def _methods(record: dict[str, Any]) -> str:
+    methods = (_string(item.get("method")) for item in _dicts(record.get("exptl")))
+    return ", ".join(dict.fromkeys(method for method in methods if method))
 
 
-def _bounded(value: int) -> int:
-    return max(1, min(value, _MAX_LIMIT))
+def _resolution(record: dict[str, Any]) -> str:
+    """The resolution in ångströms; empty when there is none (NMR, most EM maps)."""
+    values = (record.get("rcsb_entry_info") or {}).get("resolution_combined")
+    first = values[0] if isinstance(values, list) and values else values
+    if isinstance(first, bool) or not isinstance(first, int | float):
+        return ""
+    return f"{f'{first:.2f}'.rstrip('0').rstrip('.')} Å"
+
+
+def _date(value: str) -> str:
+    """The day of an RCSB timestamp (``1984-07-17T00:00:00Z``), in ISO 8601."""
+    return value[:10] if re.match(r"\d{4}-\d{2}-\d{2}", value) else value
+
+
+def _dicts(value: object) -> list[dict[str, Any]]:
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
 
 
 def _nested(data: dict[str, Any], *keys: str) -> str:
@@ -257,20 +383,6 @@ def _nested(data: dict[str, Any], *keys: str) -> str:
             return ""
         current = current.get(key)
     return _string(current)
-
-
-def _first(value: Any) -> Any:
-    if isinstance(value, list) and value:
-        return value[0]
-    return value
-
-
-def _as_list(value: Any) -> list[Any]:
-    return value if isinstance(value, list) else []
-
-
-def _list_text(value: Any) -> str:
-    return ", ".join(_string(item) for item in _as_list(value) if _string(item))
 
 
 def _join(value: Any) -> str:

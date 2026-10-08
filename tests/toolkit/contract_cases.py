@@ -24,6 +24,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from tests.toolkit import biodata_answers as bio
 from tests.toolkit import health_pages as health
 from tests.toolkit import wiki_pages, youtube_fakes
 from tests.toolkit.wiki_pages import MISSING_PAGE
@@ -311,6 +312,59 @@ WINDOW_CASES: dict[str, Case] = {
             Answer(body=health.terms(2, total=5, start=2)),
         ),
     ),
+    # Life sciences (T07b): UniProt, RCSB PDB, ChEMBL, GBIF.
+    "uniprot_search": Case(
+        args={"query": "insulin", "max_results": 2},
+        answers=(
+            Answer(
+                body=bio.uniprot_hits("P01308", "P01315"), headers=bio.uniprot_headers(5, "c2")
+            ),
+            Answer(
+                body=bio.uniprot_hits("P01317", "P01318"), headers=bio.uniprot_headers(5, "c3")
+            ),
+        ),
+    ),
+    "uniprot_entry": Case(args={"max_chars": 500}, answers=(Answer(body=bio.uniprot_entry()),)),
+    "uniprot_features": Case(args={"max_results": 5}, answers=(Answer(body=bio.uniprot_entry()),)),
+    "uniprot_crossrefs": Case(
+        args={"max_results": 5}, answers=(Answer(body=bio.uniprot_entry()),)
+    ),
+    "pdb_search": Case(
+        args={"query": "hemoglobin", "max_results": 2},
+        answers=(
+            Answer(body=bio.pdb_hits("4HHB", "1A3N", total=5)),
+            Answer(body=bio.pdb_entries("4HHB", "1A3N")),
+            Answer(body=bio.pdb_hits("2HHB", "3HHB", total=5)),
+            Answer(body=bio.pdb_entries("2HHB", "3HHB")),
+        ),
+    ),
+    **{
+        name: Case(
+            args={"max_results": 2} | ({"query": "aspirin"} if key != "activities" else {}),
+            answers=(
+                Answer(body=bio.chembl_page(key, count=2, offset=0, total=5)),
+                Answer(body=bio.chembl_page(key, count=2, offset=2, total=5)),
+            ),
+        )
+        for name, key in (
+            ("chembl_molecule_search", "molecules"),
+            ("chembl_target_search", "targets"),
+            ("chembl_activity_search", "activities"),
+        )
+    },
+    **{
+        name: Case(
+            args={"max_results": 2} | ({"query": "Puma"} if kind == "taxa" else {}),
+            answers=(
+                Answer(body=bio.gbif_page(kind, count=2, offset=0, total=5)),
+                Answer(body=bio.gbif_page(kind, count=2, offset=2, total=5)),
+            ),
+        )
+        for name, kind in (
+            ("gbif_species_search", "taxa"),
+            ("gbif_occurrence_search", "occurrences"),
+        )
+    },
 }
 
 
@@ -366,6 +420,11 @@ NOT_FOUND_CASES: dict[str, Case] = {
         name: Case(args={}, answers=(Answer(body=MISSING_PAGE),))
         for name in ("wiki_outline", "wiki_read", "wiktionary_entry")
     },
+    # GBIF's match service answers a name it cannot resolve with matchType NONE, in a 200
+    # (https://github.com/gbif/matching-ws, MatchV1Controller).
+    "gbif_species_match": Case(
+        args={}, answers=(Answer(body={"confidence": 100, "matchType": "NONE"}),)
+    ),
     "read_file": Case(args={"path": "missing.txt"}),
     "csv_read": Case(args={"path": "missing.csv"}),
     "list_directory": Case(args={"path": "missing"}),
@@ -447,5 +506,39 @@ ZERO_CASES: dict[str, ZeroCase] = {
     ),
     "foodon_search": ZeroCase(
         args={"query": "zzqqxx"}, answers=(Answer(body=health.terms(0, total=0)),), says="zzqqxx"
+    ),
+    # Life sciences (T07b).
+    "uniprot_search": ZeroCase(
+        args={"query": "zzqqxx"},
+        answers=(Answer(body={"results": []}, headers=bio.uniprot_headers(0)),),
+        says="zzqqxx",
+    ),
+    # RCSB answers a search without hits 204 No Content (https://search.rcsb.org/).
+    "pdb_search": ZeroCase(args={"query": "zzqqxx"}, answers=(Answer(status=204),), says="zzqqxx"),
+    **{
+        name: ZeroCase(
+            args={"query": "zzqqxx"},
+            answers=(Answer(body={"page_meta": {"total_count": 0, "next": None}, key: []}),),
+            says="zzqqxx",
+        )
+        for name, key in (
+            ("chembl_molecule_search", "molecules"),
+            ("chembl_target_search", "targets"),
+        )
+    },
+    "chembl_activity_search": ZeroCase(
+        args={},
+        answers=(Answer(body={"page_meta": {"total_count": 0, "next": None}, "activities": []}),),
+        says="CHEMBL25",
+    ),
+    "gbif_species_search": ZeroCase(
+        args={"query": "zzqqxx"},
+        answers=(Answer(body={"count": 0, "endOfRecords": True, "results": []}),),
+        says="zzqqxx",
+    ),
+    "gbif_occurrence_search": ZeroCase(
+        args={},
+        answers=(Answer(body={"count": 0, "endOfRecords": True, "results": []}),),
+        says="2435099",
     ),
 }

@@ -1,51 +1,88 @@
-"""GBIF tools — public biodiversity taxonomy and occurrence lookup."""
+"""GBIF tools: resolve a scientific name, search taxa, read a taxon, and search occurrence
+records (T07b; D39).
+
+The match service resolves scientific names only: its ``name`` is "the scientific name to fuzzy
+match against" (https://techdocs.gbif.org/en/openapi/v1/species; the source,
+https://github.com/gbif/matching-ws, ``MatchV1Controller``). The species search covers "the
+scientific and vernacular names" (https://github.com/gbif/checklistbank, ``SpeciesResource``), so
+it is where a common name goes. Lists page by ``limit`` and ``offset`` with a ``count``; species
+search takes offsets up to 100,000, occurrence search up to 100,000 records in all, 300 a page
+(https://github.com/gbif/occurrence, ``OccurrenceSearchResource``). A refused request answers
+400 with its reason as plain text (https://github.com/gbif/gbif-common-ws,
+``IllegalArgumentExceptionMapper``).
+"""
 
 from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from typing import Any, NoReturn
+from decimal import Decimal, InvalidOperation
+from typing import Annotated, Any, NoReturn
 
-from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.core import Range, ToolResult, tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
-from ai_arch_toolkit.toolkit.tools._http import Api
+from ai_arch_toolkit.toolkit.tools._http import Api, Reply
+from ai_arch_toolkit.toolkit.tools._window import list_window
 
-_API = Api(base="https://api.gbif.org/v1", name="GBIF", timeout_s=15)
-_MAX_LIMIT = 50
-_TEXT_RE = re.compile(r"^[\w\s,.'()/-]{1,160}$", re.UNICODE)
-_KEY_RE = re.compile(r"^\d+$")
-_CODE_RE = re.compile(r"^[A-Za-z_ -]{0,80}$")
-_TEXT_HINT = "pass 1-160 characters of letters, digits and basic punctuation"
-_RANK_HINT = "pass a rank name such as SPECIES, GENUS or FAMILY."
-_KEY_HINT = "a GBIF taxon key is a number; gbif_species_match finds it."
+
+def _gbif_error(reply: Reply) -> ToolFailure | None:
+    """A 400's reason, which GBIF sends as plain text (or in a JSON ``message``):
+    ``validation_error`` in GBIF's words; ``None`` for anything else."""
+    if reply.status != 400:
+        return None
+    body = reply.body
+    said = (
+        (_string(body.get("message")) or _string(body.get("error")))
+        if isinstance(body, dict)
+        else _string(body)
+    )
+    if not said or said.startswith("<"):  # an HTML page explains nothing
+        return None
+    return ToolFailure(
+        "validation_error", f"GBIF refused the request: {said.rstrip('.')}; change what it names"
+    )
+
+
+_API = Api(base="https://api.gbif.org/v1", name="GBIF", timeout_s=15, error_reader=_gbif_error)
+# Species search takes offsets up to 100,000 (``SpeciesResource.DEEP_PAGING_OFFSET_LIMIT``);
+# occurrence search serves offset + limit up to 100,000 (``OccurrenceSearchResource``).
+_SPECIES_DEPTH = 100_000
+_OCCURRENCE_DEPTH = 100_000
+# GBIF reads a taxon key as a 32-bit integer (``@PathVariable int usageKey``).
+_MAX_KEY = 2**31 - 1
+_NAME_CHARS = 300
+_KEY_RE = re.compile(r"\d{1,10}")
+_CODE_RE = re.compile(r"[A-Za-z_ -]{0,80}")
+_KINGDOM_RE = re.compile(r"[A-Za-z ]{1,80}")
+_RANK_HINT = "pass a rank name such as SPECIES, GENUS or FAMILY"
+_KEY_HINT = "a GBIF taxon key is a number; gbif_species_match finds it"
+_RANKS = ("kingdom", "phylum", "class", "order", "family", "genus", "species")
 
 
 @tool(capability="network")
 def gbif_species_match(name: str, rank: str = "", kingdom: str = "") -> str:
-    """Resolve a scientific name to the best GBIF taxon match.
+    """Resolve a scientific name to the GBIF backbone taxon it names, fuzzily: its key, rank,
+    status and classification. For a common name, use gbif_species_search.
 
     Args:
-        name: Scientific or common taxon name to resolve.
-        rank: Optional taxonomic rank hint, e.g. "species" or "genus".
-        kingdom: Optional kingdom hint, e.g. "Animalia" or "Plantae".
+        name: A scientific name, with or without its authorship, e.g. "Puma concolor".
+        rank: The name's rank, to tell homonyms apart, e.g. "species" or "genus".
+        kingdom: The name's kingdom, to tell homonyms apart, e.g. "Animalia" or "Plantae".
 
     Raises:
-        ToolFailure: validation_error when ``name``, ``rank`` or ``kingdom`` is malformed.
+        ToolFailure: validation_error when an argument is malformed; not_found when the
+            backbone has no single taxon for the name.
     """
-    if not _valid_text(name):
-        _invalid(f"invalid name {name!r}; {_TEXT_HINT}, e.g. 'Puma concolor'.")
-    if rank and not _CODE_RE.fullmatch(rank):
-        _invalid(f"invalid rank {rank!r}; {_RANK_HINT}")
-    if kingdom and not _valid_text(kingdom):
-        _invalid(f"invalid kingdom {kingdom!r}; pass a kingdom name, e.g. 'Animalia'.")
-
-    params = {"name": name.strip()}
+    text = _free_text("name", name, example="'Puma concolor'")
+    params = {"name": text}
     if rank.strip():
-        params["rank"] = rank.strip().upper()
+        params["rank"] = _rank(rank)
     if kingdom.strip():
+        if not _KINGDOM_RE.fullmatch(kingdom.strip()):
+            _invalid(f"invalid kingdom {kingdom[:100]!r}; pass a kingdom name, e.g. 'Animalia'")
         params["kingdom"] = kingdom.strip()
     return _API.get_json(
-        "species", "match", params=params, parse=lambda data: _match_text(data, name)
+        "species", "match", params=params, parse=lambda data: _match_text(data, text)
     )
 
 
@@ -54,67 +91,57 @@ def gbif_species_search(
     query: str,
     rank: str = "",
     highertaxon_key: str = "",
-    max_results: int = 10,
-    offset: int = 0,
-) -> str:
-    """Search GBIF taxa.
+    max_results: Annotated[int, Range(1, 50)] = 10,
+    offset: Annotated[int, Range(0, _SPECIES_DEPTH)] = 0,
+) -> ToolResult:
+    """Search GBIF taxa by scientific or common name, across GBIF's checklists.
 
     Args:
-        query: Taxon name search text.
-        rank: Optional rank filter, e.g. "SPECIES", "GENUS", or "FAMILY".
-        highertaxon_key: Optional parent taxon key filter.
-        max_results: Number of taxa to return (1-50). Defaults to 10.
-        offset: Zero-based result offset. Defaults to 0.
+        query: A name or part of one, scientific or common, e.g. "Puma" or "cougar".
+        rank: Only taxa of this rank, e.g. "SPECIES", "GENUS" or "FAMILY".
+        highertaxon_key: Only taxa under this taxon key.
+        max_results: How many taxa to list.
+        offset: How many taxa to skip; the footer gives the next offset.
 
     Raises:
-        ToolFailure: validation_error when ``query``, ``rank`` or ``highertaxon_key`` is
-            malformed, or ``offset`` is negative.
+        ToolFailure: validation_error when an argument is malformed or GBIF refuses it.
     """
-    if not _valid_text(query):
-        _invalid(f"invalid query {query!r}; {_TEXT_HINT}, e.g. 'Puma'.")
-    if offset < 0:
-        _invalid(f"offset must be greater than or equal to 0, got {offset}.")
-    if rank and not _CODE_RE.fullmatch(rank):
-        _invalid(f"invalid rank {rank!r}; {_RANK_HINT}")
-    if highertaxon_key and not _KEY_RE.fullmatch(highertaxon_key.strip()):
-        _invalid(f"invalid highertaxon_key {highertaxon_key!r}; {_KEY_HINT}")
-
-    params = {
-        "q": query.strip(),
-        "limit": str(_bounded(max_results)),
-        "offset": str(offset),
-    }
+    text = _free_text("query", query, example="'Puma'")
+    params = {"q": text, "limit": str(max_results), "offset": str(offset)}
     if rank.strip():
-        params["rank"] = rank.strip().upper()
+        params["rank"] = _rank(rank)
     if highertaxon_key.strip():
-        params["highertaxonKey"] = highertaxon_key.strip()
-    header = f"GBIF taxa for {query!r}"
-    return _API.get_json(
-        "species",
-        "search",
-        params=params,
-        parse=lambda data: _page(data, header, offset, "No GBIF taxa found.", _format_taxon),
-    )
+        params["highertaxonKey"] = _key("highertaxon_key", highertaxon_key)
+
+    def read(data: dict[str, Any]) -> ToolResult:
+        return _list_answer(
+            data,
+            offset,
+            lambda number, item: _taxon_line(number, item, text),
+            depth=_SPECIES_DEPTH,
+            heading=f"GBIF taxa that match {text!r} (scientific and common names):",
+            nothing=f"No GBIF taxa match {text!r}.",
+        )
+
+    return _API.get_json("species", "search", params=params, parse=read)
 
 
 @tool(capability="network")
 def gbif_species(taxon_key: str) -> str:
-    """Get GBIF taxon metadata by taxon key.
+    """Read a GBIF taxon by its key: name, rank, status, common name, classification, parent.
 
     Args:
-        taxon_key: GBIF taxon key, usually from gbif_species_match or gbif_species_search.
+        taxon_key: A GBIF taxon key, from gbif_species_match or gbif_species_search.
 
     Raises:
-        ToolFailure: validation_error when ``taxon_key`` is not a number; not_found when GBIF
-            has no taxon with that key.
+        ToolFailure: validation_error when ``taxon_key`` is not a GBIF key; not_found when
+            GBIF has no taxon with it.
     """
-    key = taxon_key.strip()
-    if not _KEY_RE.fullmatch(key):
-        _invalid(f"invalid taxon_key {taxon_key!r}; {_KEY_HINT}")
+    key = _key("taxon_key", taxon_key)
     return _API.get_json(
         "species",
         key,
-        parse=lambda data: "\n".join([f"GBIF taxon {key}:", *_format_taxon(data, index=None)]),
+        parse=lambda data: _taxon_text(data, key),
         missing=f"GBIF has no taxon {key}; find its key with gbif_species_match",
     )
 
@@ -125,97 +152,253 @@ def gbif_occurrence_search(
     country: str = "",
     year: str = "",
     has_coordinate: bool = True,
-    max_results: int = 10,
-    offset: int = 0,
-) -> str:
-    """Search GBIF species occurrence records.
+    max_results: Annotated[int, Range(1, 50)] = 10,
+    offset: Annotated[int, Range(0, _OCCURRENCE_DEPTH - 1)] = 0,
+) -> ToolResult:
+    """Search GBIF occurrence records (observations and specimens) of a taxon, a country or a
+    year.
 
     Args:
-        taxon_key: Optional GBIF taxon key.
-        country: Optional ISO 3166-1 alpha-2 country code, e.g. "PT".
-        year: Optional collection year or range accepted by GBIF, e.g. "2020" or "2020,2024".
-        has_coordinate: Whether to restrict to georeferenced records. Defaults to True.
-        max_results: Number of occurrences to return (1-50). Defaults to 10.
-        offset: Zero-based result offset. Defaults to 0.
+        taxon_key: Only records of this GBIF backbone taxon and the taxa under it: a key from
+            gbif_species_match, or a search hit's backbone key.
+        country: Only records from this ISO 3166-1 alpha-2 country, e.g. "PT".
+        year: Only records of this year or range of years, e.g. "2020" or "2020,2024".
+        has_coordinate: Only georeferenced records; false for records with or without
+            coordinates.
+        max_results: How many records to list.
+        offset: How many records to skip; the footer gives the next offset.
 
     Raises:
-        ToolFailure: validation_error when an option is malformed or none of ``taxon_key``,
-            ``country`` and ``year`` is given.
+        ToolFailure: validation_error when an option is malformed, none of ``taxon_key``,
+            ``country`` and ``year`` is given, or GBIF refuses the filters.
     """
-    if offset < 0:
-        _invalid(f"offset must be greater than or equal to 0, got {offset}.")
-    if taxon_key and not _KEY_RE.fullmatch(taxon_key.strip()):
-        _invalid(f"invalid taxon_key {taxon_key!r}; {_KEY_HINT}")
-    if country and not re.fullmatch(r"^[A-Za-z]{2}$", country.strip()):
-        _invalid(f"invalid country code {country!r}; use ISO 3166-1 alpha-2, e.g. 'PT'.")
-    if year and not re.fullmatch(r"^\d{4}(,\d{4})?$", year.strip()):
-        _invalid(f"invalid year {year!r}; use YYYY or YYYY,YYYY, e.g. '2020,2024'.")
-    if not any((taxon_key.strip(), country.strip(), year.strip())):
-        _invalid("provide taxon_key, country, or year to narrow the occurrences.")
-
+    filters = _occurrence_filters(taxon_key, country, year)
     params = {
-        "limit": str(_bounded(max_results)),
+        "limit": str(min(max_results, _OCCURRENCE_DEPTH - offset)),
         "offset": str(offset),
-        "hasCoordinate": str(has_coordinate).lower(),
+        **filters,
     }
+    if has_coordinate:
+        params["hasCoordinate"] = "true"
+    label = _occurrence_label(filters, has_coordinate=has_coordinate)
+
+    def read(data: dict[str, Any]) -> ToolResult:
+        return _list_answer(
+            data,
+            offset,
+            _occurrence_line,
+            depth=_OCCURRENCE_DEPTH,
+            heading=f"GBIF occurrences of {label}:",
+            nothing=f"No GBIF occurrences of {label}.",
+        )
+
+    return _API.get_json("occurrence", "search", params=params, parse=read)
+
+
+# --- Arguments ---------------------------------------------------------------------------------
+
+
+def _invalid(message: str) -> NoReturn:
+    raise ToolFailure("validation_error", message)
+
+
+def _free_text(name: str, value: str, *, example: str) -> str:
+    """``value`` stripped: refused only when empty, too long or holding a control character."""
+    text = value.strip()
+    if not text or len(text) > _NAME_CHARS or any(ord(char) < 32 for char in text):
+        _invalid(
+            f"invalid {name} {value[:100]!r}; give 1 to {_NAME_CHARS} characters on one line, "
+            f"e.g. {example}"
+        )
+    return text
+
+
+def _rank(rank: str) -> str:
+    if not _CODE_RE.fullmatch(rank.strip()):
+        _invalid(f"invalid rank {rank[:100]!r}; {_RANK_HINT}")
+    return rank.strip().upper()
+
+
+def _key(name: str, value: str) -> str:
+    """A taxon key as GBIF takes it: digits, at most a 32-bit integer."""
+    key = value.strip()
+    if not _KEY_RE.fullmatch(key) or int(key) > _MAX_KEY:
+        _invalid(f"invalid {name} {value[:100]!r}; {_KEY_HINT}")
+    return key
+
+
+def _occurrence_filters(taxon_key: str, country: str, year: str) -> dict[str, str]:
+    """GBIF's filters, by its parameter names; at least one is required."""
+    if not any((taxon_key.strip(), country.strip(), year.strip())):
+        _invalid("provide taxon_key, country, or year to narrow the occurrences")
+    if country.strip() and not re.fullmatch(r"[A-Za-z]{2}", country.strip()):
+        _invalid(f"invalid country code {country[:100]!r}; use ISO 3166-1 alpha-2, e.g. 'PT'")
+    if year.strip() and not re.fullmatch(r"\d{4}(,\d{4})?", year.strip()):
+        _invalid(f"invalid year {year[:100]!r}; use YYYY or YYYY,YYYY, e.g. '2020,2024'")
     filters = {
-        "taxonKey": taxon_key.strip(),
+        "taxonKey": _key("taxon_key", taxon_key) if taxon_key.strip() else "",
         "country": country.strip().upper(),
         "year": year.strip(),
     }
-    params.update({key: value for key, value in filters.items() if value})
-    return _API.get_json(
-        "occurrence",
-        "search",
-        params=params,
-        parse=lambda data: _page(
-            data, "GBIF occurrences", offset, "No GBIF occurrences found.", _format_occurrence
-        ),
-    )
+    return {name: value for name, value in filters.items() if value}
+
+
+def _occurrence_label(filters: dict[str, str], *, has_coordinate: bool) -> str:
+    """The filters as answers name them: ``taxon 2435099, country PT, years 2020-2024``."""
+    years = filters.get("year", "")
+    parts = [
+        f"taxon {filters['taxonKey']}" if "taxonKey" in filters else "",
+        f"country {filters['country']}" if "country" in filters else "",
+        ("years " + years.replace(",", "-") if "," in years else f"year {years}") if years else "",
+        "with coordinates" if has_coordinate else "",
+    ]
+    return ", ".join(part for part in parts if part)
+
+
+# --- Answers -----------------------------------------------------------------------------------
+
+
+def _list_answer(
+    data: dict[str, Any],
+    offset: int,
+    line: Callable[[int, dict[str, Any]], str],
+    *,
+    depth: int,
+    heading: str,
+    nothing: str,
+) -> ToolResult:
+    """A page of a GBIF list, numbered from ``offset``, with its ``count``; past ``depth`` the
+    rest is GBIF's download service's, and the heading says so."""
+    items = [item for item in data.get("results") or [] if isinstance(item, dict)]
+    if not items and offset == 0:
+        return ToolResult.success(nothing)
+    count = data.get("count")
+    total = count if isinstance(count, int) and not isinstance(count, bool) else None
+    lines = [line(offset + number, item) for number, item in enumerate(items, start=1)]
+    shown = offset + len(lines)
+    more = data.get("endOfRecords") is False or (total is not None and shown < total)
+    next_call = {"offset": shown} if lines and more and shown < depth else None
+    if total is not None and total > depth:
+        heading = heading.removesuffix(":") + (
+            f" (GBIF's search reaches the first {depth}; narrow the filters, or use GBIF's "
+            "download service, for the rest):"
+        )
+    window = list_window(lines, first=offset + 1, total=total, next_call=next_call)
+    return window.result(heading=heading)
 
 
 def _match_text(data: dict[str, Any], name: str) -> str:
-    usage_key = _string(data.get("usageKey"))
-    if not usage_key:
-        return "No GBIF species match found."
-    status = _string(data.get("status"))
-    match_type = _string(data.get("matchType"))
-    lines = [
-        f"GBIF species match for {name!r}:",
-        f"{_string(data.get('scientificName')) or _string(data.get('canonicalName'))}",
-        f"   usageKey: {usage_key} | status: {status} | match: {match_type}",
-    ]
-    rank_text = _string(data.get("rank"))
+    key = _string(data.get("usageKey"))
+    kind = _string(data.get("matchType"))
+    if not key or kind == "NONE":
+        raise ToolFailure("not_found", _no_match(name, _string(data.get("note"))))
+    rank = _string(data.get("rank"))
     confidence = _string(data.get("confidence"))
-    if rank_text or confidence:
-        lines.append(f"   rank: {rank_text or '?'} | confidence: {confidence or '?'}")
-    classification = _classification(data)
-    if classification:
-        lines.append(f"   classification: {classification}")
+    lines = [
+        f"GBIF match for {name!r}:",
+        " | ".join(
+            [
+                _string(data.get("scientificName")) or _string(data.get("canonicalName")) or "?",
+                f"key {key}",
+                rank or "?",
+                _string(data.get("status")) or "?",
+            ]
+        ),
+        f"Match: {_match_kind(kind, name, rank)}"
+        + (f", confidence {confidence}" if confidence else ""),
+    ]
+    accepted = _string(data.get("acceptedUsageKey"))
+    if accepted and accepted != key:
+        lines.append(f"Synonym of the taxon with key {accepted} (read it with gbif_species)")
+    if note := _string(data.get("note")):
+        lines.append(f"Note: {note}")
+    if classification := _classification(data):
+        lines.append(f"Classification: {classification}")
     return "\n".join(lines)
 
 
-def _page(
-    data: dict[str, Any],
-    header: str,
-    offset: int,
-    nothing_found: str,
-    format_item: Callable[..., list[str]],
-) -> str:
-    results = data.get("results", [])
-    if not isinstance(results, list) or not results:
-        return nothing_found
-    total = _string(data.get("count")) or "?"
-    lines = [f"{header} (returned {len(results)}, total {total}, offset {offset}):"]
-    for index, item in enumerate(results, start=1):
-        if isinstance(item, dict):
-            lines.extend(format_item(item, index=index))
+def _no_match(name: str, note: str) -> str:
+    if note:
+        return (
+            f"GBIF's backbone has no single scientific name matching {name!r} ({note}); give "
+            "the kingdom or the authorship to choose one, or search with "
+            f"gbif_species_search(query={name!r})"
+        )
+    return (
+        f"GBIF's backbone has no scientific name matching {name!r}; for a common name, search "
+        f"with gbif_species_search(query={name!r})"
+    )
+
+
+def _match_kind(kind: str, name: str, rank: str) -> str:
+    """What a ``matchType`` means: EXACT, FUZZY (another spelling) or HIGHERRANK (the name is
+    not in the backbone, only a taxon above it)."""
+    if kind == "FUZZY":
+        return "fuzzy (the spelling differs)"
+    if kind == "HIGHERRANK":
+        return f"higher rank only ({name!r} is not in the backbone; this is its {rank.lower()})"
+    return kind.lower() or "?"
+
+
+def _taxon_line(number: int, item: dict[str, Any], query: str) -> str:
+    """A taxon a search found; one from another checklist than the backbone names its backbone
+    key too, the one occurrence search takes."""
+    key, backbone = _string(item.get("key")), _string(item.get("nubKey"))
+    parts = [
+        f"{number}. {_string(item.get('scientificName')) or '?'}",
+        f"key {key or '?'}" + (f" (backbone key {backbone})" if backbone not in {"", key} else ""),
+        _string(item.get("rank")) or "?",
+        _string(item.get("taxonomicStatus")) or "?",
+        _classification(item, ranks=_RANKS[:-1]),
+    ]
+    if names := _common_names(item.get("vernacularNames"), query):
+        parts.append(f"common names: {names}")
+    return " | ".join(part for part in parts if part)
+
+
+def _common_names(names: object, query: str) -> str:
+    """The common names that hold the query (why a search by one matched), each spelling
+    once."""
+    wanted = query.casefold()
+    found: dict[str, str] = {}
+    for entry in names if isinstance(names, list) else []:
+        name = _string(entry.get("vernacularName")) if isinstance(entry, dict) else ""
+        if wanted in name.casefold():
+            found.setdefault(name.casefold(), name)
+    return ", ".join(found.values())
+
+
+def _taxon_text(data: dict[str, Any], key: str) -> str:
+    lines = [
+        f"GBIF taxon {key}:",
+        " | ".join(
+            [
+                _string(data.get("scientificName")) or _string(data.get("canonicalName")) or "?",
+                _string(data.get("rank")) or "?",
+                _string(data.get("taxonomicStatus")) or "?",
+            ]
+        ),
+    ]
+    facts = (
+        ("Common name", _string(data.get("vernacularName"))),
+        ("Classification", _classification(data)),
+        ("Parent", _related(data.get("parent"), data.get("parentKey"))),
+        ("Accepted name", _related(data.get("accepted"), data.get("acceptedKey"), key)),
+        ("Published in", _string(data.get("publishedIn"))),
+    )
+    lines.extend(f"{label}: {value}" for label, value in facts if value)
     return "\n".join(lines)
 
 
-def _format_occurrence(item: dict[str, Any], *, index: int) -> list[str]:
-    name = _string(item.get("scientificName")) or _string(item.get("species"))
-    key = _string(item.get("key"))
+def _related(name: object, key: object, own: str = "") -> str:
+    """``Puma (key 2435098)``; empty without a key, or when it is the taxon's own."""
+    related = _string(key)
+    if not related or related == own:
+        return ""
+    return f"{_string(name) or '?'} (key {related})"
+
+
+def _occurrence_line(number: int, item: dict[str, Any]) -> str:
     place = ", ".join(
         part
         for part in (
@@ -225,62 +408,35 @@ def _format_occurrence(item: dict[str, Any], *, index: int) -> list[str]:
         )
         if part
     )
-    coords = _coords(item)
-    event_date = _string(item.get("eventDate")) or _string(item.get("year"))
-    lines = [
-        f"{index}. {name} | occurrence key: {key}",
-        f"   date: {event_date or '?'} | place: {place or '?'} | coords: {coords or '?'}",
+    latitude, longitude = item.get("decimalLatitude"), item.get("decimalLongitude")
+    coordinates = (
+        f"{_decimal(latitude)}, {_decimal(longitude)}"
+        if latitude is not None and longitude is not None
+        else ""
+    )
+    key = _string(item.get("key"))
+    parts = [
+        f"{number}. {_string(item.get('scientificName')) or _string(item.get('species')) or '?'}",
+        _string(item.get("eventDate")) or _string(item.get("year")),
+        place,
+        coordinates,
+        _string(item.get("basisOfRecord")).replace("_", " ").lower(),
+        _string(item.get("datasetName")),
+        f"https://www.gbif.org/occurrence/{key}" if key else "",
     ]
-    dataset = _string(item.get("datasetName"))
-    if dataset:
-        lines.append(f"   dataset: {dataset}")
-    return lines
+    return " | ".join(part for part in parts if part)
 
 
-def _format_taxon(item: dict[str, Any], *, index: int | None) -> list[str]:
-    prefix = f"{index}. " if index is not None else ""
-    key = _string(item.get("key")) or _string(item.get("usageKey"))
-    name = _string(item.get("scientificName")) or _string(item.get("canonicalName"))
-    lines = [f"{prefix}{name} | key: {key}"]
-    meta = [
-        f"rank: {_string(item.get('rank')) or '?'}",
-        f"status: {_string(item.get('taxonomicStatus')) or _string(item.get('status')) or '?'}",
-    ]
-    accepted = _string(item.get("acceptedKey"))
-    if accepted:
-        meta.append(f"acceptedKey: {accepted}")
-    lines.append("   " + " | ".join(meta))
-    classification = _classification(item)
-    if classification:
-        lines.append(f"   classification: {classification}")
-    return lines
+def _classification(data: dict[str, Any], ranks: tuple[str, ...] = _RANKS) -> str:
+    return " > ".join(value for value in (_string(data.get(rank)) for rank in ranks) if value)
 
 
-def _classification(data: dict[str, Any]) -> str:
-    parts = []
-    for field in ("kingdom", "phylum", "class", "order", "family", "genus", "species"):
-        value = _string(data.get(field))
-        if value:
-            parts.append(value)
-    return " > ".join(parts)
-
-
-def _coords(item: dict[str, Any]) -> str:
-    lat = _string(item.get("decimalLatitude"))
-    lon = _string(item.get("decimalLongitude"))
-    return f"{lat}, {lon}" if lat and lon else ""
-
-
-def _invalid(message: str) -> NoReturn:
-    raise ToolFailure("validation_error", message)
-
-
-def _valid_text(value: str) -> bool:
-    return bool(_TEXT_RE.fullmatch(value.strip()))
-
-
-def _bounded(value: int) -> int:
-    return max(1, min(value, _MAX_LIMIT))
+def _decimal(value: object) -> str:
+    """A number as written, never in scientific notation (``-1e-05`` is ``-0.00001``)."""
+    try:
+        return format(Decimal(str(value)), "f")
+    except (InvalidOperation, ValueError):
+        return _string(value)
 
 
 def _string(value: Any) -> str:

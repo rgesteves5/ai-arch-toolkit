@@ -596,6 +596,19 @@ class Api:
         ask = _Ask(missing=missing, empty={}, allow_empty=allow_empty, empty_on_404=empty_on_404)
         return _parsed(parse, _object(self._json_answer(segments, params, ask)))
 
+    def get_json_reply[T](
+        self,
+        *segments: str,
+        parse: Callable[[Reply], T],
+        params: Params | None = None,
+    ) -> T:
+        """GET a JSON object and read the whole answer with ``parse``: the object as the
+        :class:`Reply`'s ``body``, with the status and the headers (for a source that pages by a
+        ``Link`` header, or counts in one)."""
+        reply = self._json_reply(segments, params, _Ask(empty={}))
+        whole = Reply(status=reply.status, headers=reply.headers, body=_object(reply.body))
+        return _parsed(parse, whole)
+
     def get_json_list[T](
         self,
         *segments: str,
@@ -645,7 +658,11 @@ class Api:
         return _parsed(parse, _object(self._json_answer(segments, None, ask)))
 
     def _json_answer(self, segments: tuple[str, ...], params: Params | None, ask: _Ask) -> object:
-        """The decoded JSON answer, unless it reports an error (``error_reader``).
+        """The decoded JSON answer, unless it reports an error (``error_reader``)."""
+        return self._json_reply(segments, params, ask).body
+
+    def _json_reply(self, segments: tuple[str, ...], params: Params | None, ask: _Ask) -> Reply:
+        """The answer, its JSON decoded, unless it reports an error (``error_reader``).
 
         ``ask.empty`` is what an answer with nothing in it stands for where the request declares
         one: ``204 No Content`` or an empty body (``allow_empty``), a 404 (``empty_on_404``).
@@ -654,7 +671,7 @@ class Api:
         if (ask.empty_on_404 and status == http.HTTPStatus.NOT_FOUND) or (
             ask.allow_empty and (status == http.HTTPStatus.NO_CONTENT or not text.strip())
         ):
-            return ask.empty
+            return Reply(status=status, headers=headers, body=ask.empty)
         try:
             value = _json(text)
         except HttpError as not_json:
@@ -667,7 +684,7 @@ class Api:
         reported = None if self.error_reader is None else _parsed(self.error_reader, reply)
         if reported is not None and (not isinstance(reported, str) or reported.strip()):
             raise self._reported(reported, reply)
-        return value
+        return reply
 
     def _read(self, reply: Reply) -> ToolFailure | str | None:
         """The error ``reply`` reports, read by ``error_reader``; a reader that trips on the body,
