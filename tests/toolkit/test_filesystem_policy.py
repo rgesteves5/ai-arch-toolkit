@@ -20,6 +20,7 @@ from ai_arch_toolkit.core import (
     ApprovalRequest,
     MeterScope,
     ToolCall,
+    ToolFailure,
     ToolGroup,
     tool,
 )
@@ -30,6 +31,7 @@ from ai_arch_toolkit.toolkit.tools.dangerous import (
     FilesystemPolicy,
     FilesystemPolicyError,
     PathScopeGate,
+    filesystem_tools,
     list_directory,
     read_file,
 )
@@ -72,8 +74,10 @@ class TestCheck:
     def test_a_path_that_climbs_out_with_dot_dot_is_refused(self, layout, action):
         message = _refused(layout.policy, "../outside/secret.txt", action)
 
-        assert str(layout.outside / "secret.txt") in message
+        assert "'../outside/secret.txt' is outside" in message
         assert "pick a path inside" in message
+        # The refusal names the path as given, never where it leads (M1).
+        assert str(layout.outside) not in message
 
     def test_a_link_at_the_leaf_is_never_written(self, layout):
         (layout.root / "inside.txt").symlink_to(layout.root / "notes.txt")
@@ -92,18 +96,27 @@ class TestCheck:
         (layout.root / "door").symlink_to(layout.outside, target_is_directory=True)
 
         message = _refused(layout.policy, "door/secret.txt", action)
-        assert str(layout.outside) in message
+        assert "'door/secret.txt' is outside" in message
+        assert str(layout.outside) not in message
 
     @pytest.mark.parametrize("action", ["read", "write"])
-    def test_a_path_through_a_file_is_refused(self, layout, action):
-        assert "is a file" in _refused(layout.policy, "notes.txt/inner.txt", action)
+    @pytest.mark.parametrize("given", ["notes.txt/inner.txt", "notes.txt/a/b"])
+    def test_a_path_through_a_file_inside_is_a_malformed_path(self, layout, action, given):
+        # Inside the roots it is the path's own fault, as for the OS: never a refusal (L1).
+        with pytest.raises(ValueError, match="a part of it is a file") as caught:
+            layout.policy.check(given, action)
+
+        assert not isinstance(caught.value, FilesystemPolicyError)
 
     @pytest.mark.parametrize("action", ["read", "write"])
-    def test_a_loop_of_links_is_refused(self, layout, action):
+    def test_a_loop_of_links_inside_is_a_malformed_path(self, layout, action):
         (layout.root / "one").symlink_to(layout.root / "two")
         (layout.root / "two").symlink_to(layout.root / "one")
 
-        assert "loop" in _refused(layout.policy, "one/file.txt", action)
+        with pytest.raises(ValueError, match="loop") as caught:
+            layout.policy.check("one/file.txt", action)
+
+        assert not isinstance(caught.value, FilesystemPolicyError)
 
     def test_a_destination_that_does_not_exist_yet_is_accepted(self, layout):
         found = layout.policy.check("new/deeper/file.txt", "write")
@@ -151,9 +164,12 @@ class TestCheck:
         assert "no folder" in _refused(policy, "notes.txt", "write")
         assert "no folder" in _refused(policy, "notes.txt", "delete")
 
-    def test_a_malformed_path_is_a_value_error_not_a_refusal(self, layout):
-        with pytest.raises(ValueError, match="null"):
-            layout.policy.check("a\x00b", "read")
+    @pytest.mark.parametrize("action", ["read", "write"])
+    def test_a_malformed_path_is_a_value_error_not_a_refusal(self, layout, action):
+        with pytest.raises(ValueError, match="null") as caught:
+            layout.policy.check("a\x00b", action)
+
+        assert not isinstance(caught.value, FilesystemPolicyError)
 
     def test_an_unknown_action_is_a_value_error(self, layout):
         with pytest.raises(ValueError, match="unknown filesystem action"):
@@ -166,6 +182,114 @@ class TestCheck:
         assert policy.root_of(layout.root / "a.txt", "write") == layout.root
         with pytest.raises(FilesystemPolicyError):
             policy.root_of(layout.outside / "a.txt", "write")
+
+
+class TestNothingIsLearntOutside:
+    """A refusal says the same of every path outside the roots, whatever is there (M1).
+
+    Nothing outside is looked at before the roots are tested, and a refusal names the path as
+    given, never where it leads.
+    """
+
+    @pytest.fixture
+    def outside(self, layout: Layout) -> dict[str, str]:
+        """Paths outside the roots, one for each kind of thing that could be there."""
+        out = layout.outside
+        (out / "folder").mkdir()
+        (out / "alink").symlink_to(out.parent / "elsewhere" / "target.txt")
+        (out / "folderlink").symlink_to(out / "folder", target_is_directory=True)
+        (out / "one").symlink_to(out / "two")
+        (out / "two").symlink_to(out / "one")
+        paths = {
+            "a file": "secret.txt",
+            "nothing": "missing.txt",
+            "a folder": "folder",
+            "through a file": "secret.txt/x",
+            "through nothing": "missing/x",
+            "a link": "alink",
+            "through a link": "folderlink/x",
+            "a loop": "one/x",
+            "a loop at the end": "one",
+        }
+        return {kind: str(out / path) for kind, path in paths.items()}
+
+    @staticmethod
+    def _shape(message: str, given: str) -> str:
+        return message.replace(repr(given), "<path>")
+
+    @pytest.mark.parametrize("action", ["read", "write"])
+    def test_every_path_outside_gets_the_same_refusal(self, layout, outside, action):
+        shapes = {
+            kind: self._shape(_refused(layout.policy, given, action), given)
+            for kind, given in outside.items()
+        }
+
+        assert len(set(shapes.values())) == 1, shapes
+        (shape,) = set(shapes.values())
+        assert shape.startswith("<path> is outside the folders this policy lets the agent")
+        assert str(layout.outside.parent / "elsewhere") not in shape
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root searches any folder")
+    def test_a_folder_outside_the_process_cannot_search_gets_the_same_refusal(
+        self, layout, outside
+    ):
+        private = layout.outside / "private"
+        private.mkdir()
+        private.chmod(0o000)
+        try:
+            shut = _refused(layout.policy, str(private / "x"), "read")
+        finally:
+            private.chmod(0o700)
+
+        given = outside["nothing"]
+        missing = _refused(layout.policy, given, "read")
+        assert self._shape(shut, str(private / "x")) == self._shape(missing, given)
+
+    def test_nothing_outside_is_looked_at_before_the_roots_are_tested(
+        self, layout, outside, monkeypatch
+    ):
+        looked: list[str] = []
+        lstat = os.lstat
+
+        def spying(path: Any, *args: Any, **kwargs: Any) -> os.stat_result:
+            looked.append(os.fspath(path))
+            return lstat(path, *args, **kwargs)
+
+        monkeypatch.setattr(os, "lstat", spying)
+
+        for given in outside.values():
+            looked.clear()
+            _refused(layout.policy, given, "write")
+            # Resolving the folder that would hold the path is all: never the path itself.
+            assert given not in looked, given
+
+    def test_a_refusal_never_names_where_a_link_inside_leads(self, layout):
+        (layout.root / "leak.txt").symlink_to(layout.outside / "secret.txt")
+        (layout.root / "door").symlink_to(layout.outside, target_is_directory=True)
+
+        for given in ("leak.txt", "door", "door/secret.txt"):
+            message = _refused(layout.policy, given, "read")
+            assert f"{given!r} is outside" in message
+            assert str(layout.outside) not in message
+
+    @pytest.mark.parametrize("name", ["read_file", "write_file"])
+    def test_the_gate_and_the_tool_refuse_every_path_outside_alike(self, layout, outside, name):
+        tool_ = {fn.__name__: fn for fn in filesystem_tools(layout.policy)}[name]
+        group = _group(layout.policy, _Approver(), tool_)
+        extra = {"content": "x"} if name == "write_file" else {}
+        shapes: set[str] = set()
+
+        for given in outside.values():
+            gated = group.execute(_call(name, path=given, **extra))
+            with pytest.raises(ToolFailure) as alone:
+                tool_(path=given, **extra)
+            assert gated.error is not None and gated.error.type == "permission_denied"
+            assert alone.value.error.type == "permission_denied"
+            assert gated.error.message.endswith(alone.value.error.message)
+            assert gated.metadata["audit"]["filesystem"]["path"] == given
+            shapes.add(self._shape(gated.error.message, given))
+
+        assert len(shapes) == 1, shapes
 
 
 class TestConstruction:
@@ -363,8 +487,25 @@ class TestPathScopeGate:
         )
 
         assert result.error is not None and result.error.type == "permission_denied"
-        assert "PathScopeGate(paths=" in result.error.message
+        assert "PathScopeGate(paths={'csv_read': {'path': 'read'}})" in result.error.message
         assert approver.asked == []
+
+    def test_the_block_of_an_unmapped_tool_names_its_own_arguments(self, layout):
+        @tool(capability="filesystem")
+        def touch(target: str, mode: int = 0) -> str:
+            """Touch a file.
+
+            Args:
+                target: The file.
+                mode: Its permission bits.
+            """
+            return target
+
+        result = _group(layout.policy, _Approver(), touch).execute(_call("touch", target="x"))
+
+        assert result.error is not None
+        assert "it takes 'target', 'mode'" in result.error.message
+        assert "PathScopeGate(paths={'touch': {'target': 'read'}})" in result.error.message
 
     def test_a_tool_that_is_not_a_filesystem_one_passes_untouched(self, layout):
         @tool
@@ -415,13 +556,35 @@ class TestPathScopeGate:
         with pytest.raises(ValueError, match="unknown actions"):
             PathScopeGate(layout.policy, paths={"peek": {"where": _any("erase")}})
 
-    def test_a_path_that_cannot_be_checked_is_refused(self, layout):
-        result = _group(layout.policy, _Approver(), read_file).execute(
-            _call("read_file", path="a" * 5000)
-        )
+    @pytest.mark.parametrize(
+        "given",
+        ["a" * 5000, "a\x00b", 5, "notes.txt/inner.txt"],
+        ids=["long", "nul", "int", "file"],
+    )
+    def test_what_the_gate_cannot_check_never_reaches_a_tool_that_does_not_check(
+        self, layout, given
+    ):
+        # The module's read_file has no check of its own: the gate fails closed (L1).
+        approver = _Approver()
+
+        result = _group(layout.policy, approver, read_file).execute(_call("read_file", path=given))
 
         assert result.error is not None and result.error.type == "permission_denied"
-        assert "cannot be checked" in result.error.message
+        assert result.error.message.startswith("The tool 'read_file' did not run: ")
+        assert result.error.message.endswith("This run cannot check it, so the tool does not run.")
+        assert approver.asked == []
+
+    def test_a_pattern_that_climbs_out_is_refused_before_the_approver(self, layout):
+        approver = _Approver()
+        group = _group(layout.policy, approver, list_directory)
+
+        for pattern in ("../outside/*", "sub/../../*", "..\\outside\\*"):
+            result = group.execute(_call("list_directory", pattern=pattern))
+            assert result.error is not None and result.error.type == "permission_denied"
+            assert "climbs out of the folder with '..'" in result.error.message
+            assert result.metadata["audit"]["filesystem"]["argument"] == "pattern"
+        assert approver.asked == []
+        assert group.execute(_call("list_directory", pattern="*.txt")).ok
 
     async def test_the_async_path_checks_the_same(self, layout):
         approver = _Approver()

@@ -2,9 +2,14 @@
 
 A policy names the folders each action may reach. Its ``check`` is the one test of a path, and it
 runs twice for each call: in the ``PathScopeGate``, before anyone is asked to approve it, and in
-the tool, right before its system call. The tool then opens what it touches from the root down, one
-folder at a time and never through a link, so a folder swapped for a link after the check fails
-the call instead of leading it out of the roots.
+the tool, right before its system call. Both read its answer through ``checked``, so they give one
+path the same failure, in the same words. The tool then opens what it touches from the root down,
+one folder at a time and never through a link, so a folder swapped for a link after the check
+fails the call instead of leading it out of the roots.
+
+Nothing is learnt outside the roots: ``check`` looks at nothing there before it tests the roots,
+and gives every path that resolves outside them one refusal, which names the path as given, never
+where it leads.
 """
 
 from __future__ import annotations
@@ -15,13 +20,14 @@ import os
 import stat
 import sys
 import unicodedata
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path, PurePath
 from typing import Any, Literal, cast, get_args
 
 from ai_arch_toolkit.core import ExecutionContext, GateBlock, GateModify, GateResult
+from ai_arch_toolkit.core._tools._result import ToolFailure
 
 type FilesystemAction = Literal["read", "write", "delete"]
 """What a tool does to a path: read it, write it (create, replace, append, move), or delete it."""
@@ -39,6 +45,14 @@ _DEFAULT_PATHS: Mapping[str, Mapping[str, FilesystemAction]] = {
     "make_directory": {"path": "write"},
     "move_path": {"source": "write", "destination": "write"},
 }
+# The tools that move what is at one path argument to another: the gate holds them to
+# ``check_move`` (M3).
+_MOVES: Mapping[str, tuple[str, str]] = {"move_path": ("source", "destination")}
+# The tools whose glob pattern argument lists below a mapped folder: the gate refuses one that
+# climbs out with ``..``, as the bound tool does (L4).
+_GLOBS: Mapping[str, str] = {"list_directory": "pattern"}
+# What marks a tool that checks its paths itself, with this policy, right before it acts.
+_CHECKED_BY = "__filesystem_policy__"
 
 
 class FilesystemPolicyError(PermissionError):
@@ -110,32 +124,40 @@ class FilesystemPolicy:
         never a root, nor a folder that holds one. Case is never folded: on a case-insensitive
         disk a path spelled in another case than its root is refused, never let through.
 
+        Nothing outside the roots is looked at before the roots are tested (the last part of a
+        path to write is looked at only inside them), and every path that resolves outside them,
+        or fails to resolve there, gets one refusal, which names the path as given: whether
+        something is there, a file, a folder or a link, and where a link leads, never shows.
+
         Raises:
-            FilesystemPolicyError: The policy does not allow it, or the path cannot be resolved
-                (a part of it is a file, or links loop).
-            ValueError: ``action`` is unknown, or the path is malformed (a NUL byte).
+            FilesystemPolicyError: The policy does not allow it.
+            ValueError: ``action`` is unknown, or the path is malformed: a null character, or,
+                inside the roots, a part of it that is a file, or links that loop.
             TypeError: ``path`` is not a text path.
-            OSError: The path cannot be read to resolve it (a name too long, a folder the
-                process may not search).
+            OSError: Inside the roots, the path cannot be read to resolve it (a name too long, a
+                folder the process may not search).
         """
         roots = self.roots(action)
-        given = os.path.expanduser(os.fspath(path))
+        given = os.fspath(path)
+        if "\0" in given:
+            raise ValueError(f"{given!r} holds a null character, which no path may; remove it.")
         if not roots:
             raise FilesystemPolicyError(
                 f"this policy lets the agent {_VERBS[action]} no folder, so {given!r} cannot be "
                 f"reached; {action} only what the run's folders allow."
             )
-        full = os.path.join(cast("Path", self.cwd), given)
+        full = os.path.join(cast("Path", self.cwd), os.path.expanduser(given))
         if action == "read":
-            canonical = Path(_resolved(full, given))
+            canonical = Path(_resolved(full, given, action, roots))
             held = canonical  # the target itself must be inside
         else:
-            held, canonical = self._leaf(full, given, action)  # the folder that holds it must be
-        if not any(held.is_relative_to(root) for root in roots):
-            names = ", ".join(map(str, roots))
+            held, canonical = self._leaf(full, given, action, roots)  # the folder that holds it
+        if not _inside(held, roots):
+            raise _outside(given, action, roots)
+        if action != "read" and _is_link(canonical, given):  # only now: it is inside the roots
             raise FilesystemPolicyError(
-                f"{given!r} is {canonical}, outside the folders this policy lets the agent "
-                f"{_VERBS[action]} ({names}); pick a path inside one of them."
+                f"{given!r} is a symbolic link, and this policy never writes through one or "
+                "moves one; use the path it points to."
             )
         if sys.platform == "win32" and os.path.isreserved(canonical):
             raise FilesystemPolicyError(f"{given!r} is a name Windows reserves; pick another.")
@@ -152,26 +174,25 @@ class FilesystemPolicy:
             raise FilesystemPolicyError(f"{path} is outside the folders of this policy.")
         return max(held, key=lambda root: len(root.parts))
 
-    def _leaf(self, full: str, given: str, action: str) -> tuple[Path, Path]:
+    def _leaf(
+        self, full: str, given: str, action: FilesystemAction, roots: tuple[Path, ...]
+    ) -> tuple[Path, Path]:
         """The canonical folder that holds the path, and the path: that folder and the path's
-        unresolved last part, which must name something, never a link nor a root."""
+        unresolved last part, which must name something, never a root. Nothing is looked at but
+        the folder's own parts, to resolve them."""
         head, leaf = os.path.split(full.rstrip("/") or "/")
         if not given or leaf in ("", ".", ".."):
             raise FilesystemPolicyError(
                 f"{given!r} names no file or folder to {action}; give the path of the file or "
                 "folder itself."
             )
-        parent = Path(_resolved(head, given))
+        parent = Path(_resolved(head, given, action, roots))
         canonical = parent / leaf
+        # Compared with the roots alone: it says nothing of what is outside them.
         if self._protects(canonical):
             raise FilesystemPolicyError(
-                f"{canonical} is a folder this policy is rooted at, or holds one, and is never "
+                f"{given!r} is a folder this policy is rooted at, or holds one, and is never "
                 f"created, moved or replaced; {action} a path inside it."
-            )
-        if _is_link(canonical, given):
-            raise FilesystemPolicyError(
-                f"{given!r} is a symbolic link, and this policy never writes through one or "
-                "moves one; use the path it points to."
             )
         return parent, canonical
 
@@ -185,6 +206,105 @@ class FilesystemPolicy:
 
 def _folded(path: Path) -> PurePath:
     return PurePath(unicodedata.normalize("NFKC", str(path).casefold()))
+
+
+def _inside(path: Path, roots: tuple[Path, ...]) -> bool:
+    return any(path.is_relative_to(root) for root in roots)
+
+
+def _outside(
+    given: str, action: FilesystemAction, roots: tuple[Path, ...]
+) -> FilesystemPolicyError:
+    """The one refusal of a path outside the roots: the path as given and the roots, nothing of
+    what is there or where it leads (M1)."""
+    names = ", ".join(map(str, roots))
+    return FilesystemPolicyError(
+        f"{given!r} is outside the folders this policy lets the agent {_VERBS[action]} "
+        f"({names}); pick a path inside one of them."
+    )
+
+
+def check_move(policy: FilesystemPolicy, origin: Path, target: Path) -> None:
+    """Refuse a move of the canonical ``origin`` to ``target`` that would let the agent read what
+    it could not: a destination inside the read roots, from a source outside them (M3).
+
+    Why this rule, and no other. Write roots need not be read roots (``write_roots=(home,)``
+    with ``read_roots=(home / "project",)``), and a write must not make them readable. Of the
+    four writes, only a move brings bytes the agent did not send: ``write_file`` and
+    ``append_file`` write the agent's own text, ``make_directory`` none. A move gives the
+    source's bytes the destination's name, so it widens what the agent reads exactly when the
+    destination is read and the source is not, and that is all this refuses. A move out of a
+    read root, or between folders the agent does not read, leaves what it reads as it was and
+    goes on; so does a folder it reads whose links point out, since a read checks each target.
+    Each side errs one way: the source counts as read only as spelled, the destination as read
+    with case and Unicode form folded (as ``_protects``), so a case-insensitive disk gives a
+    false refusal, never a false acceptance.
+
+    Raises:
+        FilesystemPolicyError: The move would let the agent read what it could not.
+    """
+    folded = _folded(target)
+    if not any(folded.is_relative_to(_folded(root)) for root in policy.read_roots):
+        return
+    if _inside(origin, policy.read_roots):
+        return
+    raise FilesystemPolicyError(
+        f"{target} is in a folder this policy lets the agent read, and {origin} is not, so "
+        "moving it there would let the agent read it; move it only between folders the agent "
+        "cannot read."
+    )
+
+
+def climbs(pattern: str) -> str | None:
+    """Why a listing's glob ``pattern`` is refused: it climbs out with ``..`` (L4); ``None``
+    when it does not."""
+    if ".." not in pattern.replace("\\", "/").split("/"):
+        return None
+    return (
+        f"pattern {pattern!r} climbs out of the folder with '..', which this policy does not "
+        "follow; list the other folder by its own path."
+    )
+
+
+def checked(
+    policy: FilesystemPolicy, path: object, action: FilesystemAction, *, argument: str = "path"
+) -> Path:
+    """The canonical ``path``, if ``policy`` lets ``action`` reach it: the one reading of
+    ``check``'s answer, for the gate and the tool alike (L1).
+
+    Raises:
+        ToolFailure: permission_denied when the policy refuses it; validation_error when it is
+            not text or is malformed (a null character, a name too long; inside the roots, a
+            part that is a file, or links that loop); upstream when the OS cannot resolve it
+            inside the roots (a folder the process may not search).
+    """
+    if not isinstance(path, str):
+        msg = f"the argument {argument!r} must be a path, as text; got {type(path).__name__}."
+        raise ToolFailure("validation_error", msg)
+    try:
+        return policy.check(path, action)
+    except FilesystemPolicyError as e:  # before OSError: it is a PermissionError
+        raise ToolFailure("permission_denied", str(e)) from e
+    except ValueError as e:
+        raise ToolFailure("validation_error", str(e)) from e
+    except OSError as e:
+        detail = e.strerror or str(e)
+        if e.errno in (errno.ENAMETOOLONG, errno.EINVAL):
+            msg = f"{path!r} cannot be resolved: {detail}; check the path."
+            raise ToolFailure("validation_error", msg) from e
+        if isinstance(e, PermissionError):
+            msg = f"{path!r} cannot be resolved: {detail}; pick a path this process can reach."
+            raise ToolFailure("upstream", msg) from e
+        msg = f"{path!r} cannot be resolved: {detail}; try again, or pick another path."
+        raise ToolFailure("upstream", msg) from e
+
+
+def checks_paths[F: Callable[..., Any]](fn: F, policy: FilesystemPolicy) -> F:
+    """``fn``, marked as a tool that checks its paths with ``policy`` itself, right before it
+    acts: the gate leaves to it an argument that is not a path at all, so the call fails with
+    the tool's own word, as it would without the gate (L1)."""
+    fn.__dict__[_CHECKED_BY] = policy
+    return fn
 
 
 def _existing_folder(path: str | os.PathLike[str], name: str) -> Path:
@@ -208,33 +328,47 @@ def _roots(roots: object, name: str) -> tuple[Path, ...]:
     return tuple(_existing_folder(root, name) for root in cast("tuple[Any, ...]", roots))
 
 
-def _resolved(path: str, given: str) -> str:
+def _resolved(path: str, given: str, action: FilesystemAction, roots: tuple[Path, ...]) -> str:
     """``path`` with every link and ``..`` resolved, as far as it exists (C07.4).
 
+    ``realpath`` names in its error the part it was resolving, with what comes before it
+    resolved: inside the roots the error is the path's own; anywhere else it is the one refusal
+    of a path outside, so it says nothing of what is there (M1).
+
     Raises:
-        FilesystemPolicyError: A part of it is a file, or its links loop.
+        FilesystemPolicyError: It cannot be resolved outside the roots.
+        ValueError: Inside the roots, a part of it is a file, or its links loop.
+        OSError: Inside the roots, the OS cannot resolve it (a name too long, a folder the
+            process may not search).
     """
     try:
         return os.path.realpath(path, strict=os.path.ALLOW_MISSING)
     except OSError as error:
-        if error.errno not in (errno.ENOTDIR, errno.ELOOP):
-            raise
-        raise FilesystemPolicyError(
-            f"cannot resolve {given!r}: {error.strerror}; a part of it is a file, or its links "
-            "loop. Pick another path."
-        ) from error
+        where = error.filename
+        if not isinstance(where, str) or not _inside(Path(where), roots):
+            raise _outside(given, action, roots) from None
+        if error.errno == errno.ENOTDIR:
+            msg = f"{given!r} cannot be resolved: a part of it is a file; pick another path."
+            raise ValueError(msg) from error
+        if error.errno == errno.ELOOP:
+            msg = f"{given!r} cannot be resolved: its links loop; pick another path."
+            raise ValueError(msg) from error
+        raise
 
 
 def _is_link(path: Path, given: str) -> bool:
+    """Whether the canonical ``path``, inside the roots, is a link.
+
+    Raises:
+        ValueError: The folder that would hold it is a file.
+    """
     try:
         return stat.S_ISLNK(os.lstat(path).st_mode)
     except FileNotFoundError:
         return False
     except NotADirectoryError as error:
-        raise FilesystemPolicyError(
-            f"cannot resolve {given!r}: the folder that would hold it is a file; pick another "
-            "path."
-        ) from error
+        msg = f"{given!r} cannot be resolved: a part of it is a file; pick another path."
+        raise ValueError(msg) from error
 
 
 # --- The walk from the root ---------------------------------------------------------------------
@@ -363,13 +497,19 @@ class PathScopeGate:
     ``source`` and ``destination`` of ``move_path``), with ``paths`` added tool by tool (a tool
     it names gets that map, not a merge of the two). An omitted argument takes its schema
     default; one with no default is refused. A tool of ``capability="filesystem"`` with no map
-    is refused.
+    is refused. ``list_directory``'s ``pattern`` may not climb out with ``..``, and
+    ``move_path`` may not bring what the agent cannot read where it reads (``check_move``).
 
     A refused call is a ``permission_denied`` block, never run nor metered, with what was
     refused under ``audit["filesystem"]``. An allowed one goes on with each path canonical, so
-    the approver sees the paths that will be touched. The tools of ``filesystem_tools`` check
-    again before they act: the gate spares the approver and the budget, the tool is the
-    guarantee.
+    the approver sees the paths the call names. The tools of ``filesystem_tools`` check again
+    before they act: the gate spares the approver and the budget, the tool is the guarantee.
+
+    Each argument is read through ``checked``, as the tools read theirs. An argument that is not
+    a path at all (not text, malformed, through a file inside the roots) is left as it is for a
+    tool of ``filesystem_tools`` bound to this policy, which then fails it as it would without
+    the gate, ``validation_error``; any other tool, which may not check it, gets a
+    ``permission_denied`` block instead.
 
     Raises:
         ValueError: ``paths`` names an action that is not ``read``, ``write`` or ``delete``.
@@ -396,49 +536,92 @@ class PathScopeGate:
         name = ctx.tool_call.name
         mapped = self._paths.get(name)
         if mapped is None:
-            if ctx.definition.policy.capability != "filesystem":
-                return None
-            return _refused(
-                name,
-                {"tool": name},
-                f"The tool {name!r} reaches the filesystem, and this run maps none of its "
-                "arguments to the folders it may reach, so it does not run. Map its path "
-                f"arguments with PathScopeGate(paths={{{name!r}: {{'path': 'read'}}}}).",
-            )
+            return None if ctx.definition.policy.capability != "filesystem" else _unmapped(ctx)
         arguments = dict(ctx.tool_call.input)
-        checked: dict[str, dict[str, str]] = {}
+        canonical: dict[str, Path] = {}
+        audit: dict[str, dict[str, Any]] = {}
         for argument, action in mapped.items():
             given = arguments.get(argument, _schema_default(ctx, argument))
-            canonical = self._canonical(name, argument, action, given)
-            if isinstance(canonical, GateBlock):
-                return canonical
-            arguments[argument] = str(canonical)
-            checked[argument] = {"action": action, "path": str(canonical)}
-        return GateModify(args=arguments, audit={"filesystem": checked})
+            found = self._canonical(ctx, argument, action, given)
+            if isinstance(found, GateBlock):
+                return found
+            if isinstance(found, ToolFailure):  # the tool fails it, in these words
+                audit[argument] = {"action": action, "unchecked": found.error.message}
+                continue
+            canonical[argument] = found
+            arguments[argument] = str(found)
+            audit[argument] = {"action": action, "path": str(found)}
+        refusal = self._call_rules(name, arguments, canonical)
+        if refusal is not None:
+            return refusal
+        return GateModify(args=arguments, audit={"filesystem": audit})
 
     async def check(self, ctx: ExecutionContext) -> GateResult | None:
         # Resolving a path is I/O: off the loop.
         return await asyncio.to_thread(self.check_sync, ctx)
 
     def _canonical(
-        self, name: str, argument: str, action: FilesystemAction, given: object
-    ) -> GateBlock | Path:
-        """The canonical path of ``given``, or the block that refuses it."""
+        self, ctx: ExecutionContext, argument: str, action: FilesystemAction, given: object
+    ) -> Path | ToolFailure | GateBlock:
+        """The canonical path of ``given``; the failure its tool will give it, when the tool
+        checks its paths with this policy; or the block that refuses it."""
+        name = ctx.tool_call.name
         audit = {"tool": name, "argument": argument, "action": action, "path": given}
-        if not isinstance(given, str):
-            return _refused(
-                name,
-                audit,
-                f"The tool {name!r} did not run: its argument {argument!r} must be a path, and "
-                f"got {'nothing' if given is _NO_DEFAULT else type(given).__name__}. Give it.",
-            )
+        if given is _NO_DEFAULT:
+            message = f"the argument {argument!r} must be a path, and got nothing. Give it."
+            return _refused(name, audit, f"The tool {name!r} did not run: {message}")
         try:
-            return self._policy.check(given, action)
-        except FilesystemPolicyError as error:
-            reason = str(error)
-        except (OSError, ValueError) as error:
-            reason = f"{given!r} cannot be checked ({error}); give another path."
+            return checked(self._policy, given, action, argument=argument)
+        except ToolFailure as failure:
+            refused = failure
+        reason = refused.error.message
+        if refused.error.type != "permission_denied":
+            if self._checks_itself(ctx):
+                return refused
+            reason = f"{reason} This run cannot check it, so the tool does not run."
         return _refused(name, audit, f"The tool {name!r} did not run: {reason}")
+
+    def _checks_itself(self, ctx: ExecutionContext) -> bool:
+        """Whether the tool checks its paths with this policy right before it acts."""
+        return getattr(ctx.definition.fn, _CHECKED_BY, None) == self._policy
+
+    def _call_rules(
+        self, name: str, arguments: dict[str, Any], canonical: Mapping[str, Path]
+    ) -> GateBlock | None:
+        """The block of a call whose arguments, each allowed, are refused together: a pattern
+        that climbs out of its folder (L4), or a move that widens what the agent reads (M3)."""
+        pattern_argument = _GLOBS.get(name)
+        pattern = arguments.get(pattern_argument) if pattern_argument else None
+        audit: dict[str, object] = {"tool": name}
+        if isinstance(pattern, str) and (reason := climbs(pattern)) is not None:
+            audit |= {"argument": pattern_argument, "pattern": pattern}
+            return _refused(name, audit, f"The tool {name!r} did not run: {reason}")
+        source, destination = _MOVES.get(name, ("", ""))
+        if source in canonical and destination in canonical:
+            try:
+                check_move(self._policy, canonical[source], canonical[destination])
+            except FilesystemPolicyError as error:
+                audit |= {"argument": destination, "action": "write"}
+                audit |= {"path": arguments[destination], "source": arguments[source]}
+                return _refused(name, audit, f"The tool {name!r} did not run: {error}")
+        return None
+
+
+def _unmapped(ctx: ExecutionContext) -> GateBlock:
+    """The block of a filesystem tool the map does not name, with a map to give it."""
+    name = ctx.tool_call.name
+    properties = ctx.definition.schema.input_schema.get("properties", {})
+    takes = list(properties) if isinstance(properties, dict) else []
+    example = takes[0] if takes else "path"
+    listed = ", ".join(map(repr, takes)) if takes else "no arguments"
+    return _refused(
+        name,
+        {"tool": name},
+        f"The tool {name!r} reaches the filesystem, and this run maps none of its arguments "
+        f"to the folders it may reach, so it does not run. Map the ones that are paths (it "
+        f"takes {listed}), each to 'read', 'write' or 'delete', e.g. "
+        f"PathScopeGate(paths={{{name!r}: {{{example!r}: 'read'}}}}).",
+    )
 
 
 def _schema_default(ctx: ExecutionContext, argument: str) -> object:

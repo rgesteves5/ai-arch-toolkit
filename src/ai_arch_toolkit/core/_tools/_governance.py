@@ -146,8 +146,9 @@ class DryRunGate:
     """Short-circuit every call as a dry run, recording the arguments in audit.
 
     For a tool with a preview hook, the audit also holds what the call would do,
-    ``audit["preview"]``, as the approver would see it; on the async path the hook runs in a
-    thread. Nothing runs and nothing is metered.
+    ``audit["preview"]``, as the approver would see it (see :func:`preview_for_sync`: the hook
+    runs in a thread of its own, for ``PREVIEW_TIMEOUT_S`` at most). Nothing runs and nothing is
+    metered.
     """
 
     __slots__ = ("_dry_run",)
@@ -180,7 +181,7 @@ class ApprovalGate:
 
     No-ops for tools that do not require approval. Denies by default when no
     handler is configured. The request's ``preview`` is the tool's preview hook's, run in a
-    thread on the async path, or the call's arguments as JSON (see :class:`ToolDefinition`).
+    thread of its own, or the call's arguments as JSON (see :func:`preview_for_sync`).
     """
 
     __slots__ = ("_handler",)

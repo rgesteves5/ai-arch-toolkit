@@ -81,7 +81,7 @@ Full `@tool` signature:
 )
 ```
 
-`preview=` writes what the approver of a call reads (`ApprovalRequest.preview`) and what a dry run records (`audit["preview"]`), in place of the tool's name and arguments as JSON. It is a plain function: it receives a copy of the call's arguments, validated and changed by any gate before the approval, and returns text, which is cut at 16,000 characters. It should only read; it runs in a thread on the async path, and one that raises or returns anything but text falls back to the JSON. An `async def` or anything not callable raises `TypeError` when the decorator is applied. See [Human approval](safety.md#human-approval).
+`preview=` writes what the approver of a call reads (`ApprovalRequest.preview`) and what a dry run records (`audit["preview"]`), in place of the tool's name and arguments as JSON. It is a plain function: it receives a copy of the call's arguments, validated and changed by any gate before the approval, and returns text; this text, like the JSON, is cut at 16,000 characters. It should only read. It runs in a daemon thread of its own, on both paths, and one that raises, returns anything but text, or takes more than 10 seconds falls back to the JSON. An `async def` or anything not callable raises `TypeError` when the decorator is applied. See [Human approval](safety.md#human-approval).
 
 ```python
 @tool(

@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Code written against the `main` before the hardening front (provider errors and metering, tools,
 flows, manifests) needs these changes; each one is detailed below.
 
+- **Python 3.13.4.** The package now requires Python 3.13.4 or later (D64): a path that does not
+  exist yet is resolved with `os.path.realpath(strict=os.path.ALLOW_MISSING)`, which 3.13.4 added.
 - **Provider errors.** Catch `ProviderError`, or one of `RequestError`, `TransportError`,
   `ProviderTimeout` and `ResponseError`: SDK and HTTP-library exceptions no longer leave the
   adapters (`APIError` handlers keep working). `fallback_on` defaults to `(ProviderError,)`;
@@ -128,6 +130,49 @@ English Wikipedia is the default, where the MediaWiki tools defaulted to the Eng
 tools moved it into their own limits without a word (1 to 100,000, or 200 to 4,000).
 
 ### Added
+- **Typed filesystem writes bound to a `FilesystemPolicy`** (C07, D64):
+  `filesystem_tools(policy)` in `ai_arch_toolkit.toolkit.tools.dangerous` gives `read_file`,
+  `list_directory` and `search_files` bound to the policy's `read_roots` (same names, schemas and
+  approval as the module-level ones), and `write_file`, `append_file`, `make_directory` and
+  `move_path` bound to its `write_roots`. Each tool checks its paths with the policy right before
+  it acts and reaches them from the root down, one folder at a time, never through a link. A
+  write is atomic (a temporary file synced to disk takes the name in one step; without
+  `overwrite` it never replaces a file, so of two writes racing to one new path one fails),
+  `append_file` refuses a file with other hard links, `move_path` never copies, and no tool
+  deletes. All need approval. The four writes take turns, one at a time in a process; one that
+  waits over 30 s for another fails (`upstream`, retryable). `move_path` refuses to bring a file
+  the agent cannot read into a folder it reads (`permission_denied`, in the gate and the tool),
+  refuses a move between two hard links of one file (`validation_error`), and leaves the source's
+  name in place when another process gave it to another file between the link and the unlink. A
+  folder that cannot be synced once the change is made is a note in the answer, not a failure.
+- `FilesystemPolicy(read_roots=, write_roots=, delete_roots=, cwd=, max_write_bytes=)`, whose
+  `check(path, action)` returns the canonical path or raises `FilesystemPolicyError` (a
+  `PermissionError`), and `PathScopeGate(policy, paths=...)`, a gate that refuses a path outside
+  the policy's folders before anyone is asked (`permission_denied`, never run nor metered, with
+  `audit["filesystem"]`), hands an allowed call on with its paths canonical, and blocks a
+  `capability="filesystem"` tool it has no map for (C07). A path outside the roots gets one
+  refusal, which names it as given, whatever lies there and wherever it leads: nothing outside is
+  looked at before the roots are tested. Inside the roots, a path through a file or a loop of
+  links is a `validation_error` in the tools. The gate refuses a `list_directory` pattern with a
+  `..` part and a `move_path` that would widen what the agent reads, and its block of an unmapped
+  filesystem tool names that tool's arguments.
+- `"permission_denied"` in `ToolFailureType` and in `GovernanceOutcome`: the word a
+  `FilesystemPolicy` refusal carries, in the gate and in the tool (D42 addendum, C07).
+- **A tool's preview hook** (C07c, D64): `@tool(preview=fn)` and `tool_from_schema(...,
+  preview=fn)` set `ToolDefinition.preview`, a plain function that receives a copy of the call's
+  arguments (validated, and changed by the gates before the approval) and returns what the call
+  will do, in words. `ApprovalRequest.preview` is its text, and `DryRunGate` records it under
+  `audit["preview"]`. The hook runs in a daemon thread of its own on both paths, in a copy of
+  the caller's context; a hook that raises, returns anything but text, or has not returned
+  within 10 seconds (`PREVIEW_TIMEOUT_S`) is logged, and the preview falls back to the arguments
+  as JSON, as for a tool without a hook. Either preview is cut at 16,000 characters with a note
+  (200 KB of arguments made a preview of 200,063 characters); `ApprovalRequest.arguments` stays
+  whole. An `async def` or a non-callable `preview` raises `TypeError`.
+- The filesystem write tools preview their calls: `create /…/a.md (12 bytes)`, or `replace
+  /…/a.md (1204 → 1311 bytes)` with a unified diff of the lines that change (cut at 80 lines or
+  8 KB; none for a binary file, or one or new text over 256 KB), `append 6 bytes to …`, `make
+  folder …`, `move file … to …`, or `will fail (<type>): <why>`. A preview checks the paths with
+  the policy and reads from the root down without following a link, and never writes (C07c).
 - **Dynamic tools** (C02, D62): `tool_from_schema(handler, name=, description=, input_schema=,
   policy=)` builds a governed tool from a complete JSON Schema, for tools that arrive as data (an
   MCP server's, for one). The handler receives the arguments in one `dict`, so keys need not be
@@ -436,6 +481,16 @@ tools moved it into their own limits without a word (1 to 100,000, or 200 to 4,0
   [docs/agents.md](docs/agents.md#file-backed-agent-manifests).
 
 ### Changed
+- **Breaking:** the minimum Python is 3.13.4 (`requires-python = ">=3.13.4"`, D64).
+- `ai_arch_toolkit.toolkit.tools.dangerous.__all__` also lists `FilesystemAction`,
+  `FilesystemPolicy`, `FilesystemPolicyError`, `PathScopeGate` and `filesystem_tools`: code that
+  takes every name there for a tool filters on `__tool_definition__`. Code that matches
+  `ToolFailureType` or `GovernanceOutcome` exhaustively meets `permission_denied` (C07).
+- The filesystem write tools are POSIX only: on Windows, `filesystem_tools` with `write_roots`
+  raises `NotImplementedError` when built; the bound reads work there (C07, D64).
+- The approval request of a `write_file`, `append_file`, `make_directory` or `move_path` call
+  shows its preview instead of its arguments as JSON (`request.arguments` still holds them
+  whole), and a dry run of one of them also records `audit["preview"]` (C07c).
 - **Breaking:** every toolkit tool keeps the tools contract (T06 to T09, C08; D37 to D42): the
   contract's debt list is empty. A cut is a window whose footer says what was shown, the total
   when the source gives one and the exact call for the rest; a limit is a `Range` bound in the

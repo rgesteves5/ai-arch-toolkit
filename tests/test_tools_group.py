@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import copy
 import functools
 import threading
+import time
 
 import pytest
 
 from ai_arch_toolkit.core._response import Response, ToolCall
 from ai_arch_toolkit.core._server_tools import code_execution, web_search
-from ai_arch_toolkit.core._tools import prepare_tools
+from ai_arch_toolkit.core._tools import _approval, prepare_tools
 from ai_arch_toolkit.core._tools._approval import ApprovalDecision, ApprovalRequest
 from ai_arch_toolkit.core._tools._decorator import tool
 from ai_arch_toolkit.core._tools._executor import async_execute_tool, execute_tool
@@ -624,6 +626,9 @@ class TestGovernanceGates:
         assert "hi" not in result.to_model_text()
 
 
+_CALLER: contextvars.ContextVar[str] = contextvars.ContextVar("caller", default="nobody")
+
+
 class _Asked:
     """An approval handler that approves and keeps every request it was shown."""
 
@@ -791,6 +796,83 @@ class TestPreview:
         }
         # A tool without a hook keeps the audit it had: the arguments alone.
         assert plain.metadata["audit"] == {"arguments": {"city": "Rio"}}
+
+    @pytest.mark.parametrize("mode", ["sync", "async"])
+    async def test_the_arguments_preview_is_cut_too(self, mode):
+        # The card's case: 200 KB of an argument made a preview of 200,063 characters.
+        command = "x" * 200_000
+        asked = _Asked()
+        call = ToolCall(id="1", name="dangerous_echo", input={"command": command})
+
+        await _run(ToolGroup(dangerous_echo, approval_handler=asked), call, mode)
+
+        (request,) = asked.requests
+        whole = len(f'dangerous_echo({{"command": "{command}"}})')
+        assert request.preview.startswith('dangerous_echo({"command": "xxx')
+        assert request.preview.endswith(f"[preview cut at 16000 of {whole} characters]")
+        assert len(request.preview) < 16_100
+        assert request.arguments == {"command": command}  # the arguments stay whole
+
+    @pytest.mark.parametrize("mode", ["sync", "async"])
+    async def test_a_hook_that_never_returns_gives_way_to_the_arguments_preview(
+        self, mode, monkeypatch
+    ):
+        monkeypatch.setattr(_approval, "PREVIEW_TIMEOUT_S", 0.2)
+        release = threading.Event()
+        daemon: list[bool] = []
+
+        def stuck(arguments: dict) -> str:
+            daemon.append(threading.current_thread().daemon)
+            release.wait(3)
+            return "too late"
+
+        @tool(requires_approval=True, preview=stuck)
+        def act(n: int) -> int:
+            """Act."""
+            return n
+
+        asked = _Asked()
+        dry = ToolGroup(act, gates=[DryRunGate()])
+        call = ToolCall(id="1", name="act", input={"n": 1})
+        try:
+            started = time.monotonic()
+            result = await _run(ToolGroup(act, approval_handler=asked), call, mode)
+            dry_run = await _run(dry, call, mode)
+            elapsed = time.monotonic() - started
+        finally:
+            release.set()
+
+        assert result.ok and result.value == 1
+        assert asked.requests[0].preview == 'act({"n": 1})'
+        assert dry_run.metadata["audit"]["preview"] == 'act({"n": 1})'
+        assert elapsed < 2
+        # In a daemon thread: a hook that never returns holds neither asyncio.run nor the exit.
+        assert daemon == [True, True]
+
+    @pytest.mark.parametrize("mode", ["sync", "async"])
+    async def test_the_hook_runs_in_the_callers_context(self, mode):
+        seen: list[str] = []
+
+        def describe(arguments: dict) -> str:
+            seen.append(_CALLER.get())
+            return "a picture"
+
+        @tool(requires_approval=True, preview=describe)
+        def act() -> str:
+            """Act."""
+            return "done"
+
+        token = _CALLER.set("the caller")
+        try:
+            await _run(
+                ToolGroup(act, approval_handler=_Asked()),
+                ToolCall(id="1", name="act", input={}),
+                mode,
+            )
+        finally:
+            _CALLER.reset(token)
+
+        assert seen == ["the caller"]
 
     def test_a_wrapper_keeps_the_hook_of_the_tool_it_wraps(self):
         @tool(requires_approval=True, preview=lambda arguments: "the hook")

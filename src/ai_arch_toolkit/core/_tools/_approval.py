@@ -3,22 +3,29 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
+import contextvars
 import inspect
 import json
 import logging
+import threading
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from ai_arch_toolkit.core._response import ToolCall
-from ai_arch_toolkit.core._tools._definition import RiskLevel, ToolDefinition
+from ai_arch_toolkit.core._tools._definition import RiskLevel, ToolDefinition, ToolPreview
 from ai_arch_toolkit.core._tools._result import line_cut
 
 logger = logging.getLogger(__name__)
 
-# The most characters of a preview hook's text an approver or an audit receives (C07c, D64).
+# The most characters of a preview an approver or an audit receives: a hook's text, or the call's
+# arguments as JSON (C07c, D64).
 PREVIEW_MAX_CHARS = 16_000
 _PREVIEW_CUT = "\n[preview cut at {kept} of {chars} characters]"
+# The seconds a preview hook may take. Past them the preview is the call's arguments as JSON, and
+# the hook, which cannot be stopped, is left to finish in its daemon thread (C07c, D64).
+PREVIEW_TIMEOUT_S = 10.0
 
 type ApprovalStatus = Literal["approved", "denied"]
 type ApprovalHandler = Callable[
@@ -128,7 +135,7 @@ class ApprovalDecision:
 
 async def approval_request_for(tool_call: ToolCall, definition: ToolDefinition) -> ApprovalRequest:
     """The approval request for a call, from its tool's policy, with :func:`preview_for`'s
-    preview: a tool's hook runs in a thread, off the loop."""
+    preview: a tool's hook runs in a thread of its own, off the loop."""
     return _request(tool_call, definition, await preview_for(tool_call, definition))
 
 
@@ -151,32 +158,87 @@ def _request(tool_call: ToolCall, definition: ToolDefinition, preview: str) -> A
 
 
 async def preview_for(tool_call: ToolCall, definition: ToolDefinition) -> str:
-    """:func:`preview_for_sync`, with the tool's hook run in a thread, so a slow one (it may read
-    files) never holds the loop."""
-    if definition.preview is None:
-        return _preview(tool_call)
-    return await asyncio.to_thread(preview_for_sync, tool_call, definition)
+    """:func:`preview_for_sync`, awaited: the tool's hook never holds the loop."""
+    hook = definition.preview
+    if hook is None:
+        return _arguments_preview(tool_call)
+    running = _started(hook, tool_call)
+    waited = asyncio.wrap_future(running)
+    try:
+        await asyncio.wait((waited,), timeout=PREVIEW_TIMEOUT_S)
+    finally:
+        waited.cancel()  # once it is done, a no-op; before, the hook runs on, unheard
+    return _answer(tool_call, running)
 
 
 def preview_for_sync(tool_call: ToolCall, definition: ToolDefinition) -> str:
-    """What the call will do, for a person: its tool's preview hook's text, cut at
-    ``PREVIEW_MAX_CHARS`` with a note, or, for a tool without a hook, its name and arguments as
-    JSON.
+    """What the call will do, for a person: its tool's preview hook's text, or, for a tool
+    without a hook, its name and arguments as JSON; either one cut at ``PREVIEW_MAX_CHARS`` with
+    a note.
 
     The hook receives a copy of the call's arguments, as validated and changed by the gates
-    before the one asking. A hook that raises, or returns anything but text, is logged, and the
-    preview is the arguments as JSON, as for a tool without one.
+    before the one asking. It runs in a daemon thread of its own, in a copy of the caller's
+    context, on this path as on the async one. A hook that raises, returns anything but text, or
+    has not returned within ``PREVIEW_TIMEOUT_S`` seconds is logged, and the preview is the
+    arguments as JSON, as for a tool without one; a hook that has not returned is left to finish
+    on its own, and what it returns then is dropped.
     """
     hook = definition.preview
     if hook is None:
-        return _preview(tool_call)
-    try:
-        text = hook(dict(tool_call.input))
-    except Exception:
+        return _arguments_preview(tool_call)
+    running = _started(hook, tool_call)
+    concurrent.futures.wait((running,), timeout=PREVIEW_TIMEOUT_S)
+    return _answer(tool_call, running)
+
+
+def _started(hook: ToolPreview, tool_call: ToolCall) -> concurrent.futures.Future[object]:
+    """``hook`` called with a copy of the call's arguments, in a daemon thread of its own, inside
+    a copy of the caller's context.
+
+    A thread cannot be stopped, so a hook the caller stopped waiting for may still be running; a
+    daemon thread never holds up ``asyncio.run`` or the end of the process (the executor runs a
+    sync tool the same way, D30).
+    """
+    future: concurrent.futures.Future[object] = concurrent.futures.Future()
+    context = contextvars.copy_context()
+    arguments = dict(tool_call.input)
+
+    def run() -> None:
+        if not future.set_running_or_notify_cancel():
+            return
+        try:
+            future.set_result(context.run(hook, arguments))
+        except BaseException as exc:  # handed to whoever waits on the future
+            future.set_exception(exc)
+
+    threading.Thread(target=run, name="tool-preview", daemon=True).start()
+    return future
+
+
+def _answer(tool_call: ToolCall, running: concurrent.futures.Future[object]) -> str:
+    """The preview from the hook's answer so far: its text cut to size, or the arguments
+    preview (logged) when it has not returned, raised, or returned anything but text.
+
+    Raises:
+        BaseException: What the hook raised that is not an ``Exception`` (``KeyboardInterrupt``,
+            ``SystemExit``), as if it had run in the caller's thread.
+    """
+    if not running.done():
         logger.warning(
-            "preview of tool %r raised; showing its arguments", tool_call.name, exc_info=True
+            "preview of tool %r did not return within %gs; showing its arguments",
+            tool_call.name,
+            PREVIEW_TIMEOUT_S,
         )
-        return _preview(tool_call)
+        return _arguments_preview(tool_call)
+    error = running.exception()
+    if error is not None and not isinstance(error, Exception):
+        raise error
+    if error is not None:
+        logger.warning(
+            "preview of tool %r raised; showing its arguments", tool_call.name, exc_info=error
+        )
+        return _arguments_preview(tool_call)
+    text = running.result()
     if not isinstance(text, str):
         if inspect.iscoroutine(text):
             text.close()
@@ -185,7 +247,7 @@ def preview_for_sync(tool_call: ToolCall, definition: ToolDefinition) -> str:
             tool_call.name,
             type(text).__name__,
         )
-        return _preview(tool_call)
+        return _arguments_preview(tool_call)
     return _bounded(text)
 
 
@@ -226,9 +288,11 @@ def resolve_approval_sync(
     return decision
 
 
-def _preview(tool_call: ToolCall) -> str:
+def _arguments_preview(tool_call: ToolCall) -> str:
+    """The call as its tool's name and its arguments as JSON, cut at ``PREVIEW_MAX_CHARS``: the
+    arguments themselves stay whole in the request."""
     try:
         args = json.dumps(tool_call.input, sort_keys=True)
     except TypeError:
         args = repr(tool_call.input)
-    return f"{tool_call.name}({args})"
+    return _bounded(f"{tool_call.name}({args})")

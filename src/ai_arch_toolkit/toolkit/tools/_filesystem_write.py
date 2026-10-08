@@ -10,8 +10,9 @@ A write is atomic (C07.5): the text goes to a new temporary file in the target's
 synced to disk, then takes the target's name in one step, and the folder is synced. Without
 ``overwrite`` that step is ``os.link``, which refuses a name that exists, so of two writes racing
 to one new path one wins and the other fails; with it, ``os.replace``, and the file keeps the old
-one's permissions. An append is not atomic. A move never copies, so it is refused across volumes.
-POSIX only (C07.8).
+one's permissions. An append is not atomic. A move never copies, so it is refused across volumes,
+and never brings a file the agent cannot read where it reads (``check_move``). The four run one at
+a time in a process, so no two of them interleave. POSIX only (C07.8).
 """
 
 from __future__ import annotations
@@ -22,18 +23,22 @@ import os
 import secrets
 import stat
 import sys
-from collections.abc import Callable
-from contextlib import suppress
-from dataclasses import replace
+import threading
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any
 
 from ai_arch_toolkit.core import ToolResult
+from ai_arch_toolkit.core._tools._definition import ToolPreview
 from ai_arch_toolkit.core._tools._result import ToolFailure
-from ai_arch_toolkit.toolkit.tools._filesystem import bound_reads, checked, governed, path_failure
+from ai_arch_toolkit.toolkit.tools._filesystem import bound_reads, governed, path_failure
 from ai_arch_toolkit.toolkit.tools._filesystem_policy import (
     FilesystemPolicy,
     FilesystemPolicyError,
+    check_move,
+    checked,
+    checks_paths,
     open_beneath,
     opened_folder,
 )
@@ -49,6 +54,34 @@ _TEMPORARY = ".ai-arch-"
 _NOT_A_FILE = frozenset({errno.EISDIR, errno.ENXIO})
 _WRONG_KIND = frozenset({errno.ENOTDIR, errno.ENOTEMPTY, errno.EEXIST})
 
+# One write at a time in this process (M2). A move by link and unlink is two steps, and so is an
+# append (open, then write): a replace landing between them makes the move remove a file it was
+# never asked to move, or the append go to the file replaced. ReAct runs a turn's calls in
+# parallel, so the four write tools, of any policy, take turns. A write waits ``_WAIT_S`` seconds
+# at most: one that takes longer is stuck (a dead network mount), and the next fails, retryable,
+# instead of running after its call gave up.
+_ONE_WRITE = threading.Lock()
+_WAIT_S = 30.0
+
+
+@contextmanager
+def _one_write() -> Iterator[None]:
+    """Hold the process's write turn.
+
+    Raises:
+        ToolFailure: upstream, retryable, when another write has held it for ``_WAIT_S``.
+    """
+    if not _ONE_WRITE.acquire(timeout=_WAIT_S):
+        msg = (
+            f"another write of this process has been running for over {_WAIT_S:g} s, and this "
+            "one waits for it; try again in a while."
+        )
+        raise ToolFailure("upstream", msg, retryable=True)
+    try:
+        yield
+    finally:
+        _ONE_WRITE.release()
+
 
 def filesystem_tools(policy: FilesystemPolicy) -> tuple[Callable[..., str | ToolResult], ...]:
     """The filesystem tools bound to ``policy``: the file tools to give an agent.
@@ -58,7 +91,7 @@ def filesystem_tools(policy: FilesystemPolicy) -> tuple[Callable[..., str | Tool
     ``append_file``, ``make_directory`` and ``move_path``. Each one checks its paths with
     ``policy`` right before it acts, whatever gates the run has, so a path an approver changed,
     or a folder swapped for a link while a person decided, fails the call (D64). All of them
-    need approval, call by call (D4).
+    need approval, call by call (D4). The writes take turns: one at a time in the process.
 
     Raises:
         ValueError: The policy has neither ``read_roots`` nor ``write_roots``.
@@ -69,22 +102,22 @@ def filesystem_tools(policy: FilesystemPolicy) -> tuple[Callable[..., str | Tool
         msg = "the FilesystemPolicy has no read_roots and no write_roots: it gives no tools"
         raise ValueError(msg)
     reads = bound_reads(policy) if policy.read_roots else ()
-    if not policy.write_roots:
-        return reads
-    if sys.platform == "win32":
+    if policy.write_roots and sys.platform == "win32":
         msg = (
             "the filesystem write tools are POSIX only (they need dir_fd and O_NOFOLLOW); on "
             "Windows, build the FilesystemPolicy with read_roots alone"
         )
         raise NotImplementedError(msg)
-    return (*reads, *(build(policy) for build in _WRITES))
+    writes = tuple(build(policy) for build in _WRITES) if policy.write_roots else ()
+    # Each checks its own paths with the policy: the gate leaves it what is not a path (L1).
+    return tuple(checks_paths(fn, policy) for fn in (*reads, *writes))
 
 
 # --- The tools -----------------------------------------------------------------------------------
 
 
 def _write_file_tool(policy: FilesystemPolicy) -> Callable[..., str]:
-    @_governed(_WRITE_REASON, _write_preview, policy)
+    @governed(_WRITE_REASON, preview=_previewed(_write_preview, policy))
     def write_file(
         path: str, content: str, overwrite: bool = False, create_parents: bool = False
     ) -> str:
@@ -103,16 +136,20 @@ def _write_file_tool(policy: FilesystemPolicy) -> Callable[..., str]:
         Raises:
             ToolFailure: permission_denied when the path is outside the folders this run may
                 write to, or is a link; validation_error when the file exists without
-                ``overwrite``, the path is a folder, or ``content`` is not text or is too long;
-                not_found when its folder is missing; upstream when the OS fails the write.
+                ``overwrite``, the path is a folder or goes through a file, or ``content`` is
+                not text or is too long; not_found when its folder is missing; upstream when
+                the OS fails the write.
         """
-        return _write(policy, path, content, overwrite=overwrite, create_parents=create_parents)
+        with _one_write():
+            return _write(
+                policy, path, content, overwrite=overwrite, create_parents=create_parents
+            )
 
     return write_file
 
 
 def _append_file_tool(policy: FilesystemPolicy) -> Callable[..., str]:
-    @_governed(_APPEND_REASON, _append_preview, policy)
+    @governed(_APPEND_REASON, preview=_previewed(_append_preview, policy))
     def append_file(path: str, content: str) -> str:
         """Add text, in UTF-8, at the end of a text file that exists.
 
@@ -126,16 +163,18 @@ def _append_file_tool(policy: FilesystemPolicy) -> Callable[..., str]:
         Raises:
             ToolFailure: permission_denied when the path is outside the folders this run may
                 write to, is a link, or has other hard links; not_found when the file is
-                missing; validation_error when it is not a regular file, or ``content`` is not
-                text or is too long; upstream when the OS fails the write.
+                missing; validation_error when it is not a regular file, the path goes through
+                a file, or ``content`` is not text or is too long; upstream when the OS fails
+                the write.
         """
-        return _append(policy, path, content)
+        with _one_write():
+            return _append(policy, path, content)
 
     return append_file
 
 
 def _make_directory_tool(policy: FilesystemPolicy) -> Callable[..., str]:
-    @_governed(_MAKE_REASON, _make_preview, policy)
+    @governed(_MAKE_REASON, preview=_previewed(_make_preview, policy))
     def make_directory(path: str, parents: bool = False) -> str:
         """Make a folder. One that exists already is fine, and the answer says so.
 
@@ -148,17 +187,19 @@ def _make_directory_tool(policy: FilesystemPolicy) -> Callable[..., str]:
                 write to, or is a link; not_found when a folder on the way is missing;
                 validation_error when a file is in the way; upstream when the OS fails.
         """
-        return _make(policy, path, parents=parents)
+        with _one_write():
+            return _make(policy, path, parents=parents)
 
     return make_directory
 
 
 def _move_path_tool(policy: FilesystemPolicy) -> Callable[..., str]:
-    @_governed(_MOVE_REASON, _move_preview, policy)
+    @governed(_MOVE_REASON, preview=_previewed(_move_preview, policy))
     def move_path(source: str, destination: str, overwrite: bool = False) -> str:
         """Move or rename a file or a folder, within one volume: it never copies.
 
         Without ``overwrite``, an existing destination is left as it is and the call fails.
+        A file the agent cannot read never moves to a folder it reads.
 
         Args:
             source: The file or folder to move.
@@ -167,11 +208,14 @@ def _move_path_tool(policy: FilesystemPolicy) -> Callable[..., str]:
 
         Raises:
             ToolFailure: permission_denied when either path is outside the folders this run
-                may write to, or is a link; not_found when the source is missing;
-                validation_error when the destination exists without ``overwrite``, is inside
-                the source, or is on another volume; upstream when the OS fails the move.
+                may write to, or is a link, or the move would let the agent read what it could
+                not; not_found when the source is missing; validation_error when the
+                destination exists without ``overwrite``, is inside the source, is the same
+                file under another name, or is on another volume; upstream when the OS fails
+                the move.
         """
-        return _move(policy, source, destination, overwrite=overwrite)
+        with _one_write():
+            return _move(policy, source, destination, overwrite=overwrite)
 
     return move_path
 
@@ -193,11 +237,9 @@ _DIFF_BYTES = 8 * 1024
 _DIFF_FILE_BYTES = 256 * 1024  # a file, or new text, larger than this gets no diff
 
 
-def _governed(
-    reason: str, picture: _Picture, policy: FilesystemPolicy
-) -> Callable[[Callable[..., str]], Callable[..., str]]:
-    """``governed(reason)``, with the call's preview hook: what ``picture`` sees the call doing,
-    or why it will fail."""
+def _previewed(picture: _Picture, policy: FilesystemPolicy) -> ToolPreview:
+    """The preview hook of a write tool: what ``picture`` sees the call doing, or why it will
+    fail, in the words the tool would use."""
 
     def preview(arguments: dict[str, Any]) -> str:
         try:
@@ -208,13 +250,7 @@ def _governed(
             failure = e
         return f"will fail ({failure.error.type}): {failure.error.message}"
 
-    def decorate(fn: Callable[..., str]) -> Callable[..., str]:
-        made = governed(reason)(fn)
-        definition = made.__dict__["__tool_definition__"]
-        made.__dict__["__tool_definition__"] = replace(definition, preview=preview)
-        return made
-
-    return decorate
+    return preview
 
 
 def _write_preview(policy: FilesystemPolicy, arguments: dict[str, Any]) -> str:
@@ -263,11 +299,7 @@ def _make_preview(policy: FilesystemPolicy, arguments: dict[str, Any]) -> str:
 
 
 def _move_preview(policy: FilesystemPolicy, arguments: dict[str, Any]) -> str:
-    origin = checked(policy, arguments.get("source"), "write", argument="source")
-    target = checked(policy, arguments.get("destination"), "write", argument="destination")
-    if target.is_relative_to(origin):
-        msg = f"{target} is {origin} or inside it; pick a destination outside the source."
-        raise ToolFailure("validation_error", msg)
+    origin, target = _move_paths(policy, arguments.get("source"), arguments.get("destination"))
     found = _look(policy, origin, "move")
     if found is None:
         msg = f"{origin} does not exist; list_directory shows what is there."
@@ -278,10 +310,24 @@ def _move_preview(policy: FilesystemPolicy, arguments: dict[str, Any]) -> str:
     there = _look(policy, target, "move")
     if there is None:
         return summary
+    if os.path.samestat(found, there):
+        _refuse_two_names_now(policy, origin, target)
     if not arguments.get("overwrite"):
         raise ToolFailure("validation_error", _exists(target, "pass overwrite=true"))
     size = "" if stat.S_ISDIR(there.st_mode) else f" ({there.st_size} bytes)"
     return f"{summary}, replacing the {_kind(there)} there{size}"
+
+
+def _refuse_two_names_now(policy: FilesystemPolicy, origin: Path, target: Path) -> None:
+    """``_refuse_two_names`` for a preview, its folders opened from their root down."""
+    try:
+        with (
+            opened_folder(policy, origin.parent, "write") as source_folder,
+            opened_folder(policy, target.parent, "write") as target_folder,
+        ):
+            _refuse_two_names((source_folder, origin), (target_folder, target))
+    except (OSError, ValueError) as e:
+        raise _failure(e, "move", origin) from e
 
 
 def _kind(found: os.stat_result) -> str:
@@ -378,6 +424,7 @@ def _write(
     try:
         with opened_folder(policy, target.parent, "write", create=create_parents) as folder:
             replaced = _publish(folder, target, data, overwrite=overwrite)
+            note = _synced(folder)
     except FileNotFoundError as e:
         msg = (
             f"the folder {target.parent} does not exist; pass create_parents=true, or make it "
@@ -387,8 +434,8 @@ def _write(
     except (OSError, ValueError) as e:
         raise _failure(e, "write", target) from e
     if replaced is None:
-        return f"Created {target} ({len(data)} bytes)"
-    return f"Replaced {target} ({replaced} → {len(data)} bytes)"
+        return f"Created {target} ({len(data)} bytes){note}"
+    return f"Replaced {target} ({replaced} → {len(data)} bytes){note}"
 
 
 def _encoded(policy: FilesystemPolicy, content: object) -> bytes:
@@ -421,7 +468,7 @@ def _too_long(policy: FilesystemPolicy, size: str) -> ToolFailure:
 
 def _publish(folder: int, target: Path, data: bytes, *, overwrite: bool) -> int | None:
     """Put ``data`` at ``target`` (inside ``folder``) in one step; the size of the file it
-    replaced, or ``None`` when there was none."""
+    replaced, or ``None`` when there was none. The caller syncs the folder."""
     existing = _entry(folder, target.name)
     if existing is not None:
         _refuse_unless_a_file(existing, target)
@@ -432,12 +479,33 @@ def _publish(folder: int, target: Path, data: bytes, *, overwrite: bool) -> int 
     try:
         if overwrite:
             os.replace(temporary, target.name, src_dir_fd=folder, dst_dir_fd=folder)
-        else:  # another write that won since the look above makes this fail
+        else:  # another process's write since the look above makes this fail
             _link((folder, temporary), (folder, target))
     finally:
         _discard(folder, temporary)  # after os.replace the name is already gone
-    os.fsync(folder)
     return None if existing is None else existing.st_size
+
+
+def _synced(*folders: int) -> str:
+    """Sync each folder to disk, so the names just put in it survive a crash; a note for the
+    answer when one cannot be, or ``""``.
+
+    The names are in place by then, so the write is done: a filesystem that cannot sync a
+    folder (``EINVAL`` on some) makes it a note, never a failure that a retry would find
+    already done (L2).
+    """
+    failed: list[str] = []
+    for folder in folders:
+        try:
+            os.fsync(folder)
+        except OSError as e:
+            failed.append(e.strerror or str(e))
+    if not failed:
+        return ""
+    return (
+        f"; the folder could not be synced to disk ({failed[0]}): the change is made, but may "
+        "not survive a crash"
+    )
 
 
 def _temporary(folder: int, data: bytes, mode: int | None) -> str:
@@ -603,12 +671,13 @@ def _make(policy: FilesystemPolicy, path: str, *, parents: bool) -> str:
     try:
         with opened_folder(policy, target.parent, "write", create=parents) as folder:
             made = _made(folder, target)
+            note = _synced(folder) if made else ""
     except FileNotFoundError as e:
         msg = f"the folder {target.parent} does not exist; pass parents=true to make it too."
         raise ToolFailure("not_found", msg) from e
     except (OSError, ValueError) as e:
         raise _failure(e, "make", target) from e
-    return f"Created folder {target}" if made else f"{target} already exists"
+    return f"Created folder {target}{note}" if made else f"{target} already exists"
 
 
 def _made(folder: int, target: Path) -> bool:
@@ -624,7 +693,6 @@ def _made(folder: int, target: Path) -> bool:
             raise FilesystemPolicyError(_a_link(target)) from None
         msg = f"{target} exists and is not a folder; pick another name."
         raise ToolFailure("validation_error", msg) from None
-    os.fsync(folder)
     return True
 
 
@@ -632,17 +700,15 @@ def _made(folder: int, target: Path) -> bool:
 
 
 def _move(policy: FilesystemPolicy, source: str, destination: str, *, overwrite: bool) -> str:
-    origin = checked(policy, source, "write", argument="source")
-    target = checked(policy, destination, "write", argument="destination")
-    if target.is_relative_to(origin):
-        msg = f"{target} is {origin} or inside it; pick a destination outside the source."
-        raise ToolFailure("validation_error", msg)
+    origin, target = _move_paths(policy, source, destination)
     try:
         with (
             opened_folder(policy, origin.parent, "write") as source_folder,
             opened_folder(policy, target.parent, "write") as target_folder,
         ):
-            _relocate((source_folder, origin), (target_folder, target), overwrite=overwrite)
+            moved = (source_folder, origin), (target_folder, target)
+            left = _relocate(*moved, overwrite=overwrite)
+            note = _synced(source_folder, target_folder)
     except FileNotFoundError as e:
         msg = (
             f"{origin.parent} or {target.parent} does not exist; list_directory shows what is "
@@ -651,15 +717,39 @@ def _move(policy: FilesystemPolicy, source: str, destination: str, *, overwrite:
         raise ToolFailure("not_found", msg) from e
     except (OSError, ValueError) as e:
         raise _failure(e, "move", origin) from e
-    return f"Moved {origin} to {target}"
+    kept = f"; {origin} no longer names the file that moved, and is left as it is" if left else ""
+    return f"Moved {origin} to {target}{kept}{note}"
 
 
-def _relocate(source: tuple[int, Path], destination: tuple[int, Path], *, overwrite: bool) -> None:
-    """Give the entry at ``source`` (its folder, its path) the name at ``destination``.
+def _move_paths(
+    policy: FilesystemPolicy, source: object, destination: object
+) -> tuple[Path, Path]:
+    """The canonical source and destination of a move the policy allows.
+
+    Raises:
+        ToolFailure: What ``checked`` says of either; validation_error when the destination is
+            the source or inside it; permission_denied when the move would let the agent read
+            what it could not (``check_move``, M3).
+    """
+    origin = checked(policy, source, "write", argument="source")
+    target = checked(policy, destination, "write", argument="destination")
+    if target.is_relative_to(origin):
+        msg = f"{target} is {origin} or inside it; pick a destination outside the source."
+        raise ToolFailure("validation_error", msg)
+    try:
+        check_move(policy, origin, target)
+    except FilesystemPolicyError as e:
+        raise ToolFailure("permission_denied", str(e)) from e
+    return origin, target
+
+
+def _relocate(source: tuple[int, Path], destination: tuple[int, Path], *, overwrite: bool) -> bool:
+    """Give the entry at ``source`` (its folder, its path) the name at ``destination``; whether
+    the source's name was left in place because another file took it meanwhile.
 
     Without ``overwrite`` a file moves by ``os.link`` and ``unlink``, which refuses a name that
     exists in one step; a folder by ``os.rename`` after a look, so only an empty folder made in
-    between could be replaced.
+    between could be replaced. The caller syncs both folders.
     """
     (source_folder, origin), (target_folder, target) = source, destination
     found = _entry(source_folder, origin.name)
@@ -668,25 +758,63 @@ def _relocate(source: tuple[int, Path], destination: tuple[int, Path], *, overwr
         raise ToolFailure("not_found", msg)
     if stat.S_ISLNK(found.st_mode):
         raise FilesystemPolicyError(_a_link(origin))
+    there = _entry(target_folder, target.name)
+    if there is not None and os.path.samestat(found, there):
+        _refuse_two_names(source, destination)
     names = (origin.name, target.name)
     if overwrite:
         os.replace(*names, src_dir_fd=source_folder, dst_dir_fd=target_folder)
-    elif stat.S_ISREG(found.st_mode):
-        _link_then_unlink(source_folder, target_folder, target, names)
-    else:
-        if _entry(target_folder, target.name) is not None:
-            raise ToolFailure("validation_error", _exists(target, "pass overwrite=true"))
-        os.rename(*names, src_dir_fd=source_folder, dst_dir_fd=target_folder)
-    os.fsync(source_folder)
-    os.fsync(target_folder)
+        return False
+    if stat.S_ISREG(found.st_mode):
+        return not _link_then_unlink(source, destination)
+    if there is not None:
+        raise ToolFailure("validation_error", _exists(target, "pass overwrite=true"))
+    os.rename(*names, src_dir_fd=source_folder, dst_dir_fd=target_folder)
+    return False
 
 
-def _link_then_unlink(
-    source_folder: int, target_folder: int, target: Path, names: tuple[str, str]
-) -> None:
-    _link((source_folder, names[0]), (target_folder, target))
+def _refuse_two_names(source: tuple[int, Path], destination: tuple[int, Path]) -> None:
+    """Refuse a move between two hard links of one file, which POSIX ``rename`` leaves as they
+    are while saying it moved (L3).
+
+    The same file under one entry is not that: on a case-insensitive disk, ``a.txt`` and
+    ``A.txt`` are one entry, and a rename that changes the case goes on.
+
+    Raises:
+        ToolFailure: validation_error when the two paths are two entries of one file.
+    """
+    (source_folder, origin), (target_folder, target) = source, destination
+    if os.path.samestat(os.fstat(source_folder), os.fstat(target_folder)):
+        if origin.name == target.name:
+            return  # one entry, spelled in two ways through its folders
+        entries = set(os.listdir(source_folder))
+        if origin.name not in entries or target.name not in entries:
+            return  # one entry under two spellings: a rename of its case or form
+    msg = (
+        f"{origin} and {target} are the same file, under two names (hard links), so a move "
+        "between them would change nothing; leave it, or move it to another name."
+    )
+    raise ToolFailure("validation_error", msg)
+
+
+def _link_then_unlink(source: tuple[int, Path], destination: tuple[int, Path]) -> bool:
+    """Give the file at ``source`` the name at ``destination`` too, then take its old name away,
+    unless another file has that name by then; whether it was taken away.
+
+    The two steps are not one: between them another process may give the old name to another
+    file, which the unlink would then remove (M2). The old name is removed only while it still
+    names the file the new one does; the tools of this process never come between, since they
+    take turns (``_one_write``).
+    """
+    (source_folder, origin), (target_folder, target) = source, destination
+    _link((source_folder, origin.name), (target_folder, target))
     try:
-        os.unlink(names[0], dir_fd=source_folder)
+        moved = os.stat(target.name, dir_fd=target_folder, follow_symlinks=False)
+        left = _entry(source_folder, origin.name)
+        if left is None or not os.path.samestat(left, moved):
+            return False
+        os.unlink(origin.name, dir_fd=source_folder)
     except BaseException:
-        _discard(target_folder, names[1])  # the file stays where it was
+        _discard(target_folder, target.name)  # the file stays where it was
         raise
+    return True

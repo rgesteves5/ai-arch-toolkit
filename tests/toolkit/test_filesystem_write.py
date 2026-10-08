@@ -289,6 +289,37 @@ class TestWriteFile:
         assert not (layout.root / "new.txt").exists() and (layout.root / "notes.txt").exists()
         assert _leftovers(layout.root) == []
 
+    def test_a_folder_that_cannot_be_synced_is_a_note_not_a_failure(self, layout, monkeypatch):
+        # Some filesystems refuse to sync a folder (EINVAL): the name is in place by then (L2).
+        fsync = os.fsync
+
+        def files_only(descriptor: int) -> None:
+            if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+                raise OSError(errno.EINVAL, "Invalid argument")
+            fsync(descriptor)
+
+        monkeypatch.setattr(os, "fsync", files_only)
+        root = layout.root
+
+        answers = [
+            _text(layout["write_file"](path="new.txt", content="x")),
+            _text(layout["write_file"](path="new.txt", content="yz", overwrite=True)),
+            _text(layout["make_directory"](path="made")),
+            _text(layout["move_path"](source="new.txt", destination="made/new.txt")),
+        ]
+
+        firsts = [
+            f"Created {root / 'new.txt'} (1 bytes)",
+            f"Replaced {root / 'new.txt'} (1 → 2 bytes)",
+            f"Created folder {root / 'made'}",
+            f"Moved {root / 'new.txt'} to {root / 'made' / 'new.txt'}",
+        ]
+        for answer, first in zip(answers, firsts, strict=True):
+            assert answer.startswith(first + "; "), answer
+            assert "could not be synced to disk (Invalid argument)" in answer
+        assert (root / "made" / "new.txt").read_text() == "yz"
+        assert _leftovers(root) == []
+
     def test_no_descriptor_stays_open_after_a_write_or_a_failure(self, layout):
         before = _open_descriptors()
 
@@ -302,17 +333,8 @@ class TestWriteFile:
         assert _open_descriptors() == before
 
     async def test_two_parallel_writes_to_one_new_path_give_one_created_and_one_error(
-        self, layout, monkeypatch
+        self, layout
     ):
-        # Both writers hold their whole temporary file before either links it into place.
-        both_ready = threading.Barrier(2, timeout=5)
-        link = os.link
-
-        def link_together(*args: Any, **kwargs: Any) -> None:
-            both_ready.wait()
-            link(*args, **kwargs)
-
-        monkeypatch.setattr(os, "link", link_together)
         group = ToolGroup(*layout.tools.values(), approval_handler=_approve)
         calls = [_call("write_file", path="race.txt", content=f"writer {n}") for n in (1, 2)]
 
@@ -324,6 +346,26 @@ class TestWriteFile:
         assert refused[0].error is not None and refused[0].error.type == "validation_error"
         assert "already exists" in refused[0].error.message
         assert (layout.root / "race.txt").read_text() in {"writer 1", "writer 2"}
+        assert _leftovers(layout.root) == []
+
+    def test_a_name_another_process_takes_before_the_link_is_never_replaced(
+        self, layout, monkeypatch
+    ):
+        # The tools of one process take turns; another process may still take the name between
+        # the write's look and its link, and os.link then refuses it (C07.5).
+        link = os.link
+
+        def taken_first(*args: Any, **kwargs: Any) -> None:
+            (layout.root / "race.txt").write_text("the other process")
+            link(*args, **kwargs)
+
+        monkeypatch.setattr(os, "link", taken_first)
+
+        failure = _failure(lambda: layout["write_file"](path="race.txt", content="mine"))
+
+        assert failure.error.type == "validation_error"
+        assert "already exists" in str(failure)
+        assert (layout.root / "race.txt").read_text() == "the other process"
         assert _leftovers(layout.root) == []
 
 
@@ -525,6 +567,177 @@ class TestMovePath:
         assert "another volume" in str(failure) and "never copies" in str(failure)
         assert (layout.root / source).exists() and not (layout.root / "moved").exists()
 
+    def test_a_source_replaced_between_link_and_unlink_is_left_in_place(self, layout, monkeypatch):
+        # Another process gives old.txt new content right after the move linked it to old.bak:
+        # the move must not then remove the new file (M2).
+        root = layout.root
+        (root / "old.txt").write_text("old")
+        (root / "new.txt").write_text("new")
+        link = os.link
+
+        def link_then_replace(*args: Any, **kwargs: Any) -> None:
+            link(*args, **kwargs)
+            os.replace(root / "new.txt", root / "old.txt")
+
+        monkeypatch.setattr(os, "link", link_then_replace)
+
+        answer = _text(layout["move_path"](source="old.txt", destination="old.bak"))
+
+        assert (root / "old.bak").read_text() == "old"
+        assert (root / "old.txt").read_text() == "new"
+        assert answer == (
+            f"Moved {root / 'old.txt'} to {root / 'old.bak'}; {root / 'old.txt'} no longer "
+            "names the file that moved, and is left as it is"
+        )
+
+    def test_two_moves_of_one_process_never_interleave(self, layout, monkeypatch):
+        # The race of the review: a move by link and unlink, and a replace of its source landing
+        # between the two. The second call waits for the first (M2).
+        root = layout.root
+        (root / "old.txt").write_text("old")
+        (root / "new.txt").write_text("new")
+        link = os.link
+        results: list[object] = []
+        within: list[bool] = []
+
+        def replace_old() -> None:
+            results.append(
+                layout["move_path"](source="new.txt", destination="old.txt", overwrite=True)
+            )
+
+        second = threading.Thread(target=replace_old)
+
+        def link_then_race(*args: Any, **kwargs: Any) -> None:
+            link(*args, **kwargs)
+            second.start()
+            second.join(0.5)
+            within.append(not second.is_alive())
+
+        monkeypatch.setattr(os, "link", link_then_race)
+
+        layout["move_path"](source="old.txt", destination="old.bak")
+        second.join(5)
+
+        assert within == [False]  # the second move waited for the first to end
+        assert results == [f"Moved {root / 'new.txt'} to {root / 'old.txt'}"]
+        assert (root / "old.bak").read_text() == "old"
+        assert (root / "old.txt").read_text() == "new"
+
+    def test_a_write_that_waits_too_long_for_another_fails_and_writes_nothing(
+        self, layout, monkeypatch
+    ):
+        monkeypatch.setattr(_filesystem_write, "_WAIT_S", 0.1)
+        assert _filesystem_write._ONE_WRITE.acquire(timeout=1)
+        try:
+            failure = _failure(lambda: layout["write_file"](path="new.txt", content="x"))
+        finally:
+            _filesystem_write._ONE_WRITE.release()
+
+        assert failure.error.type == "upstream" and failure.error.retryable
+        assert "another write" in str(failure)
+        assert not (layout.root / "new.txt").exists()
+
+    def test_a_move_onto_another_hard_link_of_the_same_file_is_refused(self, layout):
+        # POSIX rename does nothing then, and the move would say it moved (L3).
+        root = layout.root
+        os.link(root / "notes.txt", root / "sub" / "twin.txt")
+        os.link(root / "notes.txt", root / "triplet.txt")
+
+        for destination in ("sub/twin.txt", "triplet.txt"):
+            failure = _failure(
+                lambda destination=destination: layout["move_path"](
+                    source="notes.txt", destination=destination, overwrite=True
+                )
+            )
+            assert failure.error.type == "validation_error"
+            assert "the same file" in str(failure)
+            preview = _hook(layout, "move_path")(
+                {"source": "notes.txt", "destination": destination, "overwrite": True}
+            )
+            assert preview.startswith("will fail (validation_error): ") and "same file" in preview
+        assert (root / "notes.txt").exists() and (root / "sub" / "twin.txt").exists()
+
+    def test_a_rename_that_changes_only_the_case_still_works(self, layout):
+        root = layout.root
+        if not (root / "NOTES.TXT").exists():
+            pytest.skip("a case-sensitive disk: NOTES.TXT is another name")
+
+        layout["move_path"](source="notes.txt", destination="NOTES.txt", overwrite=True)
+
+        assert "NOTES.txt" in os.listdir(root) and "notes.txt" not in os.listdir(root)
+        assert (root / "NOTES.txt").read_text() == "a needle here\n"
+
+
+class TestMovesNeverWidenReads:
+    """A write root that is not a read root stays unread: no move brings its files where the agent
+    reads (M3)."""
+
+    @pytest.fixture
+    def home(self, tmp_path: Path) -> tuple[Path, dict[str, Tool], FilesystemPolicy]:
+        home = Path(os.path.realpath(tmp_path))
+        (home / "project").mkdir()
+        (home / ".secret").write_text("SECRET")
+        (home / "project" / "draft.txt").write_text("draft")
+        policy = FilesystemPolicy(
+            read_roots=(home / "project",), write_roots=(home,), cwd=home / "project"
+        )
+        return home, {fn.__name__: fn for fn in filesystem_tools(policy)}, policy
+
+    def test_a_file_the_agent_cannot_read_never_moves_where_it_can(self, home):
+        base, tools, _policy = home
+        secret = str(base / ".secret")
+
+        read = _failure(lambda: tools["read_file"](path=secret))
+        moved = _failure(lambda: tools["move_path"](source=secret, destination="s.txt"))
+        preview = tools["move_path"].__tool_definition__.preview(
+            {"source": secret, "destination": "s.txt"}
+        )
+
+        assert read.error.type == "permission_denied"
+        assert moved.error.type == "permission_denied"
+        assert "would let the agent read it" in str(moved)
+        assert preview == f"will fail (permission_denied): {moved.error.message}"
+        assert (base / ".secret").read_text() == "SECRET"
+        assert not (base / "project" / "s.txt").exists()
+
+    def test_nor_over_a_file_it_reads_nor_in_another_case(self, home):
+        base, tools, _policy = home
+        for destination, overwrite in (("draft.txt", True), (str(base / "PROJECT" / "s"), False)):
+            failure = _failure(
+                lambda destination=destination, overwrite=overwrite: tools["move_path"](
+                    source=str(base / ".secret"), destination=destination, overwrite=overwrite
+                )
+            )
+            assert failure.error.type == "permission_denied", destination
+        assert (base / "project" / "draft.txt").read_text() == "draft"
+
+    def test_the_gate_refuses_it_before_the_approver(self, home):
+        base, tools, policy = home
+        asked: list[ApprovalRequest] = []
+
+        def approve(request: ApprovalRequest) -> ApprovalDecision:
+            asked.append(request)
+            return ApprovalDecision.approve()
+
+        group = ToolGroup(*tools.values(), gates=[PathScopeGate(policy)], approval_handler=approve)
+
+        result = group.execute(_call("move_path", source=str(base / ".secret"), destination="s"))
+
+        assert result.error is not None and result.error.type == "permission_denied"
+        assert "would let the agent read it" in result.error.message
+        assert asked == []
+        assert (base / ".secret").exists()
+
+    def test_moves_that_leave_reads_as_they_were_go_on(self, home):
+        base, tools, _policy = home
+        (base / "old.log").write_text("log")
+
+        tools["move_path"](source="draft.txt", destination=str(base / "draft.txt"))
+        tools["move_path"](source=str(base / "old.log"), destination=str(base / "new.log"))
+
+        assert (base / "draft.txt").read_text() == "draft"
+        assert (base / "new.log").read_text() == "log"
+
 
 # --- The check before the system call (TOCTOU) --------------------------------------------------
 
@@ -619,6 +832,63 @@ class TestTheToolChecksAgain:
         assert "symbolic link" in str(failure)
         assert layout.outside_now() == {"secret.txt"}
         assert (layout.outside / "secret.txt").read_text() == "OUTSIDE-SECRET\n"
+
+
+class TestOneWordForOnePath:
+    """The gate and the tool say the same of a path, through one classifier (L1)."""
+
+    CASES = (
+        ("read_file", {"path": "a\x00b"}),
+        ("read_file", {"path": 5}),
+        ("list_directory", {"path": "notes.txt/inner"}),
+        ("write_file", {"path": "notes.txt/new", "content": "x"}),
+        ("make_directory", {"path": "notes.txt/a/b", "parents": True}),
+        ("move_path", {"source": "notes.txt", "destination": "notes.txt/inner"}),
+    )
+
+    @pytest.mark.parametrize(("name", "arguments"), CASES, ids=lambda case: str(case))
+    def test_a_path_that_is_not_one_is_a_validation_error_with_or_without_the_gate(
+        self, layout, name, arguments
+    ):
+        shown: list[str] = []
+
+        def approve(request: ApprovalRequest) -> ApprovalDecision:
+            shown.append(request.preview)
+            return ApprovalDecision.approve()
+
+        group = ToolGroup(
+            *layout.tools.values(), gates=[PathScopeGate(layout.policy)], approval_handler=approve
+        )
+
+        alone = _failure(lambda: layout[name](**arguments))
+        gated = group.execute(_call(name, **arguments))
+
+        assert alone.error.type == "validation_error", alone
+        assert gated.error is not None and gated.error.type == "validation_error", gated
+        assert gated.error.message == alone.error.message
+        if name in _WRITES:  # the approver was told it will fail
+            assert shown == [f"will fail (validation_error): {alone.error.message}"]
+        assert layout.outside_now() == {"secret.txt"}
+
+    def test_a_tool_bound_to_another_policy_gets_no_unchecked_path(self, layout):
+        other = FilesystemPolicy(read_roots=(layout.root,), cwd=layout.root)
+        read = {fn.__name__: fn for fn in filesystem_tools(other)}["read_file"]
+        group = ToolGroup(read, gates=[PathScopeGate(layout.policy)], approval_handler=_approve)
+
+        result = group.execute(_call("read_file", path=5))
+
+        assert result.error is not None and result.error.type == "permission_denied"
+
+    def test_a_pattern_is_refused_in_the_gates_words_and_the_tools(self, layout):
+        group = ToolGroup(
+            *layout.tools.values(), gates=[PathScopeGate(layout.policy)], approval_handler=_approve
+        )
+
+        gated = group.execute(_call("list_directory", pattern="../outside/*"))
+        alone = _failure(lambda: layout["list_directory"](pattern="../outside/*"))
+
+        assert gated.error is not None and gated.error.type == alone.error.type
+        assert gated.error.message.endswith(alone.error.message)
 
 
 def test_a_dry_run_writes_nothing_and_records_the_canonical_path(layout):

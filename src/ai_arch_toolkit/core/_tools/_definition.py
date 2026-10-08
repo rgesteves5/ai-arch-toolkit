@@ -61,7 +61,7 @@ def check_tool_name(name: object) -> None:
 def check_preview(preview: object) -> None:
     """Raise ``TypeError`` unless ``preview`` is ``None`` or a plain function.
 
-    The hook runs where no loop may be running (the synchronous path), so it cannot be ``async``.
+    The hook runs in a thread of its own, where no loop runs, so it cannot be ``async``.
     """
     if preview is None or (callable(preview) and not inspect.iscoroutinefunction(preview)):
         return
@@ -169,7 +169,8 @@ class ToolDefinition:
         preview: Writes what a call will do, for the approver (``ApprovalRequest.preview``) and
             a dry run (``audit["preview"]``). It receives a copy of the call's arguments as they
             reach the gate, validated and changed by any gate before it, and returns text; it
-            should only read. ``None`` shows the arguments as JSON.
+            runs in a thread of its own and should only read. ``None`` shows the arguments as
+            JSON, as does a hook that fails or takes more than ``PREVIEW_TIMEOUT_S`` (10 s).
 
     Raises:
         TypeError: ``preview`` is not ``None`` or a plain (not ``async``) function.

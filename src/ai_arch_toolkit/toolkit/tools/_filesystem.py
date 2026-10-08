@@ -27,11 +27,13 @@ from pathlib import Path
 from typing import Annotated, Any, TextIO
 
 from ai_arch_toolkit.core import Range, ToolResult, tool
+from ai_arch_toolkit.core._tools._definition import ToolPreview
 from ai_arch_toolkit.core._tools._result import ToolFailure, line_cut
 from ai_arch_toolkit.toolkit.tools._filesystem_policy import (
-    FilesystemAction,
     FilesystemPolicy,
     FilesystemPolicyError,
+    checked,
+    climbs,
     open_beneath,
 )
 from ai_arch_toolkit.toolkit.tools._window import Window, list_window
@@ -108,30 +110,17 @@ def path_failure(error: OSError | ValueError, action: str, path: str) -> ToolFai
     return ToolFailure("upstream", msg)
 
 
-def checked(
-    policy: FilesystemPolicy, path: object, action: FilesystemAction, *, argument: str = "path"
-) -> Path:
-    """The canonical ``path``, if ``policy`` lets ``action`` reach it: the tool's own check,
-    right before its system call (D64, C07.1).
-
-    Raises:
-        ToolFailure: validation_error when ``path`` is not text or is malformed;
-            permission_denied when the policy refuses it; what ``path_failure`` says when it
-            cannot be resolved.
-    """
-    if not isinstance(path, str):
-        msg = f"{argument} must be a path, as text; got {type(path).__name__}."
-        raise ToolFailure("validation_error", msg)
-    try:
-        return policy.check(path, action)
-    except (OSError, ValueError) as e:
-        raise path_failure(e, "reach", path) from e
-
-
-def governed(reason: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-    """The ``@tool`` of a filesystem tool: dangerous, high risk, approved call by call (D4)."""
+def governed(
+    reason: str, *, preview: ToolPreview | None = None
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """The ``@tool`` of a filesystem tool: dangerous, high risk, approved call by call (D4),
+    with ``preview`` writing what a call will do for the approver (C07c)."""
     return tool(
-        capability="filesystem", risk_level="high", requires_approval=True, approval_reason=reason
+        capability="filesystem",
+        risk_level="high",
+        requires_approval=True,
+        approval_reason=reason,
+        preview=preview,
     )
 
 
@@ -652,12 +641,8 @@ def bound_reads(policy: FilesystemPolicy) -> tuple[Callable[..., ToolResult], ..
             raise path_failure(e, "read", str(canonical)) from e
 
     def listing(path: str = ".", pattern: str = "*", offset: int = 0) -> ToolResult:
-        if ".." in pattern.replace("\\", "/").split("/"):
-            msg = (
-                f"pattern {pattern!r} climbs out of the folder with '..', which this policy "
-                "does not follow; list the other folder by its own path."
-            )
-            raise ToolFailure("permission_denied", msg)
+        if (refusal := climbs(pattern)) is not None:  # in the gate's words (L4)
+            raise ToolFailure("permission_denied", refusal)
         canonical = checked(policy, path, "read")
         shows = functools.partial(_within, policy)
         return _listing(canonical, str(canonical), pattern, offset, shows=shows)
