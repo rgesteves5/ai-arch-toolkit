@@ -195,19 +195,30 @@ costs two, the second naming its authors.
 - `chembl_target` — Get ChEMBL target metadata
 - `chembl_activity_search` — Search ChEMBL bioactivity measurements
 
-**Medication labels** — `_rxnorm_dailymed.py`
+**Medication labels** — `_rxnorm_dailymed.py`, `_spl.py`
 
-- `rxnorm_drug_search` — Search RxNorm drug concepts by name
-- `rxnorm_concept` — Get RxNorm concept properties by RxCUI
-- `rxnorm_related` — Get related RxNorm concepts
-- `rxnorm_ndcs` — List NDC product codes for an RxNorm concept
-- `dailymed_label_search` — Search DailyMed SPL drug labels
-- `dailymed_label` — Get DailyMed SPL label metadata and section titles
+RxNorm's lists come whole from RxNav and are paged here, with the total; each term type comes with
+its name (`SCD (Semantic Clinical Drug)`). A DailyMed label is its SPL document, read as text: lists
+one item per line, tables one row per line.
+
+- `rxnorm_drug_search` — Search RxNorm drug concepts by name, page by page (`offset`)
+- `rxnorm_concept` — An RxNorm concept's name, term type and synonym by RxCUI
+- `rxnorm_related` — The concepts related to one, by term types (`tty="IN BN"`) or all of them
+- `rxnorm_ndcs` — The active NDCs of a drug concept (CMS 11-digit form), page by page
+- `dailymed_label_search` — Search DailyMed labels by drug name, NDC or RxCUI, with the total and
+  the next page
+- `dailymed_label` — A label's title, version, effective date and labeler, and its sections,
+  numbered, with their LOINC codes and sizes
+- `dailymed_label_text` — Read a label's text: whole, one section (`section=N`, from
+  `dailymed_label`), or the passages around a term (`find=`), window by window
 
 **Clinical studies** — `_clinical_trials.py`
 
-- `clinical_trials_search` — Search ClinicalTrials.gov studies via the public API v2
-- `clinical_trial_study` — Get detailed metadata for a specific ClinicalTrials.gov NCT ID
+- `clinical_trials_search` — Search ClinicalTrials.gov studies, with the total; the footer gives
+  the next page's token and position
+- `clinical_trial_study` — Read a study's record: whole, one section (overview, summary,
+  description, eligibility, arms, outcomes, locations, references), or the passages around a term
+  (`find=`), window by window; eligibility criteria keep their lines
 
 ---
 
@@ -222,17 +233,23 @@ costs two, the second naming its authors.
 
 **Food products** — `_open_food_facts.py`
 
-- `open_food_facts_product` — Get packaged food metadata by barcode from Open Food Facts
-- `open_food_facts_search` — Search packaged foods with structured Open Food Facts filters
-- `open_food_facts_nutrition` — Get a nutrition-focused Open Food Facts summary by barcode
-- `open_food_facts_compare` — Compare nutrition signals for multiple Open Food Facts products
+- `open_food_facts_product` — A packaged food by barcode, whole: brand, Nutri-Score and NOVA
+  group with what they mean, nutrients per 100 g with units, ingredients, and every allergen,
+  trace, additive, category, label and country
+- `open_food_facts_search` — Search packaged foods by name, brand, category, country or label,
+  with the total and the next page
+- `open_food_facts_compare` — Up to 5 products side by side, one line each: scores, the main
+  nutrients per 100 g and every allergen
 
 **Food safety & ontology** — `_openfda_food.py`, `_foodon.py`
 
-- `openfda_food_recall_search` — Search FDA food enforcement recalls via openFDA
+- `openfda_food_recall_search` — Search FDA food enforcement recalls via openFDA, with the total
+  and the next `skip` (openFDA reads up to `skip=25000`; narrow by date beyond)
 - `openfda_food_recall` — Get a specific FDA food enforcement recall by recall number
-- `foodon_search` — Search FoodOn ontology terms via EMBL-EBI OLS
-- `foodon_term` — Get a FoodOn ontology term by OBO ID
+- `foodon_search` — Search FoodOn ontology terms via EMBL-EBI OLS, with whole definitions, the
+  total and the next `start`
+- `foodon_term` — A FoodOn term by ID: label, definition and synonyms (imported terms keep their
+  own prefix, e.g. `NCBITaxon:3750`)
 
 **Natural events** — `_earthquake.py`, `_eonet.py`
 

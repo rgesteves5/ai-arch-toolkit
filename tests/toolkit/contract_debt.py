@@ -15,7 +15,7 @@ def _owes(*points: str) -> frozenset[str]:
 
 
 # Definitions of the copied cut helpers (``_truncate``, ``_trim``) left in ``toolkit/tools``.
-CUT_HELPERS = 12
+CUT_HELPERS = 10
 
 DEBT: dict[str, frozenset[str]] = {
     "air_quality_forecast": _owes("window", "limits"),
@@ -26,14 +26,10 @@ DEBT: dict[str, frozenset[str]] = {
     "chembl_molecule_search": _owes("window", "errors", "zero", "limits"),
     "chembl_target": _owes("errors"),
     "chembl_target_search": _owes("window", "errors", "zero", "limits"),
-    "clinical_trial_study": _owes("window", "errors"),
-    "clinical_trials_search": _owes("window", "errors", "zero", "limits"),
     "country_info": _owes("errors", "not_found"),
     "crossref_search": _owes("window", "errors", "zero", "limits"),
     "crossref_work": _owes("window", "errors"),
     "csv_read": _owes("window", "limits"),
-    "dailymed_label": _owes("window", "errors", "limits"),
-    "dailymed_label_search": _owes("window", "errors", "zero", "limits"),
     "datacite_doi": _owes("window", "errors"),
     "datacite_search": _owes("window", "errors", "zero", "limits"),
     "date_add": _owes("limits"),
@@ -51,8 +47,6 @@ DEBT: dict[str, frozenset[str]] = {
     "eurostat_dataset_search": _owes("window", "errors", "zero", "limits"),
     "eurostat_dimensions": _owes("window", "limits"),
     "eurostat_series": _owes("window", "limits"),
-    "foodon_search": _owes("window", "errors", "zero", "limits"),
-    "foodon_term": _owes("errors", "not_found"),
     "gbif_occurrence_search": _owes("window", "errors", "zero", "limits"),
     "gbif_species": _owes("errors"),
     "gbif_species_match": _owes("errors", "not_found"),
@@ -70,12 +64,6 @@ DEBT: dict[str, frozenset[str]] = {
     "list_directory": _owes("window"),
     "nvd_cve": _owes("window", "errors", "not_found"),
     "nvd_cve_search": _owes("window", "errors", "zero", "limits"),
-    "open_food_facts_compare": _owes("window", "errors", "not_found"),
-    "open_food_facts_nutrition": _owes("window", "errors", "not_found"),
-    "open_food_facts_product": _owes("window", "errors", "not_found"),
-    "open_food_facts_search": _owes("window", "errors", "zero", "limits"),
-    "openfda_food_recall": _owes("errors"),
-    "openfda_food_recall_search": _owes("window", "errors", "zero", "limits"),
     "osm_reverse_geocode": _owes("window", "errors", "limits"),
     "osm_search_place": _owes("window", "errors", "zero", "limits"),
     "overpass_pois": _owes("window", "errors", "zero", "limits"),
@@ -92,10 +80,6 @@ DEBT: dict[str, frozenset[str]] = {
     "ror_organization": _owes("window", "errors"),
     "ror_search": _owes("window", "errors", "zero", "limits"),
     "run_command": _owes("window", "limits"),
-    "rxnorm_concept": _owes("errors"),
-    "rxnorm_drug_search": _owes("window", "errors", "zero"),
-    "rxnorm_ndcs": _owes("window", "errors"),
-    "rxnorm_related": _owes("window", "errors", "limits"),
     "search_files": _owes("window", "zero", "limits"),
     "semantic_scholar_citations": _owes("window", "errors", "limits"),
     "semantic_scholar_paper": _owes("window", "errors"),

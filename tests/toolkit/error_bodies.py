@@ -267,6 +267,85 @@ ERROR_BODIES: dict[str, tuple[ErrorBody, ...]] = {
             ),
         ),
     ),
+    # T07a, health.
+    "_clinical_trials": (
+        ErrorBody(
+            source=(
+                "https://clinicaltrials.gov/api/oas/v2 (a 400 is a text/plain errorMessage; the "
+                "words are illustrative)"
+            ),
+            status=400,
+            body="filter.overallStatus: unknown value 'RECRUITNG'",
+            type="validation_error",
+            says="unknown value 'RECRUITNG'",
+        ),
+    ),
+    "_rxnorm_dailymed": (
+        ErrorBody(
+            source=(
+                "https://lhncbc.nlm.nih.gov/RxNav/news/API-Changes-202107.html (a 400 for "
+                "invalid parameters)"
+            ),
+            status=400,
+            type="validation_error",
+            says="HTTP 400",
+            tools=frozenset(
+                {"rxnorm_drug_search", "rxnorm_concept", "rxnorm_related", "rxnorm_ndcs"}
+            ),
+        ),
+        ErrorBody(
+            source=(
+                "https://dailymed.nlm.nih.gov/dailymed/app-support-web-services.cfm (errors by "
+                "status: 404, 415, 5xx)"
+            ),
+            status=415,
+            type="upstream",
+            says="415",
+            tools=frozenset({"dailymed_label_search", "dailymed_label", "dailymed_label_text"}),
+        ),
+    ),
+    "_openfda_food": (
+        ErrorBody(
+            source="https://github.com/FDA/openfda/blob/master/api/faers/api_request.js",
+            status=400,
+            body={"error": {"code": "BAD_REQUEST", "message": "Skip value must 25000 or less."}},
+            type="validation_error",
+            says="Skip value must 25000 or less.",
+        ),
+        ErrorBody(
+            source="https://github.com/FDA/openfda/blob/master/api/faers/api.js",
+            status=500,
+            body={
+                "error": {"code": "SERVER_ERROR", "message": "Check your request and try again"}
+            },
+            type="upstream",
+            says="Check your request and try again",
+        ),
+    ),
+    "_open_food_facts": (
+        ErrorBody(
+            source="https://openfoodfacts.github.io/openfoodfacts-server/api/#rate-limits",
+            status=503,
+            type="rate_limited",
+            says="HTTP 503",
+        ),
+    ),
+    "_foodon": (
+        ErrorBody(
+            source=(
+                "https://github.com/EBISPOT/ols4/blob/dev/backend/src/main/java/uk/ac/ebi/spot/ols/"
+                "controller/api/exception/GlobalExceptionHandler.java"
+            ),
+            status=400,
+            body={
+                "status": 400,
+                "message": "Failed to convert value of type 'java.lang.String' to required type "
+                "'java.lang.Integer'",
+            },
+            type="upstream",
+            says="Failed to convert value of type 'java.lang.String'",
+        ),
+    ),
     "_uniprot": (
         ErrorBody(
             source="live, 2026-09-30 (https://rest.uniprot.org/uniprotkb/search)",

@@ -24,6 +24,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from tests.toolkit import health_pages as health
 from tests.toolkit import wiki_pages, youtube_fakes
 from tests.toolkit.wiki_pages import MISSING_PAGE
 from tests.toolkit.youtube_fakes import LOADER, FakeTranscript, FakeTranscriptList
@@ -76,7 +77,7 @@ _LOOKUPS = """
     csv_read dailymed_label datacite_doi earthquake_event eonet_event europe_pmc_article
     europe_pmc_citations eurostat_compare eurostat_dataset eurostat_dimensions eurostat_series
     foodon_term gbif_species gbif_species_match get_forecast get_weather internet_archive_item
-    json_extract list_directory nvd_cve open_food_facts_compare open_food_facts_nutrition
+    json_extract list_directory nvd_cve open_food_facts_compare
     open_food_facts_product open_library_isbn open_library_work openfda_food_recall
     pdb_chemical_component pdb_entry pdb_ligands pubmed_article read_file ror_organization
     rxnorm_concept rxnorm_ndcs rxnorm_related semantic_scholar_citations semantic_scholar_paper
@@ -84,6 +85,7 @@ _LOOKUPS = """
     wiki_outline wiki_read wikidata_entity wiktionary_entry world_bank_compare
     world_bank_indicator world_bank_series youtube_transcript youtube_transcript_languages
     youtube_transcript_search
+    dailymed_label_text
 """
 _SEARCHES = """
     arxiv_search brave_search chembl_activity_search chembl_molecule_search
@@ -110,9 +112,10 @@ KINDS: dict[str, Kind] = {
     **dict.fromkeys(_OTHERS.split(), "other"),
 }
 
-# The 38 tools that never cut what they return (plan, annex A), and tavily_search, whose source
-# serves one page and whose excerpts come whole (C08): point 1, the window, does not apply. Every
-# other tool cuts, and owes a window until a case proves it.
+# The 38 tools that never cut what they return (plan, annex A), and those that stopped cutting
+# when their module was migrated (tavily_search: its source serves one page, and its excerpts
+# come whole, C08): point 1, the window, does not apply. Every other tool cuts, and owes a window
+# until a case proves it.
 _WHOLE = """
     air_quality_current base64_decode base64_encode chembl_molecule chembl_target country_info
     date_add date_diff date_format datetime_now distance_between earthquake_count
@@ -121,6 +124,7 @@ _WHOLE = """
     openfda_food_recall pdb_chemical_component pdb_entry pdb_ligands python_repl
     reverse_geocode rxnorm_concept tavily_search text_stats timezone_convert timezone_lookup
     unit_convert uniprot_sequence weather_units who_indicator
+    open_food_facts_compare open_food_facts_product
 """
 WHOLE = frozenset(_WHOLE.split())
 
@@ -256,6 +260,57 @@ WINDOW_CASES: dict[str, Case] = {
     ),
     "open_library_work": Case(args={"max_chars": 500}, answers=_record_twice(_LIBRARY_WORK)),
     "open_library_isbn": Case(args={"max_chars": 500}, answers=_record_twice(_LIBRARY_EDITION)),
+    # T07a, health: sources that page (by cursor, page, skip or start) send each page; the
+    # tools that page a list they hold whole get it once.
+    "clinical_trials_search": Case(
+        args={"max_results": 2},
+        answers=(
+            Answer(body=health.studies(1, 2, token="T2", total=5)),
+            Answer(body=health.studies(3, 4, token="T3")),
+        ),
+    ),
+    "clinical_trial_study": Case(
+        args={"max_chars": 500}, answers=(Answer(body=health.study(sites=60)),)
+    ),
+    "rxnorm_drug_search": Case(
+        args={"max_results": 10}, answers=(Answer(body=health.concepts("drugGroup", 30)),)
+    ),
+    "rxnorm_related": Case(
+        args={"max_results": 10}, answers=(Answer(body=health.concepts("allRelatedGroup", 30)),)
+    ),
+    "rxnorm_ndcs": Case(args={"max_results": 10}, answers=(Answer(body=health.ndcs(30)),)),
+    "dailymed_label_search": Case(
+        args={"max_results": 2},
+        answers=(
+            Answer(body=health.labels(2, total=5, pages=3)),
+            Answer(body=health.labels(2, total=5, pages=3)),
+        ),
+    ),
+    "dailymed_label": Case(args={}, answers=(Answer(body=health.spl(60)),)),
+    "dailymed_label_text": Case(
+        args={"max_chars": 500}, answers=(Answer(body=health.spl(3, paragraphs=40)),)
+    ),
+    "openfda_food_recall_search": Case(
+        args={"max_results": 2},
+        answers=(
+            Answer(body=health.recalls(2, total=5)),
+            Answer(body=health.recalls(2, total=5, skip=2)),
+        ),
+    ),
+    "open_food_facts_search": Case(
+        args={"max_results": 2},
+        answers=(
+            Answer(body=health.products(2, total=5)),
+            Answer(body=health.products(2, total=5, first=2)),
+        ),
+    ),
+    "foodon_search": Case(
+        args={"max_results": 2},
+        answers=(
+            Answer(body=health.terms(2, total=5)),
+            Answer(body=health.terms(2, total=5, start=2)),
+        ),
+    ),
 }
 
 
@@ -324,6 +379,9 @@ NOT_FOUND_CASES: dict[str, Case] = {
             "youtube_transcript_search",
         )
     },
+    # T07a, health: a 404 for a label or a product; OLS answers an unknown ID with no terms.
+    **_missing_by_404("dailymed_label_text", "open_food_facts_product", "open_food_facts_compare"),
+    "foodon_term": Case(args={}, answers=(Answer(body=health.terms(0, total=0)),)),
 }
 
 
@@ -354,5 +412,40 @@ ZERO_CASES: dict[str, ZeroCase] = {
         args={"query": "zzqqxx"},
         answers=(Answer(body={"numFound": 0, "start": 0, "docs": []}),),
         says="zzqqxx",
+    ),
+    # T07a, health: openFDA answers a search that matches nothing with a 404 NOT_FOUND
+    # (https://github.com/FDA/openfda/blob/master/api/faers/api.js).
+    "clinical_trials_search": ZeroCase(
+        args={"query": "zzqqxx"},
+        answers=(Answer(body={"studies": [], "totalCount": 0}),),
+        says="zzqqxx",
+    ),
+    "rxnorm_drug_search": ZeroCase(
+        args={"name": "zzqqxx"},
+        answers=(Answer(body={"drugGroup": {"name": None}}),),
+        says="zzqqxx",
+    ),
+    "dailymed_label_search": ZeroCase(
+        args={"drug_name": "zzqqxx"},
+        answers=(Answer(body=health.labels(0, total=0, pages=0)),),
+        says="zzqqxx",
+    ),
+    "openfda_food_recall_search": ZeroCase(
+        args={"query": "zzqqxx"},
+        answers=(
+            Answer(
+                status=404,
+                body={"error": {"code": "NOT_FOUND", "message": "No matches found!"}},
+            ),
+        ),
+        says="zzqqxx",
+    ),
+    "open_food_facts_search": ZeroCase(
+        args={"product_name": "zzqqxx"},
+        answers=(Answer(body=health.products(0, total=0)),),
+        says="zzqqxx",
+    ),
+    "foodon_search": ZeroCase(
+        args={"query": "zzqqxx"}, answers=(Answer(body=health.terms(0, total=0)),), says="zzqqxx"
     ),
 }

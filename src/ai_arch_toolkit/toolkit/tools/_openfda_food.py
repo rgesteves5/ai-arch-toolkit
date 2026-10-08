@@ -1,25 +1,53 @@
-"""OpenFDA food tools — public FDA food enforcement recall search."""
+"""openFDA food enforcement recalls: search them, and read one by recall number (T07; D39).
+
+openFDA pages a search by ``skip`` and ``limit`` and counts the matches (``meta.results.total``);
+``limit`` goes up to 1000 and ``skip`` up to 25000 (https://open.fda.gov/apis/query-parameters/),
+so past that a search is narrowed by date. Its server answers a search that matches nothing with
+a 404 ``NOT_FOUND`` "No matches found!", a parameter it refuses with a 400 ``BAD_REQUEST`` and the
+reason, and a failed search with a 500 ``SERVER_ERROR``, each as ``{"error": {"code", "message"}}``
+(https://github.com/FDA/openfda/blob/master/api/faers/api.js).
+"""
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
 from datetime import date
-from typing import Any
+from typing import Annotated, Any
 
-from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.core import Range, ToolResult, tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
-from ai_arch_toolkit.toolkit.tools._http import Api
+from ai_arch_toolkit.toolkit.tools._http import Api, Reply
+from ai_arch_toolkit.toolkit.tools._window import list_window
 
-# openFDA answers a search that matches nothing with HTTP 404 and
-# {"error": {"code": "NOT_FOUND", "message": "No matches found!"}} (observed; the tests replay it;
-# API basics: https://open.fda.gov/apis/), so its searches declare ``empty_on_404``. Its other
-# errors carry their text in ``error.message``, which the door already quotes.
-_API = Api(base="https://api.fda.gov/food/enforcement.json", name="openFDA", timeout_s=15)
-_MAX_RESULTS_LIMIT = 20
+
+def _openfda_error(reply: Reply) -> ToolFailure | str | None:
+    """The error an openFDA answer reports: a refused parameter is the caller's to fix
+    (``validation_error``); any other code is the source's words, typed by the status."""
+    error = reply.body.get("error") if isinstance(reply.body, dict) else None
+    if not isinstance(error, dict):
+        return None
+    code, message = _string(error.get("code")), _string(error.get("message"))
+    if code == "BAD_REQUEST":
+        return ToolFailure(
+            "validation_error",
+            f"openFDA refused the search ({message or code}); check the filters and the dates",
+        )
+    return ": ".join(text for text in (code, message) if text)
+
+
+# A search that matches nothing is a 404, so searches declare ``empty_on_404`` and the recall
+# lookup ``missing=``; the reader reads every other error.
+_API = Api(
+    base="https://api.fda.gov/food/enforcement.json",
+    name="openFDA",
+    timeout_s=15,
+    error_reader=_openfda_error,
+)
+_PAGE_MAX = 20
+_SKIP_MAX = 25_000
 _TEXT_RE = re.compile(r"^[\w\s,.'&()/%:+-]{1,160}$", re.UNICODE)
 _RECALL_RE = re.compile(r"^[A-Z]-\d{3,5}-\d{4}$", re.IGNORECASE)
-_NO_RECALLS = "No openFDA food recalls found."
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -54,32 +82,28 @@ def openfda_food_recall_search(
     country: str = "",
     from_date: str = "",
     to_date: str = "",
-    max_results: int = 10,
-    skip: int = 0,
-) -> str:
-    """Search FDA food enforcement recalls using openFDA.
+    max_results: Annotated[int, Range(1, _PAGE_MAX)] = 10,
+    skip: Annotated[int, Range(0, _SKIP_MAX)] = 0,
+) -> ToolResult:
+    """Search FDA food enforcement recalls, newest reports included, through openFDA.
 
     Args:
-        query: Optional general text query across product, reason, and firm.
-        product: Optional product description filter.
-        reason: Optional reason-for-recall filter.
-        classification: Optional recall class, e.g. "Class I", "Class II", "Class III".
-        status: Optional recall status, e.g. "Ongoing" or "Terminated".
-        state: Optional recalling firm state code.
-        country: Optional recalling firm country.
-        from_date: Optional report date lower bound as YYYY-MM-DD.
-        to_date: Optional report date upper bound as YYYY-MM-DD.
-        max_results: Number of recalls to return (1-20). Defaults to 10.
-        skip: Zero-based result offset. Defaults to 0.
+        query: Text to find in the product, the reason or the firm.
+        product: Text of the product description.
+        reason: Text of the reason for the recall.
+        classification: The recall's class: "Class I", "Class II" or "Class III".
+        status: "Ongoing", "Completed" or "Terminated".
+        state: The recalling firm's state code, e.g. "MI".
+        country: The recalling firm's country, e.g. "United States".
+        from_date: The earliest report date, as YYYY-MM-DD.
+        to_date: The latest report date, as YYYY-MM-DD.
+        max_results: How many recalls to list.
+        skip: How many recalls to skip; the footer gives the next.
 
     Raises:
-        ToolFailure: validation_error when ``skip`` is negative, a filter or a date is invalid,
-            or nothing is given to search.
+        ToolFailure: validation_error when a filter or a date is invalid, nothing is given to
+            search, or openFDA refuses the search.
     """
-    if skip < 0:
-        raise ToolFailure(
-            "validation_error", f"skip must be greater than or equal to 0, not {skip}"
-        )
     search = _build_search(query, product, reason, classification, status, state, country)
     date_filter = _date_filter(from_date, to_date)
     if not search and not date_filter:
@@ -88,13 +112,25 @@ def openfda_food_recall_search(
         )
     if date_filter:
         search = f"({search}) AND {date_filter}" if search else date_filter
-
-    params = {
-        "search": search,
-        "limit": str(max(1, min(max_results, _MAX_RESULTS_LIMIT))),
-        "skip": str(skip),
-    }
-    return _API.get_json(params=params, parse=_search_text, empty_on_404=True)
+    described = _described(
+        {
+            "query": query,
+            "product": product,
+            "reason": reason,
+            "class": classification,
+            "status": status,
+            "state": state,
+            "country": country,
+        },
+        from_date.strip(),
+        to_date.strip(),
+    )
+    params = {"search": search, "limit": str(max_results), "skip": str(skip)}
+    return _API.get_json(
+        params=params,
+        parse=lambda data: _search_answer(data, described, skip),
+        empty_on_404=True,
+    )
 
 
 @tool(capability="network")
@@ -126,21 +162,38 @@ def openfda_food_recall(recall_number: str) -> str:
 
     if not recalls:
         raise ToolFailure("not_found", missing)
-    return f"openFDA food recall {normalized}:\n" + _format_recalls(
-        recalls,
-        include_index=False,
-        include_details=True,
-    )
+    recall = recalls[0]
+    lines = [recall.product_description, *_lines(recall, details=True)]
+    return f"openFDA food recall {normalized}:\n" + "\n   ".join(lines)
 
 
-def _search_text(data: dict[str, Any]) -> str:
+def _search_answer(data: dict[str, Any], described: str, skip: int) -> ToolResult:
     recalls = _recalls_from_data(data)
     if not recalls:
-        return _NO_RECALLS
-    total = _string(data.get("meta", {}).get("results", {}).get("total")) or "?"
-    return f"openFDA food recalls (returned {len(recalls)}, total {total}):\n" + _format_recalls(
-        recalls
-    )
+        later = f" after the first {skip}" if skip else ""
+        return ToolResult.success(f"No openFDA food recalls match {described}{later}.")
+    total = _dict(_dict(data, "meta"), "results").get("total")
+    total = total if isinstance(total, int) and not isinstance(total, bool) else None
+    shown = skip + len(recalls)
+    more = total is not None and shown < total
+    next_call = {"skip": shown} if more and shown <= _SKIP_MAX else None
+    heading = f"openFDA food recalls for {described}:"
+    if more and next_call is None:
+        heading += (
+            f" (openFDA pages up to skip={_SKIP_MAX}; narrow with from_date and to_date for the "
+            "rest)"
+        )
+    entries = [_entry(number, recall) for number, recall in enumerate(recalls, start=skip + 1)]
+    window = list_window(entries, first=skip + 1, total=total, next_call=next_call)
+    return window.result(heading=heading)
+
+
+def _described(filters: dict[str, str], start: str, end: str) -> str:
+    """The search in words: ``query 'milk', class 'Class I', report dates 2016-01-01 to …``."""
+    said = [f"{name} {value.strip()!r}" for name, value in filters.items() if value.strip()]
+    if start or end:
+        said.append(f"report dates {start or 'any'} to {end or 'any'}")
+    return ", ".join(said)
 
 
 def _build_search(
@@ -253,46 +306,37 @@ def _parse_recall(data: dict[str, Any]) -> _OpenFdaRecall | None:
     )
 
 
-def _format_recalls(
-    recalls: list[_OpenFdaRecall],
-    *,
-    include_index: bool = True,
-    include_details: bool = False,
-) -> str:
-    blocks: list[str] = []
-    for index, recall in enumerate(recalls, start=1):
-        title = (
-            f"{index}. {recall.recall_number} — {recall.product_description}"
-            if include_index
-            else recall.product_description
-        )
-        lines = [title]
-        meta = [f"recall: {recall.recall_number}"]
-        if recall.classification:
-            meta.append(f"class: {recall.classification}")
-        if recall.status:
-            meta.append(f"status: {recall.status}")
-        if recall.report_date:
-            meta.append(f"report date: {recall.report_date}")
-        lines.append("   " + " | ".join(meta))
-        if recall.firm:
-            location = ", ".join(
-                item for item in (recall.city, recall.state, recall.country) if item
-            )
-            firm = f"{recall.firm} ({location})" if location else recall.firm
-            lines.append(f"   Firm: {firm}")
-        if recall.reason:
-            lines.append(f"   Reason: {recall.reason}")
-        if include_details and recall.distribution:
-            lines.append(f"   Distribution: {recall.distribution}")
-        if include_details and recall.code_info:
-            lines.append(f"   Code info: {recall.code_info}")
-        if include_details and recall.initiation_date:
-            lines.append(f"   Initiated: {recall.initiation_date}")
-        if include_details and recall.termination_date:
-            lines.append(f"   Terminated: {recall.termination_date}")
-        blocks.append("\n".join(lines))
-    return "\n\n".join(blocks)
+def _entry(number: int, recall: _OpenFdaRecall) -> str:
+    """A recall in a search's list: its number, product, class, status, report date, firm and
+    reason."""
+    return "\n   ".join(
+        [f"{number}. {recall.recall_number} — {recall.product_description}", *_lines(recall)]
+    )
+
+
+def _lines(recall: _OpenFdaRecall, *, details: bool = False) -> list[str]:
+    meta = [
+        f"recall: {recall.recall_number}",
+        _labelled("class", recall.classification),
+        _labelled("status", recall.status),
+        _labelled("report date", recall.report_date),
+    ]
+    place = ", ".join(item for item in (recall.city, recall.state, recall.country) if item)
+    firm = f"{recall.firm} ({place})" if recall.firm and place else recall.firm
+    lines = [" | ".join(item for item in meta if item), _labelled("Firm", firm)]
+    lines.append(_labelled("Reason", recall.reason))
+    if details:
+        lines += [
+            _labelled("Distribution", recall.distribution),
+            _labelled("Code info", recall.code_info),
+            _labelled("Initiated", recall.initiation_date),
+            _labelled("Terminated", recall.termination_date),
+        ]
+    return [line for line in lines if line]
+
+
+def _labelled(label: str, value: str) -> str:
+    return f"{label}: {value}" if value else ""
 
 
 def _valid_text(value: str) -> bool:
@@ -314,3 +358,8 @@ def _string(value: Any) -> str:
     if value is None:
         return ""
     return " ".join(str(value).split())
+
+
+def _dict(data: dict[str, Any], key: str) -> dict[str, Any]:
+    value = data.get(key)
+    return value if isinstance(value, dict) else {}

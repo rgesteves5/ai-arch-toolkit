@@ -71,7 +71,6 @@ from ai_arch_toolkit.toolkit.tools._news import hacker_news
 from ai_arch_toolkit.toolkit.tools._nvd import nvd_cve, nvd_cve_search
 from ai_arch_toolkit.toolkit.tools._open_food_facts import (
     open_food_facts_compare,
-    open_food_facts_nutrition,
     open_food_facts_product,
     open_food_facts_search,
 )
@@ -97,6 +96,7 @@ from ai_arch_toolkit.toolkit.tools._ror import ror_organization, ror_search
 from ai_arch_toolkit.toolkit.tools._rxnorm_dailymed import (
     dailymed_label,
     dailymed_label_search,
+    dailymed_label_text,
     rxnorm_concept,
     rxnorm_drug_search,
     rxnorm_ndcs,
@@ -175,6 +175,7 @@ __all__ = [
     "crossref_work",
     "dailymed_label",
     "dailymed_label_search",
+    "dailymed_label_text",
     "datacite_doi",
     "datacite_search",
     "date_add",
@@ -218,7 +219,6 @@ __all__ = [
     "nvd_cve",
     "nvd_cve_search",
     "open_food_facts_compare",
-    "open_food_facts_nutrition",
     "open_food_facts_product",
     "open_food_facts_search",
     "open_library_isbn",

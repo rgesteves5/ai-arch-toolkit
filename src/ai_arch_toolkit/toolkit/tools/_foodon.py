@@ -1,24 +1,38 @@
-"""FoodOn tools — public food ontology search through EMBL-EBI OLS."""
+"""FoodOn: search the food ontology's terms, and read one by ID, through EMBL-EBI's OLS (T07; D39).
+
+OLS4's v1 search is Solr's: ``rows`` and ``start`` page it, and ``response.numFound`` counts the
+matches; by default it returns each term's label, IDs, definition and synonyms, and terms FoodOn
+imports from other ontologies (``NCBITaxon:3750``) come with their own prefix
+(https://github.com/EBISPOT/ols4/blob/dev/backend/src/main/java/uk/ac/ebi/spot/ols/controller/api/v1/V1SearchController.java).
+Its errors are ``{"status": …, "message": …}``, whose message the door quotes
+(``GlobalExceptionHandler.java``, same repository). A definition is never cut (D39).
+"""
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Annotated, Any
 
-from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.core import Range, ToolResult, tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._http import Api
+from ai_arch_toolkit.toolkit.tools._window import list_window
 
 _API = Api(base="https://www.ebi.ac.uk/ols4/api/search", name="EMBL-EBI OLS", timeout_s=15)
-_MAX_RESULTS_LIMIT = 20
-_TERM_RE = re.compile(r"^(FOODON[:_]\d{7,}|[A-Za-z]+[:_]\d+)$", re.IGNORECASE)
-_DESCRIPTION_MAX_CHARS = 700
+_PAGE_MAX = 20
+_TERM_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]*[:_]\d+$")
+_SYNONYMS = (
+    ("Exact synonyms", "exact_synonyms"),
+    ("Related synonyms", "related_synonyms"),
+    ("Narrow synonyms", "narrow_synonyms"),
+    ("Broad synonyms", "broad_synonyms"),
+)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class _FoodOnTerm:
-    """Normalized FoodOn ontology term."""
+    """A term as the tools read it."""
 
     iri: str
     obo_id: str
@@ -26,91 +40,99 @@ class _FoodOnTerm:
     label: str
     type: str
     ontology: str
-    descriptions: tuple[str, ...]
+    definition: str
+    synonyms: tuple[tuple[str, str], ...]
 
 
 @tool(capability="network")
-def foodon_search(query: str, max_results: int = 10, start: int = 0) -> str:
-    """Search FoodOn food ontology terms via EMBL-EBI OLS.
+def foodon_search(
+    query: str,
+    max_results: Annotated[int, Range(1, _PAGE_MAX)] = 10,
+    start: Annotated[int, Range(0)] = 0,
+) -> ToolResult:
+    """Search FoodOn's food terms, with their definitions.
 
     Args:
-        query: Food concept search text, e.g. "apple", "yogurt", or "fermented food".
-        max_results: Number of terms to return (1-20). Defaults to 10.
-        start: Zero-based result offset. Defaults to 0.
+        query: A food concept, e.g. "apple", "yogurt" or "fermented food".
+        max_results: How many terms to list.
+        start: How many terms to skip; the footer gives the next start.
 
     Raises:
-        ToolFailure: validation_error when ``query`` is empty or ``start`` is negative.
+        ToolFailure: validation_error when ``query`` is empty.
     """
     query = query.strip()
     if not query:
         msg = "query cannot be empty; pass a food concept, e.g. 'apple'."
         raise ToolFailure("validation_error", msg)
-    if start < 0:
-        msg = f"start must be greater than or equal to 0, got {start}."
-        raise ToolFailure("validation_error", msg)
-
-    return _API.get_json(
-        params=_search_params(query, max_results=max_results, start=start),
-        parse=lambda data: _search_text(data, query, start),
-    )
+    params = {"q": query, "ontology": "foodon", "rows": str(max_results), "start": str(start)}
+    return _API.get_json(params=params, parse=lambda data: _search_answer(data, query, start))
 
 
 @tool(capability="network")
 def foodon_term(term_id: str) -> str:
-    """Fetch a FoodOn ontology term by OBO ID.
+    """Read a FoodOn term by its ID: label, definition and synonyms.
 
     Args:
-        term_id: FoodOn OBO ID, e.g. "FOODON:00002473" or "FOODON_00002473".
+        term_id: The term's ID, as foodon_search gives it, e.g. "FOODON:00002473"
+            ("FOODON_00002473" works too).
 
     Raises:
-        ToolFailure: validation_error when ``term_id`` is not an OBO ID; not_found when OLS has
-            no FoodOn term with that ID.
+        ToolFailure: validation_error when ``term_id`` is not an ontology ID; not_found when
+            FoodOn has no term with it.
     """
-    normalized = term_id.strip().replace("_", ":").upper()
     if not _TERM_RE.fullmatch(term_id.strip()):
         msg = f"invalid term_id {term_id!r}; a FoodOn term ID looks like FOODON:00002473."
         raise ToolFailure("validation_error", msg)
-
-    return _API.get_json(
-        params=_search_params(normalized, max_results=5, start=0),
-        parse=lambda data: _term_text(data, normalized),
-    )
+    wanted = term_id.strip().replace("_", ":", 1)
+    params = {"q": wanted, "ontology": "foodon", "queryFields": "obo_id", "rows": "5"}
+    return _API.get_json(params=params, parse=lambda data: _term_text(data, wanted))
 
 
-def _search_params(query: str, *, max_results: int, start: int) -> dict[str, str]:
-    return {
-        "q": query,
-        "ontology": "foodon",
-        "rows": str(max(1, min(max_results, _MAX_RESULTS_LIMIT))),
-        "start": str(start),
-    }
-
-
-def _search_text(data: dict[str, Any], query: str, start: int) -> str:
-    terms = _terms_from_data(data)
+def _search_answer(data: dict[str, Any], query: str, start: int) -> ToolResult:
+    terms = _terms(data)
     if not terms:
-        return f"No FoodOn terms found for: {query!r}"
-    total = _string(data.get("response", {}).get("numFound")) or "?"
-    return (
-        f"FoodOn terms for {query!r} (start {start}, returned {len(terms)}, total {total}):\n"
-        + _format_terms(terms)
-    )
+        later = f" after the first {start}" if start else ""
+        return ToolResult.success(f"No FoodOn terms match {query!r}{later}.")
+    found = _dict(data, "response").get("numFound")
+    total = found if isinstance(found, int) and not isinstance(found, bool) else None
+    shown = start + len(terms)
+    next_call = {"start": shown} if total is not None and shown < total else None
+    entries = [_entry(number, term) for number, term in enumerate(terms, start=start + 1)]
+    window = list_window(entries, first=start + 1, total=total, next_call=next_call)
+    return window.result(heading=f"FoodOn terms for {query!r} (details: foodon_term):")
 
 
-def _term_text(data: dict[str, Any], normalized: str) -> str:
-    terms = [term for term in _terms_from_data(data) if term.obo_id.upper() == normalized]
-    if not terms:
-        msg = f"no FoodOn term with ID {normalized}; search with foodon_search."
+def _entry(number: int, term: _FoodOnTerm) -> str:
+    head = [f"{number}. {term.label}", term.obo_id, term.type]
+    head.append(f"ontology {term.ontology}" if term.ontology else "")
+    lines = [" | ".join(part for part in head if part)]
+    lines += [_labelled("Definition", term.definition), _labelled("IRI", term.iri)]
+    return "\n   ".join(line for line in lines if line)
+
+
+def _term_text(data: dict[str, Any], wanted: str) -> str:
+    matches = [term for term in _terms(data) if term.obo_id.upper() == wanted.upper()]
+    if not matches:
+        msg = f"no FoodOn term with ID {wanted.upper()}; search with foodon_search."
         raise ToolFailure("not_found", msg)
-    return f"FoodOn term {normalized}:\n" + _format_terms(
-        [terms[0]],
-        include_index=False,
-        include_full_description=True,
-    )
+    term = matches[0]
+    facts = [
+        _labelled("type", term.type),
+        _labelled("ontology", term.ontology),
+        _labelled("short form", term.short_form),
+    ]
+    lines = [
+        f"FoodOn term {term.obo_id}: {term.label}",
+        " | ".join(fact for fact in facts if fact),
+        _labelled("Definition", term.definition),
+        *(_labelled(label, synonyms) for label, synonyms in term.synonyms),
+        _labelled("IRI", term.iri),
+    ]
+    return "\n   ".join(line for line in lines if line)
 
 
-def _terms_from_data(data: dict[str, Any]) -> list[_FoodOnTerm]:
-    docs = data.get("response", {}).get("docs", [])
+def _terms(data: dict[str, Any]) -> list[_FoodOnTerm]:
+    docs = _dict(data, "response").get("docs")
     if not isinstance(docs, list):
         return []
     return [term for item in docs if isinstance(item, dict) if (term := _parse_term(item))]
@@ -121,6 +143,9 @@ def _parse_term(data: dict[str, Any]) -> _FoodOnTerm | None:
     obo_id = _string(data.get("obo_id"))
     if not label and not obo_id:
         return None
+    synonyms = tuple(
+        (name, ", ".join(found)) for name, key in _SYNONYMS if (found := _strings(data.get(key)))
+    )
     return _FoodOnTerm(
         iri=_string(data.get("iri")),
         obo_id=obo_id,
@@ -128,56 +153,26 @@ def _parse_term(data: dict[str, Any]) -> _FoodOnTerm | None:
         label=label or "(unlabeled)",
         type=_string(data.get("type")),
         ontology=_string(data.get("ontology_name")),
-        descriptions=_string_tuple(data.get("description")),
+        definition=" ".join(_strings(data.get("description"))),
+        synonyms=synonyms,
     )
 
 
-def _format_terms(
-    terms: list[_FoodOnTerm],
-    *,
-    include_index: bool = True,
-    include_full_description: bool = False,
-) -> str:
-    blocks: list[str] = []
-    for index, term in enumerate(terms, start=1):
-        title = f"{index}. {term.label}" if include_index else term.label
-        lines = [title]
-        meta = []
-        if term.obo_id:
-            meta.append(f"id: {term.obo_id}")
-        if term.short_form:
-            meta.append(f"short: {term.short_form}")
-        if term.type:
-            meta.append(f"type: {term.type}")
-        if term.ontology:
-            meta.append(f"ontology: {term.ontology}")
-        if meta:
-            lines.append("   " + " | ".join(meta))
-        if term.descriptions:
-            description = " ".join(term.descriptions)
-            if not include_full_description:
-                description = _truncate(description, _DESCRIPTION_MAX_CHARS)
-            lines.append(f"   Definition: {description}")
-        if term.iri:
-            lines.append(f"   IRI: {term.iri}")
-        blocks.append("\n".join(lines))
-    return "\n\n".join(blocks)
+def _labelled(label: str, value: str) -> str:
+    return f"{label}: {value}" if value else ""
 
 
-def _string_tuple(value: Any) -> tuple[str, ...]:
-    if isinstance(value, list):
-        return tuple(_string(item) for item in value if _string(item))
-    text = _string(value)
-    return (text,) if text else ()
+def _dict(data: dict[str, Any], key: str) -> dict[str, Any]:
+    value = data.get(key)
+    return value if isinstance(value, dict) else {}
 
 
-def _string(value: Any) -> str:
+def _strings(value: object) -> list[str]:
+    values = value if isinstance(value, list) else [value]
+    return [text for item in values if (text := _string(item))]
+
+
+def _string(value: object) -> str:
     if value is None:
         return ""
     return " ".join(str(value).split())
-
-
-def _truncate(text: str, max_chars: int) -> str:
-    if len(text) <= max_chars:
-        return text
-    return text[: max_chars - 15].rstrip() + " ... [truncated]"
