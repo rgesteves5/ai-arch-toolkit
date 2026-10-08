@@ -14,7 +14,12 @@ import inspect
 import json
 from collections.abc import Callable, Iterator, Mapping
 
-from ai_arch_toolkit.core._tools._definition import ToolDefinition, ToolRuntimePolicy, ToolSchema
+from ai_arch_toolkit.core._tools._definition import (
+    ToolDefinition,
+    ToolPreview,
+    ToolRuntimePolicy,
+    ToolSchema,
+)
 from ai_arch_toolkit.core._tools._schema import _SCHEMA_DEPTH_LIMIT, _inline_local_refs
 
 # Receives a call's arguments in one dict; may be ``async``.
@@ -29,6 +34,7 @@ def tool_from_schema(
     description: str = "",
     input_schema: Mapping[str, object],
     policy: ToolRuntimePolicy | None = None,
+    preview: ToolPreview | None = None,
 ) -> Callable[..., object]:
     """Build a tool from a complete JSON Schema and a handler that takes the arguments as a dict.
 
@@ -54,8 +60,11 @@ def tool_from_schema(
         input_schema: A JSON Schema whose root is ``{"type": "object", ...}``.
         policy: Governance metadata (capability, risk, approval, output and time bounds); the
             default is a low-risk tool that needs no approval.
+        preview: Writes what a call will do, from its arguments, for the approver and a dry run
+            (see :class:`ToolDefinition`); ``None`` shows the arguments as JSON.
 
     Raises:
+        TypeError: ``preview`` is not a plain (not ``async``) function.
         ValueError: ``name`` is not portable (1 to 64 letters, digits, ``_`` or ``-``, starting
             with a letter or ``_``); ``input_schema`` is not JSON (``NaN``, a set), its root is
             not an object, it refers outside itself (``https://...``, another file) or to a
@@ -71,7 +80,10 @@ def tool_from_schema(
     fn.__name__ = fn.__qualname__ = name
     fn.__doc__ = description
     fn.__dict__["__tool_definition__"] = ToolDefinition(
-        fn=fn, schema=schema, policy=policy if policy is not None else ToolRuntimePolicy()
+        fn=fn,
+        schema=schema,
+        policy=policy if policy is not None else ToolRuntimePolicy(),
+        preview=preview,
     )
     return fn
 

@@ -7,7 +7,7 @@ facades, internal helpers, frozen data contracts, and explicit factories.
 
 ## Linting Contract
 
-- Target Python is 3.13+. Every Python file starts with
+- Target Python is 3.13.4+. Every Python file starts with
   `from __future__ import annotations`.
 - Ruff is the formatter and linter. The repo uses `target-version = "py313"`,
   line length 99, and rules `E F W I UP B SIM RUF`.

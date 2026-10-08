@@ -77,7 +77,21 @@ Full `@tool` signature:
     approval_reason: str = "",          # shown to the approver
     max_output_chars: int | None = 200_000,  # longer results are cut and marked; None: no cut
     timeout_s: float | None = 120.0,    # then the call fails with "timeout"; None: no deadline
+    preview: Callable[[dict[str, Any]], str] | None = None,  # what a call will do, for a person
 )
+```
+
+`preview=` writes what the approver of a call reads (`ApprovalRequest.preview`) and what a dry run records (`audit["preview"]`), in place of the tool's name and arguments as JSON. It is a plain function: it receives a copy of the call's arguments, validated and changed by any gate before the approval, and returns text, which is cut at 16,000 characters. It should only read; it runs in a thread on the async path, and one that raises or returns anything but text falls back to the JSON. An `async def` or anything not callable raises `TypeError` when the decorator is applied. See [Human approval](safety.md#human-approval).
+
+```python
+@tool(
+    risk_level="high",
+    requires_approval=True,
+    preview=lambda arguments: f"drop table {arguments['name']} and its rows",
+)
+def delete_table(name: str) -> str:
+    """Drop a database table."""
+    ...
 ```
 
 `schema=` does not replace the inferred input schema: it maps a parameter's name to JSON Schema keywords merged into what was inferred for that parameter — `@tool(schema={"unit": {"enum": ["km", "mi"]}})` on `get_distance` keeps `unit`'s type, description and default and adds the `enum`, which the executor then checks. Anything else raises `TypeError` when the decorator is applied: a complete schema (`{"type": "object", "properties": ...}`) would otherwise become parameters named `type` and `properties`. A tool described by a complete schema is built with [`tool_from_schema`](#tools-from-a-json-schema).
@@ -117,7 +131,7 @@ group = ToolGroup(search_tool, approval_handler=ask)
 - **Validation** is the one `@tool` gets, before any gate or approval (see [Argument validation](safety.md#argument-validation)): root arguments are coerced (`"3"` for an `integer`, through `anyOf`, `oneOf` or a `type` list too), `additionalProperties: false` at the root refuses an unknown key, and `null` passes only where the schema admits it. A branch is read with its parent's keywords, so MCP's titled enum, `{"type": "integer", "oneOf": [{"const": 1, "title": "Low"}, ...]}`, coerces `"1"` too. Nested values are left as they came, for the handler — or the server behind it — to check, and so is a value whose schema offers more than 1,000 alternatives once its branches are flattened. A refusal names the argument, what was expected and what came, in some 1,000 characters at most.
 - **The schema** is copied and sent as it came, `title`, `$schema`, `default` and `x-*` keys included, with its local `#/$defs/...` references inlined (a recursive one stays a reference, with its `$defs` table at the root).
 - **`ValueError`** when the tool is made, and no other exception for a schema that is JSON: a name outside the rule above, a schema that is not JSON (`NaN`, a set), a root that is not `"type": "object"`, a `$ref` outside the schema (`https://...`, another file — never fetched) or to a definition that is not an object schema (`true`, a list), or references whose inlining would make the schema larger than about 100,000 characters (some 25,000 tokens in every request) or deeper than 100 levels, each reference followed counting as one. A hostile schema fails in milliseconds.
-- `policy` takes the same `ToolRuntimePolicy` `@tool` builds from its keywords; the default is a low-risk tool that needs no approval.
+- `policy` takes the same `ToolRuntimePolicy` `@tool` builds from its keywords; the default is a low-risk tool that needs no approval. `preview` takes the hook `@tool(preview=...)` does.
 
 ---
 

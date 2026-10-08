@@ -12,7 +12,9 @@ from ai_arch_toolkit.core._tools._definition import (
     DEFAULT_TIMEOUT_S,
     RiskLevel,
     ToolDefinition,
+    ToolPreview,
     ToolRuntimePolicy,
+    check_preview,
 )
 from ai_arch_toolkit.core._tools._schema import tool_schema
 
@@ -32,6 +34,7 @@ def tool(
     approval_reason: str = "",
     max_output_chars: int | None = DEFAULT_MAX_OUTPUT_CHARS,
     timeout_s: float | None = DEFAULT_TIMEOUT_S,
+    preview: ToolPreview | None = None,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]: ...
 
 
@@ -47,6 +50,7 @@ def tool(
     approval_reason: str = "",
     max_output_chars: int | None = DEFAULT_MAX_OUTPUT_CHARS,
     timeout_s: float | None = DEFAULT_TIMEOUT_S,
+    preview: ToolPreview | None = None,
 ) -> Callable[..., Any] | Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Decorator that builds a ``ToolDefinition`` from hints and docstring.
 
@@ -56,12 +60,16 @@ def tool(
     ``schema`` maps a parameter's name to JSON Schema keywords merged into what was inferred for
     it; a tool described by a complete JSON Schema is :func:`tool_from_schema`'s.
     ``max_output_chars`` and ``timeout_s`` bound each call (see :class:`ToolRuntimePolicy`).
+    ``preview`` writes what a call will do, for the approver and a dry run (see
+    :class:`ToolDefinition`).
 
     Raises:
-        TypeError: ``schema`` is not a mapping of parameter names to mappings.
+        TypeError: ``schema`` is not a mapping of parameter names to mappings, or ``preview`` is
+            not a plain function.
         ValueError: The tool's name is not portable (see :class:`ToolSchema`).
     """
     _check_overrides(schema)
+    check_preview(preview)
     policy = ToolRuntimePolicy(
         capability=capability,
         risk_level=risk_level,
@@ -81,7 +89,7 @@ def tool(
                 return await f(*args, **kwargs)
 
             async_wrapper.__tool_definition__ = ToolDefinition(  # type: ignore[attr-defined]
-                fn=async_wrapper, schema=schema_obj, policy=policy
+                fn=async_wrapper, schema=schema_obj, policy=policy, preview=preview
             )
             return async_wrapper
 
@@ -90,7 +98,7 @@ def tool(
             return f(*args, **kwargs)
 
         wrapper.__tool_definition__ = ToolDefinition(  # type: ignore[attr-defined]
-            fn=wrapper, schema=schema_obj, policy=policy
+            fn=wrapper, schema=schema_obj, policy=policy, preview=preview
         )
         return wrapper
 

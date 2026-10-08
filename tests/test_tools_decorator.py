@@ -148,6 +148,29 @@ class TestSchemaOverrides:
                 return city
 
 
+class TestPreviewHook:
+    """``preview=`` takes a plain function of the arguments that returns text (C07c, D64)."""
+
+    @pytest.mark.parametrize("preview", ["a picture", 42])
+    def test_a_preview_that_is_not_a_function_is_a_type_error(self, preview):
+        with pytest.raises(TypeError, match="plain function"):
+            tool(preview=preview)  # type: ignore[arg-type]
+
+    def test_an_async_preview_is_a_type_error_before_the_function_is_decorated(self):
+        async def describe(arguments: dict) -> str:
+            return "a picture"
+
+        with pytest.raises(TypeError, match="plain function"):
+            tool(preview=describe)  # type: ignore[arg-type]
+
+    def test_a_definition_built_by_hand_checks_its_preview_too(self):
+        def fn() -> str:
+            return "ok"
+
+        with pytest.raises(TypeError, match="plain function"):
+            ToolDefinition(fn=fn, schema=ToolSchema(name="fn"), preview="text")  # type: ignore[arg-type]
+
+
 class TestPortableNames:
     """One name rule, ``^[A-Za-z_][A-Za-z0-9_-]{0,63}$``, the one every provider and MCP take."""
 

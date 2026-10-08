@@ -1,7 +1,7 @@
 # ai-arch-toolkit
 
 [![CI](https://github.com/rgesteves5/ai-arch-toolkit/actions/workflows/ci.yml/badge.svg)](https://github.com/rgesteves5/ai-arch-toolkit/actions/workflows/ci.yml)
-[![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.13.4+](https://img.shields.io/badge/python-3.13.4%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 A lightweight, unified LLM client for Anthropic, OpenAI, Gemini, xAI, and Meta — plus

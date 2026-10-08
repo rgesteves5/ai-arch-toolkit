@@ -16,6 +16,7 @@ POSIX only (C07.8).
 
 from __future__ import annotations
 
+import difflib
 import errno
 import os
 import secrets
@@ -23,7 +24,9 @@ import stat
 import sys
 from collections.abc import Callable
 from contextlib import suppress
+from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 from ai_arch_toolkit.core import ToolResult
 from ai_arch_toolkit.core._tools._result import ToolFailure
@@ -81,7 +84,7 @@ def filesystem_tools(policy: FilesystemPolicy) -> tuple[Callable[..., str | Tool
 
 
 def _write_file_tool(policy: FilesystemPolicy) -> Callable[..., str]:
-    @governed(_WRITE_REASON)
+    @_governed(_WRITE_REASON, _write_preview, policy)
     def write_file(
         path: str, content: str, overwrite: bool = False, create_parents: bool = False
     ) -> str:
@@ -109,7 +112,7 @@ def _write_file_tool(policy: FilesystemPolicy) -> Callable[..., str]:
 
 
 def _append_file_tool(policy: FilesystemPolicy) -> Callable[..., str]:
-    @governed(_APPEND_REASON)
+    @_governed(_APPEND_REASON, _append_preview, policy)
     def append_file(path: str, content: str) -> str:
         """Add text, in UTF-8, at the end of a text file that exists.
 
@@ -132,7 +135,7 @@ def _append_file_tool(policy: FilesystemPolicy) -> Callable[..., str]:
 
 
 def _make_directory_tool(policy: FilesystemPolicy) -> Callable[..., str]:
-    @governed(_MAKE_REASON)
+    @_governed(_MAKE_REASON, _make_preview, policy)
     def make_directory(path: str, parents: bool = False) -> str:
         """Make a folder. One that exists already is fine, and the answer says so.
 
@@ -151,7 +154,7 @@ def _make_directory_tool(policy: FilesystemPolicy) -> Callable[..., str]:
 
 
 def _move_path_tool(policy: FilesystemPolicy) -> Callable[..., str]:
-    @governed(_MOVE_REASON)
+    @_governed(_MOVE_REASON, _move_preview, policy)
     def move_path(source: str, destination: str, overwrite: bool = False) -> str:
         """Move or rename a file or a folder, within one volume: it never copies.
 
@@ -174,6 +177,194 @@ def _move_path_tool(policy: FilesystemPolicy) -> Callable[..., str]:
 
 
 _WRITES = (_write_file_tool, _append_file_tool, _make_directory_tool, _move_path_tool)
+
+
+# --- The previews (C07c) -------------------------------------------------------------------------
+#
+# What a call will do, for the person who approves it and for a dry run: the action, the canonical
+# path and the size change, and for a file replaced the lines that change. A preview checks its
+# paths with the policy and looks from the root down without following a link, as the tool will;
+# it never writes. It is a picture of the files when it ran, not a lock on them.
+
+type _Picture = Callable[[FilesystemPolicy, dict[str, Any]], str]
+
+_DIFF_LINES = 80
+_DIFF_BYTES = 8 * 1024
+_DIFF_FILE_BYTES = 256 * 1024  # a file, or new text, larger than this gets no diff
+
+
+def _governed(
+    reason: str, picture: _Picture, policy: FilesystemPolicy
+) -> Callable[[Callable[..., str]], Callable[..., str]]:
+    """``governed(reason)``, with the call's preview hook: what ``picture`` sees the call doing,
+    or why it will fail."""
+
+    def preview(arguments: dict[str, Any]) -> str:
+        try:
+            return picture(policy, arguments)
+        except FilesystemPolicyError as e:  # a link where the call would act
+            failure = ToolFailure("permission_denied", str(e))
+        except ToolFailure as e:
+            failure = e
+        return f"will fail ({failure.error.type}): {failure.error.message}"
+
+    def decorate(fn: Callable[..., str]) -> Callable[..., str]:
+        made = governed(reason)(fn)
+        definition = made.__dict__["__tool_definition__"]
+        made.__dict__["__tool_definition__"] = replace(definition, preview=preview)
+        return made
+
+    return decorate
+
+
+def _write_preview(policy: FilesystemPolicy, arguments: dict[str, Any]) -> str:
+    """``create /…/a.md (12 bytes)``, or ``replace /…/a.md (1204 → 1311 bytes)`` and the diff."""
+    data = _encoded(policy, arguments.get("content"))
+    target = checked(policy, arguments.get("path"), "write")
+    found = _look(policy, target, "write", makes_folders=bool(arguments.get("create_parents")))
+    if found is None:
+        return f"create {target} ({len(data)} bytes)"
+    _refuse_unless_a_file(found, target)
+    if not arguments.get("overwrite"):
+        raise ToolFailure("validation_error", _exists(target, "pass overwrite=true"))
+    summary = f"replace {target} ({found.st_size} → {len(data)} bytes)"
+    return "\n".join((summary, *_diff(policy, target, found.st_size, data)))
+
+
+def _append_preview(policy: FilesystemPolicy, arguments: dict[str, Any]) -> str:
+    data = _encoded(policy, arguments.get("content"))
+    target = checked(policy, arguments.get("path"), "write")
+    found = _look(policy, target, "append to")
+    if found is None:
+        raise ToolFailure("not_found", f"{target} does not exist; write_file makes it.")
+    _refuse_unless_a_file(found, target)
+    if found.st_nlink != 1:
+        msg = (
+            f"{target} has {found.st_nlink} hard links, and append_file never changes a file "
+            "other paths reach too."
+        )
+        raise ToolFailure("permission_denied", msg)
+    size = found.st_size
+    return f"append {len(data)} bytes to {target} ({size} → {size + len(data)} bytes)"
+
+
+def _make_preview(policy: FilesystemPolicy, arguments: dict[str, Any]) -> str:
+    target = checked(policy, arguments.get("path"), "write")
+    found = _look(policy, target, "make", makes_folders=bool(arguments.get("parents")))
+    if found is None:
+        return f"make folder {target}"
+    if stat.S_ISDIR(found.st_mode):
+        return f"{target} already exists; nothing changes"
+    if stat.S_ISLNK(found.st_mode):
+        raise FilesystemPolicyError(_a_link(target))
+    raise ToolFailure(
+        "validation_error", f"{target} exists and is not a folder; pick another name."
+    )
+
+
+def _move_preview(policy: FilesystemPolicy, arguments: dict[str, Any]) -> str:
+    origin = checked(policy, arguments.get("source"), "write", argument="source")
+    target = checked(policy, arguments.get("destination"), "write", argument="destination")
+    if target.is_relative_to(origin):
+        msg = f"{target} is {origin} or inside it; pick a destination outside the source."
+        raise ToolFailure("validation_error", msg)
+    found = _look(policy, origin, "move")
+    if found is None:
+        msg = f"{origin} does not exist; list_directory shows what is there."
+        raise ToolFailure("not_found", msg)
+    if stat.S_ISLNK(found.st_mode):
+        raise FilesystemPolicyError(_a_link(origin))
+    summary = f"move {_kind(found)} {origin} to {target}"
+    there = _look(policy, target, "move")
+    if there is None:
+        return summary
+    if not arguments.get("overwrite"):
+        raise ToolFailure("validation_error", _exists(target, "pass overwrite=true"))
+    size = "" if stat.S_ISDIR(there.st_mode) else f" ({there.st_size} bytes)"
+    return f"{summary}, replacing the {_kind(there)} there{size}"
+
+
+def _kind(found: os.stat_result) -> str:
+    return "folder" if stat.S_ISDIR(found.st_mode) else "file"
+
+
+def _look(
+    policy: FilesystemPolicy, target: Path, verb: str, *, makes_folders: bool = False
+) -> os.stat_result | None:
+    """What is at the canonical ``target`` now, reached from its root down as the tool will,
+    links not followed; ``None`` when nothing is there, or its folder is missing and the call
+    ``makes_folders``.
+
+    Raises:
+        ToolFailure: not_found when its folder is missing and the call does not make it; what
+            ``_failure`` says when the walk fails (a link on the way is permission_denied).
+    """
+    try:
+        with opened_folder(policy, target.parent, "write") as folder:
+            return _entry(folder, target.name)
+    except FileNotFoundError as e:
+        if makes_folders:
+            return None
+        raise ToolFailure("not_found", f"the folder {target.parent} does not exist.") from e
+    except (OSError, ValueError) as e:
+        raise _failure(e, verb, target) from e
+
+
+def _diff(policy: FilesystemPolicy, target: Path, size: int, data: bytes) -> list[str]:
+    """The lines a replace of the ``size``-byte file by ``data`` changes, as a unified diff cut at
+    80 lines or 8 KB, or why there is none."""
+    try:
+        old = _text_now(policy, target, max(size, len(data)))
+    except _NoDiff as e:
+        return [f"(no diff: {e})"]
+    new = data.decode("utf-8").splitlines()
+    lines = list(
+        difflib.unified_diff(old.splitlines(), new, str(target), str(target), lineterm="")
+    )
+    if not lines:
+        return ["(the same lines of text)"]
+    shown = "\n".join(lines[:_DIFF_LINES]).encode()
+    if len(lines) <= _DIFF_LINES and len(shown) <= _DIFF_BYTES:
+        return lines
+    cut = shown[:_DIFF_BYTES].decode("utf-8", errors="ignore")
+    note = f"[the diff goes on: {len(lines)} lines in all, cut at {_DIFF_LINES} lines or 8 KB]"
+    return [cut, note]
+
+
+class _NoDiff(Exception):
+    """Why a replace shows no diff."""
+
+
+def _text_now(policy: FilesystemPolicy, target: Path, largest: int) -> str:
+    """The file's text now, opened from its root down without following a link, as
+    ``append_file`` opens it.
+
+    Raises:
+        FilesystemPolicyError: A link took the place of a folder on the way, or of the file.
+        _NoDiff: The file or the new text (``largest`` is the larger size) is over 256 KB, or the
+            file cannot be read, or is not UTF-8 text.
+    """
+    if largest > _DIFF_FILE_BYTES:
+        raise _NoDiff("over 256 KB")
+    try:
+        descriptor = open_beneath(policy, target, "write", os.O_RDONLY)
+    except FilesystemPolicyError:
+        raise
+    except (OSError, ValueError) as e:  # replacing a file needs no read of it
+        raise _NoDiff("the file cannot be read") from e
+    with open(descriptor, "rb") as handle:  # closes the descriptor
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):  # swapped since the look
+            raise _NoDiff("the file is not text")
+        raw = handle.read(_DIFF_FILE_BYTES + 1)
+    if len(raw) > _DIFF_FILE_BYTES:
+        raise _NoDiff("over 256 KB")
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise _NoDiff("the file is not text") from e
+    if "\0" in text:
+        raise _NoDiff("the file is not text")
+    return text
 
 
 # --- write_file ----------------------------------------------------------------------------------

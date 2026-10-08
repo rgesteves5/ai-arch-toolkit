@@ -8,17 +8,23 @@ Splits a tool into three concerns:
   (capability, risk level, approval requirement, output and time bounds). Never reaches a
   provider.
 - ``ToolDefinition``: the runtime object binding a callable to its schema and
-  policy. Produced by ``@tool`` and stored as ``fn.__tool_definition__``.
+  policy, and to the preview of a call it may have. Produced by ``@tool`` and stored as
+  ``fn.__tool_definition__``.
 """
 
 from __future__ import annotations
 
+import inspect
 import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
 type RiskLevel = Literal["low", "medium", "high", "critical"]
+
+# What a call will do, in words for the person who approves it or reads a dry run: a plain
+# function of the call's validated arguments that returns text (C07c, D64).
+type ToolPreview = Callable[[dict[str, Any]], str]
 
 DEFAULT_MAX_OUTPUT_CHARS = 200_000
 DEFAULT_TIMEOUT_S = 120.0
@@ -50,6 +56,21 @@ def check_tool_name(name: object) -> None:
             "starting with a letter or '_', the names every provider and MCP accept"
         )
         raise ValueError(msg)
+
+
+def check_preview(preview: object) -> None:
+    """Raise ``TypeError`` unless ``preview`` is ``None`` or a plain function.
+
+    The hook runs where no loop may be running (the synchronous path), so it cannot be ``async``.
+    """
+    if preview is None or (callable(preview) and not inspect.iscoroutinefunction(preview)):
+        return
+    kind = "an async function" if callable(preview) else f"a {type(preview).__name__}"
+    msg = (
+        "preview= takes a plain function (not async) of the call's arguments that returns text; "
+        f"got {kind}"
+    )
+    raise TypeError(msg)
 
 
 def one_per_name[T](entries: Iterable[tuple[str | None, object, T]]) -> list[T]:
@@ -139,8 +160,25 @@ class ToolRuntimePolicy:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ToolDefinition:
-    """Canonical runtime object: callable + schema + runtime policy."""
+    """Canonical runtime object: callable + schema + runtime policy.
+
+    Attributes:
+        fn: The callable the executor runs.
+        schema: What the provider receives.
+        policy: The governance metadata gates read.
+        preview: Writes what a call will do, for the approver (``ApprovalRequest.preview``) and
+            a dry run (``audit["preview"]``). It receives a copy of the call's arguments as they
+            reach the gate, validated and changed by any gate before it, and returns text; it
+            should only read. ``None`` shows the arguments as JSON.
+
+    Raises:
+        TypeError: ``preview`` is not ``None`` or a plain (not ``async``) function.
+    """
 
     fn: Callable[..., Any]
     schema: ToolSchema
     policy: ToolRuntimePolicy = field(default_factory=ToolRuntimePolicy)
+    preview: ToolPreview | None = None
+
+    def __post_init__(self) -> None:
+        check_preview(self.preview)

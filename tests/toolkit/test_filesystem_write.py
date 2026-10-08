@@ -23,13 +23,14 @@ from ai_arch_toolkit.core import (
     ApprovalDecision,
     ApprovalRequest,
     DryRunGate,
+    MeterScope,
     ToolCall,
     ToolFailure,
     ToolGroup,
     ToolResult,
     execute_tool,
 )
-from ai_arch_toolkit.toolkit.tools import dangerous
+from ai_arch_toolkit.toolkit.tools import _filesystem_write, dangerous
 from ai_arch_toolkit.toolkit.tools.dangerous import (
     FilesystemPolicy,
     PathScopeGate,
@@ -632,6 +633,315 @@ def test_a_dry_run_writes_nothing_and_records_the_canonical_path(layout):
     assert result.ok and result.metadata["governance"]["executed"] is False
     assert result.metadata["audit"]["arguments"]["path"] == str(layout.root / "dry.txt")
     assert not (layout.root / "dry.txt").exists()
+
+
+# --- The previews (C07c) -----------------------------------------------------------------------
+
+
+class _Shown:
+    """An approver that keeps the preview it was shown and denies, so nothing is written."""
+
+    def __init__(self) -> None:
+        self.previews: list[str] = []
+
+    def __call__(self, request: ApprovalRequest) -> ApprovalDecision:
+        self.previews.append(request.preview)
+        return ApprovalDecision.deny(reason="only looking")
+
+
+def _shown(layout: Layout, name: str, mode: str = "sync", **arguments: object) -> str:
+    """The preview the approver of ``name`` sees, with the path gate in front."""
+    shown = _Shown()
+    group = ToolGroup(layout[name], gates=[PathScopeGate(layout.policy)], approval_handler=shown)
+    call = _call(name, **arguments)
+    result = group.execute(call) if mode == "sync" else asyncio.run(group.async_execute(call))
+    assert result.error is not None and result.error.type == "approval_denied", result
+    (preview,) = shown.previews
+    return preview
+
+
+def _hook(layout: Layout, name: str) -> Callable[[dict[str, Any]], str]:
+    preview = layout[name].__tool_definition__.preview
+    assert preview is not None
+    return preview
+
+
+def _tree(folder: Path) -> dict[str, bytes | None]:
+    """Every path under ``folder`` and a file's bytes, so a test sees any change."""
+    return {
+        str(path.relative_to(folder)): None if path.is_dir() else path.read_bytes()
+        for path in sorted(folder.rglob("*"))
+        if not path.is_symlink()
+    }
+
+
+class TestPreviews:
+    @pytest.mark.parametrize("mode", ["sync", "async"])
+    def test_a_replace_shows_the_size_change_and_the_lines_that_change(self, layout, mode):
+        old = "title\nkeep one\nold line\nkeep two\n"
+        new = "title\nkeep one\nnew line\nkeep two\nadded\n"
+        target = layout.root / "a.md"
+        target.write_text(old)
+
+        preview = _shown(layout, "write_file", mode, path="a.md", content=new, overwrite=True)
+
+        lines = preview.splitlines()
+        assert lines[0] == f"replace {target} ({len(old)} → {len(new)} bytes)"
+        assert "-old line" in lines and "+new line" in lines and "+added" in lines
+        assert " keep one" in lines and " title" in lines
+        assert target.read_text() == old
+
+    def test_a_new_file_is_a_create_with_its_size_and_nothing_is_made(self, layout):
+        before = _tree(layout.root)
+
+        created = _shown(layout, "write_file", path="fresh.txt", content="héllo")
+        nested = _shown(
+            layout, "write_file", path="x/y/fresh.txt", content="hi", create_parents=True
+        )
+
+        assert created == f"create {layout.root / 'fresh.txt'} (6 bytes)"
+        assert nested == f"create {layout.root / 'x' / 'y' / 'fresh.txt'} (2 bytes)"
+        assert _tree(layout.root) == before
+
+    def test_the_diff_is_cut_at_80_lines(self, layout):
+        (layout.root / "long.txt").write_text("".join(f"old {i}\n" for i in range(200)))
+        new = "".join(f"new {i}\n" for i in range(200))
+
+        preview = _hook(layout, "write_file")(
+            {"path": "long.txt", "content": new, "overwrite": True}
+        )
+
+        lines = preview.splitlines()
+        assert lines[0].startswith("replace ")
+        assert len(lines) == 1 + 80 + 1
+        assert lines[-1] == "[the diff goes on: 403 lines in all, cut at 80 lines or 8 KB]"
+
+    def test_the_diff_is_cut_at_8_kb(self, layout):
+        (layout.root / "wide.txt").write_text("a" * 20_000 + "\n")
+        new = "b" * 20_000 + "\n"
+
+        preview = _hook(layout, "write_file")(
+            {"path": "wide.txt", "content": new, "overwrite": True}
+        )
+
+        summary, *diff, note = preview.splitlines()
+        assert summary.startswith("replace ")
+        assert len("\n".join(diff).encode()) <= 8 * 1024
+        assert diff[-1].startswith("-aaaa")  # the cut falls inside the long line
+        assert note == "[the diff goes on: 5 lines in all, cut at 80 lines or 8 KB]"
+
+    @pytest.mark.parametrize(
+        ("old", "why"),
+        [
+            (b"\x89PNG\r\n\x1a\n\x00\x00binary", "the file is not text"),
+            (b"\xff\xfe not utf-8", "the file is not text"),
+            (b"valid utf-8\x00with a nul\n", "the file is not text"),
+            (b"x" * (256 * 1024 + 1), "over 256 KB"),
+        ],
+        ids=["binary", "not-utf8", "nul", "large"],
+    )
+    def test_no_diff_for_a_binary_file_or_one_over_256_kb(self, layout, old, why):
+        target = layout.root / "data.bin"
+        target.write_bytes(old)
+
+        preview = _hook(layout, "write_file")(
+            {"path": "data.bin", "content": "x", "overwrite": True}
+        )
+
+        assert preview == f"replace {target} ({len(old)} → 1 bytes)\n(no diff: {why})"
+        assert target.read_bytes() == old
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root reads any file")
+    def test_a_file_it_cannot_read_gets_no_diff_and_still_shows_the_replace(self, layout):
+        target = layout.root / "notes.txt"
+        target.chmod(0o200)  # write only: replacing it needs no read
+        try:
+            preview = _hook(layout, "write_file")(
+                {"path": "notes.txt", "content": "x", "overwrite": True}
+            )
+        finally:
+            target.chmod(0o600)
+
+        assert preview == f"replace {target} (14 → 1 bytes)\n(no diff: the file cannot be read)"
+
+    def test_new_text_over_256_kb_gets_no_diff(self, layout):
+        target = layout.root / "notes.txt"
+
+        preview = _hook(layout, "write_file")(
+            {"path": "notes.txt", "content": "y" * (256 * 1024 + 1), "overwrite": True}
+        )
+
+        assert preview == f"replace {target} (14 → {256 * 1024 + 1} bytes)\n(no diff: over 256 KB)"
+
+    def test_the_same_lines_say_so(self, layout):
+        preview = _hook(layout, "write_file")(
+            {"path": "notes.txt", "content": "a needle here\r\n", "overwrite": True}
+        )
+
+        assert preview.splitlines()[1:] == ["(the same lines of text)"]
+
+    def test_a_call_that_will_fail_says_why(self, layout):
+        target = layout.root / "notes.txt"
+        hook = _hook(layout, "write_file")
+
+        exists = hook({"path": "notes.txt", "content": "x"})
+        outside = hook({"path": "../outside/new.txt", "content": "x"})
+        missing = hook({"path": "nowhere/new.txt", "content": "x"})
+        not_text = hook({"path": "notes.txt", "content": 7, "overwrite": True})
+
+        assert exists == (
+            f"will fail (validation_error): {target} already exists; pass overwrite=true to "
+            "replace it, or pick another name."
+        )
+        assert outside.startswith("will fail (permission_denied): ")
+        assert missing == (
+            f"will fail (not_found): the folder {layout.root / 'nowhere'} does not exist."
+        )
+        assert not_text.startswith("will fail (validation_error): content must be text")
+
+    def test_a_link_at_the_leaf_is_never_read(self, layout):
+        (layout.root / "leak.txt").symlink_to(layout.outside / "secret.txt")
+
+        preview = _hook(layout, "write_file")(
+            {"path": "leak.txt", "content": "x", "overwrite": True}
+        )
+
+        assert preview.startswith("will fail (permission_denied): ")
+        assert "OUTSIDE-SECRET" not in preview
+
+    def test_a_folder_swapped_for_a_link_after_the_check_is_never_read(self, layout, monkeypatch):
+        (layout.root / "sub" / "secret.txt").write_text("inside\n")
+        check = FilesystemPolicy.check
+
+        def check_then_swap(policy: FilesystemPolicy, path: Any, action: Any) -> Path:
+            found = check(policy, path, action)
+            sub = layout.root / "sub"
+            if sub.is_dir() and not sub.is_symlink():
+                (sub / "secret.txt").unlink()
+                sub.rmdir()
+                sub.symlink_to(layout.outside, target_is_directory=True)
+            return found
+
+        monkeypatch.setattr(FilesystemPolicy, "check", check_then_swap)
+
+        preview = _hook(layout, "write_file")(
+            {"path": "sub/secret.txt", "content": "x", "overwrite": True}
+        )
+
+        assert preview.startswith("will fail (permission_denied): ")
+        assert "OUTSIDE-SECRET" not in preview
+        assert layout.outside_now() == {"secret.txt"}
+
+    def test_the_old_text_is_read_without_following_a_link_swapped_in_after_the_look(
+        self, layout, monkeypatch
+    ):
+        sub = layout.root / "sub"
+        (sub / "secret.txt").write_text("inside\n")
+        look = _filesystem_write._look
+
+        def look_then_swap(*args: Any, **kwargs: Any) -> os.stat_result | None:
+            found = look(*args, **kwargs)
+            (sub / "secret.txt").unlink()
+            sub.rmdir()
+            sub.symlink_to(layout.outside, target_is_directory=True)
+            return found
+
+        monkeypatch.setattr(_filesystem_write, "_look", look_then_swap)
+
+        preview = _hook(layout, "write_file")(
+            {"path": "sub/secret.txt", "content": "x", "overwrite": True}
+        )
+
+        assert preview.startswith("will fail (permission_denied): ")
+        assert "OUTSIDE-SECRET" not in preview
+
+    def test_the_other_writes_say_what_they_will_do_in_one_line(self, layout):
+        (layout.root / "sub" / "old.txt").write_text("12345")
+        root = layout.root
+
+        assert _shown(layout, "append_file", path="notes.txt", content="more!\n") == (
+            f"append 6 bytes to {root / 'notes.txt'} (14 → 20 bytes)"
+        )
+        assert _shown(layout, "make_directory", path="new") == f"make folder {root / 'new'}"
+        assert _shown(layout, "make_directory", path="sub") == (
+            f"{root / 'sub'} already exists; nothing changes"
+        )
+        assert _shown(layout, "move_path", source="notes.txt", destination="sub/n.txt") == (
+            f"move file {root / 'notes.txt'} to {root / 'sub' / 'n.txt'}"
+        )
+        assert _shown(layout, "move_path", source="sub", destination="moved") == (
+            f"move folder {root / 'sub'} to {root / 'moved'}"
+        )
+        assert _shown(
+            layout, "move_path", source="notes.txt", destination="sub/old.txt", overwrite=True
+        ) == (
+            f"move file {root / 'notes.txt'} to {root / 'sub' / 'old.txt'}, replacing the file "
+            "there (5 bytes)"
+        )
+
+    def test_the_other_writes_say_why_they_will_fail(self, layout):
+        root = layout.root
+        os.link(root / "notes.txt", root / "sub" / "twin.txt")
+
+        missing = _hook(layout, "append_file")({"path": "none.txt", "content": "x"})
+        linked = _hook(layout, "append_file")({"path": "notes.txt", "content": "x"})
+        in_the_way = _hook(layout, "make_directory")({"path": "notes.txt"})
+        no_source = _hook(layout, "move_path")({"source": "none", "destination": "b"})
+        taken = _hook(layout, "move_path")({"source": "sub", "destination": "notes.txt"})
+
+        assert missing == (
+            f"will fail (not_found): {root / 'none.txt'} does not exist; write_file makes it."
+        )
+        assert linked.startswith("will fail (permission_denied): ") and "2 hard links" in linked
+        assert in_the_way == (
+            f"will fail (validation_error): {root / 'notes.txt'} exists and is not a folder; "
+            "pick another name."
+        )
+        assert no_source == (
+            f"will fail (not_found): {root / 'none'} does not exist; list_directory shows what "
+            "is there."
+        )
+        assert taken.startswith(f"will fail (validation_error): {root / 'notes.txt'} already")
+
+    def test_no_preview_writes_anything(self, layout):
+        (layout.root / "sub" / "old.txt").write_text("12345")
+        before = _tree(layout.root)
+        calls = {
+            "write_file": {"path": "a/b/c.txt", "content": "x", "create_parents": True},
+            "append_file": {"path": "notes.txt", "content": "more"},
+            "make_directory": {"path": "p/q/r", "parents": True},
+            "move_path": {"source": "notes.txt", "destination": "sub/old.txt", "overwrite": True},
+        }
+
+        for name, arguments in calls.items():
+            assert not _hook(layout, name)(arguments).startswith("will fail"), name
+
+        assert _tree(layout.root) == before
+        assert _leftovers(layout.root) == []
+
+    def test_a_dry_run_after_the_gate_writes_and_meters_nothing_and_records_the_preview(
+        self, layout
+    ):
+        target = layout.root / "notes.txt"
+        shown = _Shown()
+        group = ToolGroup(
+            layout["write_file"],
+            gates=[PathScopeGate(layout.policy), DryRunGate()],
+            approval_handler=shown,
+        )
+
+        with MeterScope() as scope:
+            result = group.execute(
+                _call("write_file", path="sub/../notes.txt", content="a pin\n", overwrite=True)
+            )
+
+        assert result.ok and result.metadata["governance"]["executed"] is False
+        assert scope.snapshot().tool_calls == 0
+        assert shown.previews == []  # the dry run stops the call before anyone is asked
+        preview = result.metadata["audit"]["preview"].splitlines()
+        assert preview[0] == f"replace {target} (14 → 6 bytes)"
+        assert "-a needle here" in preview and "+a pin" in preview
+        assert target.read_text() == "a needle here\n"
 
 
 # --- The bound reads ---------------------------------------------------------------------------

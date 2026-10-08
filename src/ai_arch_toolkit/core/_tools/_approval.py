@@ -1,15 +1,24 @@
-"""Human approval models for high-risk tool execution."""
+"""Human approval models for high-risk tool execution, and the preview of a call."""
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from ai_arch_toolkit.core._response import ToolCall
-from ai_arch_toolkit.core._tools._definition import RiskLevel, ToolRuntimePolicy
+from ai_arch_toolkit.core._tools._definition import RiskLevel, ToolDefinition
+from ai_arch_toolkit.core._tools._result import line_cut
+
+logger = logging.getLogger(__name__)
+
+# The most characters of a preview hook's text an approver or an audit receives (C07c, D64).
+PREVIEW_MAX_CHARS = 16_000
+_PREVIEW_CUT = "\n[preview cut at {kept} of {chars} characters]"
 
 type ApprovalStatus = Literal["approved", "denied"]
 type ApprovalHandler = Callable[
@@ -117,16 +126,76 @@ class ApprovalDecision:
         }
 
 
-def approval_request_for(tool_call: ToolCall, policy: ToolRuntimePolicy) -> ApprovalRequest:
-    """Create an approval request for a tool call from its runtime policy."""
+async def approval_request_for(tool_call: ToolCall, definition: ToolDefinition) -> ApprovalRequest:
+    """The approval request for a call, from its tool's policy, with :func:`preview_for`'s
+    preview: a tool's hook runs in a thread, off the loop."""
+    return _request(tool_call, definition, await preview_for(tool_call, definition))
+
+
+def approval_request_for_sync(tool_call: ToolCall, definition: ToolDefinition) -> ApprovalRequest:
+    """The approval request for a call, from its tool's policy, with :func:`preview_for`'s
+    preview."""
+    return _request(tool_call, definition, preview_for_sync(tool_call, definition))
+
+
+def _request(tool_call: ToolCall, definition: ToolDefinition, preview: str) -> ApprovalRequest:
+    policy = definition.policy
     return ApprovalRequest(
         tool_name=tool_call.name,
         arguments=dict(tool_call.input),
         capability=policy.capability,
         risk_level=policy.risk_level,
-        preview=_preview(tool_call),
+        preview=preview,
         reason=policy.approval_reason,
     )
+
+
+async def preview_for(tool_call: ToolCall, definition: ToolDefinition) -> str:
+    """:func:`preview_for_sync`, with the tool's hook run in a thread, so a slow one (it may read
+    files) never holds the loop."""
+    if definition.preview is None:
+        return _preview(tool_call)
+    return await asyncio.to_thread(preview_for_sync, tool_call, definition)
+
+
+def preview_for_sync(tool_call: ToolCall, definition: ToolDefinition) -> str:
+    """What the call will do, for a person: its tool's preview hook's text, cut at
+    ``PREVIEW_MAX_CHARS`` with a note, or, for a tool without a hook, its name and arguments as
+    JSON.
+
+    The hook receives a copy of the call's arguments, as validated and changed by the gates
+    before the one asking. A hook that raises, or returns anything but text, is logged, and the
+    preview is the arguments as JSON, as for a tool without one.
+    """
+    hook = definition.preview
+    if hook is None:
+        return _preview(tool_call)
+    try:
+        text = hook(dict(tool_call.input))
+    except Exception:
+        logger.warning(
+            "preview of tool %r raised; showing its arguments", tool_call.name, exc_info=True
+        )
+        return _preview(tool_call)
+    if not isinstance(text, str):
+        if inspect.iscoroutine(text):
+            text.close()
+        logger.warning(
+            "preview of tool %r returned a %s, not text; showing its arguments",
+            tool_call.name,
+            type(text).__name__,
+        )
+        return _preview(tool_call)
+    return _bounded(text)
+
+
+def _bounded(text: str) -> str:
+    """``text``, or its first ``PREVIEW_MAX_CHARS`` characters (ending on a line where one lies
+    in their second half) and a note that says so."""
+    if len(text) <= PREVIEW_MAX_CHARS:
+        return text
+    kept = line_cut(text, 0, PREVIEW_MAX_CHARS)
+    return text[:kept] + _PREVIEW_CUT.format(kept=kept, chars=len(text))
 
 
 async def resolve_approval(

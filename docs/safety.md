@@ -51,7 +51,7 @@ def export_report(month: str) -> str:
 
 A `ToolGroup` takes a ceiling for all its tools — `ToolGroup(*tools, max_output_chars=20_000, timeout_s=30)` — and the stricter of the group's and the tool's own applies: a group tightens its tools, never widens them.
 
-> A timeout only helps while the tool releases Python's GIL (waiting on I/O, or running Python code). One long call into C — a catastrophic regular expression, arithmetic on enormous integers — holds the GIL, and nothing in the process can interrupt it, the executor's timeout included. Refuse such inputs before the call: the toolkit's `math_eval` estimates each result's size before computing it, and `regex_search` refuses patterns that backtrack exponentially and texts over 20 000 characters.
+> A timeout only helps while the tool releases Python's GIL (waiting on I/O, or running Python code). One long call into C — a catastrophic regular expression, arithmetic on enormous integers — holds the GIL, and nothing in the process can interrupt it, the executor's timeout included. Refuse such inputs before the call: the toolkit's `math_eval` estimates each result's size before computing it, and `regex_search` refuses texts over 20 000 characters and runs each match in a child process it kills after 5 seconds, so a pattern that backtracks is refused instead of freezing the program (D66).
 
 ---
 
@@ -218,7 +218,7 @@ Limits to know:
 - **Hard links.** A path cannot tell a hard link from a file, so a hard link inside a root to a file outside it reads like any file there. `append_file` refuses a file with other links, and `write_file` with `overwrite` replaces the name, so the other link keeps the old file.
 - **A new file.** `overwrite` writes a new file: other hard links keep the old one, and its ACLs, extended attributes and owner are not carried over.
 - **Leftovers.** A process killed during a write can leave a `.ai-arch-*.tmp` file in the target's folder.
-- **The approver sees arguments.** The approval request shows the call's arguments, the whole `content` included; a preview of the change is planned.
+- **A preview is a picture, not a lock.** Each write tool tells the approver, and a dry run, what the call will do: `replace /…/a.md (1204 → 1311 bytes)` and a unified diff of the lines that change (cut at 80 lines or 8 KB; none when the file is binary, or it or the new text is over 256 KB), `create …`, `append 6 bytes to … (14 → 20 bytes)`, `make folder …`, `move file … to …`, or `will fail (<type>): <why>`. It checks the paths with the policy and reads from the root down without following a link, and never writes; but the files may change before the call runs, and the tool checks again then. `request.arguments` still holds the whole `content`.
 
 ### Web search tools
 
@@ -268,6 +268,8 @@ group = ToolGroup(delete_table, approval_handler=approve_handler)
 result = await group.async_execute(call)   # approved -> result.ok is True
 ```
 
+`request.preview` is text for the person deciding. By default it is the tool's name and arguments as JSON, `delete_table({"name": "logs_tmp"})`. A tool with a preview hook, `@tool(preview=fn)` or `tool_from_schema(..., preview=fn)`, writes its own: `fn` receives a copy of the call's arguments as they reach the approval (validated, and changed by any gate before it, such as the canonical paths of a `PathScopeGate`) and returns text, cut at 16,000 characters with a note saying so. On the async path the hook runs in a thread, so one that reads files never holds the loop. A hook that raises, or returns anything but text, is logged, and the preview falls back to the JSON one. A hook should only read: the filesystem write tools' previews show the change, a diff included (see [Filesystem scope](#filesystem-scope)).
+
 `ApprovalDecision` factories:
 
 ```python
@@ -288,11 +290,11 @@ from ai_arch_toolkit import DryRunGate
 group = ToolGroup(run_command, gates=[DryRunGate(dry_run=True)])
 ```
 
-A dry-run result is `ok=True` with `value="[dry-run] would call <tool>"`, carries `metadata["governance"] == {"outcome": "dry_run", "executed": False}`, and records the arguments that *would* have run under `metadata["audit"]["arguments"]`.
+A dry-run result is `ok=True` with `value="[dry-run] would call <tool>"`, carries `metadata["governance"] == {"outcome": "dry_run", "executed": False}`, and records the arguments that *would* have run under `metadata["audit"]["arguments"]`. For a tool with a preview hook it also records what the call would do, the text an approver would see, under `metadata["audit"]["preview"]` (redacted like the rest of the audit). Nothing runs, nothing is metered, and no approver is asked. Placed after a `PathScopeGate`, a dry run of `write_file` shows the diff of the change with the paths canonical and nothing written.
 
 ### Custom gates
 
-A gate is any object with `check_sync(ctx)` and `async check(ctx)` — the runtime-checkable `ToolGate` protocol. Both receive an `ExecutionContext` — `ctx.tool_call` (the `ToolCall`: `name`, `input`) and `ctx.definition` (the `ToolDefinition`: `fn`, `schema`, `policy`) — and return `None` to pass, or a `GateResult`:
+A gate is any object with `check_sync(ctx)` and `async check(ctx)` — the runtime-checkable `ToolGate` protocol. Both receive an `ExecutionContext` — `ctx.tool_call` (the `ToolCall`: `name`, `input`) and `ctx.definition` (the `ToolDefinition`: `fn`, `schema`, `policy`, `preview`) — and return `None` to pass, or a `GateResult`:
 
 - `GateBlock(error_type=..., message=..., safe_to_show=True, retryable=False, audit={})` — refuse the call with a structured failure.
 - `GateModify(args=..., audit={})` — let the call run with these arguments.

@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from ai_arch_toolkit.core import MeterScope, ToolGroup, prepare_tools, tool_from_schema
+from ai_arch_toolkit.core import DryRunGate, MeterScope, ToolGroup, prepare_tools, tool_from_schema
 from ai_arch_toolkit.core._content import user
 from ai_arch_toolkit.core._providers._anthropic import AnthropicProvider
 from ai_arch_toolkit.core._providers._gemini import GeminiProvider
@@ -239,6 +239,46 @@ async def test_a_local_reference_is_inlined_and_its_value_coerced_before_approva
         "properties": {"count": {"type": "integer", "minimum": 1}},
         "required": ["count"],
     }
+
+
+@pytest.mark.parametrize("mode", MODES)
+async def test_the_preview_hook_writes_what_the_approver_and_a_dry_run_see(mode: str) -> None:
+    handler = Recorder()
+    approver = Approver()
+    seen: list[dict[str, Any]] = []
+
+    def describe(arguments: dict[str, Any]) -> str:
+        seen.append(arguments)
+        return f"set {arguments['count']} on the board"
+
+    counted = tool_from_schema(
+        handler,
+        name="counted",
+        input_schema=COUNT_SCHEMA,
+        policy=ToolRuntimePolicy(requires_approval=True),
+        preview=describe,
+    )
+
+    result = await _execute(
+        ToolGroup(counted, approval_handler=approver), _call("counted", count="3"), mode
+    )
+    dry = await _execute(
+        ToolGroup(counted, gates=[DryRunGate()]), _call("counted", count="4"), mode
+    )
+
+    assert result.ok, result.to_model_text()
+    assert [request.preview for request in approver.requests] == ["set 3 on the board"]
+    assert dry.metadata["audit"]["preview"] == "set 4 on the board"
+    assert seen == [{"count": 3}, {"count": 4}]
+    assert handler.calls == [{"count": 3}]
+
+
+def test_a_preview_that_is_not_a_plain_function_is_a_type_error() -> None:
+    async def describe(arguments: dict[str, Any]) -> str:
+        return "a picture"
+
+    with pytest.raises(TypeError, match="plain function"):
+        tool_from_schema(Recorder(), name="made", input_schema=OBJECT, preview=describe)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("mode", MODES)

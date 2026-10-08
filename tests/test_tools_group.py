@@ -12,10 +12,16 @@ import pytest
 from ai_arch_toolkit.core._response import Response, ToolCall
 from ai_arch_toolkit.core._server_tools import code_execution, web_search
 from ai_arch_toolkit.core._tools import prepare_tools
-from ai_arch_toolkit.core._tools._approval import ApprovalDecision
+from ai_arch_toolkit.core._tools._approval import ApprovalDecision, ApprovalRequest
 from ai_arch_toolkit.core._tools._decorator import tool
 from ai_arch_toolkit.core._tools._executor import async_execute_tool, execute_tool
-from ai_arch_toolkit.core._tools._governance import DangerousToolGate, DryRunGate
+from ai_arch_toolkit.core._tools._governance import (
+    DangerousToolGate,
+    DryRunGate,
+    ExecutionContext,
+    GateModify,
+    GateResult,
+)
 from ai_arch_toolkit.core._tools._group import ToolGroup
 from ai_arch_toolkit.toolkit import run_tools, run_tools_sync
 
@@ -616,6 +622,190 @@ class TestGovernanceGates:
         assert calls == []
         # The model-facing text never includes raw arguments.
         assert "hi" not in result.to_model_text()
+
+
+class _Asked:
+    """An approval handler that approves and keeps every request it was shown."""
+
+    def __init__(self) -> None:
+        self.requests: list[ApprovalRequest] = []
+
+    def __call__(self, request: ApprovalRequest) -> ApprovalDecision:
+        self.requests.append(request)
+        return ApprovalDecision.approve()
+
+
+class _Doubling:
+    """A gate that doubles ``factor``, given as text, so a hook sees the arguments it left."""
+
+    def check_sync(self, ctx: ExecutionContext) -> GateResult | None:
+        return GateModify(args={"factor": str(ctx.tool_call.input["factor"] * 2)})
+
+    async def check(self, ctx: ExecutionContext) -> GateResult | None:
+        return self.check_sync(ctx)
+
+
+async def _run(group: ToolGroup, tool_call: ToolCall, mode: str):
+    if mode == "sync":
+        return group.execute(tool_call)
+    return await group.async_execute(tool_call)
+
+
+class TestPreview:
+    """A tool's ``preview`` hook writes what the approver and a dry run see (C07c, D64)."""
+
+    @pytest.mark.parametrize("mode", ["sync", "async"])
+    async def test_the_approval_request_preview_comes_from_the_hook(self, mode):
+        seen: list[dict] = []
+
+        def describe(arguments: dict) -> str:
+            seen.append(arguments)
+            return f"scale by {arguments['factor']}"
+
+        @tool(requires_approval=True, preview=describe)
+        def rescale(factor: int) -> int:
+            """Rescale."""
+            return factor
+
+        asked = _Asked()
+        group = ToolGroup(rescale, gates=[_Doubling()], approval_handler=asked)
+
+        result = await _run(
+            group, ToolCall(id="tc_1", name="rescale", input={"factor": "3"}), mode
+        )
+
+        assert result.ok, result.to_model_text()
+        assert [request.preview for request in asked.requests] == ["scale by 6"]
+        # Validated and coerced again after the gate changed them: an int, not the text sent.
+        assert seen == [{"factor": 6}]
+        assert result.metadata["audit"]["approval"]["request"]["preview"] == "scale by 6"
+
+    @pytest.mark.parametrize("mode", ["sync", "async"])
+    @pytest.mark.parametrize("answer", ["raises", "returns_bytes", "returns_none"])
+    async def test_a_hook_that_fails_falls_back_to_the_arguments_preview(self, mode, answer):
+        def describe(arguments: dict) -> object:
+            if answer == "raises":
+                raise RuntimeError("the preview broke")
+            return b"bytes" if answer == "returns_bytes" else None
+
+        @tool(capability="shell", requires_approval=True, preview=describe)  # type: ignore[arg-type]
+        def echo(command: str) -> str:
+            """Echo."""
+            return command
+
+        asked = _Asked()
+        group = ToolGroup(echo, approval_handler=asked)
+
+        result = await _run(group, ToolCall(id="tc_1", name="echo", input={"command": "ls"}), mode)
+
+        assert result.ok and result.value == "ls"
+        assert [request.preview for request in asked.requests] == ['echo({"command": "ls"})']
+
+    @pytest.mark.parametrize("mode", ["sync", "async"])
+    async def test_a_hook_cannot_change_the_arguments_that_run(self, mode):
+        def meddle(arguments: dict) -> str:
+            arguments["command"] = "rm -rf /"
+            return "harmless"
+
+        @tool(requires_approval=True, preview=meddle)
+        def echo(command: str) -> str:
+            """Echo."""
+            return command
+
+        asked = _Asked()
+        group = ToolGroup(echo, approval_handler=asked)
+
+        result = await _run(group, ToolCall(id="tc_1", name="echo", input={"command": "ls"}), mode)
+
+        assert result.value == "ls"
+        assert asked.requests[0].arguments == {"command": "ls"}
+
+    @pytest.mark.parametrize("mode", ["sync", "async"])
+    async def test_a_tool_without_a_hook_keeps_the_arguments_preview(self, mode):
+        asked = _Asked()
+        group = ToolGroup(dangerous_echo, approval_handler=asked)
+        call = ToolCall(id="tc_1", name="dangerous_echo", input={"command": "echo ok"})
+
+        await _run(group, call, mode)
+
+        assert asked.requests[0].preview == 'dangerous_echo({"command": "echo ok"})'
+
+    async def test_on_the_async_path_the_hook_runs_off_the_loop(self):
+        threads: list[int] = []
+
+        def describe(arguments: dict) -> str:
+            threads.append(threading.get_ident())
+            return "a picture"
+
+        @tool(requires_approval=True, preview=describe)
+        def act() -> str:
+            """Act."""
+            return "done"
+
+        for gates in ([], [DryRunGate()]):
+            await ToolGroup(act, gates=gates, approval_handler=_Asked()).async_execute(
+                ToolCall(id="tc_1", name="act", input={})
+            )
+
+        assert len(threads) == 2
+        assert threading.get_ident() not in threads
+
+    @pytest.mark.parametrize("mode", ["sync", "async"])
+    async def test_a_long_preview_is_cut_and_says_so(self, mode):
+        @tool(requires_approval=True, preview=lambda arguments: "line\n" * 50_000)
+        def act() -> str:
+            """Act."""
+            return "done"
+
+        asked = _Asked()
+        await _run(
+            ToolGroup(act, approval_handler=asked), ToolCall(id="1", name="act", input={}), mode
+        )
+
+        preview = asked.requests[0].preview
+        assert len(preview) < 16_100
+        assert preview.startswith("line\nline\n")
+        assert preview.endswith("[preview cut at 16000 of 250000 characters]")
+
+    @pytest.mark.parametrize("mode", ["sync", "async"])
+    async def test_a_dry_run_records_the_hooks_preview(self, mode):
+        calls: list[str] = []
+
+        @tool(preview=lambda arguments: f"would record {arguments['text']!r}")
+        def record(text: str) -> str:
+            """Record a call."""
+            calls.append(text)
+            return text
+
+        group = ToolGroup(record, get_weather, gates=(DryRunGate(),))
+
+        result = await _run(group, ToolCall(id="1", name="record", input={"text": "hi"}), mode)
+        plain = await _run(
+            group, ToolCall(id="2", name="get_weather", input={"city": "Rio"}), mode
+        )
+
+        assert calls == []
+        assert result.metadata["audit"] == {
+            "arguments": {"text": "hi"},
+            "preview": "would record 'hi'",
+        }
+        # A tool without a hook keeps the audit it had: the arguments alone.
+        assert plain.metadata["audit"] == {"arguments": {"city": "Rio"}}
+
+    def test_a_wrapper_keeps_the_hook_of_the_tool_it_wraps(self):
+        @tool(requires_approval=True, preview=lambda arguments: "the hook")
+        def act() -> str:
+            """Act."""
+            return "done"
+
+        @functools.wraps(act)
+        def logged(*args, **kwargs):
+            return act(*args, **kwargs)
+
+        asked = _Asked()
+        ToolGroup(logged, approval_handler=asked).execute(ToolCall(id="1", name="act", input={}))
+
+        assert asked.requests[0].preview == "the hook"
 
 
 class TestCallBudget:

@@ -62,7 +62,7 @@ Deeper reading, in `docs/`: `framework-overview.md` (layer tour), `configuring-a
 
 ## Conventions
 
-- Python 3.13+ (CI also runs 3.14); `from __future__ import annotations` in every file.
+- Python 3.13.4+ (CI also runs 3.14); `from __future__ import annotations` in every file.
 - Ruff, line length 99.
 - Dataclasses: `frozen=True, slots=True`; add `kw_only=True` at 3+ fields.
 - PEP 695 `type` aliases; `__all__` in every `__init__.py`.

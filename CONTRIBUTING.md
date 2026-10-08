@@ -47,7 +47,7 @@ CI; run them locally.
 
 ## Code conventions
 
-- Python **3.13+** with `from __future__ import annotations` in every file.
+- Python **3.13.4+** with `from __future__ import annotations` in every file.
 - Ruff: line length 99; selected rules `E F W I UP B SIM RUF`. `ruff format`
   is the formatter — never hand-format.
 - All dataclasses are `frozen=True, slots=True` (`kw_only=True` once they

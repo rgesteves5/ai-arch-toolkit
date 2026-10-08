@@ -4,7 +4,7 @@ This document summarizes the **ai-arch-toolkit** package: its structure, feature
 
 ## What It Is
 
-**ai-arch-toolkit** is a Python 3.13+ library that provides:
+**ai-arch-toolkit** is a Python 3.13.4+ library that provides:
 
 1. A **unified async-first LLM facade** across multiple providers
 2. **Middleware** with before/after hooks for caching, cost tracking, guardrails

@@ -18,6 +18,9 @@ from ai_arch_toolkit.core._response import ToolCall
 from ai_arch_toolkit.core._tools._approval import (
     ApprovalHandler,
     approval_request_for,
+    approval_request_for_sync,
+    preview_for,
+    preview_for_sync,
     resolve_approval,
     resolve_approval_sync,
 )
@@ -140,7 +143,12 @@ class DangerousToolGate:
 
 
 class DryRunGate:
-    """Short-circuit every call as a dry run, recording the arguments in audit."""
+    """Short-circuit every call as a dry run, recording the arguments in audit.
+
+    For a tool with a preview hook, the audit also holds what the call would do,
+    ``audit["preview"]``, as the approver would see it; on the async path the hook runs in a
+    thread. Nothing runs and nothing is metered.
+    """
 
     __slots__ = ("_dry_run",)
 
@@ -148,19 +156,31 @@ class DryRunGate:
         self._dry_run = dry_run
 
     def check_sync(self, ctx: ExecutionContext) -> GateResult | None:
-        if self._dry_run:
-            return GateDryRun(audit={"arguments": dict(ctx.tool_call.input)})
-        return None
+        if not self._dry_run:
+            return None
+        hooked = ctx.definition.preview is not None
+        return _dry_run(ctx, preview_for_sync(ctx.tool_call, ctx.definition) if hooked else None)
 
     async def check(self, ctx: ExecutionContext) -> GateResult | None:
-        return self.check_sync(ctx)
+        if not self._dry_run:
+            return None
+        hooked = ctx.definition.preview is not None
+        return _dry_run(ctx, await preview_for(ctx.tool_call, ctx.definition) if hooked else None)
+
+
+def _dry_run(ctx: ExecutionContext, preview: str | None) -> GateDryRun:
+    audit: dict[str, Any] = {"arguments": dict(ctx.tool_call.input)}
+    if preview is not None:
+        audit["preview"] = preview
+    return GateDryRun(audit=audit)
 
 
 class ApprovalGate:
     """Require human/external approval for tools whose policy demands it.
 
     No-ops for tools that do not require approval. Denies by default when no
-    handler is configured.
+    handler is configured. The request's ``preview`` is the tool's preview hook's, run in a
+    thread on the async path, or the call's arguments as JSON (see :class:`ToolDefinition`).
     """
 
     __slots__ = ("_handler",)
@@ -171,14 +191,14 @@ class ApprovalGate:
     def check_sync(self, ctx: ExecutionContext) -> GateResult | None:
         if not ctx.definition.policy.requires_approval:
             return None
-        request = approval_request_for(ctx.tool_call, ctx.definition.policy)
+        request = approval_request_for_sync(ctx.tool_call, ctx.definition)
         decision = resolve_approval_sync(request, self._handler)
         return self._outcome(ctx, request, decision)
 
     async def check(self, ctx: ExecutionContext) -> GateResult | None:
         if not ctx.definition.policy.requires_approval:
             return None
-        request = approval_request_for(ctx.tool_call, ctx.definition.policy)
+        request = await approval_request_for(ctx.tool_call, ctx.definition)
         decision = await resolve_approval(request, self._handler)
         return self._outcome(ctx, request, decision)
 
