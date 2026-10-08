@@ -466,6 +466,8 @@ Só acrescentar. Uma decisão revista ganha uma nova entrada que diz qual substi
   a chave `error` como "error details" (docstring do `google-genai`), e o adaptador põe lá o
   resultado de uma chamada que falhou. A Responses API, a Chat Completions e o xAI continuam só com
   o texto.
+- **Adenda (D64, C07.9, 2026-10-08):** o `ToolFailureType` ganha `permission_denied`, para um
+  caminho que a `FilesystemPolicy` recusa: a mesma palavra no gate e na tool. Entra com a C07.
 
 ## D43 · OpenAI pela Responses API no host oficial; Chat Completions só para servidores compatíveis (frente O)
 
@@ -1076,3 +1078,131 @@ Só acrescentar. Uma decisão revista ganha uma nova entrada que diz qual substi
   - o Gemini não promete o número de imagens pedido ("won't always follow the exact number"):
     imagens a mais do que as pedidas ficam fora da reserva, como antes;
   - a app pode tirar a estimativa da D-81 quando passa a qualidade.
+
+## D62 · As tools dinâmicas: `tool_from_schema` (frente C, C02)
+
+- **Contexto:** só o `@tool` cria definições; o cliente MCP (C03) precisa de tools feitas de um
+  JSON Schema que chega em execução, com nomes que podem não ser identificadores Python. O
+  `ToolGroup.add`, o `prepare_tools`, o `execute_tool` e o `run_tools` já aceitam qualquer callable
+  que traga o seu `__tool_definition__`.
+- **Decisão** (do dono, a 2026-10-08, na página das decisões da vaga 1; as recomendações do
+  coordenador, revistas contra o código de hoje):
+  - **C02.1:** uma factory pública, `tool_from_schema(handler, name=, description=, input_schema=,
+    policy=)`, devolve um callable com `__tool_definition__` (e sem `__wrapped__`), que entra nos
+    quatro caminhos sem lhes mexer;
+  - **C02.2:** o handler recebe os argumentos num `dict`: a factory faz o callable `(**arguments)`,
+    que chama `handler(dict(arguments))`; o handler levanta `ToolFailure` (D42) para dar o tipo;
+  - **C02.3:** a validação da D7 estende-se, só com a biblioteca padrão. `oneOf` e `type` em lista
+    coagem como `anyOf`. `additionalProperties: false` na raiz recusa chaves desconhecidas, mesmo
+    com `**kwargs`. Um parâmetro que chega pelo `**kwargs` só aceita `null` se o schema o admitir.
+    Os aninhados não mudam, e o `jsonschema` fica nos testes (D36);
+  - **C02.4:** a regra de nomes portátil (`^[A-Za-z_][A-Za-z0-9_-]{0,63}$`, a intersecção das dos
+    fornecedores e do MCP) vive na `ToolSchema`. O `prepare_tools` passa a usá-la também para
+    callables nus e dicts, e uma `lambda` passa a `ValueError`;
+  - **C02.7:** as chaves extra de um schema MCP vão como vêm, só com os `$ref` locais embutidos.
+    Uma recusa provada ao vivo (C02f) vira regra no adaptador desse fornecedor, com a fonte;
+  - **C02.8:** nomes repetidos numa lista ou em vários grupos levantam `ValueError` antes de enviar
+    ou de correr; a mesma tool repetida não conta. Fecha o achado de 2026-10-04;
+  - **já decididas:** a C02.5 (nomes repetidos num grupo) pela A03 (G-21), e a C02.6 (o grupo
+    vazio) pela F24.
+- **Alternativas rejeitadas:**
+  - `ToolGroup.add_definition()` ou `@tool(input_schema=)`;
+  - `**kwargs` no handler;
+  - a D7 como está, ou o `jsonschema` como extra: dois comportamentos para a mesma tool (R00);
+  - a regra de nomes só na factory, ou por adaptador;
+  - limpar as chaves extra à partida;
+  - deixar as listas sem verificação.
+
+## D63 · O catálogo técnico de modelos no core (frente C, C06)
+
+- **Contexto:** nada no `src/` guarda os limites e as capacidades de cada modelo com fonte e data.
+  Desde a R02 as regras por modelo vivem nas tabelas de perfis de cada adaptador, resolvidas pelo
+  `_model_id.lookup`.
+- **Decisão** (do dono, a 2026-10-08, na página das decisões da vaga 1):
+  - **C06.1** (confirmada depois da resposta abaixo): um facto diz o que funciona através do adaptador, com
+    `kind="adapter"` quando o limite é do adaptador e não do modelo;
+  - **C06.3:** cada facto é `T | None` (`None` é desconhecido, nunca "não"), com `sources` por
+    campo, e os três limites como os publicam (janela, entrada, saída);
+  - **C06.4:** o catálogo tira os factos do adaptador das próprias tabelas de cada um, por um
+    método de classe puro (como o `image_token_bound` da D61). O TOML guarda só o que o adaptador
+    não sabe (limites e modalidades publicados, com fonte e data). Sem o extra do SDK, esses campos
+    ficam `None`. Os adaptadores nunca lêem o catálogo;
+  - **C06.5:** `LLM.describe_model()` (e o `_sync`) para a Anthropic, o Gemini e o xAI; a OpenAI e a
+    Meta levantam `NotImplementedError`. Não escreve no catálogo. É a C06e, fora da vaga 1;
+  - **C06.6:** a semente é a linha actual com página oficial: os 30 modelos do inventário que ainda
+    servem, e os de imagem;
+  - **C06.7:** um campo `output_modalities` (`text`, `image`), e os modelos de imagem na semente,
+    com `tools=False`;
+  - **já decidida:** a C06.2 (como um id casa com a sua entrada) pela R02 (`_model_id.lookup`, D16).
+- **A dúvida do dono na C06.1** ("isto não limita quem usa a framework, se ela não for
+  actualizada?") e a resposta: o catálogo não limita nada, porque nenhum adaptador o lê. Quem
+  limita é o adaptador, com catálogo ou sem ele, e o catálogo só o diz, e de quem é o limite. Um
+  modelo que a framework não conhece dá `None`; um facto errado corrige-se na app com `register()`
+  (`kind="override"`); e, pela C06.4, corrigir o adaptador corrige o catálogo.
+- **Alternativas rejeitadas:**
+  - o modelo publicado (a app mandaria o que o adaptador perde);
+  - `bool` com uma fonte por entrada;
+  - os adaptadores a ler o catálogo;
+  - o TOML a repetir os factos do adaptador, ligado por um teste;
+  - a descoberta em execução na app;
+  - tudo o que tem preço na semente.
+
+## D64 · As tools de escrita tipadas e a `FilesystemPolicy` (frente C, C07)
+
+- **Contexto:** as tools de ficheiros só lêem e não têm raízes; a C07 traz a escrita, sob uma
+  policy com raízes por acção.
+- **Decisão** (do dono, a 2026-10-08, na página das decisões da vaga 1):
+  - **C07.1:** a policy verifica-se no gate e na tool, com o mesmo `check`: o gate poupa o humano e
+    o budget, e a tool, logo antes do syscall, é a garantia;
+  - **C07.2:** o `PathScopeGate` recebe no construtor o mapa `paths={tool: {argumento: acção}}`,
+    com o das sete tools por omissão; uma tool `capability="filesystem"` sem mapa fica bloqueada;
+  - **C07.3:** uma factory, `filesystem_tools(policy)`. As leituras actuais não mudam, as ligadas
+    recusam `..` no `pattern` e saltam alvos fora das raízes, e sem policy não há escrita. O
+    `tests/toolkit/tool_catalog.py` constrói as tools da factory com uma policy de teste, para a
+    invariante e o contrato as verem. A C07e vem depois da parte de ficheiros da T09; a C07a, b e d
+    podem começar já;
+  - **C07.4:** o Python mínimo sobe para o 3.13.4 (`requires-python = ">=3.13.4"`, com `uv lock`), e
+    a resolução de um caminho que ainda não existe usa só
+    `os.path.realpath(strict=os.path.ALLOW_MISSING)`. A garantia continua a ser a caminhada da raiz
+    com `O_DIRECTORY|O_NOFOLLOW` e a operação relativa ao `dir_fd` do pai;
+  - **C07.5:** a escrita é atómica. Um temporário no mesmo directório
+    (`O_CREAT|O_EXCL|O_NOFOLLOW`) e `fsync`. Sem `overwrite`, `os.link` e `unlink`; com
+    `overwrite`, `os.replace` com o modo antigo e `fsync` do directório. O `append_file` só em
+    ficheiro regular com `st_nlink == 1`; o `move_path` sem cópia entre volumes. UTF-8 estrito; um
+    `content` que não é texto é `validation_error`;
+  - **C07.6:** um hook `@tool(preview=fn)` no core (`ToolDefinition.preview`), lido pelo pedido de
+    aprovação e pelo `DryRunGate`, e um outcome novo, `permission_denied`. É a C07c, na vaga 2;
+  - **C07.7:** nenhuma tool de remoção na v1;
+  - **C07.8:** só POSIX. Em Windows, `filesystem_tools` com `write_roots` levanta
+    `NotImplementedError` ao construir; as leituras ficam;
+  - **C07.9:** `permission_denied` entra no `ToolFailureType` (adenda à D42): a mesma palavra no gate
+    e na tool.
+- **Alternativas rejeitadas:**
+  - a policy só no gate, ou só na tool;
+  - `path_args` na `ToolRuntimePolicy`;
+  - a policy num parâmetro ou num contextvar;
+  - o `ALLOW_MISSING` onde existe e outra coisa antes (dois caminhos, contra a R00);
+  - a escrita directa;
+  - um helper de preview para a app;
+  - um `delete_path` com quarentena;
+  - o Windows sem prova no CI;
+  - `validation_error` ou `upstream` para a recusa da policy.
+
+## D65 · A pesquisa web local: o que fica da C08 (frente C, C08)
+
+- **Contexto:** a A07 já fez as tools `brave_search` e `tavily_search` (D55, D56), de outra maneira
+  do que a ficha propunha; ficam a dívida de contrato das duas e o fim da C08d.
+- **Decisão** (do dono, a 2026-10-08, na página das decisões da vaga 1):
+  - **C08.3:** sem aprovação obrigatória, risco `low`, como as outras tools de rede. O custo fica
+    sob o budget (D56), e a app que queira aprovar re-decora a tool ou põe um gate seu;
+  - **C08.4:** os URLs dos resultados filtram-se a `http(s)`, sem rótulo de conteúdo de terceiros;
+  - **C08.7:** a ficha C08 reescreve-se com o que falta. A dívida de contrato das duas tools
+    (`Range` no `max_results`, os casos de `errors` e de `zero`, a janela). O contraste com o
+    `web_search()` em `docs/tools.md`, o `docs/safety.md`, o `CANDIDATE_TOOLS.md`. O exemplo com
+    modelo local e a verificação ao vivo;
+  - **já decididas:** a C08.1, a C08.2 e a C08.6 pela D55 (com a D52), e a C08.5 pela D56.
+- **Alternativas rejeitadas:**
+  - aprovação obrigatória com risco `medium` (quebrava a app, que as usa sem handler);
+  - o rótulo "untrusted" só nestas duas tools;
+  - passar a C08 para a T09, ou deixar a dívida sem dono.
+

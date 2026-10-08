@@ -3,7 +3,7 @@
 - **Dono:** por atribuir · **Estado:** todo · **Depende de:** nada (coordenar `core/_tools` com C02)
 - **Origem:** `docs/internal/agentes-app-toolkit-review.md` — L9 (`:360-379`), §10 (`:184-190`), §4
   `ResourcePolicy.check_path` para âmbitos (`:460-462`), ponto C (`:739-757`)
-- **Decisões:** por fixar (ver abaixo); respeita D4 (aprovação) e D7 (validar antes dos gates)
+- **Decisões:** fixadas pelo dono a 2026-10-08, D64; respeita D4 (aprovação) e D7 (validar antes dos gates)
 - **Actualização (2026-09-30):** espera pela T01 e pela T03 e nasce com o contrato das tools (D37 a
   D42). As referências a ficheiros e linhas são de 2026-09-15, anteriores às frentes R e T: relê-as
   contra o `main` antes de começar.
@@ -68,6 +68,8 @@ def filesystem_tools(policy: FilesystemPolicy) -> tuple[Callable[..., str], ...]
   da tool conta como chamada executada.
 
 ## Decisões a fixar antes de codificar
+
+**Fixadas a 2026-10-08 (D64), todas na opção recomendada; a lista abaixo fica como estava.**
 
 1. **Onde se aplica.** (a) só gate: não vê `modified_args`, falta com lista, janela aberta durante a
    aprovação; (b) só tool: pede aprovação ao que depois recusa; (c) ambos. Recomendo (c): o gate

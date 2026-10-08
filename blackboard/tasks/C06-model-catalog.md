@@ -4,7 +4,7 @@
 - **Origem:** `docs/internal/agentes-app-toolkit-review.md` L7 (`:332-350`), "Dividido" (`:38`),
   prioridade 6 (`:516`), matriz de probes não é catálogo (`:536`); fora do plano de correcção
   (`docs/internal/toolkit-fix-plan.md:648-652`).
-- **Decisões:** por fixar (ver abaixo)
+- **Decisões:** fixadas pelo dono a 2026-10-08, D63
 
 ## Problema
 
@@ -83,6 +83,8 @@ sources.tools = { kind = "adapter", ref = "core/_providers/_openai.py:456-460", 
   (c.input_token_limit or 0) >= n]` — `None` exclui; a app decide se pergunta, testa ou descarta.
 
 ## Decisões a fixar antes de codificar
+
+**Fixadas a 2026-10-08 (D63), todas na opção recomendada; a lista abaixo fica como estava.**
 
 1. **O que um facto afirma:** o modelo publicado, ou o que funciona via adaptador. Recomendo: via
    adaptador, com `kind="adapter"` quando o limite é dele, porque é o que o cliente usa — o Astra tem

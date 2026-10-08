@@ -71,10 +71,12 @@
   foram escritas antes da frente de robustez: quem pegar numa relê a sua secção de ficheiros contra
   o `main` novo (a porta `_http.py`, o `FlowOptions`, as chaves `answer`/`response` e as
   declarações dos manifestos mudaram o terreno de C02, C05, C07 e C08).
-- **Estado:** aberta em 2026-09-15. As nove fichas estão escritas; nenhuma tarefa começou.
+- **Estado:** aberta em 2026-09-15. As nove fichas estão escritas; nenhuma tarefa começou. As
+  decisões da vaga 1 (C02, C06, C07, C08) foram fixadas pelo dono a 2026-10-08 (D62 a D65, todas
+  na opção recomendada).
 - **Antes de codificar:** o dono fixa as "Decisões a fixar" de cada ficha. Cada decisão tomada entra
-  em `DECISIONS.md` a partir de D62 (as D15 a D42 foram para as frentes R e T, as D43 a D45
-  para a frente O, as D46 e D47 para a frente I e as D48 a D61 para a frente A), com o número dado pelo coordenador.
+  em `DECISIONS.md` a partir de D66 (as D15 a D42 foram para as frentes R e T, as D43 a D45
+  para a frente O, as D46 e D47 para a frente I, as D48 a D61 para a frente A e as D62 a D65 para a vaga 1 desta), com o número dado pelo coordenador.
 - **Origem:** o que `docs/internal/agentes-app-toolkit-review.md` pediu ao toolkit (L1, L3–L7, L9, L13
   e o ponto D) e que `docs/internal/toolkit-fix-plan.md` §4 (itens 3 e 10) deixou de fora por ser
   âmbito, não contrato partido.
@@ -389,8 +391,8 @@ que ficou aberto está em "Por fazer".
 - **Modelos novos ao vivo:** o Grok 4.7 e o Opus 5.5 ainda não correram ao vivo
   (`docs/model-compatibility.md`). Os 13 modelos OpenAI do inventário, com o Astra e o 6.1 Sol,
   correram a 2026-10-02 (77 de 77, O04).
-- **Frente C, decisões:** fixar as da vaga 1 (C02, C06, C07, C08) antes de atribuir donos; a C07 e
-  a C08 só começam depois da T01 e da T03.
+- **Frente C, decisões:** as da vaga 1 estão fixadas (D62 a D65); falta, quando chegar a vez,
+  fixar as das vagas 2 e 3 (C01, C03, C04, C05, C09).
 - **Decidir, achado de 2026-09-18 sem tarefa (`FINDINGS.md`):** o xAI larga os documentos de um
   pedido (o SDK tem `file(...)`). As imagens passaram a ir na A13, e o `LLM("grok-…")` depois de
   um `asyncio.run` já não levanta desde a A03 (G-17). (O `thinking_effort` do OpenAI e o preço do

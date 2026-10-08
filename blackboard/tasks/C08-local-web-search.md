@@ -3,7 +3,7 @@
 - **Dono:** por atribuir · **Estado:** todo · **Depende de:** nada (C05 é o par server-side)
 - **Origem:** L13 (`docs/internal/agentes-app-toolkit-review.md:424-446`, `:586-588`);
   `toolkit/tools/CANDIDATE_TOOLS.md:134-142` (DuckDuckGo), `:234-284` (Brave #22, Tavily #23)
-- **Decisões:** por fixar (ver abaixo)
+- **Decisões:** fixadas pelo dono a 2026-10-08, D65
 - **Actualização (2026-09-30):** a C08c saiu na R01 (o `HeuristicEstimator` reserva o preço de uma
   tool, `toolkit/budget/_estimator.py`). Espera pela T01 e pela T03 e nasce com o contrato das tools
   (D37 a D42). As referências a ficheiros e linhas são de 2026-09-15, anteriores às frentes R e T:
@@ -71,6 +71,8 @@ tavily_search_tool(api_key, *, name="tavily_search", search_depth="basic", topic
   `…/rate-limits`: 100/1000 RPM, `retry-after`; `…/api-credits`: 1000 créditos/mês, 0,008 USD PAYG.
 
 ## Decisões a fixar antes de codificar
+
+**Fixadas a 2026-10-08 (D65), todas na opção recomendada; a lista abaixo fica como estava.**
 
 1. **Tool por fornecedor ou genérica** — (a) factory por fornecedor, schema e saída comuns; (b)
    `web_search_tool(provider=…)` com registo; (c) tools de módulo com chave do ambiente. Recomendo (a),

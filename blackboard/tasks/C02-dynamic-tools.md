@@ -3,7 +3,7 @@
 - **Dono:** por atribuir · **Estado:** todo · **Depende de:** nada
 - **Origem:** `agentes-app-toolkit-review.md` §2.6, L1 (último parágrafo), "Dívida de desenho" 15;
   `toolkit-fix-plan.md` §4.10; `docs/internal/core_audit.md` SILENT-5
-- **Decisões:** por fixar (ver abaixo)
+- **Decisões:** fixadas pelo dono a 2026-10-08, D62
 - **Actualização (2026-09-30):** a C02a (grupo vazio mantém a identidade) saiu na F24, e com ela a
   decisão 6. A validação (C02d) leva o número de decisão que o coordenador der, a partir de D43. As
   referências a ficheiros e linhas são de 2026-09-15, anteriores às frentes R e T: relê-as contra o
@@ -85,6 +85,8 @@ group.remove("github_search")         # -> ToolDefinition; KeyError se não exis
   `{tools}` e o mapa do ReWOO ficam como na compilação (`_rewoo.py:72-75`, `_plan_execute.py:65`).
 
 ## Decisões a fixar antes de codificar
+
+**Fixadas a 2026-10-08 (D62), todas na opção recomendada; a lista abaixo fica como estava.**
 
 1. **Forma.** (a) factory que devolve callable; (b) `ToolGroup.add_definition()`; (c)
    `@tool(input_schema=)`. Recomendo (a), porque `ToolGroup`, `prepare_tools`, `run_tools` e
