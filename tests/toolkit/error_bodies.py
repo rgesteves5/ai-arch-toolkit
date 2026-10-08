@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from ai_arch_toolkit.core import ToolFailureType
 from tests.toolkit import geo_answers
 from tests.toolkit.contract_cases import Body
+from tests.toolkit.data_bodies import WORLD_BANK_INVALID_VALUE
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -40,6 +41,14 @@ class ErrorBody:
 
 
 _MEDIAWIKI_ERRORS = "https://www.mediawiki.org/wiki/API:Errors_and_warnings"
+_EUROSTAT_GUIDE = (
+    "https://ec.europa.eu/eurostat/web/user-guides/data-browser/api-data-access/"
+    "api-detailed-guidelines/api-statistics"
+)
+_EUROSTAT_DATA = frozenset({"eurostat_dataset", "eurostat_series"})
+_WORLD_BANK_ERRORS = (
+    "https://datahelpdesk.worldbank.org/knowledgebase/articles/898620-api-error-codes"
+)
 
 
 def _mediawiki(*tools: str) -> tuple[ErrorBody, ...]:
@@ -341,7 +350,36 @@ ERROR_BODIES: dict[str, tuple[ErrorBody, ...]] = {
             says=geo_answers.USGS_BAD_START.rstrip("."),
         ),
     ),
-    "_wikidata": _mediawiki("wikidata_search"),
+    "_wikidata": (
+        *_mediawiki("wikidata_search"),
+        ErrorBody(
+            source="https://www.wikidata.org/wiki/Wikidata:Data_access (a 429 asks to wait)",
+            status=429,
+            headers={"Retry-After": "1"},
+            type="rate_limited",
+            says="HTTP 429",
+            tools=frozenset({"wikidata_entity", "wikidata_sparql"}),
+        ),
+        ErrorBody(
+            source="Blazegraph's parse error, with a 400 (a malformed query)",
+            status=400,
+            body="SPARQL-QUERY: queryStr=SELECT ?x WHERE {\njava.util.concurrent."
+            "ExecutionException: org.openrdf.query.MalformedQueryException: Encountered "
+            '"<EOF>" at line 1.',
+            type="validation_error",
+            says='Encountered "<EOF>" at line 1.',
+            tools=frozenset({"wikidata_sparql"}),
+        ),
+        ErrorBody(
+            source="https://www.mediawiki.org/wiki/Wikidata_Query_Service/User_Manual"
+            "#Query_limits (the 60 s deadline)",
+            status=500,
+            body="SPARQL-QUERY: queryStr=SELECT ?x\njava.util.concurrent.TimeoutException",
+            type="upstream",
+            says="TimeoutException",
+            tools=frozenset({"wikidata_sparql"}),
+        ),
+    ),
     "_eurostat": (
         ErrorBody(
             source="live, 2026-09-30 (statistics and catalogue APIs)",
@@ -352,9 +390,131 @@ ERROR_BODIES: dict[str, tuple[ErrorBody, ...]] = {
             ),
             type="upstream",
             says="ASYNCHRONOUS_RESPONSE",
+        ),
+        ErrorBody(
+            source=_EUROSTAT_GUIDE,
+            status=200,
+            body={
+                "warning": {
+                    "status": 413,
+                    "label": "ASYNCHRONOUS_RESPONSE. Your request will be treated "
+                    "asynchronously. Please try again later.",
+                }
+            },
+            type="upstream",
+            says="ASYNCHRONOUS_RESPONSE",
+            tools=_EUROSTAT_DATA,
+        ),
+        ErrorBody(
+            source=_EUROSTAT_GUIDE + " (error 100 with a 400: the result is empty)",
+            status=400,
+            body={"error": [{"status": 400, "id": 100, "label": "No results found"}]},
+            type="not_found",
+            says="No results found",
+            tools=_EUROSTAT_DATA,
+        ),
+        ErrorBody(
+            source="https://ec.europa.eu/eurostat/web/user-guides/data-browser/api-data-access/"
+            "api-faq (error 150)",
+            status=400,
+            body={
+                "error": [
+                    {
+                        "status": 400,
+                        "id": 150,
+                        "label": "INVALID_QUERY_DIMENSION_VALUE: Query is invalid as per its "
+                        "structure's definition. The following values for dimension are not "
+                        "allowed: GEO=EU27.",
+                    }
+                ]
+            },
+            type="validation_error",
+            says="INVALID_QUERY_DIMENSION_VALUE",
+            tools=_EUROSTAT_DATA,
+        ),
+    ),
+    "_world_bank": (
+        ErrorBody(
+            source=_WORLD_BANK_ERRORS + " (error 120, sent with HTTP 200, 2026-09-29)",
+            status=200,
+            body=WORLD_BANK_INVALID_VALUE,
+            type="validation_error",
+            says="Invalid value: The provided parameter value is not valid",
             tools=frozenset(
-                {"eurostat_dataset", "eurostat_dimensions", "eurostat_series", "eurostat_compare"}
+                {
+                    "world_bank_topics",
+                    "world_bank_sources",
+                    "world_bank_countries",
+                    "world_bank_indicators",
+                }
             ),
+        ),
+        ErrorBody(
+            source=_WORLD_BANK_ERRORS + " (error 120, sent with HTTP 200, 2026-09-29)",
+            status=200,
+            body=WORLD_BANK_INVALID_VALUE,
+            type="not_found",
+            says="Invalid value: The provided parameter value is not valid",
+            tools=frozenset({"world_bank_indicator", "world_bank_series"}),
+        ),
+        ErrorBody(
+            source=_WORLD_BANK_ERRORS + " (error 105)",
+            status=200,
+            body=[
+                {
+                    "message": [
+                        {
+                            "id": "105",
+                            "key": "Service currently unavailable",
+                            "value": "The requested service is temporarily unavailable.",
+                        }
+                    ]
+                }
+            ],
+            type="upstream",
+            says="The requested service is temporarily unavailable",
+        ),
+    ),
+    "_who_gho": (
+        ErrorBody(
+            source="https://docs.oasis-open.org/odata/odata-json-format/v4.01/"
+            "odata-json-format-v4.01.html#sec_ErrorResponse (the GHO API is OData)",
+            status=400,
+            body={
+                "error": {
+                    "code": "",
+                    "message": "The query specified in the URI is not valid. Could not find a "
+                    "property named 'Dim9' on type 'Default.FACT'.",
+                }
+            },
+            type="validation_error",
+            says="The query specified in the URI is not valid",
+        ),
+    ),
+    "_gdelt": (
+        ErrorBody(
+            source="live, 2026-09-29 (text in place of the JSON, with HTTP 200)",
+            status=200,
+            body="Your query was too short or too long.\n",
+            type="validation_error",
+            says="Your query was too short or too long",
+        ),
+        ErrorBody(
+            source="live, 2026-10-04 (https://github.com/cyanheads/gdelt-mcp-server/issues/44)",
+            status=429,
+            body="Please limit requests to one every 5 seconds.",
+            type="rate_limited",
+            says="Please limit requests to one every 5 seconds",
+        ),
+    ),
+    "_news": (
+        ErrorBody(
+            source="https://firebase.google.com/docs/reference/rest/database"
+            "#section-error-conditions",
+            status=401,
+            body={"error": "Permission denied"},
+            type="upstream",
+            says="Permission denied",
         ),
     ),
     # T07a, health.

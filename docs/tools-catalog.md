@@ -90,15 +90,22 @@ row per line with every cell, no navigation boxes, edit links or footnote marker
 
 **Wikidata** — `_wikidata.py`
 
-- `wikidata_search` — Search Wikidata entities by label or alias
-- `wikidata_entity` — Get labels, aliases, claims, and Wikipedia links for a Wikidata QID
-- `wikidata_sparql` — Run read-only Wikidata SPARQL SELECT/ASK queries
+- `wikidata_search` — Search Wikidata items by label or alias, numbered, with the next offset
+- `wikidata_entity` — An item's or property's (`Q42`, `P31`) label, description, aliases,
+  Wikipedia link and statements, 40 at a time: every code with its label
+  (`instance of (P31): human (Q5)`), quantities with their unit, dates to their precision,
+  coordinates as latitude and longitude
+- `wikidata_sparql` — Run a read-only SPARQL SELECT/ASK query; every row it returns reads on by
+  `offset` (a SELECT without a `LIMIT` gets `LIMIT 1000`, and the answer says when it reached it)
 
 **News & events** — `_news.py`, `_gdelt.py`
 
-- `hacker_news` — Top stories from Hacker News
-- `gdelt_news_search` — Search global news coverage via GDELT DOC 2.0
-- `gdelt_timeline` — Get a GDELT volume timeline for a news query
+- `hacker_news` — The Hacker News top stories (up to 500) in rank order, `count` at a time from
+  `offset`
+- `gdelt_news_search` — Search global news coverage via GDELT DOC 2.0: up to the 250 articles
+  GDELT lists for a query, read on by `offset`
+- `gdelt_timeline` — A query's share of all the coverage GDELT monitored (%), step by step, read
+  on by `offset`
 
 GDELT's free API takes few requests per minute from one address: after a 429 both tools wait 60 s, answering at once with when to try again.
 
@@ -268,21 +275,28 @@ one item per line, tables one row per line.
 
 **Official statistics** — `_world_bank.py`, `_who_gho.py`, `_eurostat.py`
 
-- `world_bank_topics` — List World Bank indicator topics
+Every list reads on (`page`, `skip` or `offset`, as the footer says), values keep every digit the
+source sent, and codes come with the labels the answer brings.
+
+- `world_bank_topics` — List World Bank indicator topics, with their notes
 - `world_bank_sources` — List World Bank data sources/databases
-- `world_bank_countries` — List or search World Bank countries, economies, and aggregates
-- `world_bank_indicators` — Browse or search World Bank indicators with topic/source filters
-- `world_bank_indicator` — Get metadata for a specific World Bank indicator
-- `world_bank_series` — Get a World Bank indicator time series for a country or aggregate
-- `world_bank_compare` — Compare a World Bank indicator across multiple countries or aggregates
+- `world_bank_countries` — List or search World Bank countries, economies, and aggregates, with
+  the codes `world_bank_series` takes
+- `world_bank_indicators` — Browse World Bank indicators (by topic or source), or search them,
+  best matches first
+- `world_bank_indicator` — An indicator's name, source, topics, whole definition and source
+  organization
+- `world_bank_series` — An indicator's values for one or several countries or aggregates
+  (`"PRT,ESP,DEU"` compares them), page by page
 - `who_indicators` — Search WHO Global Health Observatory indicators
 - `who_indicator` — Get WHO GHO indicator metadata by code
-- `who_series` — Fetch WHO GHO observations for an indicator
+- `who_series` — WHO GHO observations of an indicator: place, year, value with its uncertainty
+  interval, and each code's dimension
 - `eurostat_dataset_search` — Search Eurostat datasets by ID or title (on a Python whose CA file lacks Eurostat's root, such as uv's standalone builds on macOS, install the `truststore` extra)
-- `eurostat_dataset` — Get Eurostat dataset metadata and dimension summary
-- `eurostat_dimensions` — List Eurostat dimensions and sample category codes
-- `eurostat_series` — Get Eurostat observations with generic dimension filters
-- `eurostat_compare` — Compare a Eurostat dataset across geo codes
+- `eurostat_dataset` — A Eurostat dataset's title, update time, period and description, and each
+  dimension's codes with their labels (`dimension="geo"` lists one)
+- `eurostat_series` — Eurostat observations, one row each with its codes' labels; several codes
+  of a dimension compare them (`filters="geo=PT+ES+FR,unit=NR"`)
 
 **Security** — `_nvd.py`
 

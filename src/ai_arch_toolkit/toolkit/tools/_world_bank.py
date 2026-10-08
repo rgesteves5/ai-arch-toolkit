@@ -1,24 +1,41 @@
-"""World Bank tools — public development indicators catalog and series lookup."""
+"""World Bank tools: the development indicators catalogue and its series.
+
+The API (https://datahelpdesk.worldbank.org/knowledgebase/articles/898581-api-basic-call-structures)
+pages with ``page`` and ``per_page`` and says the total; every list here reads on by ``page``,
+through the window (D39). Several countries go in one request, joined by ``;``. Values are
+written with every digit the API sent, never in scientific notation. The API explains its
+errors as ``[{"message": [{"id", "key", "value"}]}]``, with HTTP 200 (seen 2026-09-29), with the
+ids of its error table
+(https://datahelpdesk.worldbank.org/knowledgebase/articles/898620-api-error-codes).
+"""
 
 from __future__ import annotations
 
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Any, overload
+from typing import Annotated, Any
 
-from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.core import Range, ToolResult, tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._http import Api, Reply
+from ai_arch_toolkit.toolkit.tools._numbers import plain_number
+from ai_arch_toolkit.toolkit.tools._window import Window, list_window
+
+# The errors of a request at fault: a missing parameter (115), an invalid value (120), an
+# unsupported language (150), a value filter without dates (160).
+_REQUEST_ERRORS = frozenset({"115", "120", "150", "160"})
+# The service is temporarily unavailable (105).
+_UNAVAILABLE = frozenset({"105"})
+_INVALID_VALUE = "120"
+_LISTS = (
+    "check the codes and IDs given (world_bank_countries, world_bank_indicators, "
+    "world_bank_sources and world_bank_topics list them)"
+)
 
 
 def _messages(payload: object) -> list[dict[str, Any]] | None:
-    """The messages a World Bank error answer carries; ``None`` for a result.
-
-    The API sends its errors
-    (https://datahelpdesk.worldbank.org/knowledgebase/articles/898620-api-error-codes) as
-    ``[{"message": [{"id", "key", "value"}]}]``, with HTTP 200 (seen 2026-09-29).
-    """
+    """The messages a World Bank error answer carries; ``None`` for a result."""
     first = payload[0] if isinstance(payload, list) and payload else None
     messages = first.get("message") if isinstance(first, dict) else None
     if not isinstance(messages, list):
@@ -26,12 +43,24 @@ def _messages(payload: object) -> list[dict[str, Any]] | None:
     return [item for item in messages if isinstance(item, dict)]
 
 
-def _api_message(reply: Reply) -> str | None:
-    """The error a World Bank answer reports, as ``key: value`` in the source's words; ``None``
-    for a result."""
+def _api_message(reply: Reply) -> ToolFailure | str | None:
+    """The error a World Bank answer reports, in the source's words (``key: value``); ``None``
+    for a result. Errors of the request are a ``validation_error``; error 105, the service
+    unavailable, is worth a retry; any other is the words."""
     messages = _messages(reply.body)
     if messages is None:
         return None
+    said = _said(messages)
+    ids = {_string(item.get("id")) for item in messages}
+    if ids and ids <= _REQUEST_ERRORS:
+        return ToolFailure("validation_error", f"{said.rstrip('.')}; {_LISTS}")
+    if ids and ids <= _UNAVAILABLE:
+        return ToolFailure("upstream", f"{said.rstrip('.')}; try again later", retryable=True)
+    return said
+
+
+def _said(messages: list[dict[str, Any]]) -> str:
+    """The messages in the source's words, ``key: value`` each."""
     reported = [
         ": ".join(text for text in (_string(item.get("key")), _string(item.get("value"))) if text)
         for item in messages
@@ -39,15 +68,16 @@ def _api_message(reply: Reply) -> str | None:
     return "; ".join(text for text in reported if text) or "unknown error"
 
 
-def _indicator_error(indicator: str) -> Callable[[Reply], ToolFailure | str | None]:
-    """The reader of an indicator lookup: error 120 ("Invalid value"), the only parameter
-    being the indicator ID, is an indicator the World Bank does not have (``not_found``);
-    any other error stays the source's words (:func:`_api_message`)."""
+def _lookup_error(what: str, next_step: str) -> Callable[[Reply], ToolFailure | str | None]:
+    """The reader of a request for named codes: error 120 ("Invalid value") is a code the World
+    Bank does not have (``not_found``: ``what``, the source's words, ``next_step``); any other
+    error as :func:`_api_message` reads it."""
 
     def read(reply: Reply) -> ToolFailure | str | None:
         messages = _messages(reply.body)
-        if messages and all(_string(item.get("id")) == "120" for item in messages):
-            return ToolFailure("not_found", _no_indicator(indicator))
+        if messages and all(_string(item.get("id")) == _INVALID_VALUE for item in messages):
+            said = _said(messages).rstrip(".")
+            return ToolFailure("not_found", f"{what} (error 120, {said}); {next_step}")
         return _api_message(reply)
 
     return read
@@ -62,56 +92,13 @@ _API = Api(
     segment_safe=";",
     error_reader=_api_message,
 )
-_MAX_RESULTS_LIMIT = 100
-_INDICATOR_SEARCH_PAGE_SIZE = 1000
-_INDICATOR_SCAN_PAGES_LIMIT = 30
-_COUNTRIES_PAGE_SIZE = 500
-_COMPARE_COUNTRIES_LIMIT = 10
-_COMPARE_POINTS_LIMIT = 300
-_NOTE_MAX_CHARS = 500
+_CATALOGUE_PAGE = 1000
+_SCAN_PAGES = 30
+# Every country and aggregate in one page (296 in 2026): the filters apply to all of them.
+_ALL_COUNTRIES = 1000
 _YEAR_RE = re.compile(r"^\d{4}$")
 _ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _COUNTRY_RE = re.compile(r"^[A-Za-z0-9_]+$")
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class _WorldBankTopic:
-    """Normalized World Bank topic metadata."""
-
-    id: str
-    name: str
-    note: str
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class _WorldBankSource:
-    """Normalized World Bank source/database metadata."""
-
-    id: str
-    name: str
-    code: str
-    last_updated: str
-    data_available: str
-    metadata_available: str
-    description: str
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class _WorldBankCountry:
-    """Normalized World Bank country or aggregate metadata."""
-
-    id: str
-    iso2: str
-    name: str
-    region_id: str
-    region: str
-    income_level_id: str
-    income_level: str
-    lending_type_id: str
-    lending_type: str
-    capital_city: str
-    latitude: str
-    longitude: str
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -129,53 +116,65 @@ class _WorldBankIndicator:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class _WorldBankSeriesPoint:
-    """Normalized World Bank indicator observation."""
+class _Scan:
+    """What a search read of the catalogue: its matches, how many indicators it read, and the
+    catalogue's size."""
 
-    country_id: str
-    country_iso3: str
-    country: str
-    indicator_id: str
-    indicator: str
-    date: str
-    value: int | float | str | None
-    unit: str
-    obs_status: str
-    decimal: int | None
+    matches: list[_WorldBankIndicator]
+    read: int
+    total: int
+    pages: int
 
 
 @tool(capability="network")
-def world_bank_topics(max_results: int = 50, page: int = 1) -> str:
-    """List World Bank indicator topics.
+def world_bank_topics(
+    max_results: Annotated[int, Range(1, 100)] = 50, page: Annotated[int, Range(1)] = 1
+) -> ToolResult:
+    """List the World Bank's indicator topics, each with its note.
 
     Args:
-        max_results: Number of topics to return (1-100). Defaults to 50.
-        page: One-based result page. Defaults to 1.
-
-    Raises:
-        ToolFailure: validation_error when ``page`` is below 1.
+        max_results: How many topics to show.
+        page: The page to show; the footer gives the next one.
     """
-    _check_page(page)
-
-    params = {"page": str(page), "per_page": str(_bounded(max_results))}
-    return _API.get_json_list("topic", params=params, parse=_topics_text)
+    params = {"page": str(page), "per_page": str(max_results)}
+    return _API.get_json_list(
+        "topic",
+        params=params,
+        parse=lambda payload: _listing(
+            payload,
+            page=page,
+            per_page=max_results,
+            line=_topic_line,
+            heading="World Bank topics (world_bank_indicators(topic=ID) lists one's indicators):",
+            empty="The World Bank lists no topics.",
+        ),
+    )
 
 
 @tool(capability="network")
-def world_bank_sources(max_results: int = 50, page: int = 1) -> str:
-    """List World Bank data sources/databases.
+def world_bank_sources(
+    max_results: Annotated[int, Range(1, 100)] = 50, page: Annotated[int, Range(1)] = 1
+) -> ToolResult:
+    """List the World Bank's data sources (its databases).
 
     Args:
-        max_results: Number of sources to return (1-100). Defaults to 50.
-        page: One-based result page. Defaults to 1.
-
-    Raises:
-        ToolFailure: validation_error when ``page`` is below 1.
+        max_results: How many sources to show.
+        page: The page to show; the footer gives the next one.
     """
-    _check_page(page)
-
-    params = {"page": str(page), "per_page": str(_bounded(max_results))}
-    return _API.get_json_list("source", params=params, parse=_sources_text)
+    params = {"page": str(page), "per_page": str(max_results)}
+    return _API.get_json_list(
+        "source",
+        params=params,
+        parse=lambda payload: _listing(
+            payload,
+            page=page,
+            per_page=max_results,
+            line=_source_line,
+            heading="World Bank sources (world_bank_indicators(source=ID) lists one's "
+            "indicators):",
+            empty="The World Bank lists no sources.",
+        ),
+    )
 
 
 @tool(capability="network")
@@ -184,40 +183,46 @@ def world_bank_countries(
     region: str = "",
     income_level: str = "",
     lending_type: str = "",
-    max_results: int = 50,
-    page: int = 1,
-) -> str:
-    """List or search World Bank countries and aggregates.
+    max_results: Annotated[int, Range(1, 100)] = 50,
+    page: Annotated[int, Range(1)] = 1,
+) -> ToolResult:
+    """List or search World Bank countries and aggregates, with the codes world_bank_series
+    takes.
 
     Args:
-        query: Optional text or code filter, e.g. "Portugal", "PT", or "WLD".
-        region: Optional official region ID filter, e.g. "ECS" or "NA".
-        income_level: Optional official income level ID filter, e.g. "HIC".
-        lending_type: Optional official lending type ID filter, e.g. "IBD".
-        max_results: Number of countries/aggregates to return (1-100). Defaults to 50.
-        page: One-based result page. Defaults to 1.
-
-    Raises:
-        ToolFailure: validation_error when ``page`` is below 1.
+        query: Text or code to look for, e.g. "Portugal", "PT", or "WLD".
+        region: Region ID to keep, e.g. "ECS" or "NAC".
+        income_level: Income level ID to keep, e.g. "HIC".
+        lending_type: Lending type ID to keep, e.g. "IBD".
+        max_results: How many countries or aggregates to show.
+        page: The page to show; the footer gives the next one.
     """
-    _check_page(page)
-
-    max_results = _bounded(max_results)
     filters = (
         query.strip(),
         region.strip().upper(),
         income_level.strip().upper(),
         lending_type.strip().upper(),
     )
-    filtered = any(filters)
-    params = {
-        "page": "1" if filtered else str(page),
-        "per_page": str(_COUNTRIES_PAGE_SIZE if filtered else max_results),
-    }
+    heading = "World Bank countries and aggregates (world_bank_series takes their codes):"
+    if not any(filters):
+        params = {"page": str(page), "per_page": str(max_results)}
+        return _API.get_json_list(
+            "country",
+            params=params,
+            parse=lambda payload: _listing(
+                payload,
+                page=page,
+                per_page=max_results,
+                line=_country_line,
+                heading=heading,
+                empty="The World Bank lists no countries or aggregates.",
+            ),
+        )
+    params = {"page": "1", "per_page": str(_ALL_COUNTRIES)}
     return _API.get_json_list(
         "country",
         params=params,
-        parse=lambda payload: _countries_text(payload, filters, page, max_results),
+        parse=lambda payload: _countries_answer(payload, filters, page, max_results, heading),
     )
 
 
@@ -226,41 +231,49 @@ def world_bank_indicators(
     query: str = "",
     topic: str = "",
     source: str = "",
-    max_results: int = 20,
-    page: int = 1,
-    scan_pages: int = 10,
-) -> str:
-    """List or search World Bank indicators.
+    max_results: Annotated[int, Range(1, 100)] = 20,
+    page: Annotated[int, Range(1)] = 1,
+    scan_pages: Annotated[int, Range(1, _SCAN_PAGES)] = 10,
+) -> ToolResult:
+    """List or search World Bank indicators, with the IDs world_bank_series takes.
+
+    Without a query, it lists the catalogue (or a topic's or a source's indicators) page by
+    page. With one, it searches the IDs, names, sources, topics and definitions of the first
+    ``scan_pages`` catalogue pages of 1000 indicators, best matches first.
 
     Args:
-        query: Optional text filter across indicator ID, name, source, topics, and definition.
-        topic: Optional official topic ID filter, e.g. "3" for Economy & Growth.
-        source: Optional official source ID filter, e.g. "2" for World Development Indicators.
-        max_results: Number of indicators to return (1-100). Defaults to 20.
-        page: One-based page to browse, or first page to scan when query is provided.
-        scan_pages: Number of catalog pages to scan for query matches (1-30). Defaults to 10.
-
-    Raises:
-        ToolFailure: validation_error when ``page`` or ``scan_pages`` is below 1.
+        query: Words to look for, e.g. "inflation consumer prices".
+        topic: Topic ID to keep, e.g. "3" for Economy & Growth (world_bank_topics).
+        source: Source ID to keep, e.g. "2" for World Development Indicators
+            (world_bank_sources).
+        max_results: How many indicators to show.
+        page: The page to show, of the catalogue or of the matches; the footer gives the next.
+        scan_pages: With a query, how many catalogue pages of 1000 indicators to search.
     """
-    _check_page(page)
-    if scan_pages < 1:
-        raise ToolFailure("validation_error", f"invalid scan_pages {scan_pages}; use 1 to 30")
-
-    max_results = _bounded(max_results)
-    query = query.strip()
-    topic = topic.strip()
-    source = source.strip()
-    scan_pages = min(scan_pages, _INDICATOR_SCAN_PAGES_LIMIT)
-
-    if query:
-        return _search_indicators(query, topic, source, page, scan_pages, max_results)
-    return _browse_indicators(topic, source, page, max_results)
+    query, topic, source = query.strip(), topic.strip(), source.strip()
+    if query or (topic and source):
+        scan = _scan_indicators(query, topic, source, scan_pages)
+        return _search_answer(scan, query, topic, source, page, max_results)
+    params = {"page": str(page), "per_page": str(max_results)}
+    under = f" {_under(topic, source)}" if topic or source else ""
+    return _API.get_json_list(
+        *_indicator_segments(topic, source),
+        params=params,
+        parse=lambda payload: _listing(
+            payload,
+            page=page,
+            per_page=max_results,
+            line=_indicator_line,
+            heading=f"World Bank indicators{under} (world_bank_indicator gives a definition):",
+            empty=f"No World Bank indicators are listed{under}.",
+        ),
+    )
 
 
 @tool(capability="network")
-def world_bank_indicator(indicator: str) -> str:
-    """Fetch metadata for a specific World Bank indicator.
+def world_bank_indicator(indicator: str) -> ToolResult:
+    """Read a World Bank indicator: its name, source, topics, definition and source
+    organization.
 
     Args:
         indicator: World Bank indicator ID, e.g. "SP.POP.TOTL".
@@ -270,12 +283,14 @@ def world_bank_indicator(indicator: str) -> str:
             Bank has no indicator with that ID.
     """
     indicator = _indicator_id(indicator)
-
-    api = replace(_API, error_reader=_indicator_error(indicator))
+    what = f"the World Bank has no indicator {indicator}"
+    api = replace(
+        _API, error_reader=_lookup_error(what, "search for one with world_bank_indicators")
+    )
     return api.get_json_list(
         "indicator",
         indicator,
-        parse=lambda payload: _indicator_text(payload, indicator),
+        parse=lambda payload: _indicator_answer(payload, indicator),
         missing=_no_indicator(indicator),
     )
 
@@ -286,91 +301,46 @@ def world_bank_series(
     indicator: str,
     start_year: str = "",
     end_year: str = "",
-    max_results: int = 100,
-    page: int = 1,
-) -> str:
-    """Fetch a World Bank indicator time series for a country or aggregate.
+    max_results: Annotated[int, Range(1, 100)] = 100,
+    page: Annotated[int, Range(1)] = 1,
+) -> ToolResult:
+    """Read a World Bank indicator's values for one or several countries or aggregates, in the
+    API's order; several codes compare them.
 
     Args:
-        country: Country, economy, or aggregate code, e.g. "PRT", "US", "WLD", or "all".
-        indicator: World Bank indicator ID, e.g. "SP.POP.TOTL".
-        start_year: Optional first year as YYYY.
-        end_year: Optional last year as YYYY.
-        max_results: Number of observations to return (1-100). Defaults to 100.
-        page: One-based result page. Defaults to 1.
-
-    Raises:
-        ToolFailure: validation_error when the country code, the indicator ID, a year or ``page``
-            is invalid.
-    """
-    _check_series_inputs(country, indicator, start_year, end_year, page)
-
-    params = _series_params(start_year, end_year, page, _bounded(max_results))
-    return _API.get_json_list(
-        "country",
-        country.strip(),
-        "indicator",
-        indicator.strip(),
-        params=params,
-        parse=_series_text,
-    )
-
-
-@tool(capability="network")
-def world_bank_compare(
-    indicator: str,
-    countries: str,
-    year: str = "",
-    start_year: str = "",
-    end_year: str = "",
-    max_points: int = 100,
-) -> str:
-    """Compare a World Bank indicator across multiple countries or aggregates.
-
-    Args:
+        country: Country, economy or aggregate codes, comma-separated, e.g. "PRT",
+            "PRT,ESP,DEU", "WLD", or "all" (world_bank_countries lists the codes).
         indicator: World Bank indicator ID, e.g. "NY.GDP.MKTP.CD".
-        countries: Comma-separated country/economy codes, e.g. "PRT,ESP,DEU".
-        year: Optional single year as YYYY. Overrides start_year/end_year when provided.
-        start_year: Optional first year as YYYY.
-        end_year: Optional last year as YYYY.
-        max_points: Maximum observations to return (1-300). Defaults to 100.
+        start_year: First year, as YYYY; alone, the only year.
+        end_year: Last year, as YYYY.
+        max_results: How many values to show.
+        page: The page to show; the footer gives the next one.
 
     Raises:
-        ToolFailure: validation_error when the indicator ID, the country list or a year is
-            invalid.
+        ToolFailure: validation_error when a country code, the indicator ID or a year is
+            invalid; not_found when the World Bank has no such indicator or country.
     """
+    codes = _country_codes(country)
     indicator = _indicator_id(indicator)
-
-    country_codes = _parse_country_list(countries)
-    if not country_codes:
-        raise ToolFailure(
-            "validation_error",
-            f"no valid country code in {countries!r}; give codes such as 'PRT,ESP,DEU'",
-        )
-    if len(country_codes) > _COMPARE_COUNTRIES_LIMIT:
-        raise ToolFailure(
-            "validation_error",
-            f"{len(country_codes)} countries given; compare at most {_COMPARE_COUNTRIES_LIMIT} "
-            "per call",
-        )
-
-    if year.strip():
-        if not _valid_year(year):
-            raise ToolFailure("validation_error", f"invalid year {year!r}; use YYYY")
-        start_year = year.strip()
-        end_year = year.strip()
     _check_year_range(start_year, end_year)
-
-    max_points = max(1, min(max_points, _COMPARE_POINTS_LIMIT))
-    params = _series_params(start_year, end_year, 1, max_points)
-    return _API.get_json_list(
+    what = f"the World Bank has no indicator {indicator} or no country or aggregate among {codes}"
+    reader = _lookup_error(
+        what,
+        "find the indicator with world_bank_indicators and the codes with world_bank_countries",
+    )
+    asked = f"{indicator} for {codes}{_years(start_year, end_year)}"
+    api = replace(_API, error_reader=reader)
+    return api.get_json_list(
         "country",
-        ";".join(country_codes),
+        codes,
         "indicator",
         indicator,
-        params=params,
-        parse=_compare_text,
+        params=_series_params(start_year, end_year, page, max_results),
+        parse=lambda payload: _series_answer(payload, asked, page, max_results),
     )
+
+
+# --- Answers -----------------------------------------------------------------------------------
 
 
 def _page(payload: list[Any]) -> tuple[dict[str, Any], list[Any]]:
@@ -385,143 +355,293 @@ def _page(payload: list[Any]) -> tuple[dict[str, Any], list[Any]]:
     )
 
 
-def _parse_items[T](items: list[Any], parse_item: Callable[[dict[str, Any]], T | None]) -> list[T]:
-    """The items that are objects and parse, in order."""
-    parsed = [parse_item(item) for item in items if isinstance(item, dict)]
-    return [item for item in parsed if item is not None]
+def _paged(lines: list[str], *, page: int, per_page: int, total: int | None, pages: int) -> Window:
+    """A page of a list the API (or the tool) paged: numbered from the page's start, with the
+    total and the next page."""
+    next_call = {"page": page + 1} if lines and page < pages else None
+    return list_window(lines, first=(page - 1) * per_page + 1, total=total, next_call=next_call)
 
 
-def _topics_text(payload: list[Any]) -> str:
+def _listing(
+    payload: list[Any],
+    *,
+    page: int,
+    per_page: int,
+    line: Callable[[int, dict[str, Any]], str],
+    heading: str,
+    empty: str,
+) -> ToolResult:
+    """One page of a list the API pages, each item a line from ``line``; ``empty`` says the
+    list has nothing."""
     metadata, items = _page(payload)
-    topics = _parse_items(items, _parse_topic)
-    if not topics:
-        return "No World Bank topics found."
-    return _pagination_header("World Bank topics", metadata) + "\n" + _format_topics(topics)
+    records = [item for item in items if isinstance(item, dict)]
+    if not records and page == 1:
+        return ToolResult.success(empty)
+    first = (page - 1) * per_page + 1
+    lines = [line(number, item) for number, item in enumerate(records, start=first)]
+    pages = _int_or_none(metadata.get("pages")) or 0
+    window = _paged(
+        lines,
+        page=page,
+        per_page=per_page,
+        total=_int_or_none(metadata.get("total")),
+        pages=pages,
+    )
+    return window.result(heading=heading)
 
 
-def _sources_text(payload: list[Any]) -> str:
+def _topic_line(number: int, topic: dict[str, Any]) -> str:
+    line = (
+        f"{number}. {_string(topic.get('value')) or '(unnamed)'} (ID {_string(topic.get('id'))})"
+    )
+    note = _string(topic.get("sourceNote"))
+    return line + (f"\n   {note}" if note else "")
+
+
+def _source_line(number: int, source: dict[str, Any]) -> str:
+    code = _string(source.get("code"))
+    ids = f"ID {_string(source.get('id'))}" + (f", code {code}" if code else "")
+    lines = [f"{number}. {_string(source.get('name')) or '(unnamed)'} ({ids})"]
+    meta = [
+        f"{label}: {value}"
+        for label, key in (
+            ("last updated", "lastupdated"),
+            ("data", "dataavailability"),
+            ("metadata", "metadataavailability"),
+        )
+        if (value := _string(source.get(key)))
+    ]
+    if meta:
+        lines.append("   " + " | ".join(meta))
+    if description := _string(source.get("description")):
+        lines.append(f"   {description}")
+    return "\n".join(lines)
+
+
+def _country_line(number: int, country: dict[str, Any]) -> str:
+    iso2 = _string(country.get("iso2Code"))
+    codes = _string(country.get("id")) + (f", ISO2 {iso2}" if iso2 else "")
+    lines = [f"{number}. {_string(country.get('name')) or '(unnamed)'} ({codes})"]
+    meta = [
+        f"{label}: {_string(group.get('value'))} ({_string(group.get('id'))})"
+        for label, key in (
+            ("region", "region"),
+            ("income", "incomeLevel"),
+            ("lending", "lendingType"),
+        )
+        if _string((group := _dict(country.get(key))).get("value"))
+    ]
+    if meta:
+        lines.append("   " + " | ".join(meta))
+    place = []
+    if capital := _string(country.get("capitalCity")):
+        place.append(f"capital: {capital}")
+    latitude, longitude = _string(country.get("latitude")), _string(country.get("longitude"))
+    if latitude and longitude:
+        place.append(f"latitude {latitude}, longitude {longitude}")
+    if place:
+        lines.append("   " + " | ".join(place))
+    return "\n".join(lines)
+
+
+def _countries_answer(
+    payload: list[Any],
+    filters: tuple[str, str, str, str],
+    page: int,
+    per_page: int,
+    heading: str,
+) -> ToolResult:
+    """The page of the countries and aggregates that match ``filters``, among all of them."""
     metadata, items = _page(payload)
-    sources = _parse_items(items, _parse_source)
-    if not sources:
-        return "No World Bank sources found."
-    return _pagination_header("World Bank sources", metadata) + "\n" + _format_sources(sources)
+    matches = [
+        item for item in items if isinstance(item, dict) and _country_matches(item, *filters)
+    ]
+    if not matches:
+        named = zip(("query", "region", "income_level", "lending_type"), filters, strict=True)
+        asked = ", ".join(
+            f"{key}={value!r}" if key == "query" else f"{key}={value}"
+            for key, value in named
+            if value
+        )
+        return ToolResult.success(f"No World Bank country or aggregate matches {asked}.")
+    start = (page - 1) * per_page
+    lines = [
+        _country_line(number, item)
+        for number, item in enumerate(matches[start : start + per_page], start=start + 1)
+    ]
+    total = _int_or_none(metadata.get("total"))
+    if total is not None and total > len(items):
+        heading += f"\n(searched the first {len(items)} of {total} the World Bank lists)"
+    pages = -(-len(matches) // per_page)
+    window = _paged(lines, page=page, per_page=per_page, total=len(matches), pages=pages)
+    return window.result(heading=heading)
 
 
-def _countries_text(
-    payload: list[Any], filters: tuple[str, str, str, str], page: int, per_page: int
-) -> str:
-    """The countries on the page; with ``filters``, the page of the matches among all of them."""
-    metadata, items = _page(payload)
-    countries = _parse_items(items, _parse_country)
-    if any(filters):
-        countries = [country for country in countries if _country_matches(country, *filters)]
-        metadata = _local_metadata(page=page, per_page=per_page, total=len(countries))
-        countries = _slice_page(countries, page, per_page)
-
-    if not countries:
-        return "No World Bank countries found."
-    return (
-        _pagination_header("World Bank countries", metadata) + "\n" + _format_countries(countries)
+def _country_matches(
+    country: dict[str, Any], query: str, region: str, income_level: str, lending_type: str
+) -> bool:
+    if query:
+        fields = ("id", "iso2Code", "name")
+        haystack = " ".join(_string(country.get(key)) for key in fields).lower()
+        if query.lower() not in haystack:
+            return False
+    wanted = (("region", region), ("incomeLevel", income_level), ("lendingType", lending_type))
+    return all(
+        not value or _string(_dict(country.get(key)).get("id")).upper() == value
+        for key, value in wanted
     )
 
 
-def _search_indicators(
-    query: str, topic: str, source: str, page: int, scan_pages: int, max_results: int
-) -> str:
-    """The best ``query`` matches over ``scan_pages`` catalog pages from ``page``."""
-    indicators = _scan_indicators(query, topic, source, page, scan_pages)
-    if not indicators:
-        return "No World Bank indicators found. Try a topic/source filter or increase scan_pages."
-
-    metadata = _local_metadata(page=1, per_page=max_results, total=len(indicators))
-    header = _pagination_header("World Bank indicators", metadata)
-    ranked = _rank_indicators(indicators, query)[:max_results]
-    return f"{header} | scanned_pages: {scan_pages}\n" + _format_indicators(
-        ranked, include_note=True
-    )
-
-
-def _browse_indicators(topic: str, source: str, page: int, max_results: int) -> str:
-    """One catalog page, under ``topic`` or ``source`` when given."""
-    params = {"page": str(page), "per_page": str(max_results)}
-    return _API.get_json_list(
-        *_indicator_segments(topic, source),
-        params=params,
-        parse=lambda payload: _indicators_text(payload, topic, source),
-    )
-
-
-def _indicators_text(payload: list[Any], topic: str, source: str) -> str:
-    metadata, items = _page(payload)
-    indicators = _parse_items(items, _parse_indicator)
-    if topic and source:
-        indicators = [indicator for indicator in indicators if indicator.source_id == source]
-    if not indicators:
-        return "No World Bank indicators found."
-    header = _pagination_header("World Bank indicators", metadata)
-    return header + "\n" + _format_indicators(indicators, include_note=True)
-
-
-def _indicator_text(payload: list[Any], indicator: str) -> str:
-    _metadata, items = _page(payload)
-    indicators = _parse_items(items, _parse_indicator)
-    if not indicators:
-        raise ToolFailure("not_found", _no_indicator(indicator))
-    return f"World Bank indicator {indicators[0].id}:\n" + _format_indicators(
-        [indicators[0]],
-        include_index=False,
-        include_note=True,
-        include_organization=True,
-    )
-
-
-def _series_text(payload: list[Any]) -> str:
-    metadata, items = _page(payload)
-    points = _parse_items(items, _parse_series_point)
-    if not points:
-        return "No World Bank series observations found."
-    return _pagination_header("World Bank series", metadata) + "\n" + _format_series(points)
-
-
-def _compare_text(payload: list[Any]) -> str:
-    metadata, items = _page(payload)
-    points = _parse_items(items, _parse_series_point)
-    if not points:
-        return "No World Bank comparison observations found."
-    return _pagination_header("World Bank comparison", metadata) + "\n" + _format_compare(points)
-
-
-def _scan_indicators(
-    query: str,
-    topic: str,
-    source: str,
-    start_page: int,
-    scan_pages: int,
-) -> list[_WorldBankIndicator]:
-    matches: list[_WorldBankIndicator] = []
+def _scan_indicators(query: str, topic: str, source: str, scan_pages: int) -> _Scan:
+    """The indicators that match ``query`` (and ``topic`` and ``source``) in the first
+    ``scan_pages`` catalogue pages."""
     tokens = _query_tokens(query)
     segments = _indicator_segments(topic, source)
-
-    for page in range(start_page, start_page + scan_pages):
-        params = {"page": str(page), "per_page": str(_INDICATOR_SEARCH_PAGE_SIZE)}
-        pages, indicators = _API.get_json_list(*segments, params=params, parse=_indicator_page)
-        for indicator in indicators:
-            if topic and not _indicator_has_topic(indicator, topic):
-                continue
-            if source and indicator.source_id != source:
-                continue
-            if _indicator_matches(indicator, tokens):
-                matches.append(indicator)
-        if pages is None or page >= pages:
+    matches: list[_WorldBankIndicator] = []
+    read = total = pages = 0
+    for page in range(1, scan_pages + 1):
+        params = {"page": str(page), "per_page": str(_CATALOGUE_PAGE)}
+        metadata, indicators = _API.get_json_list(*segments, params=params, parse=_indicator_page)
+        total = _int_or_none(metadata.get("total")) or total
+        pages = _int_or_none(metadata.get("pages")) or pages
+        read += len(indicators)
+        matches.extend(
+            indicator
+            for indicator in indicators
+            if (not topic or any(topic_id == topic for topic_id, _ in indicator.topics))
+            and (not source or indicator.source_id == source)
+            and all(token in _indicator_haystack(indicator) for token in tokens)
+        )
+        if page >= pages:
             break
+    return _Scan(
+        matches=list(dict.fromkeys(matches)), read=read, total=max(total, read), pages=pages
+    )
 
-    return list(dict.fromkeys(matches))
+
+def _search_answer(
+    scan: _Scan, query: str, topic: str, source: str, page: int, per_page: int
+) -> ToolResult:
+    looked = f"searched {scan.read} of {scan.total} indicators"
+    if scan.read < scan.total:
+        looked += (
+            f"; scan_pages={scan.pages} searches them all"
+            if scan.pages <= _SCAN_PAGES
+            else f"; a search reads at most {_SCAN_PAGES} pages: narrow it with topic or source"
+        )
+    under = _under(topic, source)
+    asked = " ".join(part for part in (f"that match {query!r}" if query else "", under) if part)
+    if not scan.matches:
+        return ToolResult.success(f"No World Bank indicators {asked} ({looked}).")
+    ranked = _rank_indicators(scan.matches, query)
+    start = (page - 1) * per_page
+    lines = [
+        _indicator_text(number, indicator)
+        for number, indicator in enumerate(ranked[start : start + per_page], start=start + 1)
+    ]
+    pages = -(-len(ranked) // per_page)
+    window = _paged(lines, page=page, per_page=per_page, total=len(ranked), pages=pages)
+    return window.result(
+        heading=f"World Bank indicators {asked} ({looked}; world_bank_indicator gives a "
+        "definition):"
+    )
 
 
-def _indicator_page(payload: list[Any]) -> tuple[int | None, list[_WorldBankIndicator]]:
-    """A catalog page's page count (``None`` when absent or not a number) and its indicators."""
+def _under(topic: str, source: str) -> str:
+    """``under topic 3 and source 2``; empty without either."""
+    named = [f"{kind} {value}" for kind, value in (("topic", topic), ("source", source)) if value]
+    return f"under {' and '.join(named)}" if named else ""
+
+
+def _indicator_page(payload: list[Any]) -> tuple[dict[str, Any], list[_WorldBankIndicator]]:
     metadata, items = _page(payload)
-    return _int_or_none(metadata.get("pages")), _parse_items(items, _parse_indicator)
+    parsed = [_parse_indicator(item) for item in items if isinstance(item, dict)]
+    return metadata, [indicator for indicator in parsed if indicator is not None]
+
+
+def _indicator_line(number: int, item: dict[str, Any]) -> str:
+    indicator = _parse_indicator(item)
+    return _indicator_text(number, indicator) if indicator else f"{number}. (unnamed)"
+
+
+def _indicator_text(number: int, indicator: _WorldBankIndicator) -> str:
+    parts = [f"{number}. {indicator.id}: {indicator.name}"]
+    if indicator.unit:
+        parts.append(f"unit: {indicator.unit}")
+    if indicator.source:
+        parts.append(f"source: {indicator.source} ({indicator.source_id})")
+    if indicator.topics:
+        parts.append("topics: " + ", ".join(f"{name} ({key})" for key, name in indicator.topics))
+    return " | ".join(parts)
+
+
+def _indicator_answer(payload: list[Any], indicator: str) -> ToolResult:
+    _metadata, indicators = _indicator_page(payload)
+    if not indicators:
+        raise ToolFailure("not_found", _no_indicator(indicator))
+    found = indicators[0]
+    lines = [f"World Bank indicator {found.id}: {found.name}"]
+    meta = [f"unit: {found.unit}"] if found.unit else []
+    if found.source:
+        meta.append(f"source: {found.source} ({found.source_id})")
+    if found.topics:
+        meta.append("topics: " + ", ".join(f"{name} ({key})" for key, name in found.topics))
+    if meta:
+        lines.append("   " + " | ".join(meta))
+    if found.source_note:
+        lines.append(f"   Definition: {found.source_note}")
+    if found.source_organization:
+        lines.append(f"   Source organization: {found.source_organization}")
+    return ToolResult.success("\n".join(lines))
+
+
+def _series_answer(payload: list[Any], asked: str, page: int, per_page: int) -> ToolResult:
+    metadata, items = _page(payload)
+    points = [item for item in items if isinstance(item, dict) and _string(item.get("date"))]
+    if not points and page == 1:
+        return ToolResult.success(f"No World Bank observations of {asked}.")
+    lines = [
+        _point_text(number, point)
+        for number, point in enumerate(points, start=(page - 1) * per_page + 1)
+    ]
+    indicator = _dict(points[0].get("indicator")) if points else {}
+    name = f"{_string(indicator.get('id'))}: {_string(indicator.get('value'))}".strip(": ")
+    units = {unit for point in points if (unit := _string(point.get("unit")))}
+    heading = (
+        f"World Bank, {name or asked}"
+        + (f" (unit: {', '.join(sorted(units))})" if units else "")
+        + ":"
+    )
+    total = _int_or_none(metadata.get("total"))
+    pages = _int_or_none(metadata.get("pages")) or 0
+    window = _paged(lines, page=page, per_page=per_page, total=total, pages=pages)
+    return window.result(heading=heading)
+
+
+def _point_text(number: int, point: dict[str, Any]) -> str:
+    """``3. Portugal (PRT), 2023: 29184912345600``: the value with every digit it has."""
+    country = _dict(point.get("country"))
+    code = _string(point.get("countryiso3code")) or _string(country.get("id"))
+    name = _string(country.get("value"))
+    place = f"{name} ({code})" if name and code else name or code or "(no country)"
+    value = point.get("value")
+    shown = plain_number(value) if isinstance(value, int | float | str) else "no value"
+    status = _string(point.get("obs_status"))
+    return f"{number}. {place}, {_date(_string(point.get('date')))}: {shown}" + (
+        f" (status: {status})" if status else ""
+    )
+
+
+def _date(date: str) -> str:
+    """A World Bank period in ISO 8601: ``2021M07`` as ``2021-07``, ``2021Q1`` as ``2021-Q1``."""
+    found = re.fullmatch(r"(\d{4})([MQ])(\d{1,2})", date)
+    if found is None:
+        return date
+    year, kind, step = found.groups()
+    return f"{year}-{step.zfill(2)}" if kind == "M" else f"{year}-Q{step}"
+
+
+# --- Requests ----------------------------------------------------------------------------------
 
 
 def _indicator_segments(topic: str, source: str) -> tuple[str, ...]:
@@ -532,12 +652,7 @@ def _indicator_segments(topic: str, source: str) -> tuple[str, ...]:
     return ("indicator",)
 
 
-def _series_params(
-    start_year: str,
-    end_year: str,
-    page: int,
-    per_page: int,
-) -> dict[str, str]:
+def _series_params(start_year: str, end_year: str, page: int, per_page: int) -> dict[str, str]:
     params = {"page": str(page), "per_page": str(per_page)}
     if start_year.strip() or end_year.strip():
         start = start_year.strip() or end_year.strip()
@@ -546,54 +661,12 @@ def _series_params(
     return params
 
 
-def _parse_topic(data: dict[str, Any]) -> _WorldBankTopic | None:
-    topic_id = _string(data.get("id"))
-    name = _string(data.get("value"))
-    if not topic_id and not name:
-        return None
-    return _WorldBankTopic(
-        id=topic_id, name=name or "(unnamed)", note=_string(data.get("sourceNote"))
-    )
-
-
-def _parse_source(data: dict[str, Any]) -> _WorldBankSource | None:
-    source_id = _string(data.get("id"))
-    name = _string(data.get("name"))
-    if not source_id and not name:
-        return None
-    return _WorldBankSource(
-        id=source_id,
-        name=name or "(unnamed)",
-        code=_string(data.get("code")),
-        last_updated=_string(data.get("lastupdated")),
-        data_available=_string(data.get("dataavailability")),
-        metadata_available=_string(data.get("metadataavailability")),
-        description=_string(data.get("description")),
-    )
-
-
-def _parse_country(data: dict[str, Any]) -> _WorldBankCountry | None:
-    country_id = _string(data.get("id"))
-    name = _string(data.get("name"))
-    if not country_id and not name:
-        return None
-    region = _dict(data.get("region"))
-    income_level = _dict(data.get("incomeLevel"))
-    lending_type = _dict(data.get("lendingType"))
-    return _WorldBankCountry(
-        id=country_id,
-        iso2=_string(data.get("iso2Code")),
-        name=name or "(unnamed)",
-        region_id=_string(region.get("id")),
-        region=_string(region.get("value")),
-        income_level_id=_string(income_level.get("id")),
-        income_level=_string(income_level.get("value")),
-        lending_type_id=_string(lending_type.get("id")),
-        lending_type=_string(lending_type.get("value")),
-        capital_city=_string(data.get("capitalCity")),
-        latitude=_string(data.get("latitude")),
-        longitude=_string(data.get("longitude")),
-    )
+def _years(start_year: str, end_year: str) -> str:
+    start = start_year.strip() or end_year.strip()
+    end = end_year.strip() or start_year.strip()
+    if not start:
+        return ""
+    return f" in {start}" if start == end else f" from {start} to {end}"
 
 
 def _parse_indicator(data: dict[str, Any]) -> _WorldBankIndicator | None:
@@ -614,221 +687,34 @@ def _parse_indicator(data: dict[str, Any]) -> _WorldBankIndicator | None:
     )
 
 
-def _parse_series_point(data: dict[str, Any]) -> _WorldBankSeriesPoint | None:
-    indicator = _dict(data.get("indicator"))
-    country = _dict(data.get("country"))
-    date = _string(data.get("date"))
-    if not date:
-        return None
-    return _WorldBankSeriesPoint(
-        country_id=_string(country.get("id")),
-        country_iso3=_string(data.get("countryiso3code")),
-        country=_string(country.get("value")),
-        indicator_id=_string(indicator.get("id")),
-        indicator=_string(indicator.get("value")),
-        date=date,
-        value=data.get("value"),
-        unit=_string(data.get("unit")),
-        obs_status=_string(data.get("obs_status")),
-        decimal=_int_or_none(data.get("decimal")),
-    )
-
-
 def _topics(value: Any) -> tuple[tuple[str, str], ...]:
-    topics: list[tuple[str, str]] = []
-    for item in value or []:
-        if isinstance(item, dict):
-            topic_id = _string(item.get("id"))
-            name = _string(item.get("value"))
-            if topic_id or name:
-                topics.append((topic_id, name))
-    return tuple(topics)
-
-
-def _format_topics(topics: list[_WorldBankTopic]) -> str:
-    blocks: list[str] = []
-    for index, topic in enumerate(topics, start=1):
-        lines = [f"{index}. {topic.name} ({topic.id})"]
-        if topic.note:
-            lines.append(f"   Note: {_truncate(topic.note, _NOTE_MAX_CHARS)}")
-        blocks.append("\n".join(lines))
-    return "\n\n".join(blocks)
-
-
-def _format_sources(sources: list[_WorldBankSource]) -> str:
-    blocks: list[str] = []
-    for index, source in enumerate(sources, start=1):
-        title = f"{index}. {source.name} ({source.id})"
-        if source.code:
-            title += f" [{source.code}]"
-        lines = [title]
-        meta = []
-        if source.last_updated:
-            meta.append(f"last updated: {source.last_updated}")
-        if source.data_available:
-            meta.append(f"data: {source.data_available}")
-        if source.metadata_available:
-            meta.append(f"metadata: {source.metadata_available}")
-        if meta:
-            lines.append("   " + " | ".join(meta))
-        if source.description:
-            lines.append(f"   Description: {_truncate(source.description, _NOTE_MAX_CHARS)}")
-        blocks.append("\n".join(lines))
-    return "\n\n".join(blocks)
-
-
-def _format_countries(countries: list[_WorldBankCountry]) -> str:
-    blocks: list[str] = []
-    for index, country in enumerate(countries, start=1):
-        lines = [f"{index}. {country.name} ({country.id})"]
-        meta = []
-        if country.iso2:
-            meta.append(f"ISO2: {country.iso2}")
-        if country.region:
-            meta.append(f"region: {country.region} ({country.region_id})")
-        if country.income_level:
-            meta.append(f"income: {country.income_level} ({country.income_level_id})")
-        if country.lending_type:
-            meta.append(f"lending: {country.lending_type} ({country.lending_type_id})")
-        if meta:
-            lines.append("   " + " | ".join(meta))
-        if country.capital_city:
-            lines.append(f"   Capital: {country.capital_city}")
-        if country.latitude and country.longitude:
-            lines.append(f"   Coordinates: {country.latitude}, {country.longitude}")
-        blocks.append("\n".join(lines))
-    return "\n\n".join(blocks)
-
-
-def _format_indicators(
-    indicators: list[_WorldBankIndicator],
-    *,
-    include_index: bool = True,
-    include_note: bool = False,
-    include_organization: bool = False,
-) -> str:
-    blocks: list[str] = []
-    for index, indicator in enumerate(indicators, start=1):
-        title = f"{index}. {indicator.id} — {indicator.name}" if include_index else indicator.name
-        lines = [title]
-        meta = []
-        if not include_index:
-            meta.append(f"ID: {indicator.id}")
-        if indicator.unit:
-            meta.append(f"unit: {indicator.unit}")
-        if indicator.source:
-            meta.append(f"source: {indicator.source} ({indicator.source_id})")
-        if indicator.topics:
-            topics = ", ".join(f"{name} ({topic_id})" for topic_id, name in indicator.topics[:6])
-            meta.append(f"topics: {topics}")
-        if meta:
-            lines.append("   " + " | ".join(meta))
-        if include_note and indicator.source_note:
-            lines.append(f"   Definition: {_truncate(indicator.source_note, _NOTE_MAX_CHARS)}")
-        if include_organization and indicator.source_organization:
-            organization = _truncate(indicator.source_organization, _NOTE_MAX_CHARS)
-            lines.append(f"   Source organization: {organization}")
-        blocks.append("\n".join(lines))
-    return "\n\n".join(blocks)
-
-
-def _format_series(points: list[_WorldBankSeriesPoint]) -> str:
-    first = points[0]
-    lines = [
-        f"{first.indicator_id} — {first.indicator} for {first.country} ({first.country_iso3})"
+    items = value if isinstance(value, list) else []
+    pairs = [
+        (_string(item.get("id")), _string(item.get("value")))
+        for item in items
+        if isinstance(item, dict)
     ]
-    for index, point in enumerate(points, start=1):
-        value = "missing" if point.value is None else _format_value(point.value)
-        suffix = f" {point.unit}" if point.unit else ""
-        status = f" | status: {point.obs_status}" if point.obs_status else ""
-        lines.append(f"{index}. {point.date}: {value}{suffix}{status}")
-    return "\n".join(lines)
-
-
-def _format_compare(points: list[_WorldBankSeriesPoint]) -> str:
-    indicator = points[0].indicator_id
-    indicator_name = points[0].indicator
-    lines = [f"{indicator} — {indicator_name} comparison:"]
-    for index, point in enumerate(
-        sorted(
-            points, key=lambda item: (item.date, item.country_iso3 or item.country), reverse=True
-        ),
-        start=1,
-    ):
-        value = "missing" if point.value is None else _format_value(point.value)
-        country = point.country_iso3 or point.country_id or point.country
-        label = f"{point.country} ({country})" if point.country else country
-        lines.append(f"{index}. {point.date} | {label}: {value}")
-    return "\n".join(lines)
-
-
-def _pagination_header(label: str, metadata: dict[str, Any]) -> str:
-    page = _string(metadata.get("page")) or "?"
-    pages = _string(metadata.get("pages")) or "?"
-    total = _string(metadata.get("total")) or "?"
-    per_page = _string(metadata.get("per_page")) or "?"
-    return f"{label} (page {page}/{pages}, per_page {per_page}, total {total}):"
-
-
-def _local_metadata(page: int, per_page: int, total: int) -> dict[str, Any]:
-    pages = (total + per_page - 1) // per_page if total else 0
-    return {"page": page, "pages": pages, "per_page": per_page, "total": total}
-
-
-def _slice_page(items: list[Any], page: int, per_page: int) -> list[Any]:
-    start = (page - 1) * per_page
-    return items[start : start + per_page]
-
-
-def _country_matches(
-    country: _WorldBankCountry,
-    query: str,
-    region: str,
-    income_level: str,
-    lending_type: str,
-) -> bool:
-    if query:
-        haystack = " ".join((country.id, country.iso2, country.name)).lower()
-        if query.lower() not in haystack:
-            return False
-    if region and country.region_id.upper() != region:
-        return False
-    if income_level and country.income_level_id.upper() != income_level:
-        return False
-    return not (lending_type and country.lending_type_id.upper() != lending_type)
-
-
-def _indicator_matches(indicator: _WorldBankIndicator, tokens: tuple[str, ...]) -> bool:
-    haystack = _indicator_haystack(indicator)
-    return all(token in haystack for token in tokens)
+    return tuple(pair for pair in pairs if any(pair))
 
 
 def _rank_indicators(
-    indicators: list[_WorldBankIndicator],
-    query: str,
+    indicators: list[_WorldBankIndicator], query: str
 ) -> list[_WorldBankIndicator]:
     phrase = query.lower()
 
     def score(indicator: _WorldBankIndicator) -> int:
-        name = indicator.name.lower()
-        indicator_id = indicator.id.lower()
-        haystack = _indicator_haystack(indicator)
-        value = 0
-        if indicator_id == phrase:
-            value += 100
-        if name == phrase:
-            value += 80
-        if name.startswith(phrase):
-            value += 40
-        if phrase in name:
-            value += 25
-        if phrase in indicator_id:
-            value += 20
-        if phrase in haystack:
-            value += 10
-        return value
+        name, indicator_id = indicator.name.lower(), indicator.id.lower()
+        checks = (
+            (indicator_id == phrase, 100),
+            (name == phrase, 80),
+            (name.startswith(phrase), 40),
+            (phrase in name, 25),
+            (phrase in indicator_id, 20),
+            (phrase in _indicator_haystack(indicator), 10),
+        )
+        return sum(points for hit, points in checks if hit)
 
-    return sorted(indicators, key=score, reverse=True)
+    return sorted(indicators, key=score, reverse=True) if phrase else indicators
 
 
 def _indicator_haystack(indicator: _WorldBankIndicator) -> str:
@@ -847,51 +733,36 @@ def _indicator_haystack(indicator: _WorldBankIndicator) -> str:
     ).lower()
 
 
-def _indicator_has_topic(indicator: _WorldBankIndicator, topic: str) -> bool:
-    return any(topic_id == topic for topic_id, _name in indicator.topics)
-
-
 def _query_tokens(query: str) -> tuple[str, ...]:
     return tuple(token for token in re.split(r"\W+", query.lower()) if token)
 
 
-def _parse_country_list(countries: str) -> tuple[str, ...]:
-    codes: list[str] = []
-    for raw in countries.replace(";", ",").split(","):
-        code = raw.strip().upper()
-        if code and _COUNTRY_RE.fullmatch(code):
-            codes.append(code)
-    return tuple(dict.fromkeys(codes))
+def _country_codes(country: str) -> str:
+    """The codes of ``country``, joined by ``;`` as the API takes them.
 
-
-def _check_series_inputs(
-    country: str,
-    indicator: str,
-    start_year: str,
-    end_year: str,
-    page: int,
-) -> None:
-    """Raises ``ToolFailure`` (validation_error) for the first invalid series input."""
-    _check_page(page)
-    if not _valid_country(country):
+    Raises:
+        ToolFailure: validation_error for an empty or malformed code, or "all" with others.
+    """
+    codes = [code.strip() for code in country.replace(";", ",").split(",") if code.strip()]
+    if not codes or not all(_COUNTRY_RE.fullmatch(code) for code in codes):
         raise ToolFailure(
             "validation_error",
-            f"invalid country code {country!r}; use a code such as 'PRT', 'US', 'WLD' or 'all' "
-            "(find one with world_bank_countries)",
+            f"invalid country code in {country!r}; use codes such as 'PRT', 'PRT,ESP', 'WLD' "
+            "or 'all' (find them with world_bank_countries)",
         )
-    _indicator_id(indicator)
-    _check_year_range(start_year, end_year)
-
-
-def _check_page(page: int) -> None:
-    if page < 1:
-        raise ToolFailure("validation_error", f"invalid page {page}; pages start at 1")
+    if any(code.lower() == "all" for code in codes):
+        if len(codes) > 1:
+            raise ToolFailure(
+                "validation_error", "give 'all' alone, or the countries' codes without it"
+            )
+        return "all"
+    return ";".join(dict.fromkeys(code.upper() for code in codes))
 
 
 def _indicator_id(indicator: str) -> str:
     """The stripped indicator ID; a malformed one raises ``ToolFailure`` (validation_error)."""
     stripped = indicator.strip()
-    if not _valid_indicator_id(stripped):
+    if not (stripped and _ID_RE.fullmatch(stripped)):
         raise ToolFailure(
             "validation_error",
             f"invalid indicator ID {indicator!r}; an ID looks like SP.POP.TOTL "
@@ -909,34 +780,16 @@ def _no_indicator(indicator: str) -> str:
 
 def _check_year_range(start_year: str, end_year: str) -> None:
     """Raises ``ToolFailure`` (validation_error) for a malformed year or a reversed range."""
-    start = start_year.strip()
-    end = end_year.strip()
+    start, end = start_year.strip(), end_year.strip()
     problem = ""
-    if start and not _valid_year(start):
+    if start and not _YEAR_RE.fullmatch(start):
         problem = f"invalid start_year {start_year!r}; use YYYY"
-    elif end and not _valid_year(end):
+    elif end and not _YEAR_RE.fullmatch(end):
         problem = f"invalid end_year {end_year!r}; use YYYY"
     elif start and end and int(start) > int(end):
         problem = f"start_year {start} is after end_year {end}; swap them"
     if problem:
         raise ToolFailure("validation_error", problem)
-
-
-def _valid_year(value: str) -> bool:
-    return bool(_YEAR_RE.fullmatch(value.strip()))
-
-
-def _valid_indicator_id(value: str) -> bool:
-    return bool(value and _ID_RE.fullmatch(value))
-
-
-def _valid_country(value: str) -> bool:
-    stripped = value.strip()
-    return bool(stripped and (stripped.lower() == "all" or _COUNTRY_RE.fullmatch(stripped)))
-
-
-def _bounded(value: int) -> int:
-    return max(1, min(value, _MAX_RESULTS_LIMIT))
 
 
 def _string(value: Any) -> str:
@@ -949,32 +802,12 @@ def _dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-@overload
-def _int_or_none(value: Any, default: int) -> int: ...
-
-
-@overload
-def _int_or_none(value: Any, default: None = ...) -> int | None: ...
-
-
-def _int_or_none(value: Any, default: int | None = None) -> int | None:
+def _int_or_none(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
     if isinstance(value, int):
         return value
     try:
-        if value is not None and str(value).strip():
-            return int(value)
+        return int(str(value).strip()) if value is not None else None
     except ValueError:
-        return default
-    return default
-
-
-def _format_value(value: int | float | str) -> str:
-    if isinstance(value, float):
-        return f"{value:.6g}"
-    return str(value)
-
-
-def _truncate(text: str, max_chars: int) -> str:
-    if len(text) <= max_chars:
-        return text
-    return text[: max_chars - 15].rstrip() + " ... [truncated]"
+        return None

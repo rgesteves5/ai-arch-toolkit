@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from tests.toolkit import biodata_answers as bio
-from tests.toolkit import geo_answers, wiki_pages, youtube_fakes
+from tests.toolkit import data_bodies, geo_answers, wiki_pages, youtube_fakes
 from tests.toolkit import health_pages as health
 from tests.toolkit.wiki_pages import MISSING_PAGE
 from tests.toolkit.youtube_fakes import LOADER, FakeTranscript, FakeTranscriptList
@@ -76,15 +76,15 @@ class ZeroCase(Case):
 _LOOKUPS = """
     arxiv_paper chembl_molecule chembl_target clinical_trial_study country_info crossref_work
     csv_read dailymed_label datacite_doi earthquake_event eonet_event europe_pmc_article
-    europe_pmc_citations eurostat_compare eurostat_dataset eurostat_dimensions eurostat_series
+    europe_pmc_citations eurostat_dataset eurostat_series
     foodon_term gbif_species gbif_species_match get_forecast get_weather internet_archive_item
     json_extract list_directory nvd_cve open_food_facts_compare
     open_food_facts_product open_library_isbn open_library_work openfda_food_recall
     pdb_chemical_component pdb_entry pdb_ligands pubmed_article read_file ror_organization
     rxnorm_concept rxnorm_ndcs rxnorm_related semantic_scholar_citations semantic_scholar_paper
     uniprot_crossrefs uniprot_entry uniprot_features uniprot_sequence who_indicator who_series
-    wiki_outline wiki_read wikidata_entity wiktionary_entry world_bank_compare
-    world_bank_indicator world_bank_series youtube_transcript youtube_transcript_languages
+    wiki_outline wiki_read wikidata_entity wiktionary_entry world_bank_indicator
+    world_bank_series youtube_transcript youtube_transcript_languages
     youtube_transcript_search
     dailymed_label_text
 """
@@ -123,7 +123,7 @@ _WHOLE = """
     get_weather ip_lookup json_extract math_eval openfda_food_recall osm_reverse_geocode
     pdb_chemical_component pdb_entry pdb_ligands rxnorm_concept tavily_search text_stats
     timezone_convert timezone_lookup unit_convert uniprot_sequence who_indicator
-    open_food_facts_compare open_food_facts_product
+    open_food_facts_compare open_food_facts_product world_bank_indicator
 """
 WHOLE = frozenset(_WHOLE.split())
 
@@ -213,6 +213,88 @@ def _record_twice(record: dict[str, Any]) -> tuple[Answer, ...]:
     """A record and its authors' names, for a call and the one its footer names."""
     return tuple(Answer(body=body) for body in (record, _LIBRARY_AUTHORS) * 2)
 
+
+def _answers(*bodies: Body) -> tuple[Answer, ...]:
+    return tuple(Answer(body=body) for body in bodies)
+
+
+def _world_bank_pages(**args: Any) -> Case:
+    """Two pages of a World Bank list of 6, two items each."""
+    first = data_bodies.world_bank_page(
+        data_bodies.world_bank_records(2, start=1), page=1, pages=3, total=6
+    )
+    second = data_bodies.world_bank_page(
+        data_bodies.world_bank_records(2, start=3), page=2, pages=3, total=6
+    )
+    return Case(args={"max_results": 2, **args}, answers=_answers(first, second))
+
+
+# The data and news sources (T08a): each a list longer than its page, or a source that reads on.
+_DATA_NEWS_WINDOWS: dict[str, Case] = {
+    "eurostat_dataset_search": Case(
+        args={"query": "population", "max_results": 2},
+        answers=_answers(data_bodies.eurostat_catalogue(5)),
+    ),
+    "eurostat_dataset": Case(
+        args={"dataset_id": "TPS00001", "dimension": "geo"},
+        answers=_answers(data_bodies.eurostat_dataset(70, 1)),
+    ),
+    "eurostat_series": Case(
+        args={"dataset_id": "TPS00001", "max_points": 3},
+        answers=_answers(data_bodies.eurostat_dataset(2, 4)),
+    ),
+    "world_bank_topics": _world_bank_pages(),
+    "world_bank_sources": _world_bank_pages(),
+    "world_bank_countries": _world_bank_pages(),
+    "world_bank_indicators": _world_bank_pages(),
+    "world_bank_series": _world_bank_pages(),
+    "who_indicators": Case(
+        args={"max_results": 2},
+        answers=_answers(data_bodies.who_values(3), data_bodies.who_values(3, start=3)),
+    ),
+    "who_series": Case(
+        args={"max_results": 2},
+        answers=_answers(data_bodies.who_values(3), data_bodies.who_values(3, start=3)),
+    ),
+    "gdelt_news_search": Case(
+        args={"query": "climate", "max_results": 2},
+        answers=_answers(data_bodies.gdelt_articles(3), data_bodies.gdelt_articles(5)),
+    ),
+    "gdelt_timeline": Case(
+        args={"query": "climate"}, answers=_answers(data_bodies.gdelt_timeline(150))
+    ),
+    "wikidata_search": Case(
+        args={"query": "item", "max_results": 2},
+        answers=_answers(
+            data_bodies.wikidata_search(2, start=1, more=2),
+            data_bodies.wikidata_search(2, start=3, more=4),
+        ),
+    ),
+    "wikidata_entity": Case(
+        args={"qid": "Q1"},
+        answers=_answers(
+            data_bodies.wikidata_entity(50),
+            data_bodies.wikidata_labels(),
+            data_bodies.wikidata_entity(50),
+            data_bodies.wikidata_labels(),
+        ),
+    ),
+    "wikidata_sparql": Case(
+        args={"query": "SELECT ?item WHERE { ?item ?p ?o } LIMIT 30", "max_results": 10},
+        answers=_answers(data_bodies.sparql_rows(30)),
+    ),
+    "hacker_news": Case(
+        args={"count": 2},
+        answers=_answers(
+            data_bodies.hn_ids(5),
+            data_bodies.hn_story(1),
+            data_bodies.hn_story(2),
+            data_bodies.hn_ids(5),
+            data_bodies.hn_story(3),
+            data_bodies.hn_story(4),
+        ),
+    ),
+}
 
 WINDOW_CASES: dict[str, Case] = {
     "wiki_read": Case(
@@ -428,6 +510,7 @@ WINDOW_CASES: dict[str, Case] = {
             Answer(body=geo_answers.usgs_features(3)),
         ),
     ),
+    **_DATA_NEWS_WINDOWS,
 }
 
 
@@ -452,9 +535,7 @@ NOT_FOUND_CASES: dict[str, Case] = {
         "earthquake_event",
         "eonet_event",
         "eurostat_dataset",
-        "eurostat_dimensions",
         "eurostat_series",
-        "eurostat_compare",
         "gbif_species",
         "internet_archive_item",
         "open_library_isbn",
@@ -497,6 +578,10 @@ NOT_FOUND_CASES: dict[str, Case] = {
         )
         for name in ("get_weather", "get_forecast")
     },
+    # The WHO GHO API answers an unknown indicator code with an empty list; the World Bank, a
+    # series of an unknown indicator or country with its error 120, in a 200 (2026-09-29).
+    "who_indicator": Case(args={}, answers=_answers({"value": []})),
+    "world_bank_series": Case(args={}, answers=_answers(data_bodies.WORLD_BANK_INVALID_VALUE)),
     "read_file": Case(args={"path": "missing.txt"}),
     "csv_read": Case(args={"path": "missing.csv"}),
     "list_directory": Case(args={"path": "missing"}),
@@ -518,6 +603,36 @@ NOT_FOUND_CASES: dict[str, Case] = {
 
 
 # --- Point 3: zero results ------------------------------------------------------------------
+
+# The data and news searches (T08a), each answering a query that matches nothing as its source
+# does.
+_DATA_NEWS_ZEROS: dict[str, ZeroCase] = {
+    "eurostat_dataset_search": ZeroCase(
+        args={"query": "zzqq"}, answers=_answers(data_bodies.eurostat_catalogue(3)), says="zzqq"
+    ),
+    "gdelt_news_search": ZeroCase(args={"query": "zzqq"}, answers=_answers({}), says="zzqq"),
+    "gdelt_timeline": ZeroCase(args={"query": "zzqq"}, answers=_answers({}), says="zzqq"),
+    "who_indicators": ZeroCase(
+        args={"query": "zzqq"}, answers=_answers({"value": []}), says="zzqq"
+    ),
+    "wikidata_search": ZeroCase(
+        args={"query": "zzqq"}, answers=_answers({"search": []}), says="zzqq"
+    ),
+    "wikidata_sparql": ZeroCase(
+        args={"query": "SELECT ?zzqq WHERE { ?zzqq ?p ?o }"},
+        answers=_answers(data_bodies.sparql_rows(0)),
+        says="zzqq",
+    ),
+    "world_bank_indicators": ZeroCase(
+        args={"query": "zzqq", "scan_pages": 1},
+        answers=_answers(
+            data_bodies.world_bank_page(
+                data_bodies.world_bank_records(2, start=1), page=1, pages=1, total=2
+            )
+        ),
+        says="zzqq",
+    ),
+}
 
 ZERO_CASES: dict[str, ZeroCase] = {
     "wiki_search": ZeroCase(
@@ -633,4 +748,5 @@ ZERO_CASES: dict[str, ZeroCase] = {
         says="category=wildfires",
     ),
     "earthquake_search": ZeroCase(args={}, answers=(Answer(body="0"),), says="2024-01-01"),
+    **_DATA_NEWS_ZEROS,
 }

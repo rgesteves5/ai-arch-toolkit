@@ -39,10 +39,8 @@ from ai_arch_toolkit.toolkit.tools._europe_pmc import (
     europe_pmc_search,
 )
 from ai_arch_toolkit.toolkit.tools._eurostat import (
-    eurostat_compare,
     eurostat_dataset,
     eurostat_dataset_search,
-    eurostat_dimensions,
     eurostat_series,
 )
 from ai_arch_toolkit.toolkit.tools._foodon import foodon_search, foodon_term
@@ -134,7 +132,6 @@ from ai_arch_toolkit.toolkit.tools._wikidata import (
     wikidata_sparql,
 )
 from ai_arch_toolkit.toolkit.tools._world_bank import (
-    world_bank_compare,
     world_bank_countries,
     world_bank_indicator,
     world_bank_indicators,
@@ -185,10 +182,8 @@ __all__ = [
     "europe_pmc_article",
     "europe_pmc_citations",
     "europe_pmc_search",
-    "eurostat_compare",
     "eurostat_dataset",
     "eurostat_dataset_search",
-    "eurostat_dimensions",
     "eurostat_series",
     "foodon_search",
     "foodon_term",
@@ -257,7 +252,6 @@ __all__ = [
     "wikidata_search",
     "wikidata_sparql",
     "wiktionary_entry",
-    "world_bank_compare",
     "world_bank_countries",
     "world_bank_indicator",
     "world_bank_indicators",

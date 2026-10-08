@@ -1,41 +1,75 @@
-"""Eurostat tools — public EU statistics dataset discovery and series lookup."""
+"""Eurostat tools: find a dataset, read its dimensions and codes, and read its observations.
+
+The statistics API answers JSON-stat 2.0 (https://json-stat.org/format/), with each dimension's
+codes and their labels; the tools show both, and every list reads on through the window (D39).
+The API's guide
+(https://ec.europa.eu/eurostat/web/user-guides/data-browser/api-data-access/api-detailed-guidelines/api-statistics)
+sets the rules the tools follow: several codes of one dimension are one parameter each
+(``geo=PT&geo=ES``), one time parameter per query, and its error table: 404 for a dataset it
+does not disseminate, 400 with error 100 for a query whose result is empty, 400 with 140 or 150
+for a query it refuses, and 413 (``ASYNCHRONOUS_RESPONSE``) for one it will only serve later.
+"""
 
 from __future__ import annotations
 
 import re
-from typing import Any
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime
+from typing import Annotated, Any
 
-from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.core import Range, ToolResult, tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._http import Api, Reply
+from ai_arch_toolkit.toolkit.tools._numbers import plain_number
+from ai_arch_toolkit.toolkit.tools._window import Window, page_window
 
 
 def _eurostat_error(reply: Reply) -> ToolFailure | str | None:
-    """The error a Eurostat answer explains: ``{"error": [{"status", "id", "label"}]}``.
+    """The error a Eurostat answer explains: ``{"error": [{"status", "id", "label"}]}`` (or one
+    object), or the guide's ``{"warning": {"status": 413, "label"}}``.
 
-    Both APIs send it with the error status (seen 2026-09-30): 404 for a dataset they do not
-    disseminate (the dataset calls declare it ``missing``), 413 ``ASYNCHRONOUS_RESPONSE`` for a
-    request they will only serve later, which is worth a retry. Any other error is the labels.
+    By the guide's error table: a 400 with error 100 is a query with no data (``not_found``);
+    any other 400 a query the API refuses (``validation_error``); a 413 a request it will only
+    serve later, worth a retry. A 404 never gets here: each dataset call declares it
+    ``missing``. Any other error is the labels; any other warning is no error.
     """
-    errors = reply.body.get("error") if isinstance(reply.body, dict) else None
-    errors = [errors] if isinstance(errors, dict) else errors
-    if not isinstance(errors, list):
-        return None
-    labels = [_string(item.get("label")) for item in errors if isinstance(item, dict)]
-    said = "; ".join(label for label in labels if label)
+    body = reply.body if isinstance(reply.body, dict) else {}
+    later = [
+        item
+        for item in _error_items(body.get("warning"))
+        if _int(item.get("status")) == _ASYNCHRONOUS
+    ]
+    items = _error_items(body.get("error")) or later
+    full = "; ".join(label for item in items if (label := _string(item.get("label"))))
+    said = full.rstrip(".")
     if not said:
         return None
-    if reply.status == _ASYNCHRONOUS:
+    statuses = {reply.status, *(_int(item.get("status")) for item in items)}
+    if _ASYNCHRONOUS in statuses:
         return ToolFailure(
             "upstream",
-            f"{said.rstrip('.')}; try again in a few minutes, or narrow the request with filters",
+            f"{said}; try again in a few minutes, or narrow the request with filters",
             retryable=True,
         )
-    return said
+    if reply.status == 400 and any(_int(item.get("id")) == _NO_RESULTS for item in items):
+        return ToolFailure(
+            "not_found",
+            f"Eurostat has no data for this query ({said}); other codes or periods may have "
+            "some: eurostat_dataset lists the codes",
+        )
+    if reply.status == 400:
+        return ToolFailure(
+            "validation_error",
+            f"{said}; list the codes with eurostat_dataset(dataset_id, dimension=...)",
+        )
+    return full
 
 
 # The status of a request Eurostat treats asynchronously: the answer is ready later.
 _ASYNCHRONOUS = 413
+# The error of a query whose result is empty, with a 400 (the guide's error table).
+_NO_RESULTS = 100
 # Stubs are each dataset's ID and title, about 1.5 MB; the full catalogue is 20 MB, nine tenths of
 # it annotations. eurostat_dataset reads one dataset's details.
 _DATAFLOWS = Api(
@@ -52,76 +86,80 @@ _DATA = Api(
     params={"format": "JSON", "lang": "en"},
     error_reader=_eurostat_error,
 )
-_MAX_LIMIT = 50
+_DATASET_LINES = 60
 _DATASET_RE = re.compile(r"^[A-Za-z0-9_]{2,60}$")
 _CODE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
 _TEXT_RE = re.compile(r"^[\w\s,.'()/%:+-]{1,180}$", re.UNICODE)
+# The parameters that set the time of a query: only one goes in a query (the guide).
+_TIME_KEYS = frozenset(
+    {"time", "time_period", "sincetimeperiod", "untiltimeperiod", "lasttimeperiod"}
+)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _Dimension:
+    """A dimension of a JSON-stat answer: its codes in index order, with their labels."""
+
+    id: str
+    label: str
+    codes: tuple[str, ...]
+    labels: Mapping[str, str]
+
+    def named(self, code: str) -> str:
+        """``Portugal (PT)``; a code whose label is itself (a year) stays as it is."""
+        label = self.labels.get(code, "")
+        return f"{label} ({code})" if label and label != code else code
 
 
 @tool(capability="network")
-def eurostat_dataset_search(query: str, max_results: int = 10, offset: int = 0) -> str:
-    """Search Eurostat datasets by ID or title; eurostat_dataset gives one's period and dimensions.
+def eurostat_dataset_search(
+    query: str,
+    max_results: Annotated[int, Range(1, 50)] = 10,
+    offset: Annotated[int, Range(0)] = 0,
+) -> ToolResult:
+    """Search Eurostat datasets by ID or title; eurostat_dataset reads one's dimensions and
+    codes.
 
     Args:
-        query: Dataset ID or title search text.
-        max_results: Number of datasets to return (1-50). Defaults to 10.
-        offset: Zero-based offset in matching local results. Defaults to 0.
+        query: Words of the dataset's title, or its ID.
+        max_results: How many datasets to show.
+        offset: How many matching datasets to skip; the footer gives the next offset.
 
     Raises:
-        ToolFailure: validation_error when ``query`` is empty or has unsupported characters, or
-            ``offset`` is negative.
+        ToolFailure: validation_error when ``query`` is empty or has unsupported characters.
     """
-    if not _valid_text(query):
+    if not _TEXT_RE.fullmatch(query.strip()):
         msg = (
             f"invalid query {query!r}; pass 1-180 characters of words, digits and basic "
             "punctuation, e.g. 'population'."
         )
         raise ToolFailure("validation_error", msg)
-    if offset < 0:
-        msg = f"offset must be greater than or equal to 0, got {offset}."
-        raise ToolFailure("validation_error", msg)
     return _DATAFLOWS.get_json(
-        parse=lambda data: _dataset_search_text(data, query, offset, max_results)
+        parse=lambda data: _search_answer(data, query.strip(), offset, max_results)
     )
 
 
 @tool(capability="network")
-def eurostat_dataset(dataset_id: str) -> str:
-    """Get Eurostat dataset metadata using a small last-period query.
+def eurostat_dataset(
+    dataset_id: str, dimension: str = "", offset: Annotated[int, Range(0)] = 0
+) -> ToolResult:
+    """Read a Eurostat dataset: its title, update time, period and description, and each
+    dimension's codes with their labels (the codes eurostat_series takes as filters).
 
     Args:
-        dataset_id: Eurostat dataset/dataflow ID, e.g. "TPS00001".
+        dataset_id: Eurostat dataset ID, e.g. "TPS00001" (eurostat_dataset_search finds them).
+        dimension: One dimension's ID, e.g. "geo", to list only its codes; empty lists them all.
+        offset: How many lines of codes to skip; the footer gives the next offset.
 
     Raises:
-        ToolFailure: validation_error when ``dataset_id`` is malformed; not_found when Eurostat
-            does not disseminate that dataset.
+        ToolFailure: validation_error when ``dataset_id`` is malformed or the dataset has no
+            such dimension; not_found when Eurostat does not disseminate that dataset.
     """
     dataset = _dataset_id(dataset_id)
     return _DATA.get_json(
         dataset,
         params={"lastTimePeriod": "1"},
-        parse=lambda data: _dataset_text(data, dataset),
-        missing=_missing(dataset),
-    )
-
-
-@tool(capability="network")
-def eurostat_dimensions(dataset_id: str, max_values: int = 20) -> str:
-    """List Eurostat dataset dimensions and sample category codes.
-
-    Args:
-        dataset_id: Eurostat dataset/dataflow ID, e.g. "TPS00001".
-        max_values: Number of category values to show per dimension (1-50). Defaults to 20.
-
-    Raises:
-        ToolFailure: validation_error when ``dataset_id`` is malformed; not_found when Eurostat
-            does not disseminate that dataset.
-    """
-    dataset = _dataset_id(dataset_id)
-    return _DATA.get_json(
-        dataset,
-        params={"lastTimePeriod": "1"},
-        parse=lambda data: _dimensions_text(data, dataset, max_values),
+        parse=lambda data: _dataset_answer(data, dataset, dimension.strip(), offset),
         missing=_missing(dataset),
     )
 
@@ -130,72 +168,41 @@ def eurostat_dimensions(dataset_id: str, max_values: int = 20) -> str:
 def eurostat_series(
     dataset_id: str,
     filters: str = "",
-    last_time_periods: int = 5,
-    max_points: int = 25,
-) -> str:
-    """Get Eurostat observations for a dataset using generic dimension filters.
+    last_time_periods: Annotated[int, Range(1, 100)] = 5,
+    max_points: Annotated[int, Range(1, 100)] = 30,
+    offset: Annotated[int, Range(0)] = 0,
+) -> ToolResult:
+    """Read Eurostat observations of a dataset, one row per observation, each code with its
+    label. Several codes of a dimension compare them, e.g. geo=PT+ES+FR.
 
     Args:
-        dataset_id: Eurostat dataset/dataflow ID, e.g. "TPS00001".
-        filters: Comma-separated dimension filters, e.g. "geo=PT,unit=NR".
-        last_time_periods: Number of latest time periods to request when no time filter is given.
-        max_points: Number of observations to return (1-50). Defaults to 25.
+        dataset_id: Eurostat dataset ID, e.g. "TPS00001".
+        filters: Comma-separated dimension filters, codes joined by '+', e.g.
+            "geo=PT+ES,unit=NR"; a time filter (time=2020, sinceTimePeriod=2015) replaces
+            ``last_time_periods``. eurostat_dataset lists the dimensions and codes.
+        last_time_periods: How many of the latest periods to read, without a time filter.
+        max_points: How many observations to show.
+        offset: How many observations to skip; the footer gives the next offset.
 
     Raises:
-        ToolFailure: validation_error when ``dataset_id`` or ``filters`` is malformed;
-            not_found when Eurostat has no data for the filters or does not disseminate that
-            dataset (its 404 does not say which).
+        ToolFailure: validation_error when ``dataset_id`` or ``filters`` is malformed, or
+            Eurostat refuses a code; not_found when Eurostat does not disseminate that dataset
+            or has no data for the query.
     """
     dataset = _dataset_id(dataset_id)
-    params = _with_last_periods(_parse_filters(filters), last_time_periods)
+    parsed = _parse_filters(filters)
+    params: dict[str, list[str] | str] = dict(parsed)
+    filtered = ", ".join(f"{key}={'+'.join(codes)}" for key, codes in parsed.items())
+    asked = f" for {filtered}" if filtered else ""
+    if not _TIME_KEYS & {key.lower() for key in parsed}:
+        params["lastTimePeriod"] = str(last_time_periods)
+        asked += f" in the last {last_time_periods} periods"
     return _DATA.get_json(
         dataset,
         params=params,
-        parse=lambda data: _series_text(data, dataset, max_points),
-        missing=_missing(dataset, filtered=True),
+        parse=lambda data: _series_answer(data, dataset, asked, max_points, offset),
+        missing=_missing(dataset),
     )
-
-
-@tool(capability="network")
-def eurostat_compare(
-    dataset_id: str,
-    geo_codes: str,
-    filters: str = "",
-    last_time_periods: int = 1,
-) -> str:
-    """Compare a Eurostat dataset across multiple geo codes.
-
-    Args:
-        dataset_id: Eurostat dataset/dataflow ID, e.g. "TPS00001".
-        geo_codes: Comma-separated geo codes, e.g. "PT,ES,FR".
-        filters: Additional comma-separated dimension filters except geo.
-        last_time_periods: Number of latest time periods to request. Defaults to 1.
-
-    Raises:
-        ToolFailure: validation_error when ``geo_codes``, ``filters`` or ``dataset_id`` is
-            malformed, or ``filters`` names geo; not_found when Eurostat has no data for the
-            codes or does not disseminate that dataset (its 404 does not say which).
-    """
-    geos = [geo.strip().upper() for geo in geo_codes.split(",") if geo.strip()]
-    if not geos or len(geos) > 10:
-        msg = f"provide 1-10 comma-separated geo_codes, e.g. 'PT,ES,FR'; got {len(geos)}."
-        raise ToolFailure("validation_error", msg)
-    invalid = [geo for geo in geos if not _CODE_RE.fullmatch(geo)]
-    if invalid:
-        msg = f"invalid geo code {invalid[0]!r}; use Eurostat geo codes such as PT or EU27_2020."
-        raise ToolFailure("validation_error", msg)
-    parsed = _parse_filters(filters)
-    if "geo" in {key.lower() for key in parsed}:
-        msg = "provide geo filters via geo_codes, not filters."
-        raise ToolFailure("validation_error", msg)
-    dataset = _dataset_id(dataset_id)
-
-    rows = _compare_rows(dataset, geos, parsed, last_time_periods)
-    if not rows:
-        return f"No Eurostat comparison observations found for {dataset}."
-    lines = [f"Eurostat comparison {dataset}:"]
-    lines.extend(f"{index}. {row}" for index, row in enumerate(rows, start=1))
-    return "\n".join(lines)
 
 
 def _dataset_id(dataset_id: str) -> str:
@@ -209,269 +216,305 @@ def _dataset_id(dataset_id: str) -> str:
     return dataset
 
 
-def _missing(dataset: str, *, filtered: bool = False) -> str:
-    """What a 404 of a dataset call means: Eurostat does not disseminate that dataset, or, for a
-    call with filters, that it has no data for them (its 404 does not say which)."""
-    if filtered:
-        return (
-            f"Eurostat has no data for dataset {dataset} with these filters, or no such dataset; "
-            "check the codes with eurostat_dimensions, or find the ID with eurostat_dataset_search"
-        )
+def _missing(dataset: str) -> str:
+    """What a 404 of a dataset call means: "the requested resource is not available"."""
     return (
         f"Eurostat has no dataset {dataset} to disseminate; find its ID with "
         "eurostat_dataset_search"
     )
 
 
-def _with_last_periods(params: dict[str, str], last_time_periods: int) -> dict[str, str]:
-    if not any(key.lower() == "time" for key in params):
-        params["lastTimePeriod"] = str(max(1, min(last_time_periods, 20)))
-    return params
-
-
-def _compare_rows(
-    dataset: str, geos: list[str], filters: dict[str, str], last_time_periods: int
-) -> list[str]:
-    rows: list[str] = []
-    for geo in geos:
-        params = _with_last_periods({**filters, "geo": geo}, last_time_periods)
-        rows.extend(
-            _DATA.get_json(
-                dataset,
-                params=params,
-                parse=lambda data: [
-                    _point_text(point) for point in _observations(data)[:last_time_periods]
-                ],
-                missing=_missing(dataset, filtered=True),
-            )
-        )
-    return rows
-
-
-def _dataset_search_text(data: dict[str, Any], query: str, offset: int, max_results: int) -> str:
-    terms = query.lower().split()
-    matches = [item for item in _dataflow_items(data) if _matches_dataflow(item, terms)]
-    page = matches[offset : offset + _bounded(max_results)]
-    if not page:
-        return "No Eurostat datasets found."
-    lines = [
-        (
-            f"Eurostat datasets for {query!r} "
-            f"(returned {len(page)}, total matches {len(matches)}, offset {offset}):"
-        )
-    ]
-    for index, item in enumerate(page, start=1):
-        lines.extend(_format_dataflow(item, index=index))
-    return "\n".join(lines)
-
-
-def _dataset_text(data: dict[str, Any], dataset: str) -> str:
-    lines = [f"Eurostat dataset {dataset}:", _string(data.get("label")) or "(no label)"]
-    updated = _string(data.get("updated")) or "?"
-    source = _string(data.get("source")) or "?"
-    lines.append(f"   updated: {updated} | source: {source}")
-    description = _strip_html(_nested(data, "extension", "description"))
-    if description:
-        lines.append(f"   description: {_trim(description, 500)}")
-    annotations = _annotations(data)
-    if annotations:
-        lines.append("   " + " | ".join(annotations))
-    dims = _dimension_summaries(data, max_values=5)
-    if dims:
-        lines.append("   dimensions: " + "; ".join(dims))
-    return "\n".join(lines)
-
-
-def _dimensions_text(data: dict[str, Any], dataset: str, max_values: int) -> str:
-    dims = data.get("dimension", {})
-    ids = data.get("id", [])
-    if not isinstance(dims, dict) or not isinstance(ids, list):
-        return f"No Eurostat dimensions found for {dataset}."
-    lines = [f"Eurostat dimensions for {dataset}:"]
-    for dim_id in ids:
-        dim = dims.get(dim_id, {})
-        if not isinstance(dim, dict):
-            continue
-        labels = dim.get("category", {}).get("label", {})
-        values = []
-        if isinstance(labels, dict):
-            for code, label in list(labels.items())[: _bounded(max_values)]:
-                values.append(f"{code}={_string(label)}")
-        lines.append(f"{dim_id} — {_string(dim.get('label')) or '?'}")
-        if values:
-            lines.append(f"   values: {'; '.join(values)}")
-    return "\n".join(lines)
-
-
-def _series_text(data: dict[str, Any], dataset: str, max_points: int) -> str:
-    points = _observations(data)
-    if not points:
-        return f"No Eurostat observations found for {dataset}."
-    returned = min(len(points), _bounded(max_points))
-    lines = [f"Eurostat series {dataset} (returned {returned} of {len(points)}):"]
-    for index, point in enumerate(points[: _bounded(max_points)], start=1):
-        lines.append(f"{index}. {_point_text(point)}")
-    return "\n".join(lines)
-
-
-def _point_text(point: dict[str, Any]) -> str:
-    dims = ", ".join(f"{key}={value}" for key, value in point["dimensions"].items())
-    return f"{point['value']} | {dims}"
-
-
-def _dataflow_items(data: dict[str, Any]) -> list[dict[str, Any]]:
-    items = data.get("link", {}).get("item", [])
-    return [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
-
-
-def _matches_dataflow(item: dict[str, Any], terms: list[str]) -> bool:
-    text = f"{_string(item.get('label'))} {_dataflow_id(item)}".lower()
-    return all(term in text for term in terms)
-
-
-def _format_dataflow(item: dict[str, Any], *, index: int) -> list[str]:
-    return [f"{index}. {_dataflow_id(item)} — {_string(item.get('label'))}"]
-
-
-def _dataflow_id(item: dict[str, Any]) -> str:
-    extension = item.get("extension", {})
-    return _string(extension.get("id")) if isinstance(extension, dict) else ""
-
-
-def _annotations(data: dict[str, Any]) -> list[str]:
-    values = _annotation_map(data.get("extension", {}).get("annotation"))
-    out = []
-    if values.get("OBS_COUNT"):
-        out.append(f"observations: {values['OBS_COUNT']}")
-    if values.get("OBS_PERIOD_OVERALL_OLDEST") or values.get("OBS_PERIOD_OVERALL_LATEST"):
-        oldest = values.get("OBS_PERIOD_OVERALL_OLDEST", "?")
-        latest = values.get("OBS_PERIOD_OVERALL_LATEST", "?")
-        out.append(f"period: {oldest}-{latest}")
-    return out
-
-
-def _annotation_map(value: Any) -> dict[str, str]:
-    if not isinstance(value, list):
-        return {}
-    out = {}
-    for item in value:
-        if isinstance(item, dict):
-            key = _string(item.get("type"))
-            text = (
-                _string(item.get("title"))
-                or _string(item.get("text"))
-                or _string(item.get("date"))
-            )
-            if key and text:
-                out[key] = text
-    return out
-
-
-def _dimension_summaries(data: dict[str, Any], *, max_values: int) -> list[str]:
-    dims = data.get("dimension", {})
-    ids = data.get("id", [])
-    if not isinstance(dims, dict) or not isinstance(ids, list):
-        return []
-    out = []
-    for dim_id in ids:
-        dim = dims.get(dim_id, {})
-        if not isinstance(dim, dict):
-            continue
-        labels = dim.get("category", {}).get("label", {})
-        count = len(labels) if isinstance(labels, dict) else 0
-        sample = ", ".join(list(labels)[:max_values]) if isinstance(labels, dict) else ""
-        out.append(f"{dim_id} ({count}: {sample})")
-    return out
-
-
-def _observations(data: dict[str, Any]) -> list[dict[str, Any]]:
-    value_map = data.get("value", {})
-    if not isinstance(value_map, dict):
-        return []
-    ids = data.get("id", [])
-    sizes = data.get("size", [])
-    dims = data.get("dimension", {})
-    if not isinstance(ids, list) or not isinstance(sizes, list) or not isinstance(dims, dict):
-        return []
-    index_to_code = [_dimension_index(dims.get(dim_id, {})) for dim_id in ids]
-    points = []
-    for flat_index, value in value_map.items():
-        if not str(flat_index).isdigit():
-            continue
-        coordinates = _decode_index(int(flat_index), [int(size) for size in sizes])
-        dimensions = {
-            str(dim_id): index_to_code[position].get(coord, str(coord))
-            for position, (dim_id, coord) in enumerate(zip(ids, coordinates, strict=False))
-        }
-        points.append({"value": value, "dimensions": dimensions})
-    return points
-
-
-def _dimension_index(dim: dict[str, Any]) -> dict[int, str]:
-    index = dim.get("category", {}).get("index", {}) if isinstance(dim, dict) else {}
-    if not isinstance(index, dict):
-        return {}
-    return {int(position): code for code, position in index.items() if isinstance(position, int)}
-
-
-def _decode_index(flat_index: int, sizes: list[int]) -> list[int]:
-    coords = []
-    for size in reversed(sizes):
-        coords.append(flat_index % size)
-        flat_index //= size
-    return list(reversed(coords))
-
-
-def _parse_filters(filters: str) -> dict[str, str]:
-    out: dict[str, str] = {}
-    if not filters.strip():
-        return out
+def _parse_filters(filters: str) -> dict[str, list[str]]:
+    """``geo=PT+ES,unit=NR`` as ``{"geo": ["PT", "ES"], "unit": ["NR"]}``."""
+    out: dict[str, list[str]] = {}
     for raw in filters.split(","):
         item = raw.strip()
         if not item:
             continue
         if "=" not in item:
             raise ToolFailure("validation_error", f"invalid filter {item!r}; use key=value.")
-        key, value = [part.strip() for part in item.split("=", 1)]
+        key, value = (part.strip() for part in item.split("=", 1))
         if not _CODE_RE.fullmatch(key):
-            msg = f"invalid filter dimension {key!r}; eurostat_dimensions lists the dimensions."
+            msg = f"invalid filter dimension {key!r}; eurostat_dataset lists the dimensions."
             raise ToolFailure("validation_error", msg)
-        if not value or any(not _CODE_RE.fullmatch(part.strip()) for part in value.split("+")):
+        codes = [code.strip() for code in value.split("+")]
+        if not value or not all(_CODE_RE.fullmatch(code) for code in codes):
             msg = (
                 f"invalid filter value for {key!r}; use codes joined by '+', e.g. {key}=PT+ES "
-                "(eurostat_dimensions lists the codes)."
+                "(eurostat_dataset lists the codes)."
             )
             raise ToolFailure("validation_error", msg)
-        out[key] = value
+        out.setdefault(key, []).extend(codes)
     return out
 
 
-def _valid_text(value: str) -> bool:
-    return bool(_TEXT_RE.fullmatch(value.strip()))
+# --- Answers -----------------------------------------------------------------------------------
 
 
-def _bounded(value: int) -> int:
-    return max(1, min(value, _MAX_LIMIT))
+def _search_answer(data: dict[str, Any], query: str, offset: int, max_results: int) -> ToolResult:
+    terms = query.lower().split()
+    items = data.get("link", {}).get("item", [])
+    lines = [
+        f"{_string(item.get('extension', {}).get('id'))}: {_string(item.get('label'))}"
+        for item in (items if isinstance(items, list) else [])
+        if isinstance(item, dict) and _matches(item, terms)
+    ]
+    if not lines:
+        return ToolResult.success(f"No Eurostat datasets match {query!r}.")
+    window = page_window(
+        [f"{number}. {line}" for number, line in enumerate(lines, start=1)],
+        offset=offset,
+        limit=max_results,
+    )
+    return window.result(
+        heading=f"Eurostat datasets that match {query!r} (eurostat_dataset reads one):"
+    )
 
 
-def _strip_html(value: str) -> str:
-    return re.sub(r"<[^>]+>", "", value)
+def _matches(item: dict[str, Any], terms: list[str]) -> bool:
+    extension = item.get("extension")
+    code = _string(extension.get("id")) if isinstance(extension, dict) else ""
+    text = f"{_string(item.get('label'))} {code}".lower()
+    return all(term in text for term in terms)
 
 
-def _trim(text: str, max_chars: int) -> str:
-    return text if len(text) <= max_chars else text[: max_chars - 3].rstrip() + "..."
+def _dataset_answer(data: dict[str, Any], dataset: str, dimension: str, offset: int) -> ToolResult:
+    dimensions = _dimensions(data)
+    if dimension:
+        dimensions = [dim for dim in dimensions if dim.id.lower() == dimension.lower()]
+        if not dimensions:
+            have = _and([dim.id for dim in _dimensions(data)])
+            raise ToolFailure(
+                "validation_error", f"{dataset} has no dimension {dimension!r}; it has {have}"
+            )
+    period = _period(data)
+    lines = [line for dim in dimensions for line in _dimension_lines(dim, period)]
+    title = f"Eurostat dataset {dataset}: {_string(data.get('label')) or '(no title)'}"
+    if offset or dimension:
+        heading = f"{title}, codes:"
+    else:
+        heading = "\n".join(
+            [
+                title,
+                *_details(data, period),
+                "Dimensions and codes (eurostat_series takes them as filters, e.g. geo=PT+ES):",
+            ]
+        )
+    window = page_window(lines, offset=offset, limit=_DATASET_LINES)
+    return _naming(window, dimension).result(heading=heading)
 
 
-def _nested(data: dict[str, Any], *keys: str) -> str:
-    current: Any = data
-    for key in keys:
-        if not isinstance(current, dict):
-            return ""
-        current = current.get(key)
-    return _string(current)
+def _naming(window: Window, dimension: str) -> Window:
+    """A window of one dimension's codes names the dimension in its next call."""
+    if not dimension or window.next_call is None:
+        return window
+    return replace(window, next_call={**window.next_call, "dimension": dimension})
 
 
-def _string(value: Any) -> str:
+def _details(data: dict[str, Any], period: str) -> list[str]:
+    updated = _utc(_string(data.get("updated"))) or "?"
+    lines = [f"   updated: {updated} | source: {_string(data.get('source')) or '?'}"]
+    count = _annotations(data).get("OBS_COUNT")
+    facts = [f"observations: {count}"] if count else []
+    if period:
+        facts.append(f"period: {period}")
+    if facts:
+        lines.append("   " + " | ".join(facts))
+    extension = data.get("extension")
+    description = extension.get("description") if isinstance(extension, dict) else None
+    if text := _string(re.sub(r"<[^>]+>", " ", _string(description))):
+        lines.append(f"   description: {text}")
+    return lines
+
+
+def _dimension_lines(dim: _Dimension, period: str) -> list[str]:
+    count = f"{len(dim.codes)} code{'' if len(dim.codes) == 1 else 's'}"
+    if dim.id.lower() == "time":  # the request asks for the latest period only
+        span = f"; the data cover {period}" if period else ""
+        head = f"{dim.id}: {dim.label} (the latest period here{span})"
+    else:
+        head = f"{dim.id}: {dim.label} ({count})"
+    codes = [
+        f"  {code}: {dim.labels[code]}" if dim.labels.get(code, code) != code else f"  {code}"
+        for code in dim.codes
+    ]
+    return [head, *codes]
+
+
+def _series_answer(
+    data: dict[str, Any], dataset: str, asked: str, max_points: int, offset: int
+) -> ToolResult:
+    dimensions = _dimensions(data)
+    observations = _observations(data, dimensions)
+    if not observations:
+        return ToolResult.success(f"Eurostat has no observations of {dataset}{asked}.")
+    varying = [dim for dim in dimensions if len(dim.codes) > 1]
+    rows = [
+        f"{number}. {_row(coordinates, value, flag, dimensions, varying)}"
+        for number, (coordinates, value, flag) in enumerate(observations, start=1)
+    ]
+    heading = [f"Eurostat {dataset}: {_string(data.get('label')) or '(no title)'}"]
+    if fixed := [dim for dim in dimensions if len(dim.codes) == 1]:
+        heading.append(
+            "fixed: "
+            + "; ".join(f"{dim.label} ({dim.id}) = {dim.named(dim.codes[0])}" for dim in fixed)
+        )
+    if others := [dim for dim in varying if dim.id.lower() not in ("geo", "time")]:
+        verb, pronoun = ("vary", "them") if len(others) > 1 else ("varies", "it")
+        example = f"{others[0].id}={others[0].codes[0]}"
+        heading.append(
+            f"{_and([dim.id for dim in others])} {verb} too: each row names its series; filter "
+            f"{pronoun} (e.g. {example}) to compare one series"
+        )
+    heading.append(
+        "rows: "
+        + " | ".join([*(dim.id for dim in varying if dim.id != "time"), _point_name(dimensions)])
+    )
+    window = page_window(rows, offset=offset, limit=max_points)
+    return window.result(heading="\n".join(heading))
+
+
+def _point_name(dimensions: list[_Dimension]) -> str:
+    """How a row ends: ``time: value``, or ``value`` for a dataset without time."""
+    return "time: value" if any(dim.id == "time" for dim in dimensions) else "value"
+
+
+def _row(
+    coordinates: tuple[int, ...],
+    value: object,
+    flag: str,
+    dimensions: list[_Dimension],
+    varying: list[_Dimension],
+) -> str:
+    """``Number (NR) | Portugal (PT) | 2024: 10639726 (flag p)``: the observation's codes of the
+    dimensions that vary, with their labels, then its time and its value."""
+    codes = {dim.id: dim.codes[index] for dim, index in zip(dimensions, coordinates, strict=True)}
+    named = [dim.named(codes[dim.id]) for dim in varying if dim.id != "time"]
+    time = codes.get("time", "")
+    shown = plain_number(value) if isinstance(value, int | float | str) else "no value"
+    point = f"{time}: {shown}" if time else shown
+    return " | ".join([*named, point]) + (f" (flag {flag})" if flag else "")
+
+
+# --- JSON-stat ---------------------------------------------------------------------------------
+
+
+def _dimensions(data: dict[str, Any]) -> list[_Dimension]:
+    """The answer's dimensions in ``id`` order, each with its codes in index order."""
+    ids, dims = data.get("id", []), data.get("dimension", {})
+    if not isinstance(ids, list) or not isinstance(dims, dict):
+        return []
+    return [_dimension(str(dim_id), dims.get(dim_id)) for dim_id in ids]
+
+
+def _dimension(dim_id: str, dim: object) -> _Dimension:
+    raw: dict[str, Any] = dim if isinstance(dim, dict) else {}
+    category = raw.get("category")
+    category = category if isinstance(category, dict) else {}
+    index, named = category.get("index"), category.get("label")
+    labels = (
+        {str(code): _string(label) for code, label in named.items()}
+        if isinstance(named, dict)
+        else {}
+    )
+    if isinstance(index, list):  # JSON-stat allows the codes as an array, in order
+        codes = [str(code) for code in index]
+    elif isinstance(index, dict):
+        codes = [str(code) for code, _ in sorted(index.items(), key=lambda item: int(item[1]))]
+    else:
+        codes = list(labels)
+    return _Dimension(
+        id=dim_id, label=_string(raw.get("label")) or dim_id, codes=tuple(codes), labels=labels
+    )
+
+
+def _observations(
+    data: dict[str, Any], dimensions: list[_Dimension]
+) -> list[tuple[tuple[int, ...], object, str]]:
+    """Each observation's coordinates (one index per dimension), value and flag, in the
+    answer's order: series by series, time fastest (row-major)."""
+    raw, status = data.get("value"), data.get("status")
+    if isinstance(raw, list):  # JSON-stat allows every cell in a list, null where none
+        raw = {str(position): value for position, value in enumerate(raw) if value is not None}
+    if not isinstance(raw, dict) or not dimensions:
+        return []
+    values = {str(key): value for key, value in raw.items() if str(key).isdigit()}
+    sizes = [len(dim.codes) for dim in dimensions]
+    return [
+        (coordinates, values[key], _flag(status, position))
+        for position, key in sorted((int(key), key) for key in values)
+        if (coordinates := _coordinates(position, sizes)) is not None
+    ]
+
+
+def _coordinates(position: int, sizes: list[int]) -> tuple[int, ...] | None:
+    """The indices of a flat position (row-major: the last dimension fastest); ``None`` past
+    the cube."""
+    coordinates = []
+    for size in reversed(sizes):
+        if size < 1:
+            return None
+        coordinates.append(position % size)
+        position //= size
+    return tuple(reversed(coordinates)) if position == 0 else None
+
+
+def _flag(status: object, position: int) -> str:
+    """An observation's status code: JSON-stat gives one for all, a list, or an object."""
+    if isinstance(status, str):
+        return status
+    if isinstance(status, list):
+        return _string(status[position]) if position < len(status) else ""
+    if isinstance(status, dict):
+        return _string(status.get(str(position)))
+    return ""
+
+
+def _annotations(data: dict[str, Any]) -> dict[str, str]:
+    extension = data.get("extension")
+    items = extension.get("annotation") if isinstance(extension, dict) else None
+    out: dict[str, str] = {}
+    for item in items if isinstance(items, list) else ():
+        if isinstance(item, dict) and (key := _string(item.get("type"))):
+            text = _string(item.get("title")) or _string(item.get("text"))
+            if text:
+                out[key] = text
+    return out
+
+
+def _period(data: dict[str, Any]) -> str:
+    notes = _annotations(data)
+    oldest, latest = notes.get("OBS_PERIOD_OVERALL_OLDEST"), notes.get("OBS_PERIOD_OVERALL_LATEST")
+    return f"{oldest or '?'} to {latest or '?'}" if oldest or latest else ""
+
+
+def _error_items(value: object) -> list[dict[str, Any]]:
+    items = [value] if isinstance(value, dict) else value
+    return [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
+
+
+def _utc(stamp: str) -> str:
+    """``2026-04-30T23:00:00+0200`` as ``2026-04-30T21:00:00Z``; other text as it is."""
+    try:
+        when = datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%S%z")
+    except ValueError:
+        return stamp
+    return when.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _and(items: Iterable[str]) -> str:
+    names = list(items)
+    return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
+
+
+def _int(value: object) -> int | None:
+    try:
+        return int(str(value))
+    except ValueError:
+        return None
+
+
+def _string(value: object) -> str:
     if value is None:
         return ""
     return " ".join(str(value).split())
