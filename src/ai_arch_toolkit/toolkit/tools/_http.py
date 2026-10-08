@@ -63,6 +63,8 @@ class HttpError(ToolFailure):
             the API reported the error inside a successful one (``Api.error_reader``).
         body: The start of an error response's body, for APIs that explain errors there.
         retry_after_s: The seconds an error response's ``Retry-After`` asked to wait, if it did.
+        redirect: The URL of a redirect the door refused to follow (another host, or https down
+            to http); ``None`` for any other failure.
     """
 
     def __init__(
@@ -74,6 +76,7 @@ class HttpError(ToolFailure):
         retry_after_s: float | None = None,
         kind: ToolFailureType | None = None,
         retryable: bool | None = None,
+        redirect: str | None = None,
     ) -> None:
         server = status is not None and status >= 500
         details: dict[str, float] = {}
@@ -90,6 +93,7 @@ class HttpError(ToolFailure):
         self.status = status
         self.body = body
         self.retry_after_s = retry_after_s
+        self.redirect = redirect
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -110,6 +114,11 @@ class Reply:
 type ErrorReader = Callable[[Reply], ToolFailure | str | None]
 """Reads the error an answer reports (D38): ``None`` for none, the source's words as text (typed
 by the status), or a typed :class:`ToolFailure` when the source says what happened."""
+
+type EmptyOn404 = bool | Callable[[Reply], bool]
+"""What a request's 404 means (``empty_on_404=``): ``True`` for nothing found whatever the 404
+says, or a test of the 404's :class:`Reply` (its body decoded when it is JSON) that says whether
+it is the source's own "nothing found"; any other 404 is an endpoint that moved (D38)."""
 
 
 class _Response(Protocol):
@@ -360,7 +369,8 @@ def _fetch(
         raise failure(reply, str(error.reason)) from error
     except _Redirected as refused:
         target = refused.target
-        raise HttpError(f"refused a redirect to {target} (only same-host HTTPS)") from refused
+        msg = f"refused a redirect to {target} (only same-host HTTPS)"
+        raise HttpError(msg, redirect=target) from refused
     except urllib.error.URLError as error:
         unverified = isinstance(error.reason, ssl.SSLCertVerificationError)
         hint = _TRUSTSTORE_HINT if unverified and not _SYSTEM_STORE else ""
@@ -468,8 +478,18 @@ class _Ask:
     missing: str | None = None
     empty: object | None = None
     allow_empty: bool = False
-    empty_on_404: bool = False
+    empty_on_404: EmptyOn404 = False
     body: tuple[bytes, str] | None = None
+
+    def empty_404(self, reply: Reply) -> bool:
+        """Whether ``reply``, a 404, is nothing found, as the request declared; a test that
+        trips on the body says no."""
+        if not callable(self.empty_on_404):
+            return self.empty_on_404
+        try:
+            return bool(self.empty_on_404(reply))
+        except _SHAPE_ERRORS:
+            return False
 
 
 class _EmptyNotFound(Exception):
@@ -491,7 +511,9 @@ class Api:
     a 404 is then ``not_found``, with that message; without it, a 404 is an ``upstream`` "endpoint
     not found". A source that answers "nothing found" with ``204 No Content`` or an empty body
     is declared with ``allow_empty`` (``parse`` reads an empty object or array), one that answers
-    it with a 404 with ``empty_on_404``; anywhere else such an answer is a failure.
+    it with a 404 with ``empty_on_404``: ``True``, or a test of the 404's answer when only some
+    404s are the source's "nothing found" (an :data:`EmptyOn404`); anywhere else such an answer
+    is a failure.
 
     Attributes:
         base: ``https://host/path`` without credentials, port, query, fragment or final slash.
@@ -590,7 +612,7 @@ class Api:
         params: Params | None = None,
         missing: str | None = None,
         allow_empty: bool = False,
-        empty_on_404: bool = False,
+        empty_on_404: EmptyOn404 = False,
     ) -> T:
         """GET a JSON object from ``base/segment/...`` and read it with ``parse``."""
         ask = _Ask(missing=missing, empty={}, allow_empty=allow_empty, empty_on_404=empty_on_404)
@@ -616,7 +638,7 @@ class Api:
         params: Params | None = None,
         missing: str | None = None,
         allow_empty: bool = False,
-        empty_on_404: bool = False,
+        empty_on_404: EmptyOn404 = False,
     ) -> T:
         """GET a JSON array from ``base/segment/...`` and read it with ``parse``."""
         ask = _Ask(missing=missing, empty=[], allow_empty=allow_empty, empty_on_404=empty_on_404)
@@ -788,9 +810,10 @@ class Api:
         """The failure of an error status, by what the request declared and the source says.
 
         A 404 is ``not_found`` for a request that asks for a resource (``missing``), an empty
-        answer for one that declares it (``empty_on_404``), and otherwise an endpoint that is not
-        there. A typed failure from the reader is the answer; its text, or else the source's own
-        error text, is what the source said, in the status's sentence.
+        answer for one that declares it (``empty_on_404``, when its test accepts the answer), and
+        otherwise an endpoint that is not there. A typed failure from the reader is the answer;
+        its text, or else the source's own error text, is what the source said, in the status's
+        sentence.
         """
         status = reply.status
         full = reply.body if isinstance(reply.body, str) else ""
@@ -798,9 +821,9 @@ class Api:
         retry_after = _retry_after_value(reply.headers.get("retry-after"))
         if status == http.HTTPStatus.NOT_FOUND and ask.missing is not None:
             return HttpError(ask.missing, status=status, body=body, kind="not_found")
-        if status == http.HTTPStatus.NOT_FOUND and ask.empty_on_404:
-            raise _EmptyNotFound
         decoded = Reply(status=status, headers=reply.headers, body=_decoded(full))
+        if status == http.HTTPStatus.NOT_FOUND and ask.empty_404(decoded):
+            raise _EmptyNotFound
         error = self._read(decoded)
         if isinstance(error, ToolFailure):
             return self._failure(error, decoded, retry_after)

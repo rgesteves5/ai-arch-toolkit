@@ -21,18 +21,18 @@ from typing import Annotated, Any
 from ai_arch_toolkit.core import Range, ToolResult, tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._http import Api, Reply
-from ai_arch_toolkit.toolkit.tools._numbers import plain_number
+from ai_arch_toolkit.toolkit.tools._values import decimal_text, plain
 from ai_arch_toolkit.toolkit.tools._window import Window, page_window
 
 
-def _eurostat_error(reply: Reply) -> ToolFailure | str | None:
+def _eurostat_error(reply: Reply, query: str = "for this query") -> ToolFailure | str | None:
     """The error a Eurostat answer explains: ``{"error": [{"status", "id", "label"}]}`` (or one
     object), or the guide's ``{"warning": {"status": 413, "label"}}``.
 
-    By the guide's error table: a 400 with error 100 is a query with no data (``not_found``);
-    any other 400 a query the API refuses (``validation_error``); a 413 a request it will only
-    serve later, worth a retry. A 404 never gets here: each dataset call declares it
-    ``missing``. Any other error is the labels; any other warning is no error.
+    By the guide's error table: a 400 with error 100 is a query with no data (``not_found``,
+    naming ``query``); any other 400 a query the API refuses (``validation_error``); a 413 a
+    request it will only serve later, worth a retry. A 404 never gets here: each dataset call
+    declares it ``missing``. Any other error is the labels; any other warning is no error.
     """
     body = reply.body if isinstance(reply.body, dict) else {}
     later = [
@@ -55,8 +55,8 @@ def _eurostat_error(reply: Reply) -> ToolFailure | str | None:
     if reply.status == 400 and any(_int(item.get("id")) == _NO_RESULTS for item in items):
         return ToolFailure(
             "not_found",
-            f"Eurostat has no data for this query ({said}); other codes or periods may have "
-            "some: eurostat_dataset lists the codes",
+            f"Eurostat has no data {query} ({said}); other codes or periods may have some: "
+            "eurostat_dataset lists the codes",
         )
     if reply.status == 400:
         return ToolFailure(
@@ -94,6 +94,8 @@ _TEXT_RE = re.compile(r"^[\w\s,.'()/%:+-]{1,180}$", re.UNICODE)
 _TIME_KEYS = frozenset(
     {"time", "time_period", "sincetimeperiod", "untiltimeperiod", "lasttimeperiod"}
 )
+# The parameters the tool sets on every data request (``_DATA``): no filter replaces them.
+_FIXED_KEYS = frozenset({"format", "lang"})
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -197,11 +199,12 @@ def eurostat_series(
     if not _TIME_KEYS & {key.lower() for key in parsed}:
         params["lastTimePeriod"] = str(last_time_periods)
         asked += f" in the last {last_time_periods} periods"
-    return _DATA.get_json(
+    api = replace(_DATA, error_reader=lambda reply: _eurostat_error(reply, f"of {dataset}{asked}"))
+    return api.get_json(
         dataset,
         params=params,
         parse=lambda data: _series_answer(data, dataset, asked, max_points, offset),
-        missing=_missing(dataset),
+        missing=_missing(dataset, filtered),
     )
 
 
@@ -216,11 +219,18 @@ def _dataset_id(dataset_id: str) -> str:
     return dataset
 
 
-def _missing(dataset: str) -> str:
-    """What a 404 of a dataset call means: "the requested resource is not available"."""
-    return (
+def _missing(dataset: str, filtered: str = "") -> str:
+    """What a 404 of a dataset call means: "the requested resource is not available", which the
+    guide reads as the dataset. With filters, the answer does not say which it was."""
+    missing = (
         f"Eurostat has no dataset {dataset} to disseminate; find its ID with "
         "eurostat_dataset_search"
+    )
+    if not filtered:
+        return missing
+    return (
+        f"{missing} (a 404 does not say whether the filters {filtered} were at fault: "
+        "eurostat_dataset lists the codes)"
     )
 
 
@@ -237,7 +247,17 @@ def _parse_filters(filters: str) -> dict[str, list[str]]:
         if not _CODE_RE.fullmatch(key):
             msg = f"invalid filter dimension {key!r}; eurostat_dataset lists the dimensions."
             raise ToolFailure("validation_error", msg)
-        codes = [code.strip() for code in value.split("+")]
+        if key.lower() in _FIXED_KEYS:
+            msg = (
+                f"invalid filter {key!r}: the tool sets format and lang itself; filter by a "
+                "dimension (eurostat_dataset lists them)."
+            )
+            raise ToolFailure("validation_error", msg)
+        # Geo codes are upper case (PT, EU27_2020), as eurostat_compare sent them.
+        codes = [
+            code.strip().upper() if key.lower() == "geo" else code.strip()
+            for code in value.split("+")
+        ]
         if not value or not all(_CODE_RE.fullmatch(code) for code in codes):
             msg = (
                 f"invalid filter value for {key!r}; use codes joined by '+', e.g. {key}=PT+ES "
@@ -288,10 +308,16 @@ def _dataset_answer(data: dict[str, Any], dataset: str, dimension: str, offset: 
                 "validation_error", f"{dataset} has no dimension {dimension!r}; it has {have}"
             )
     period = _period(data)
-    lines = [line for dim in dimensions for line in _dimension_lines(dim, period)]
+    owned = [(dim, line) for dim in dimensions for line in _dimension_lines(dim, period)]
+    lines = [line for _, line in owned]
     title = f"Eurostat dataset {dataset}: {_string(data.get('label')) or '(no title)'}"
     if offset or dimension:
-        heading = f"{title}, codes:"
+        # A window that starts among a dimension's codes names it: its line is in an earlier one.
+        within = offset < len(owned) and owned[offset][1].startswith(" ")
+        dim = owned[offset][0] if within else None
+        heading = (
+            f"{title}, codes ({dim.id}: {dim.label}, continued):" if dim else f"{title}, codes:"
+        )
     else:
         heading = "\n".join(
             [
@@ -349,8 +375,9 @@ def _series_answer(
     if not observations:
         return ToolResult.success(f"Eurostat has no observations of {dataset}{asked}.")
     varying = [dim for dim in dimensions if len(dim.codes) > 1]
+    flags = _flag_labels(data)
     rows = [
-        f"{number}. {_row(coordinates, value, flag, dimensions, varying)}"
+        f"{number}. {_row(coordinates, value, _flag_text(flag, flags), dimensions, varying)}"
         for number, (coordinates, value, flag) in enumerate(observations, start=1)
     ]
     heading = [f"Eurostat {dataset}: {_string(data.get('label')) or '(no title)'}"]
@@ -391,7 +418,10 @@ def _row(
     codes = {dim.id: dim.codes[index] for dim, index in zip(dimensions, coordinates, strict=True)}
     named = [dim.named(codes[dim.id]) for dim in varying if dim.id != "time"]
     time = codes.get("time", "")
-    shown = plain_number(value) if isinstance(value, int | float | str) else "no value"
+    if isinstance(value, str):
+        shown = decimal_text(value)
+    else:
+        shown = plain(value) if isinstance(value, int | float) else "no value"
     point = f"{time}: {shown}" if time else shown
     return " | ".join([*named, point]) + (f" (flag {flag})" if flag else "")
 
@@ -457,6 +487,29 @@ def _coordinates(position: int, sizes: list[int]) -> tuple[int, ...] | None:
         coordinates.append(position % size)
         position //= size
     return tuple(reversed(coordinates)) if position == 0 else None
+
+
+def _flag_labels(data: dict[str, Any]) -> dict[str, str]:
+    """What each flag means, as Eurostat's answer names them (``extension.status.label``:
+    ``p`` is provisional)."""
+    extension = data.get("extension")
+    status = extension.get("status") if isinstance(extension, dict) else None
+    labels = status.get("label") if isinstance(status, dict) else None
+    if not isinstance(labels, dict):
+        return {}
+    return {str(code): text for code, label in labels.items() if (text := _string(label))}
+
+
+def _flag_text(flag: str, labels: Mapping[str, str]) -> str:
+    """``p: provisional``; flags given together (``ep``) each with its label; a flag the answer
+    does not name stays a code."""
+    if not flag:
+        return ""
+    if flag in labels:
+        return f"{flag}: {labels[flag]}"
+    if all(letter in labels for letter in flag):
+        return f"{flag}: {', '.join(labels[letter] for letter in flag)}"
+    return flag
 
 
 def _flag(status: object, position: int) -> str:

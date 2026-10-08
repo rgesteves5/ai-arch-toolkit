@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
 from typing import Annotated, Any, NoReturn
 
@@ -44,10 +45,17 @@ def _gbif_error(reply: Reply) -> ToolFailure | None:
 
 
 _API = Api(base="https://api.gbif.org/v1", name="GBIF", timeout_s=15, error_reader=_gbif_error)
-# Species search takes offsets up to 100,000 (``SpeciesResource.DEEP_PAGING_OFFSET_LIMIT``);
-# occurrence search serves offset + limit up to 100,000 (``OccurrenceSearchResource``).
+# Species search refuses only an offset past 100,000 (``SpeciesResource.checkDeepPaging``,
+# ``DEEP_PAGING_OFFSET_LIMIT``); occurrence search serves offset + limit up to 100,000
+# (``OccurrenceSearchResource``).
 _SPECIES_DEPTH = 100_000
 _OCCURRENCE_DEPTH = 100_000
+_SPECIES_REST = (
+    f"GBIF's species search pages no further than offset {_SPECIES_DEPTH}; narrow the query, "
+    "the rank or the higher taxon for the rest"
+)
+_OCCURRENCE_REACHED = f"GBIF's search reaches the first {_OCCURRENCE_DEPTH}"
+_OCCURRENCE_REST = "narrow the filters, or use GBIF's download service, for the rest"
 # GBIF reads a taxon key as a 32-bit integer (``@PathVariable int usageKey``).
 _MAX_KEY = 2**31 - 1
 _NAME_CHARS = 300
@@ -118,7 +126,7 @@ def gbif_species_search(
             data,
             offset,
             lambda number, item: _taxon_line(number, item, text),
-            depth=_SPECIES_DEPTH,
+            reach=_Reach(last_offset=_SPECIES_DEPTH, rest=_SPECIES_REST),
             heading=f"GBIF taxa that match {text!r} (scientific and common names):",
             nothing=f"No GBIF taxa match {text!r}.",
         )
@@ -173,11 +181,8 @@ def gbif_occurrence_search(
             ``country`` and ``year`` is given, or GBIF refuses the filters.
     """
     filters = _occurrence_filters(taxon_key, country, year)
-    params = {
-        "limit": str(min(max_results, _OCCURRENCE_DEPTH - offset)),
-        "offset": str(offset),
-        **filters,
-    }
+    limit, reach = _occurrence_page(offset, max_results)
+    params = {"limit": str(limit), "offset": str(offset), **filters}
     if has_coordinate:
         params["hasCoordinate"] = "true"
     label = _occurrence_label(filters, has_coordinate=has_coordinate)
@@ -187,7 +192,7 @@ def gbif_occurrence_search(
             data,
             offset,
             _occurrence_line,
-            depth=_OCCURRENCE_DEPTH,
+            reach=reach,
             heading=f"GBIF occurrences of {label}:",
             nothing=f"No GBIF occurrences of {label}.",
         )
@@ -243,6 +248,22 @@ def _occurrence_filters(taxon_key: str, country: str, year: str) -> dict[str, st
     return {name: value for name, value in filters.items() if value}
 
 
+def _occurrence_page(offset: int, max_results: int) -> tuple[int, _Reach]:
+    """The limit to ask for at ``offset``, and how deep the search reaches.
+
+    GBIF serves offset + limit up to 100,000: the page that reaches that depth asks for fewer
+    than ``max_results``, and its footer says so.
+    """
+    limit = min(max_results, _OCCURRENCE_DEPTH - offset)
+    short = f" (max_results={max_results} stops there: {limit} on this page)"
+    reach = _Reach(
+        last_offset=_OCCURRENCE_DEPTH - 1,
+        rest=f"{_OCCURRENCE_REACHED}{short if limit < max_results else ''}; {_OCCURRENCE_REST}",
+        heading=f"{_OCCURRENCE_REACHED}; {_OCCURRENCE_REST}",
+    )
+    return limit, reach
+
+
 def _occurrence_label(filters: dict[str, str], *, has_coordinate: bool) -> str:
     """The filters as answers name them: ``taxon 2435099, country PT, years 2020-2024``."""
     years = filters.get("year", "")
@@ -258,17 +279,33 @@ def _occurrence_label(filters: dict[str, str], *, has_coordinate: bool) -> str:
 # --- Answers -----------------------------------------------------------------------------------
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _Reach:
+    """How deep a GBIF search pages, and what to do for the results past it.
+
+    Attributes:
+        last_offset: The largest offset the search takes.
+        rest: What the footer says when the next page is past ``last_offset``.
+        heading: What the heading says when there are more results than that; ``rest`` when
+            empty.
+    """
+
+    last_offset: int
+    rest: str
+    heading: str = ""
+
+
 def _list_answer(
     data: dict[str, Any],
     offset: int,
     line: Callable[[int, dict[str, Any]], str],
     *,
-    depth: int,
+    reach: _Reach,
     heading: str,
     nothing: str,
 ) -> ToolResult:
-    """A page of a GBIF list, numbered from ``offset``, with its ``count``; past ``depth`` the
-    rest is GBIF's download service's, and the heading says so."""
+    """A page of a GBIF list, numbered from ``offset``, with its ``count``; past
+    ``reach.last_offset`` the heading and the footer say where the rest is."""
     items = [item for item in data.get("results") or [] if isinstance(item, dict)]
     if not items and offset == 0:
         return ToolResult.success(nothing)
@@ -277,14 +314,11 @@ def _list_answer(
     lines = [line(offset + number, item) for number, item in enumerate(items, start=1)]
     shown = offset + len(lines)
     more = data.get("endOfRecords") is False or (total is not None and shown < total)
-    next_call = {"offset": shown} if lines and more and shown < depth else None
-    if total is not None and total > depth:
-        heading = heading.removesuffix(":") + (
-            f" (GBIF's search reaches the first {depth}; narrow the filters, or use GBIF's "
-            "download service, for the rest):"
-        )
+    next_call = {"offset": shown} if lines and more and shown <= reach.last_offset else None
+    if total is not None and total > reach.last_offset:
+        heading = heading.removesuffix(":") + f" ({reach.heading or reach.rest}):"
     window = list_window(lines, first=offset + 1, total=total, next_call=next_call)
-    return window.result(heading=heading)
+    return replace(window, rest=reach.rest).result(heading=heading)
 
 
 def _match_text(data: dict[str, Any], name: str) -> str:

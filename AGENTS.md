@@ -9,7 +9,7 @@ This comment is stripped from Claude's context and costs no tokens.
 
 ai-arch-toolkit is a Python library with zero required dependencies: a unified LLM client
 (Anthropic, OpenAI, Gemini, xAI, Meta, and OpenAI-compatible local servers) plus Flow
-orchestration, nine agent architectures, budgets/metering, ~130 tools (stdlib-only except the
+orchestration, nine agent architectures, budgets/metering, ~120 tools (stdlib-only except the
 `youtube_*` ones), graph-backed memory, and a file-backed prompt/resource system.
 
 ## Commands

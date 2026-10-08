@@ -139,6 +139,35 @@ class TestSearches:
         assert query["standard_type"] == ["IC50"]
 
     @pytest.mark.parametrize(
+        ("value", "shown"), [("1E-7", "0.0000001"), (1e-07, "0.0000001"), ("2.50E+3", "2500")]
+    )
+    @patch(HTTP_OPEN)
+    def test_a_value_reads_without_scientific_notation(
+        self, mock_urlopen: MagicMock, value: object, shown: str
+    ) -> None:
+        # ChEMBL sends its decimals as text, a small one as "1E-7"; it was shown so.
+        activity = {**_ACTIVITY, "standard_value": value, "standard_units": "M"}
+        mock_urlopen.return_value = _page("activities", [activity], total=1)
+
+        text = _text(chembl_activity_search(molecule_chembl_id="CHEMBL25"))
+
+        assert f"| IC50: {shown} M |" in text
+
+    @patch(HTTP_OPEN)
+    def test_the_assay_an_activity_names_lists_its_activities(
+        self, mock_urlopen: MagicMock
+    ) -> None:
+        # Each activity named its assay's ID, and no tool took it (T00, point 6). ChEMBL filters
+        # activities by it: activity?molecule_chembl_id=CHEMBL998&assay_chembl_id=CHEMBL1909156
+        # (https://chembl.gitbook.io/chembl-interface-documentation/web-services/chembl-data-web-services).
+        mock_urlopen.return_value = _page("activities", [_ACTIVITY], total=1)
+
+        text = _text(chembl_activity_search(assay_chembl_id="chembl1217643"))
+
+        assert text.splitlines()[0] == "ChEMBL activities of assay CHEMBL1217643:"
+        assert _query(mock_urlopen)["assay_chembl_id"] == ["CHEMBL1217643"]
+
+    @pytest.mark.parametrize(
         ("call", "said"),
         [
             (lambda: chembl_molecule_search("zzqq"), "No ChEMBL molecules match 'zzqq'."),
@@ -270,6 +299,7 @@ class TestRecords:
     [
         (lambda: chembl_activity_search(), "provide molecule_chembl_id"),
         (lambda: chembl_activity_search(target_chembl_id="X1"), "invalid target_chembl_id"),
+        (lambda: chembl_activity_search(assay_chembl_id="A1"), "invalid assay_chembl_id"),
         (lambda: chembl_molecule("bad"), "invalid chembl_id 'bad'"),
         (lambda: chembl_target("CHEMBL"), "invalid chembl_id 'CHEMBL'"),
         # ChEMBL refuses a search under 3 characters ("Search query too short").

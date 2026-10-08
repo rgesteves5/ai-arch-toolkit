@@ -14,10 +14,10 @@ from ai_arch_toolkit.core._server_tools import code_execution, web_search
 from ai_arch_toolkit.core._tools import prepare_tools
 from ai_arch_toolkit.core._tools._approval import ApprovalDecision
 from ai_arch_toolkit.core._tools._decorator import tool
-from ai_arch_toolkit.core._tools._executor import execute_tool
+from ai_arch_toolkit.core._tools._executor import async_execute_tool, execute_tool
 from ai_arch_toolkit.core._tools._governance import DangerousToolGate, DryRunGate
 from ai_arch_toolkit.core._tools._group import ToolGroup
-from ai_arch_toolkit.toolkit import run_tools
+from ai_arch_toolkit.toolkit import run_tools, run_tools_sync
 
 
 @tool
@@ -347,6 +347,45 @@ class TestOneToolPerNameAcrossListsAndGroups:
         )
 
         assert result.value == "Sunny in Porto"
+
+    async def test_a_list_llm_complete_takes_runs_without_a_false_clash(self):
+        # Server tools, wire-form dicts and groups have no name of the app's: two of a kind never
+        # clash by their type's name.
+        tools = [
+            get_weather,
+            web_search(),
+            code_execution(),
+            {"_server_tool": True, "type": "web_search"},
+            {"_server_tool": True, "type": "code_execution"},
+            ToolGroup(search),
+            ToolGroup(async_fetch),
+        ]
+        call = ToolCall(id="tc_1", name="get_weather", input={"city": "Porto"})
+
+        assert prepare_tools(tools) is not None
+        assert execute_tool(call, tools).value == "Sunny in Porto"
+        assert (await async_execute_tool(call, tools)).value == "Sunny in Porto"
+        response = Response(tool_calls=(call,))
+        assert [r["content"] for r in run_tools_sync(response, tools)] == ["Sunny in Porto"]
+        assert [r["content"] for r in await run_tools(response, tools)] == ["Sunny in Porto"]
+
+    def test_the_executor_refuses_the_dict_and_tool_with_one_name_that_prepare_tools_refuses(
+        self,
+    ):
+        wire = {"name": "search", "description": "", "input_schema": {"type": "object"}}
+        call = ToolCall(id="tc_1", name="search", input={"query": "q"})
+
+        with pytest.raises(ValueError, match="'search'"):
+            prepare_tools([wire, search])
+        with pytest.raises(ValueError, match="'search'"):
+            execute_tool(call, [wire, search])
+
+    def test_a_call_to_a_tool_dict_is_an_unknown_tool(self):
+        wire = {"name": "raw", "description": "", "input_schema": {"type": "object"}}
+
+        result = execute_tool(ToolCall(id="tc_1", name="raw", input={}), [wire, get_weather])
+
+        assert result.error is not None and result.error.type == "unknown_tool"
 
 
 class TestWrappedTools:

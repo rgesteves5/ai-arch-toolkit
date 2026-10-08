@@ -394,6 +394,54 @@ class TestInternetArchiveItem:
         assert failure.error.type == "not_found"
         assert "no Internet Archive item 'zzqqxx'" in failure.error.message
 
+    @patch(HTTP_OPEN)
+    def test_an_unknown_identifier_answered_with_an_empty_array_is_not_found(self, mock_urlopen):
+        # md-read.html: an identifier that does not exist "returns an empty array"; it was an
+        # upstream "expected a JSON object, got an array".
+        mock_urlopen.return_value = respond([])
+
+        failure = _failure(internet_archive_item, "zzqqxx")
+
+        assert (failure.error.type, failure.error.retryable) == ("not_found", False)
+        assert failure.error.message == (
+            "no Internet Archive item 'zzqqxx'; find its identifier with internet_archive_search"
+        )
+
+    @patch(HTTP_OPEN)
+    def test_an_array_with_something_in_it_is_a_parse_error(self, mock_urlopen):
+        mock_urlopen.return_value = respond([{"metadata": {}}])
+
+        failure = _failure(internet_archive_item, "zzqqxx")
+
+        assert failure.error.type == "upstream"
+        assert failure.error.message.startswith("could not parse API response: ")
+
+    @patch(HTTP_OPEN)
+    def test_a_warning_beside_the_item_does_not_fail_the_read(self, mock_urlopen):
+        # Code 106: "a secondary copy was used" (md-read.html), so the metadata comes with it.
+        warned = {**_ITEM, "error": "Unbalanced locations", "errcode": 106}
+        mock_urlopen.return_value = respond(warned)
+
+        text = _text(internet_archive_item("goodytwoshoes00newyiala"))
+
+        assert text.splitlines()[0] == (
+            "Internet Archive item goodytwoshoes00newyiala (the Internet Archive says: "
+            "Unbalanced locations):"
+        )
+        assert "Title: Goody Two Shoes" in text
+
+    @patch(HTTP_OPEN)
+    def test_an_error_status_is_still_read_by_the_metadata_reader(self, mock_urlopen):
+        body = b'{"error": "Item is unavailable", "errcode": 102}'
+        mock_urlopen.side_effect = http_error(500, "Server Error", body=body)
+
+        failure = _failure(internet_archive_item, "goodytwoshoes00newyiala")
+
+        assert (failure.error.type, failure.error.retryable) == ("upstream", True)
+        assert failure.error.message == (
+            "the item cannot be read now (Item is unavailable); try again later"
+        )
+
     @pytest.mark.parametrize("max_chars", [499, 20_001])
     @patch(HTTP_OPEN)
     def test_max_chars_is_refused_outside_its_limits_through_the_executor(

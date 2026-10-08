@@ -9,7 +9,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
-from ai_arch_toolkit.core import ToolResult
+from ai_arch_toolkit.core import ToolCall, ToolGroup, ToolResult
 from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit import tools
 from ai_arch_toolkit.toolkit.tools._osm import osm_reverse_geocode, osm_search_place
@@ -58,6 +58,18 @@ def _called_params(mock_urlopen) -> dict[str, list[str]]:
     return parse_qs(urlparse(_called_request(mock_urlopen).full_url).query)
 
 
+def _executed(fn, **args):
+    """What the executor answers a call with ``args`` (the schema's bounds are checked there)."""
+    return ToolGroup(fn).execute(ToolCall(id="c", name=fn.__name__, input=args))
+
+
+def _bounds(fn, *names: str) -> dict[str, tuple[object, object]]:
+    properties = fn.__tool_definition__.schema.input_schema["properties"]
+    return {
+        name: (properties[name].get("minimum"), properties[name].get("maximum")) for name in names
+    }
+
+
 class TestOsmSearchPlace:
     @patch(HTTP_OPEN)
     def test_returns_places_with_their_osm_object_address_box_and_tags(self, mock_urlopen):
@@ -90,7 +102,7 @@ class TestOsmSearchPlace:
         params = _called_params(mock_urlopen)
         assert params["format"] == ["jsonv2"]
         assert params["q"] == ["Lisbon"]
-        assert params["limit"] == ["3"]  # the page and one more
+        assert params["limit"] == ["40"]  # all Nominatim gives: every page is cut from it
         assert params["countrycodes"] == ["pt"]
         assert params["layer"] == ["address"]
         assert params["extratags"] == ["1"]
@@ -98,10 +110,7 @@ class TestOsmSearchPlace:
     @patch(HTTP_OPEN)
     def test_more_than_ten_places_page_on_up_to_the_forty_nominatim_gives(self, mock_urlopen):
         # It stopped at 10, with nothing past them; Nominatim gives up to 40.
-        mock_urlopen.side_effect = [
-            respond(geo_answers.nominatim_places(31)),
-            respond(geo_answers.nominatim_places(40)),
-        ]
+        mock_urlopen.side_effect = lambda *_: respond(geo_answers.nominatim_places(40))
 
         page = _text(osm_search_place("Springfield", max_results=15, offset=15))
         last = _text(osm_search_place("Springfield", max_results=10, offset=30))
@@ -113,6 +122,42 @@ class TestOsmSearchPlace:
             "precise query)\n[results 31-40 | end]"
         )
         assert _called_params(mock_urlopen)["limit"] == ["40"]
+
+    @patch(HTTP_OPEN)
+    def test_the_first_page_knows_the_total_below_the_forty(self, mock_urlopen):
+        # Asked for the page and one more, a page could only say that more followed.
+        mock_urlopen.side_effect = lambda *_: respond(geo_answers.nominatim_places(12))
+
+        text = _text(osm_search_place("Springfield", max_results=5))
+
+        assert text.endswith("[results 1-5 of 12 | next: offset=5]")
+
+    @patch(HTTP_OPEN)
+    def test_pages_are_cut_from_one_answer_whatever_order_the_limit_gives(self, mock_urlopen):
+        # Nominatim ranks a pool of candidates that grows with ``limit`` (max_results plus up to
+        # 10, v1/server_glue.py), deduplicates and reranks it (geocoder.py): the first five of
+        # limit=6 need not be the first five of limit=11, so page 2 could repeat or skip a place.
+        pool = geo_answers.nominatim_places(12)
+
+        def nominatim(request, timeout):
+            limit = int(parse_qs(urlparse(request.full_url).query)["limit"][0])
+            ranked = pool if limit >= 40 else pool[::-1]
+            return respond(ranked[:limit])
+
+        mock_urlopen.side_effect = nominatim
+
+        pages = [
+            _text(osm_search_place("Springfield", max_results=5, offset=offset))
+            for offset in (0, 5)
+        ]
+
+        names = [
+            line.split(". ", 1)[1]
+            for page in pages
+            for line in page.splitlines()
+            if line[:1].isdigit()
+        ]
+        assert names == [place["display_name"] for place in pool[:10]]
 
     def test_the_forty_is_in_the_schema(self):
         properties = osm_search_place.__tool_definition__.schema.input_schema["properties"]
@@ -204,10 +249,33 @@ class TestOsmReverseGeocode:
 
     @patch(HTTP_OPEN)
     def test_invalid_reverse_options_do_not_call_api(self, mock_urlopen):
-        assert "must be between -90 and 90" in _invalid(osm_reverse_geocode, -91, 0)
-        assert "must be between -180 and 180" in _invalid(osm_reverse_geocode, 0, 181)
+        mock_urlopen.side_effect = AssertionError("no request")
+
         assert "invalid layer" in _invalid(osm_reverse_geocode, 0, 0, layer="bad")
-        mock_urlopen.assert_not_called()
+        for point in (
+            {"latitude": -91.0, "longitude": 0.0},
+            {"latitude": 0.0, "longitude": 181.0},
+        ):
+            result = _executed(osm_reverse_geocode, **point)
+            assert result.error is not None
+            assert result.error.type == "validation_error"
+
+    def test_the_coordinates_are_bounded_in_the_schema(self):
+        assert _bounds(osm_reverse_geocode, "latitude", "longitude") == {
+            "latitude": (-90, 90),
+            "longitude": (-180, 180),
+        }
+
+    @patch(HTTP_OPEN)
+    def test_coordinates_go_in_decimal_notation(self, mock_urlopen):
+        # str(0.00001) is "1e-05".
+        mock_urlopen.return_value = respond(_PLACE)
+
+        text = osm_reverse_geocode(0.00001, -0.00002)
+
+        params = _called_params(mock_urlopen)
+        assert (params["lat"], params["lon"]) == (["0.00001"], ["-0.00002"])
+        assert "latitude 0.00001, longitude -0.00002" in text
 
     @patch(HTTP_OPEN)
     def test_nothing_at_the_point_is_a_success_that_says_so(self, mock_urlopen):

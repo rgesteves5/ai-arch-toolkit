@@ -54,7 +54,8 @@ AIR_QUALITY = Api(
     error_reader=open_meteo_error,
 )
 # The geocoding search returns up to 100 places for a name, and has no offset
-# (https://open-meteo.com/en/docs/geocoding-api, "count").
+# (https://open-meteo.com/en/docs/geocoding-api, "count"); ``geocode`` asks for all of them and
+# cuts each page from that answer (``_first_results``).
 GEOCODING_DEPTH = 100
 
 

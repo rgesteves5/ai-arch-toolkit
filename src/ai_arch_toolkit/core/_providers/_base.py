@@ -208,6 +208,7 @@ class LoopAwareClientCache:
 type ThinkingMode = Literal["none", "optional", "always"]
 type ToolChoiceMode = Literal["auto", "none", "required", "named"]
 type InputModality = Literal["text", "image", "pdf", "audio", "video"]
+type OutputModality = Literal["text", "image"]
 
 # The reasoning efforts, weakest first: the order a model's efforts are listed in.
 EFFORT_ORDER = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
@@ -215,11 +216,14 @@ EVERY_TOOL_CHOICE: frozenset[ToolChoiceMode] = frozenset({"auto", "none", "requi
 # The inputs the toolkit's content parts carry: text, ``ImagePart`` and ``DocumentPart`` (a PDF).
 # No part carries audio or video.
 CONTENT_PARTS: frozenset[InputModality] = frozenset({"text", "image", "pdf"})
+# The ``ServerTool.type`` values ``core/_server_tools.py`` builds: the catalog's words for
+# ``server_tools`` (a test keeps them equal; C05 adds its types to both).
+SERVER_TOOL_TYPES = ("web_search", "code_execution", "image_generation")
 
 
 def ordered_efforts(efforts: Iterable[str]) -> tuple[str, ...]:
-    """``efforts`` weakest first, by :data:`EFFORT_ORDER`."""
-    return tuple(sorted(efforts, key=EFFORT_ORDER.index))
+    """``efforts`` weakest first, by :data:`EFFORT_ORDER`, each once."""
+    return tuple(sorted(set(efforts), key=EFFORT_ORDER.index))
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -242,6 +246,8 @@ class AdapterFacts:
         server_tools: The server tools it sends, by ``ServerTool.type``.
         input_modalities: The inputs it sends to the model; the catalog narrows a published
             list to them.
+        output_modalities: What its answers carry back; the catalog narrows a published list
+            to them.
     """
 
     tools: bool | None = None
@@ -254,10 +260,11 @@ class AdapterFacts:
     thinking_budget: bool | None = None
     server_tools: frozenset[str] | None = None
     input_modalities: frozenset[InputModality] | None = None
+    output_modalities: frozenset[OutputModality] | None = None
 
 
 # An image model no completion reaches: it only draws, from a prompt and input images (an image
-# generation takes text and image parts only, ``image_prompt``).
+# generation takes text and image parts only, ``image_prompt``), and the answer is the images.
 DRAWS_ONLY = AdapterFacts(
     tools=False,
     tool_choice_modes=frozenset(),
@@ -269,13 +276,16 @@ DRAWS_ONLY = AdapterFacts(
     thinking_budget=False,
     server_tools=frozenset(),
     input_modalities=frozenset({"text", "image"}),
+    output_modalities=frozenset({"image"}),
 )
-# An image model that also completes, but takes no tools.
+# An image model that also completes, but takes no tools: a completion carries every content
+# part (a PDF too), and its answer text and images.
 DRAWS_WITHOUT_TOOLS = AdapterFacts(
     tools=False,
     tool_choice_modes=frozenset(),
     server_tools=frozenset(),
-    input_modalities=frozenset({"text", "image"}),
+    input_modalities=CONTENT_PARTS,
+    output_modalities=frozenset({"text", "image"}),
 )
 
 

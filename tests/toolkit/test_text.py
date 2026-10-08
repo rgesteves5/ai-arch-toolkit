@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import re
+import subprocess
+import sys
+import threading
+import time
 from typing import Any
 
 import pytest
 
 from ai_arch_toolkit.core import ToolCall, ToolGroup, ToolResult
 from ai_arch_toolkit.core._tools._result import ToolFailure
+from ai_arch_toolkit.toolkit.tools import _text as text_tools
 from ai_arch_toolkit.toolkit.tools._text import (
     base64_decode,
     base64_encode,
@@ -169,6 +175,89 @@ class TestRegexGuards:
     def test_a_long_pattern_or_text_is_refused(self):
         assert _invalid(regex_search, "a", "a" * 501).startswith("pattern refused:")
         assert _invalid(regex_search, "a" * 20_001, "a").startswith("text refused:")
+
+
+class TestPolynomialBacktracking:
+    """A match runs in a child process with a time budget: a pattern whose quantifiers backtrack
+    polynomially (``a*a*b``: n³ steps) is refused when the budget runs out, and this process,
+    whose GIL the engine would hold, runs on meanwhile."""
+
+    def test_a_star_a_star_b_on_20000_characters_is_refused_within_the_budget(self) -> None:
+        # In a child with a hard deadline: were the match to run here, it would hold the suite
+        # for about 18 minutes.
+        code = (
+            "import time\n"
+            "from ai_arch_toolkit.core import ToolFailure\n"
+            "from ai_arch_toolkit.toolkit.tools._text import regex_search\n"
+            "started = time.monotonic()\n"
+            "try:\n"
+            "    regex_search('a' * 20000, 'a*a*b')\n"
+            "except ToolFailure as failure:\n"
+            "    print(failure.error.type, round(time.monotonic() - started, 1))\n"
+            "    print(failure.error.message)\n"
+        )
+        done = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, timeout=30, check=False
+        )
+
+        kind, took = done.stdout.split("\n", 1)[0].split()
+        assert kind == "validation_error", done.stdout + done.stderr
+        assert float(took) < text_tools._MATCH_S + 3
+        assert f"took longer than {text_tools._MATCH_S:g}s" in done.stdout
+
+    def test_this_process_runs_on_while_the_match_does(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(text_tools, "_MATCH_S", 0.5)
+        ticks: list[float] = []
+        stop = threading.Event()
+
+        def tick() -> None:
+            while not stop.is_set():
+                ticks.append(time.monotonic())
+                time.sleep(0.01)
+
+        ticker = threading.Thread(target=tick, daemon=True)
+        ticker.start()
+        started = time.monotonic()
+        try:
+            message = _invalid(regex_search, "a" * 3000, "a*a*b")  # about 4 s in the engine
+        finally:
+            stop.set()
+            ticker.join()
+
+        assert time.monotonic() - started < 2
+        assert message.startswith("pattern refused:")
+        assert sum(1 for at in ticks if at >= started) >= 10
+
+    @pytest.mark.parametrize(
+        ("pattern", "text"),
+        [
+            (r"(a)|(b)", "abc"),
+            (r"(?P<word>\w+)(\s)?", "héllo wörld 😀 x"),
+            (r"", "ab"),
+            (r"(?=(a*))a", "aaa"),
+        ],
+    )
+    def test_the_child_finds_what_re_finds_here(self, pattern: str, text: str) -> None:
+        expected = [
+            f"  [{m.start()}:{m.end()}] {m.group()!r}"
+            + (f" groups={m.groups()}" if m.groups() else "")
+            for m in re.finditer(pattern, text)
+        ]
+
+        assert _text(regex_search(text, pattern)).split("\n")[1:] == expected
+
+    def test_a_program_with_no_python_to_start_is_an_upstream_failure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+
+        with pytest.raises(ToolFailure) as caught:
+            regex_search("abc", "b")
+
+        assert caught.value.error.type == "upstream"
+        assert "sys.executable" in caught.value.error.message
 
 
 @pytest.mark.parametrize("pattern", ["a{4294967296}", "(" * 2000 + ")" * 2000])

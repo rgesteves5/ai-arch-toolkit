@@ -9,7 +9,7 @@ from typing import Annotated, Any
 
 from ai_arch_toolkit.core import Range, ToolResult, tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
-from ai_arch_toolkit.toolkit.tools._first_results import asked, first_results_window
+from ai_arch_toolkit.toolkit.tools._first_results import first_results_window
 from ai_arch_toolkit.toolkit.tools._http import Api, Reply
 from ai_arch_toolkit.toolkit.tools._values import plain
 
@@ -57,7 +57,8 @@ _NOMINATIM = Api(
     error_reader=_nominatim_error,
 )
 # A search returns at most 40 places, and has no offset
-# (https://nominatim.org/release-docs/latest/api/Search/, "limit").
+# (https://nominatim.org/release-docs/latest/api/Search/, "limit"). The tool always asks for the
+# 40: Nominatim's first results change with the limit (``_first_results``).
 _DEPTH = 40
 _COUNTRY_CODES_RE = re.compile(r"^[a-zA-Z]{2}(,[a-zA-Z]{2})*$")
 _LAYERS = {"address", "poi", "railway", "natural", "manmade"}
@@ -120,7 +121,7 @@ def osm_search_place(
     params = {
         "format": "jsonv2",
         "q": query,
-        "limit": str(asked(offset, max_results, _DEPTH)),
+        "limit": str(_DEPTH),
         "addressdetails": "1",
         "extratags": "1" if include_extra_tags else "0",
         "accept-language": accept_language.strip() or "en",
@@ -138,8 +139,8 @@ def osm_search_place(
 
 @tool(capability="network")
 def osm_reverse_geocode(
-    latitude: float,
-    longitude: float,
+    latitude: Annotated[float, Range(-90, 90)],
+    longitude: Annotated[float, Range(-180, 180)],
     zoom: Annotated[int, Range(0, 18)] = 18,
     layer: str = "address,poi",
     accept_language: str = "en",
@@ -158,14 +159,13 @@ def osm_reverse_geocode(
         include_extra_tags: Add OSM's extra tags (website, opening hours, Wikidata…).
 
     Raises:
-        ToolFailure: validation_error when the coordinates are out of range or a layer is invalid.
+        ToolFailure: validation_error when a layer is invalid, or Nominatim refuses an argument.
     """
-    _validate_location(latitude, longitude)
     parsed_layers = _parse_layers(layer)
     params = {
         "format": "jsonv2",
-        "lat": str(latitude),
-        "lon": str(longitude),
+        "lat": plain(latitude),
+        "lon": plain(longitude),
         "zoom": str(zoom),
         "addressdetails": "1",
         "extratags": "1" if include_extra_tags else "0",
@@ -190,6 +190,7 @@ def _search_answer(places: list[_OsmPlace], query: str, offset: int, limit: int)
         blocks,
         offset=offset,
         limit=limit,
+        requested=_DEPTH,
         depth=_DEPTH,
         narrow="add country_codes or layer, or a more precise query",
     )
@@ -271,15 +272,6 @@ def _parse_layers(value: str) -> tuple[str, ...]:
             f"invalid layer(s): {', '.join(invalid)}; use {', '.join(sorted(_LAYERS))}.",
         )
     return layers
-
-
-def _validate_location(latitude: float, longitude: float) -> None:
-    if not -90 <= latitude <= 90:
-        raise ToolFailure("validation_error", f"latitude {latitude} must be between -90 and 90.")
-    if not -180 <= longitude <= 180:
-        raise ToolFailure(
-            "validation_error", f"longitude {longitude} must be between -180 and 180."
-        )
 
 
 def _labelled(value: Any, *, ordered: bool = False) -> tuple[str, ...]:

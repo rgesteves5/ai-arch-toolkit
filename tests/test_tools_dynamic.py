@@ -345,8 +345,31 @@ def test_a_recursive_reference_stays_a_reference_with_its_table() -> None:
         ({"type": "object", "properties": {"q": {"$ref": "other.json#/q"}}}, "other.json#/q"),
         ({"type": "object", "properties": {"x": {"maximum": float("nan")}}}, "JSON"),
         ({"type": "object", "properties": {"x": {"enum": {1, 2}}}}, "JSON"),
+        (
+            {
+                "type": "object",
+                "properties": {"x": {"$ref": "#/$defs/Any"}},
+                "$defs": {"Any": True},
+            },
+            "'#/$defs/Any'",
+        ),
+        (
+            {"type": "object", "properties": {"x": {"$ref": "#/$defs/L"}}, "$defs": {"L": [1]}},
+            "'#/$defs/L'",
+        ),
+        ({"$ref": "#/$defs/Root", "$defs": {"Root": False}}, "'#/$defs/Root'"),
     ],
-    ids=["array root", "no type", "remote ref", "relative file ref", "NaN", "a set"],
+    ids=[
+        "array root",
+        "no type",
+        "remote ref",
+        "relative file ref",
+        "NaN",
+        "a set",
+        "a boolean definition",
+        "a list definition",
+        "a root that refers to a boolean",
+    ],
 )
 def test_a_schema_the_tool_cannot_send_is_a_value_error(
     schema: dict[str, Any], words: str
@@ -400,6 +423,13 @@ def _chain(length: int) -> dict[str, Any]:
     return {"type": "object", "properties": {"root": {"$ref": "#/$defs/D0"}}, "$defs": definitions}
 
 
+def _ref_chain(length: int) -> dict[str, Any]:
+    """Each definition is only a reference to the next one: no nesting until the last."""
+    definitions: dict[str, Any] = {f"D{i}": {"$ref": f"#/$defs/D{i + 1}"} for i in range(length)}
+    definitions[f"D{length}"] = {"type": "string"}
+    return {"type": "object", "properties": {"root": {"$ref": "#/$defs/D0"}}, "$defs": definitions}
+
+
 def _nested_any_of(levels: int) -> dict[str, Any]:
     """A property nested ``levels`` deep in ``anyOf`` branches, with no references at all."""
     node: dict[str, Any] = {"type": "integer"}
@@ -408,10 +438,34 @@ def _nested_any_of(levels: int) -> dict[str, Any]:
     return {"type": "object", "properties": {"n": node}}
 
 
+def _doubling_any_of(levels: int) -> dict[str, Any]:
+    """Each definition offers the next one twice, as ``anyOf`` branches: ``2**levels`` leaves."""
+    definitions: dict[str, Any] = {
+        f"D{i}": {"anyOf": [{"$ref": f"#/$defs/D{i + 1}"}, {"$ref": f"#/$defs/D{i + 1}"}]}
+        for i in range(levels)
+    }
+    definitions[f"D{levels}"] = {"type": "integer"}
+    return {"type": "object", "properties": {"x": {"$ref": "#/$defs/D0"}}, "$defs": definitions}
+
+
 @pytest.mark.parametrize(
     "schema",
-    [_doubling_bomb(30), _wide_bomb(50), _chain(5_000), _nested_any_of(300)],
-    ids=["doubling refs", "a long definition many times", "a long chain", "deep anyOf"],
+    [
+        _doubling_bomb(30),
+        _wide_bomb(50),
+        _chain(5_000),
+        _ref_chain(2_000),
+        _nested_any_of(300),
+        _doubling_any_of(12),
+    ],
+    ids=[
+        "doubling refs",
+        "a long definition many times",
+        "a long chain",
+        "a chain of references alone",
+        "deep anyOf",
+        "anyOf branches that double",
+    ],
 )
 def test_a_hostile_schema_fails_in_under_a_second(schema: dict[str, Any]) -> None:
     started = time.perf_counter()
@@ -419,6 +473,40 @@ def test_a_hostile_schema_fails_in_under_a_second(schema: dict[str, Any]) -> Non
         tool_from_schema(Recorder(), name="bomb", input_schema=schema)
 
     assert time.perf_counter() - started < 1.0
+
+
+def _deepest_doubling_the_budget_takes() -> int:
+    levels = 1
+    while True:
+        try:
+            tool_from_schema(Recorder(), name="wide", input_schema=_doubling_any_of(levels + 1))
+        except ValueError:
+            return levels
+        levels += 1
+
+
+def test_a_bad_call_against_many_alternatives_is_refused_quickly_and_briefly() -> None:
+    wide = tool_from_schema(Recorder(), name="wide", input_schema=_doubling_any_of(9))  # 512
+
+    started = time.perf_counter()
+    refused = ToolGroup(wide).execute(_call("wide", x="abc"))
+
+    assert time.perf_counter() - started < 0.1
+    assert refused.error is not None and refused.error.type == "validation_error"
+    assert refused.error.message == "Tool 'wide' argument 'x': expected integer, got str 'abc'"
+
+
+def test_past_the_alternatives_the_walk_takes_a_value_passes_as_it_came() -> None:
+    handler = Recorder()
+    levels = _deepest_doubling_the_budget_takes()
+    wide = tool_from_schema(handler, name="wide", input_schema=_doubling_any_of(levels))
+
+    started = time.perf_counter()
+    result = ToolGroup(wide).execute(_call("wide", x="abc"))
+
+    assert time.perf_counter() - started < 0.1
+    assert 2**levels > 1_000 and result.ok
+    assert handler.calls == [{"x": "abc"}]  # for the handler, or its server, to check
 
 
 # --- The schema reaches the providers as the tool keeps it -------------------------

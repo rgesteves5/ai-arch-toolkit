@@ -197,12 +197,13 @@ def window_kept(fn: Tool, case: Case | None, monkeypatch: pytest.MonkeyPatch) ->
     return int(second[0]["first"]) == int(first[0]["last"]) + step
 
 
-_DEAD_ENDS = ("end", "the rest cannot be read here")
-
-
-def once_kept(fn: Tool, case: Case | None, monkeypatch: pytest.MonkeyPatch) -> bool:
+def once_kept(
+    fn: Tool, case: Case | None, monkeypatch: pytest.MonkeyPatch, narrow: str = ""
+) -> bool:
     """The output that does not fit ends with the window's footer: what was shown, the size, and
-    how to narrow the output, where other tools name the call that reads on."""
+    how to narrow the output, in the words the tool declares (``narrow``, else its ``ONCE``
+    entry's), where other tools name the call that reads on. No next call, not even a malformed
+    one, and no dead end in other words."""
     if case is None:
         return False
     found = _window(_run(fn, case, monkeypatch))
@@ -210,11 +211,13 @@ def once_kept(fn: Tool, case: Case | None, monkeypatch: pytest.MonkeyPatch) -> b
         return False
     footer = found[0]
     onward = footer["onward"]
+    words = narrow or ONCE[fn.__name__].narrow
     return (
         footer["unit"] == "chars"
         and footer["total"] is not None
-        and _next_call(onward) is None
-        and onward not in _DEAD_ENDS
+        and int(footer["last"]) < int(footer["total"])
+        and not onward.startswith("next")
+        and words in onward
     )
 
 
@@ -551,6 +554,26 @@ def dead_end(code: str = "") -> str:
 
 
 @tool(capability="compute")
+def misnamed(code: str = "") -> str:
+    """Run something, and name a next call that is not one.
+
+    Args:
+        code: Ignored.
+    """
+    return _start_of_output("next: run it again printing less").text()
+
+
+@tool(capability="compute")
+def reworded(code: str = "") -> str:
+    """Run something, and say in other words that the rest is out of reach.
+
+    Args:
+        code: Ignored.
+    """
+    return _start_of_output("the rest cannot be read").text()
+
+
+@tool(capability="compute")
 def silent(max_results: int = 10) -> str:
     """List some items.
 
@@ -673,11 +696,15 @@ class TestTheChecks:
     def test_an_output_that_says_its_size_and_how_to_narrow_it_is_kept_once(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        assert once_kept(narrowed, Case(args={}), monkeypatch)
-        assert not once_kept(dead_end, Case(args={}), monkeypatch)  # no way to the rest
-        assert not once_kept(windowed, Case(args={}), monkeypatch)  # it names a next call
-        assert not once_kept(silent, Case(args={}), monkeypatch)
-        assert not once_kept(narrowed, None, monkeypatch)
+        words = "printing less"
+        assert once_kept(narrowed, Case(args={}), monkeypatch, words)
+        assert not once_kept(dead_end, Case(args={}), monkeypatch, words)  # no way to the rest
+        assert not once_kept(reworded, Case(args={}), monkeypatch, words)  # nor in other words
+        assert not once_kept(windowed, Case(args={}), monkeypatch, words)  # it names a next call
+        assert not once_kept(misnamed, Case(args={}), monkeypatch, words)  # a malformed one too
+        assert not once_kept(narrowed, Case(args={}), monkeypatch, "| grep")  # not its words
+        assert not once_kept(silent, Case(args={}), monkeypatch, words)
+        assert not once_kept(narrowed, None, monkeypatch, words)
 
     def test_limits_in_the_signature_are_kept(self) -> None:
         assert limits_kept(bounded, {})

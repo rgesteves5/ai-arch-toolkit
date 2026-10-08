@@ -122,13 +122,15 @@ class TestGdeltNewsSearch:
 
         text = _text(gdelt_news_search("climate", max_results=50, offset=240))
 
+        # The page of GDELT's first results is _first_results' (T08b), the cap said at its end.
         assert _called_params(mock_urlopen)["maxrecords"] == ["250"]
-        assert text.splitlines()[1:3] == [
-            "GDELT lists at most 250 articles for a query: narrow the timespan or the query, or "
-            "change the sort, to see others.",
-            "241. Story 241",
-        ]
-        assert text.endswith("[results 241-250 | end]")
+        assert text.splitlines()[1] == "241. Story 241"
+        assert text.endswith(
+            "   https://news.example/250\n"
+            "(the source returns no more than 250 results; narrow the timespan or the query, or "
+            "change the sort, to see others)\n"
+            "[results 241-250 | end]"
+        )
 
     @patch(HTTP_OPEN)
     def test_zero_results_say_so_with_the_query(self, mock_urlopen):

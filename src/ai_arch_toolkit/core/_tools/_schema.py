@@ -182,8 +182,13 @@ _LOCAL_DEFINITION = "#/$defs/"
 # Inlining can multiply a schema: a definition that refers twice to the next one doubles at each
 # level (1.9 KB with 18 such levels became 17.5 MB in 1.4 s). A schema that arrives at run time,
 # from an MCP server, must fail fast instead. The size is in about one unit per character of
-# JSON; the depth matches the toolkit's other loaded data (D59).
-_INLINE_SIZE_LIMIT = 1_000_000
+# JSON. Inlined, a schema may take 100,000: some 25,000 tokens in every request that offers the
+# tool, sixty times the largest schema among the toolkit's 123 tools (1,688 characters on
+# 2026-10-08), and more than a model can use for one tool. What follows stays cheap too: the
+# inlining takes milliseconds, and so does refusing a malformed call (the validator bounds its own
+# walk, ``_validation._ALTERNATIVES_LIMIT``). The depth matches the toolkit's other loaded data
+# (D59); a reference followed counts as a level, so a chain of references alone stops there too.
+_INLINE_SIZE_LIMIT = 100_000
 _SCHEMA_DEPTH_LIMIT = 100
 
 
@@ -197,9 +202,10 @@ def _inline_local_refs(schema: dict[str, Any]) -> dict[str, object]:
     table, which :func:`infer_schema` hoists to the tool's root.
 
     Raises:
-        ValueError: The inlined schema would take more than about 1,000,000 characters of JSON
-            or nest deeper than 100 levels. The walk stops there, so a hostile schema fails in
-            milliseconds.
+        ValueError: The inlined schema would take more than about 100,000 characters of JSON
+            or nest deeper than 100 levels (a reference followed counts as one), or a reference
+            names a definition that is not an object schema. The walk stops there, so a hostile
+            schema fails in milliseconds.
     """
     definitions = schema.get("$defs")
     if not isinstance(definitions, dict):
@@ -230,7 +236,7 @@ class _Inlining:
         name = self._target(node, expanding)
         if name is None:
             return {key: self.resolve(value, expanding, depth + 1) for key, value in node.items()}
-        target = self.resolve(self._definitions[name], expanding | {name}, depth)
+        target = self.resolve(self._definitions[name], expanding | {name}, depth + 1)
         siblings = {
             key: self.resolve(value, expanding, depth + 1)
             for key, value in node.items()
@@ -239,12 +245,24 @@ class _Inlining:
         return {**target, **siblings}  # a field's description sits next to its $ref
 
     def _target(self, node: dict[str, Any], expanding: frozenset[str]) -> str | None:
-        """The definition ``node`` refers to, when it is one to inline."""
+        """The definition ``node`` refers to, when it is one to inline.
+
+        Raises:
+            ValueError: The definition is not an object schema (``true``, a list), which
+                cannot take the reference's sibling keywords.
+        """
         ref = node.get("$ref")
         if not isinstance(ref, str) or not ref.startswith(_LOCAL_DEFINITION):
             return None
         name = ref.removeprefix(_LOCAL_DEFINITION)
-        return name if name in self._definitions and name not in expanding else None
+        if name not in self._definitions or name in expanding:
+            return None
+        if not isinstance(self._definitions[name], dict):
+            raise ValueError(
+                f"the schema refers to {ref!r}, whose definition is not an object schema: "
+                f"{type(self._definitions[name]).__name__}"
+            )
+        return name
 
     def _spend(self, node: object, depth: int) -> None:
         self._left -= _own_size(node)
@@ -256,7 +274,7 @@ class _Inlining:
         if depth > _SCHEMA_DEPTH_LIMIT:
             raise ValueError(
                 f"the schema would nest deeper than {_SCHEMA_DEPTH_LIMIT} levels once its $ref "
-                "references are inlined"
+                "references are inlined (a reference followed counts as one)"
             )
 
 

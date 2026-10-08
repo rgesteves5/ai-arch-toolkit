@@ -15,7 +15,7 @@ from typing import Annotated, Any
 from ai_arch_toolkit.core import Range, ToolResult, tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._http import Api, Reply
-from ai_arch_toolkit.toolkit.tools._numbers import plain_number
+from ai_arch_toolkit.toolkit.tools._values import plain
 from ai_arch_toolkit.toolkit.tools._window import list_window
 
 
@@ -48,6 +48,9 @@ _API = Api(
 _CODE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,120}$")
 _TEXT_RE = re.compile(r"^[\w\s,.'()/%:+-]{1,180}$", re.UNICODE)
 _YEAR_RE = re.compile(r"^\d{4}$")
+# A row's place (SpatialDim): a country's ISO3 code, a region (SEAR), the globe (GLOBAL), a World
+# Bank income group (WB_LMI); the longest is not documented, so the bound is generous.
+_PLACE_RE = re.compile(r"^[A-Za-z0-9_]{2,40}$")
 _TEXT_HINT = "use 1-180 letters, digits, spaces and ,.'()/%:+-"
 # The dimensions a row may carry besides place and time, each with its type.
 _DIMENSIONS = (("Dim1Type", "Dim1"), ("Dim2Type", "Dim2"), ("Dim3Type", "Dim3"))
@@ -119,7 +122,8 @@ def who_series(
 
     Args:
         indicator_code: WHO GHO indicator code, e.g. "WHOSIS_000001".
-        country: ISO3 country code to keep, e.g. "PRT".
+        country: Place code to keep, as the rows show it (their SpatialDim): a country's
+            ISO3 code such as "PRT", a region such as "SEAR", or "GLOBAL".
         from_year: First year, as YYYY.
         to_year: Last year, as YYYY.
         dim1: First-dimension code to keep, e.g. a sex or age code such as "SEX_MLE".
@@ -166,8 +170,8 @@ def _no_indicator(code: str) -> str:
 def _check_series(country: str, from_year: str, to_year: str, dim1: str) -> None:
     """Raises ``ToolFailure`` (validation_error) for the first invalid series filter."""
     problem = ""
-    if country and not re.fullmatch(r"^[A-Za-z]{3}$", country.strip()):
-        problem = f"invalid country {country!r}; use an ISO3 code such as PRT"
+    if country and not _PLACE_RE.fullmatch(country.strip()):
+        problem = f"invalid country {country!r}; use a place code such as PRT, SEAR or GLOBAL"
     elif from_year and not _YEAR_RE.fullmatch(from_year.strip()):
         problem = f"invalid from_year {from_year!r}; use YYYY"
     elif to_year and not _YEAR_RE.fullmatch(to_year.strip()):
@@ -292,8 +296,8 @@ def _value(row: dict[str, Any]) -> str:
         return _string(row.get("Value")) or "no value"
     low, high = row.get("Low"), row.get("High")
     if isinstance(low, int | float) and isinstance(high, int | float):
-        return f"{plain_number(number)} ({plain_number(low)} to {plain_number(high)})"
-    return plain_number(number)
+        return f"{plain(number)} ({plain(low)} to {plain(high)})"
+    return plain(number)
 
 
 def _values(data: dict[str, Any]) -> list[dict[str, Any]]:

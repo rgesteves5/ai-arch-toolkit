@@ -161,6 +161,16 @@ class TestWhoSeries:
         )
         assert "SpatialDim eq 'PRT'" in _params(mock_urlopen)["$filter"][0]
 
+    @pytest.mark.parametrize("place", ["SEAR", "GLOBAL", "wb_lmi", "EUR"])
+    @patch(HTTP_OPEN)
+    def test_every_place_code_a_row_shows_is_a_filter(self, mock_urlopen, place):
+        # Rows show regions, the globe and income groups (SpatialDim); only ISO3 was taken.
+        mock_urlopen.return_value = respond({"value": [_ROW]})
+
+        who_series("WHOSIS_000001", country=place)
+
+        assert _params(mock_urlopen)["$filter"] == [f"SpatialDim eq '{place.upper()}'"]
+
     @patch(HTTP_OPEN)
     def test_a_row_without_a_number_keeps_the_displayed_value(self, mock_urlopen):
         row = {"SpatialDimType": "REGION", "SpatialDim": "EUR", "TimeDim": 2019, "Value": "<0.1"}
@@ -189,7 +199,8 @@ class TestWhoSeries:
     @pytest.mark.parametrize(
         ("call", "words"),
         [
-            (lambda: who_series("WHOSIS_000001", country="PT"), "invalid country 'PT'"),
+            (lambda: who_series("WHOSIS_000001", country="P'T"), 'invalid country "P\'T"'),
+            (lambda: who_series("WHOSIS_000001", country="X"), "use a place code"),
             (lambda: who_series("WHOSIS_000001", from_year="20"), "invalid from_year '20'"),
             (
                 lambda: who_series("WHOSIS_000001", from_year="2020", to_year="2010"),

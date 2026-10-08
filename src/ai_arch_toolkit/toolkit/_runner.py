@@ -37,7 +37,8 @@ def _reject_handler_with_group(
 
 
 def _require_known_tools(response: Response, tools: list[Callable[..., Any]] | ToolGroup) -> None:
-    """Raise ``KeyError`` for an unknown tool before any call in the response runs.
+    """Raise ``KeyError`` for an unknown tool, and ``ValueError`` for two tools with one name,
+    before any call in the response runs.
 
     Checked up front so a response naming an unknown tool never half-executes: an earlier call's
     side effects would otherwise happen and its ``tool_result`` be lost with the exception.
@@ -76,7 +77,8 @@ async def run_tools(
 
     Raises:
         KeyError: A tool call names a tool that ``tools`` does not contain; no call runs.
-        ValueError: ``approval_handler`` is passed together with a ToolGroup.
+        ValueError: ``approval_handler`` is passed together with a ToolGroup, or two different
+            tools in ``tools`` share a name (D62); no call runs.
     """
     _reject_handler_with_group(tools, approval_handler)
     if not response.has_tool_calls:
@@ -119,7 +121,8 @@ def run_tools_sync(
 
     Raises:
         KeyError: A tool call names a tool that ``tools`` does not contain; no call runs.
-        ValueError: ``approval_handler`` is passed together with a ToolGroup.
+        ValueError: ``approval_handler`` is passed together with a ToolGroup, or two different
+            tools in ``tools`` share a name (D62); no call runs.
     """
     _reject_handler_with_group(tools, approval_handler)
     if not response.has_tool_calls:

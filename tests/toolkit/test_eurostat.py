@@ -233,8 +233,24 @@ class TestDataset:
         assert _text(first).splitlines()[1] == "geo: Geopolitical entity (70 codes)"
         assert _text(first).endswith('[results 1-60 of 71 | next: offset=60, dimension="geo"]')
         assert first.metadata["window"]["next_call"] == {"offset": 60, "dimension": "geo"}
-        assert second.splitlines()[1] == "  G59: Region 59"
+        # The codes past the first window name their dimension, whose line is in the first.
+        assert second.splitlines()[:2] == [
+            "Eurostat dataset TPS00001: Population on 1 January, codes (geo: Geopolitical "
+            "entity, continued):",
+            "  G59: Region 59",
+        ]
         assert second.endswith("[results 61-71 of 71 | end]")
+
+    @patch(HTTP_OPEN)
+    def test_a_window_that_starts_on_a_dimensions_line_needs_no_name(self, mock_urlopen):
+        mock_urlopen.return_value = respond(_latest())
+
+        text = _text(eurostat_dataset("TPS00001", offset=2))
+
+        assert text.splitlines()[:2] == [
+            "Eurostat dataset TPS00001: Population on 1 January, codes:",
+            "unit: Unit of measure (2 codes)",
+        ]
 
     @patch(HTTP_OPEN)
     def test_a_dimension_the_dataset_does_not_have_names_those_it_has(self, mock_urlopen):
@@ -268,8 +284,51 @@ class TestSeries:
             "5. Thousand (THS) | Portugal (PT) | 2023: 10467.366",
             "6. Thousand (THS) | Portugal (PT) | 2024: 10639.726",
             "7. Thousand (THS) | Spain (ES) | 2023: 48085.361",
-            "8. Thousand (THS) | Spain (ES) | 2024: 15000000",
+            "8. Thousand (THS) | Spain (ES) | 2024: 15000000.0",  # a float keeps its point
         ]
+
+    @patch(HTTP_OPEN)
+    def test_flags_come_with_the_labels_the_answer_brings(self, mock_urlopen):
+        # Eurostat's JSON-stat names its flags in extension.status.label.
+        extension = {
+            **_DATASET["extension"],
+            "status": {"label": {"p": "provisional", "e": "estimated"}},
+        }
+        status = {"0": "e", "1": "p", "2": "ep", "3": "x"}
+        mock_urlopen.return_value = respond(
+            {**_one_geo(), "status": status, "extension": extension}
+        )
+
+        text = _text(eurostat_series("TPS00001", filters="geo=PT,unit=NR"))
+
+        assert text.splitlines()[-2:] == [
+            "1. 2023: 10467366 (flag e: estimated)",
+            "2. 2024: 10639726 (flag p: provisional)",
+        ]
+
+    @patch(HTTP_OPEN)
+    def test_combined_and_unknown_flags(self, mock_urlopen):
+        extension = {"status": {"label": {"p": "provisional", "e": "estimated"}}}
+        status = {"0": "ep", "1": "x"}
+        mock_urlopen.return_value = respond(
+            {**_one_geo(), "status": status, "extension": extension}
+        )
+
+        text = _text(eurostat_series("TPS00001", filters="geo=PT,unit=NR"))
+
+        assert text.splitlines()[-2:] == [
+            "1. 2023: 10467366 (flag ep: estimated, provisional)",
+            "2. 2024: 10639726 (flag x)",
+        ]
+
+    @patch(HTTP_OPEN)
+    def test_geo_codes_are_upper_case(self, mock_urlopen):
+        # eurostat_compare upper-cased them; Eurostat's geo codes are (PT, EU27_2020).
+        mock_urlopen.return_value = respond(_DATASET)
+
+        eurostat_series("TPS00001", filters="geo=pt+es")
+
+        assert _params(mock_urlopen)["geo"] == ["PT", "ES"]
 
     @patch(HTTP_OPEN)
     def test_several_codes_go_as_repeated_parameters(self, mock_urlopen):
@@ -349,6 +408,8 @@ class TestSeries:
         (lambda: eurostat_dataset_search(""), "invalid query"),
         (lambda: eurostat_series("TPS00001", filters="geo"), "use key=value"),
         (lambda: eurostat_series("TPS00001", filters="geo=P T"), "invalid filter value"),
+        (lambda: eurostat_series("TPS00001", filters="format=TSV"), "the tool sets format"),
+        (lambda: eurostat_series("TPS00001", filters="geo=PT,Lang=fr"), "the tool sets format"),
     ],
 )
 @patch(HTTP_OPEN)
@@ -387,9 +448,23 @@ def test_a_dataset_eurostat_does_not_have_is_not_found(mock_urlopen, call):
 
     assert failure.error.type == "not_found"
     assert not failure.error.retryable
-    assert str(failure) == (
+    assert str(failure).startswith(
         "Eurostat has no dataset NOT_A_DATASET to disseminate; find its ID with "
         "eurostat_dataset_search"
+    )
+
+
+@patch(HTTP_OPEN)
+def test_a_404_with_filters_names_the_dataset_and_the_filters(mock_urlopen):
+    # The guide reads a 404 as the dataset; the answer does not say which of the two it was.
+    mock_urlopen.side_effect = http_error(404, "Not Found", body=_NOT_DISSEMINATED)
+
+    failure = _failure(lambda: eurostat_series("NOT_A_DATASET", filters="geo=XX"))
+
+    assert str(failure) == (
+        "Eurostat has no dataset NOT_A_DATASET to disseminate; find its ID with "
+        "eurostat_dataset_search (a 404 does not say whether the filters geo=XX were at fault: "
+        "eurostat_dataset lists the codes)"
     )
 
 
@@ -406,8 +481,8 @@ def test_a_query_that_matches_no_data_is_not_found(mock_urlopen):
 
     assert failure.error.type == "not_found"
     assert str(failure) == (
-        "Eurostat has no data for this query (No results found); other codes or periods may "
-        "have some: eurostat_dataset lists the codes"
+        "Eurostat has no data of TPS00001 for geo=PT, time=1960 (No results found); other codes "
+        "or periods may have some: eurostat_dataset lists the codes"
     )
 
 

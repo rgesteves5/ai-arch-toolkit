@@ -113,15 +113,17 @@ docstrings/comments, and when to use classes vs functions — see
 4. Declare the tool's `capability` (`network`, `compute`, …); the invariants test compares it
    with what the tool reaches. Set `max_output_chars`/`timeout_s` on `@tool` when the defaults
    do not fit. Declare numeric limits in the signature, `Annotated[int, Range(1, 25)]`, instead of
-   clamping inside the tool (the existing tools, the templates included, clamp).
+   clamping inside the tool.
 5. **Never cut without a way on.** Return part of something longer through
    `toolkit/tools/_window.py` — `text_window` (a document by characters, ending on a line),
    `find_window` (the passages around a term), `list_window` (a page the source cut) or
    `page_window` (a page of a list the tool holds) — and return `window.result()`, with a
    `heading=` that says in the tool's words what was read and where. Its footer
    tells the model what was shown, the total, and the exact call that reads on
-   (`[chars 0-4000 of 34651 | next: offset=4000]`), and `metadata["window"]` tells the app. The
-   wiki family uses it; the tools not yet migrated mark a cut in their own words.
+   (`[chars 0-4000 of 34651 | next: offset=4000]`), and `metadata["window"]` tells the app. Where
+   no call can read on (a command's output, results past how deep the source pages), give the
+   window a `rest=` that says how to narrow instead. Every tool uses it, and the contract test
+   holds each one to it.
 6. **Fail with a type, never with a string.** When the tool cannot answer, raise
    `ToolFailure(type, message)` from `ai_arch_toolkit.core`: `not_found` (what was asked for
    does not exist), `validation_error` (an argument is wrong), `upstream` (the source failed or

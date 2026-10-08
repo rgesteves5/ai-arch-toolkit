@@ -20,8 +20,11 @@ from ai_arch_toolkit.toolkit.tools._window import Window, find_window, text_wind
 _DEFAULT_MAX_CHARS = 8000
 _MAX_CHARS = 100_000
 # UTF-8 needs at most four bytes a character: reading four bytes a character reaches as far as a
-# window asks.
+# window asks, in most pages.
 _BYTES_PER_CHAR = 4
+# A read that falls short (a BOM, a stateful encoding's escapes, characters of more than four
+# bytes) is made again, at least twice as far and at least one socket read (the door's 64 KiB).
+_REREAD_MIN_BYTES = 64 * 1024
 # The most of a page http_get reads, its offset as deep as it goes (the door's default body bound).
 _READ_BYTES = 10_000_000
 # A page's text is a fraction of its HTML: scrape_text reads this much HTML, whatever it returns.
@@ -73,6 +76,10 @@ def http_get(
 ) -> ToolResult:
     """Fetch a URL and return the response text as it came.
 
+    It reads only as much of the page as the window needs, four bytes a character; a page whose
+    characters take more (a byte-order mark, a stateful encoding such as ISO-2022-JP) is fetched
+    again, further, until the window is whole.
+
     Args:
         url: The URL to fetch (http:// or https://). Redirects stay on its host.
         max_chars: How many characters to return.
@@ -90,6 +97,10 @@ def http_get(
     budget = min(wanted, _READ_BYTES)
     page = fetch_page(url, max_bytes=budget)
     text = _read_text(page)
+    while not page.complete and len(text) < offset + max_chars and budget < _READ_BYTES:
+        budget = min(max(budget * 2, _REREAD_MIN_BYTES), _READ_BYTES)
+        page = fetch_page(url, max_bytes=budget)
+        text = _read_text(page)
     if page.complete and not text.strip():
         return ToolResult.success(f"The answer from {url} has no text.")
     at_most = not page.complete and budget == _READ_BYTES  # nothing past this read is reachable
@@ -127,12 +138,13 @@ def scrape_text(
             upstream or rate_limited when the request fails.
     """
     page = fetch_page(url, max_bytes=_SCRAPE_MAX_BYTES)
+    html_text = _read_text(page)
     extractor = _HTMLTextExtractor()
-    extractor.feed(_read_text(page))
+    extractor.feed(html_text)
     text = extractor.get_text()
     note = (
         f"(only the first {_SCRAPE_MAX_BYTES} bytes of {url}'s HTML were read: its text stops "
-        "there)"
+        f"there; http_get with offset={len(html_text)} reads the HTML on, or find= searches it)"
     )
     if not text:
         cut = "" if page.complete else f" {note}"
@@ -154,12 +166,16 @@ def _window(text: str, *, whole: bool, onward: bool, term: str, offset: int, lim
 
     ``whole`` is ``False`` when the page goes on past ``text``: its length is then unknown, and
     when the window reaches the end of ``text`` the next call reads further only if more can be
-    fetched (``onward``).
+    fetched (``onward``). An offset past ``text`` then shows nothing there, at that offset.
     """
     if term:
         return find_window(text, term, offset=offset, limit=limit)
     window = text_window(text, offset=offset, limit=limit)
-    if whole:
-        return window
-    more = window.last < len(text) or onward
-    return replace(window, total=None, next_call={"offset": window.last} if more else None)
+    if not whole:
+        if offset > len(text):  # past all that can be read: nothing there, and no way on
+            return replace(window, first=offset, last=offset, total=None, next_call=None)
+        more = window.last < len(text) or onward
+        window = replace(window, total=None, next_call={"offset": window.last} if more else None)
+    # Every footer reads on: a short read is made again further (``http_get``) until it does.
+    assert window.next_call is None or window.last > offset, "a footer that does not read on"
+    return window

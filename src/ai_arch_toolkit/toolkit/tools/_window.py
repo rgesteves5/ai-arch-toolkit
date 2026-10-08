@@ -42,7 +42,10 @@ class Window:
             nothing is left.
         label: The term a search looked for.
         rest: What the footer says in place of a next call when no call can read the rest (the
-            output of a command, which reading on would run again): how to narrow it instead.
+            output of a command, which reading on would run again; results past how deep the
+            source pages): how to narrow it instead. With a ``total``, it shows only while some
+            are left; without one, whenever there is no next call, so set it only when the
+            source has more.
     """
 
     body: str
@@ -61,7 +64,7 @@ class Window:
         if not _partial(self):
             return ""
         if self.last < self.first:
-            return f"[no {self.unit} from {self.first}{_of(self.total)} | end]"
+            return f"[no {self.unit} from {self.first}{_of(self.total)} | {_onward(self)}]"
         return f"[{self.unit} {self.first}-{self.last}{_of(self.total)} | {_onward(self)}]"
 
     def text(self, heading: str = "") -> str:
@@ -259,7 +262,9 @@ def _onward(window: Window) -> str:
     if window.next_call is not None:
         arguments = (f"{name}={_json(value)}" for name, value in window.next_call.items())
         return "next: " + ", ".join(arguments)
-    if window.total is not None and window.last < window.total:
+    if window.total is None:
+        return window.rest or "end"
+    if window.last < window.total:
         return window.rest or "the rest cannot be read here"
     return "end"
 

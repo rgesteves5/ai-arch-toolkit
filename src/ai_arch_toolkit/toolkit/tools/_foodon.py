@@ -65,7 +65,9 @@ def foodon_search(
         msg = "query cannot be empty; pass a food concept, e.g. 'apple'."
         raise ToolFailure("validation_error", msg)
     params = {"q": query, "ontology": "foodon", "rows": str(max_results), "start": str(start)}
-    return _API.get_json(params=params, parse=lambda data: _search_answer(data, query, start))
+    return _API.get_json(
+        params=params, parse=lambda data: _search_answer(data, query, start, max_results)
+    )
 
 
 @tool(capability="network")
@@ -88,13 +90,18 @@ def foodon_term(term_id: str) -> str:
     return _API.get_json(params=params, parse=lambda data: _term_text(data, wanted))
 
 
-def _search_answer(data: dict[str, Any], query: str, start: int) -> ToolResult:
+def _search_answer(data: dict[str, Any], query: str, start: int, rows: int) -> ToolResult:
     terms = _terms(data)
+    found = _dict(data, "response").get("numFound")
+    total = found if isinstance(found, int) and not isinstance(found, bool) else None
+    if not terms and total and start >= total:
+        return ToolResult.success(
+            f"start={start} is past the end: {total} FoodOn terms match {query!r}; the last page "
+            f"is start={(total - 1) // rows * rows}."
+        )
     if not terms:
         later = f" after the first {start}" if start else ""
         return ToolResult.success(f"No FoodOn terms match {query!r}{later}.")
-    found = _dict(data, "response").get("numFound")
-    total = found if isinstance(found, int) and not isinstance(found, bool) else None
     shown = start + len(terms)
     next_call = {"start": shown} if total is not None and shown < total else None
     entries = [_entry(number, term) for number, term in enumerate(terms, start=start + 1)]

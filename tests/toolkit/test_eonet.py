@@ -10,6 +10,7 @@ import pytest
 from ai_arch_toolkit.core import ToolCall, ToolGroup, ToolResult
 from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._eonet import eonet_categories, eonet_event, eonet_events
+from ai_arch_toolkit.toolkit.tools._values import plain
 from tests.toolkit import geo_answers
 from tests.toolkit.http_fakes import HTTP_OPEN, http_error, respond
 
@@ -54,7 +55,8 @@ class TestEonet:
             "NASA EONET events for status=open, category=severeStorms, days=7:\n"
             "1. Tropical Storm 1 | id: EONET_1 | Severe Storms (severeStorms) | open\n"
             "   track: 2 points, 2026-09-01T00:00:00Z to 2026-09-02T00:00:00Z; latest at "
-            "latitude 16.0, longitude -41.0, magnitude 36.0 kts (eonet_event reads the track)"
+            f"latitude {plain(16.0)}, longitude {plain(-41.0)}, magnitude {plain(36.0)} kts "
+            "(eonet_event reads the track)"
         )
         params = _params(mock_urlopen)
         assert params["category"] == ["severeStorms"]
@@ -92,6 +94,21 @@ class TestEonet:
         assert (params["start"], params["end"]) == (["2026-09-01"], ["2026-09-30"])
         assert "days" not in params
 
+    @patch(HTTP_OPEN)
+    def test_several_categories_and_sources_go_as_eonet_takes_them(self, mock_urlopen):
+        # EONET documents comma-separated lists for both, read as "any of them"
+        # (https://eonet.gsfc.nasa.gov/docs/v3); the tool refused the comma.
+        mock_urlopen.return_value = respond({"events": []})
+
+        eonet_events(category="wildfires,volcanoes", source="InciWeb,EO")
+
+        params = _params(mock_urlopen)
+        assert (params["category"], params["source"]) == (["wildfires,volcanoes"], ["InciWeb,EO"])
+
+    def test_the_statuses_are_in_the_schema(self):
+        properties = eonet_events.__tool_definition__.schema.input_schema["properties"]
+        assert properties["status"]["enum"] == ["open", "closed", "all"]
+
     def test_the_365_days_are_in_the_schema(self):
         days = eonet_events.__tool_definition__.schema.input_schema["properties"]["days"]
         assert (days["minimum"], days["maximum"]) == (1, 365)
@@ -119,6 +136,8 @@ class TestEonet:
             (lambda: eonet_events(status="bad"), "status must"),
             (lambda: eonet_events(start_date="2026"), "invalid start_date"),
             (lambda: eonet_events(bbox="1,2,3"), "bbox must"),
+            (lambda: eonet_events(category="wildfires,"), "invalid category"),
+            (lambda: eonet_events(source="InciWeb,,EO"), "invalid source"),
             (lambda: eonet_event("bad/id"), "invalid event_id"),
         ):
             with pytest.raises(ToolFailure) as caught:
@@ -154,11 +173,13 @@ class TestEonetEvent:
             "  Sources: JTWC: https://www.metoc.navy.mil/jtwc/products/al012026.tcw; NOAA_NHC: "
             "https://www.nhc.noaa.gov/",
             "  Track (8 points; date | position | magnitude):",
-            "2026-09-01T00:00:00Z | latitude 15.0, longitude -40.0, magnitude 35.0 kts",
+            f"2026-09-01T00:00:00Z | latitude {plain(15.0)}, longitude {plain(-40.0)}, "
+            f"magnitude {plain(35.0)} kts",
         ]
         assert _text(first).endswith("[results 1-5 of 8 | next: offset=5]")
         assert _text(rest).splitlines()[-2:] == [
-            "2026-09-08T00:00:00Z | latitude 22.0, longitude -47.0, magnitude 42.0 kts",
+            f"2026-09-08T00:00:00Z | latitude {plain(22.0)}, longitude {plain(-47.0)}, "
+            f"magnitude {plain(42.0)} kts",
             "[results 6-8 of 8 | end]",
         ]
 
@@ -179,7 +200,8 @@ class TestEonetEvent:
 
         assert "  Status: closed 2026-09-05T00:00:00Z" in text
         assert text.endswith(
-            "2026-09-01T00:00:00Z | area latitude 38.0 to 38.4, longitude -120.5 to -120.0"
+            f"2026-09-01T00:00:00Z | area latitude {plain(38.0)} to 38.4, longitude -120.5 to "
+            f"{plain(-120.0)}"
         )
 
     @patch(HTTP_OPEN)

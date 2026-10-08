@@ -346,6 +346,30 @@ class TestToolsPlaceholder:
         assert "Look up a fact" in planner_system
         assert "{tools}" not in planner_system
 
+    @pytest.mark.parametrize(
+        ("strategy", "plan"),
+        [("plan_execute", "1. Do the thing"), ("llm_compiler", "$1. Do the thing [deps: none]")],
+    )
+    async def test_an_empty_phase_group_renders_none(self, strategy: str, plan: str) -> None:
+        # the strategies whose default planner prompt carries the token
+        def lookup(query: str) -> str:
+            """Look up a fact."""
+            return "fact"
+
+        planner = _llm(plan)
+        spec = ReasoningSpec(strategy=strategy, knobs={"max_replans": 0})
+        await _run(
+            spec,
+            _llm("done", "final"),
+            ToolGroup(lookup),
+            planner_llm=planner,
+            executor_tools=ToolGroup(),
+        )
+
+        planner_system = _calls(planner)[0].system
+        assert "Available tools:\n(none)" in planner_system
+        assert "lookup" not in planner_system
+
 
 class TestGlobalLlmKwargs:
     async def test_llm_kwargs_reach_every_phase(self) -> None:

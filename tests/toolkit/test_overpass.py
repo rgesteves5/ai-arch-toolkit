@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from ai_arch_toolkit.core import ToolResult
+from ai_arch_toolkit.core import ToolCall, ToolGroup, ToolResult
 from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._overpass import overpass_pois, overpass_query
 from tests.toolkit import geo_answers
@@ -141,6 +141,84 @@ class TestOverpass:
                 call(*args)
             assert caught.value.error.type == "validation_error"
             assert words in caught.value.error.message
+        mock_urlopen.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("query", "words"),
+        [
+            # No out statement: Overpass answers no elements, which read as "nothing matches".
+            ("[out:json];node(1);", "no out statement"),
+            ("[out:json];node[name=Shout](1);", "no out statement"),
+            # Another format: the answer could not be parsed, an upstream failure to retry.
+            ("[out:xml];node(1);out;", "start it with [out:json]"),
+            ("[out:csv(name)];node(1);out;", "start it with [out:json]"),
+            ("node(1);out;", "start it with [out:json]"),
+        ],
+    )
+    @patch(HTTP_OPEN)
+    def test_a_query_the_tool_cannot_read_is_refused_before_any_request(
+        self, mock_urlopen, query, words
+    ):
+        mock_urlopen.side_effect = AssertionError("no request")
+
+        failure = _failure(overpass_query, query)
+
+        assert failure.error.type == "validation_error"
+        assert words in failure.error.message
+        assert "out;" in failure.error.message  # the example to follow
+        mock_urlopen.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            '[out:json][timeout:25];node["amenity"="cafe"](38.7,-9.2,38.8,-9.1);out;',
+            "[out:json];(node(1);way(2););out center tags;",
+            "[ out : json ];node(1)->.a;.a out body;",
+            "[out:json];\nnode(1);\nout\n  count;",
+            "[out:json];foreach(node(1)){out;}",
+        ],
+    )
+    @patch(HTTP_OPEN)
+    def test_every_form_of_the_out_statement_is_taken(self, mock_urlopen, query):
+        mock_urlopen.return_value = respond(_DATA)
+
+        assert "Cafe A | node/1" in _text(overpass_query(query))
+
+    @patch(HTTP_OPEN)
+    def test_coordinates_go_in_decimal_notation(self, mock_urlopen):
+        # str(0.00001) is "1e-05", which Overpass QL cannot parse.
+        mock_urlopen.side_effect = lambda *_: respond(_DATA)
+
+        around = overpass_pois("amenity", latitude=0.00001, longitude=-0.00002, radius_m=10)
+        box = overpass_pois("amenity", bbox="0.00001,-0.00002,0.00003,0.00004")
+
+        sent = [call.args[0].data.decode() for call in mock_urlopen.call_args_list]
+        assert "around%3A10%2C0.00001%2C-0.00002" in sent[0]
+        assert "%280.00001%2C-0.00002%2C0.00003%2C0.00004%29" in sent[1]
+        assert "e-0" not in _text(around) + _text(box)
+
+    def test_the_coordinates_are_bounded_in_the_schema(self):
+        properties = overpass_pois.__tool_definition__.schema.input_schema["properties"]
+        assert (properties["latitude"]["minimum"], properties["latitude"]["maximum"]) == (-90, 90)
+        assert (properties["longitude"]["minimum"], properties["longitude"]["maximum"]) == (
+            -180,
+            180,
+        )
+
+    @patch(HTTP_OPEN)
+    def test_coordinates_out_of_range_are_refused_by_the_executor(self, mock_urlopen):
+        mock_urlopen.side_effect = AssertionError("no request")
+
+        result = ToolGroup(overpass_pois).execute(
+            ToolCall(
+                id="c",
+                name="overpass_pois",
+                input={"tag_key": "amenity", "latitude": 91.0, "longitude": 0.0},
+            )
+        )
+
+        assert result.error is not None
+        assert result.error.type == "validation_error"
         mock_urlopen.assert_not_called()
 
     @patch(HTTP_OPEN)

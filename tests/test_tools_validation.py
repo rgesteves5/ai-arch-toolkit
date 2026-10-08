@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import enum
+import time
 from typing import Annotated, Any, Literal
 
 import pytest
@@ -604,3 +605,75 @@ async def test_nested_values_are_left_as_they_are() -> None:
     result = ToolGroup(nested).execute(_call("dynamic", filter={"n": "3"}))
 
     assert result.ok and result.value == "[('filter', {'n': '3'})]"
+
+
+# --- A branch keeps its parent's keywords; the walk and the refusal stay bounded ---
+
+
+@pytest.mark.parametrize("keyword", ["anyOf", "oneOf"])
+@pytest.mark.parametrize("mode", MODES)
+async def test_branches_without_a_type_keep_the_type_of_their_parameter(
+    keyword: str, mode: str
+) -> None:
+    @tool(
+        name="fetch", schema={"page": {keyword: [{"minimum": 1, "maximum": 9}, {"minimum": 99}]}}
+    )
+    def fetch(page: int) -> str:
+        """Fetch a page."""
+        return f"{type(page).__name__} {page!r}"
+
+    group = ToolGroup(fetch)
+
+    assert (await _execute(group, _call("fetch", page="5"), mode)).value == "int 5"
+    for wrong in ("abc", [1]):
+        refused = await _execute(group, _call("fetch", page=wrong), mode)
+        assert refused.error is not None and refused.error.type == "validation_error"
+        assert "argument 'page': expected integer, got" in refused.error.message
+
+
+@pytest.mark.parametrize("mode", MODES)
+async def test_a_titled_enum_coerces_to_the_type_of_its_parent(mode: str) -> None:
+    # MCP's titled enum: one oneOf branch per value, the type on the parent
+    titled = {"type": "integer", "oneOf": [{"const": 1, "title": "Low"}, {"const": 2}]}
+    group = ToolGroup(_dynamic({"level": titled}))
+
+    assert (await _execute(group, _call("dynamic", level="2"), mode)).value == "[('level', 2)]"
+    refused = await _execute(group, _call("dynamic", level="high"), mode)
+    assert refused.error is not None
+    assert "argument 'level': expected integer, got str 'high'" in refused.error.message
+
+
+async def test_null_through_kwargs_is_refused_where_the_type_of_the_branches_parent_is() -> None:
+    group = ToolGroup(
+        _dynamic({"label": {"type": "string", "oneOf": [{"minLength": 1}, {"maxLength": 0}]}})
+    )
+
+    refused = group.execute(_call("dynamic", label=None))
+
+    assert refused.error is not None
+    assert "argument 'label': expected string, got null" in refused.error.message
+    assert group.execute(_call("dynamic", label="Ada")).ok
+
+
+async def test_a_value_is_walked_against_a_bounded_number_of_alternatives() -> None:
+    # A type list on a parent of many branches multiplies them: 3,001 x 3,000 alternatives.
+    many = {"type": [f"t{i}" for i in range(3_000)] + ["integer"], "anyOf": [{}] * 3_000}
+    group = ToolGroup(_dynamic({"x": many}))
+
+    started = time.perf_counter()
+    result = group.execute(_call("dynamic", x="abc"))
+
+    assert time.perf_counter() - started < 0.5
+    assert result.ok and result.value == "[('x', 'abc')]"  # too many to walk: as it came
+
+
+async def test_a_refusal_stays_brief_however_large_the_schema() -> None:
+    values = [f"value-{i}" for i in range(5_000)]
+    group = ToolGroup(_dynamic({"pick": {"type": "string", "enum": values}}))
+
+    refused = group.execute(_call("dynamic", pick="nope"))
+
+    assert refused.error is not None and refused.error.type == "validation_error"
+    assert len(refused.error.message) < 1_100
+    assert "'value-0'" in refused.error.message
+    assert refused.error.message.endswith("got str 'nope'")

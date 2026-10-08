@@ -347,12 +347,26 @@ class TestOpenLibraryWork:
         assert failure.error.retryable
 
     @patch(HTTP_OPEN)
-    def test_a_failure_of_the_names_request_is_the_tools_failure(self, mock_urlopen):
+    def test_a_failure_of_the_names_request_keeps_the_keys_and_says_so(self, mock_urlopen):
+        # The work was read, but the author search's 503 failed the whole tool.
         mock_urlopen.side_effect = [respond(_WORK), http_error(503, "Unavailable")]
 
-        failure = _failure(open_library_work, "OL27448W")
+        text = _text(open_library_work("OL27448W"))
 
-        assert (failure.error.type, failure.error.retryable) == ("upstream", True)
+        assert (
+            "Authors: OL26320A (names not read: HTTP error 503: Unavailable; call again to read "
+            "them)\n"
+        ) in text
+        assert "Title: The Lord of the Rings" in text
+
+    @patch(HTTP_OPEN)
+    def test_a_names_failure_that_will_not_pass_does_not_ask_to_call_again(self, mock_urlopen):
+        mock_urlopen.side_effect = [respond(_ISBN), respond("<html>moved</html>")]
+
+        text = _text(open_library_isbn("9780140328721"))
+
+        assert "Authors: OL34184A (names not read: could not parse API response: " in text
+        assert "call again" not in text
 
 
 class TestOpenLibraryIsbn:

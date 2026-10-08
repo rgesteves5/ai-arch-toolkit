@@ -5,6 +5,8 @@ from __future__ import annotations
 import errno
 import io
 import itertools
+import os
+import tracemalloc
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -32,10 +34,16 @@ def _window(result: ToolResult) -> dict[str, Any]:
     return result.metadata["window"]
 
 
-def _hits(result: ToolResult) -> list[str]:
-    """The matching lines of a search, without its heading and footer."""
+def _hits(result: ToolResult, under: Path | None = None) -> list[str]:
+    """The matching lines of a search, without its heading and footer; with ``under``, each must
+    start with that folder (the search's ``directory``), which is taken off."""
     lines = _text(result).splitlines()[1:]
-    return [line for line in lines if not line.startswith("[results ")]
+    hits = [line for line in lines if not line.startswith("[results ")]
+    if under is None:
+        return hits
+    prefix = f"{under}{os.sep}"
+    assert all(hit.startswith(prefix) for hit in hits), hits
+    return [hit.removeprefix(prefix) for hit in hits]
 
 
 class _Recording:
@@ -271,7 +279,7 @@ class TestSearchFiles:
         source = tmp_path / "a.py"
         source.write_text("import os\n\n    def hello():\n        pass\n")
 
-        hits = _hits(search_files(str(tmp_path), "hello"))
+        hits = _hits(search_files(str(tmp_path), "hello"), tmp_path)
 
         assert hits == ["a.py:3:15: def hello():"]
         assert _text(read_file(str(source), offset=15)).startswith("def hello():\n")
@@ -282,9 +290,9 @@ class TestSearchFiles:
         first = search_files(str(tmp_path), "needle", max_results=3)
         last = search_files(str(tmp_path), "needle", max_results=3, offset=9)
 
-        assert _hits(first) == [f"hay.txt:{i + 1}:{9 * i}: needle {i}" for i in range(3)]
+        assert _hits(first, tmp_path) == [f"hay.txt:{i + 1}:{9 * i}: needle {i}" for i in range(3)]
         assert _text(first).endswith("\n[results 1-3 | next: offset=3]")
-        assert _hits(last) == ["hay.txt:10:81: needle 9"]
+        assert _hits(last, tmp_path) == ["hay.txt:10:81: needle 9"]
         assert _text(last).endswith("\n[results 10-10 of 10 | end]")
 
     def test_files_come_in_name_order_folder_by_folder(self, tmp_path):
@@ -292,7 +300,7 @@ class TestSearchFiles:
             (tmp_path / name).parent.mkdir(exist_ok=True)
             (tmp_path / name).write_text("needle\n")
 
-        hits = _hits(search_files(str(tmp_path), "needle"))
+        hits = _hits(search_files(str(tmp_path), "needle"), tmp_path)
 
         assert [hit.split(":")[0] for hit in hits] == ["a.txt", "b.txt", "A/d.txt", "sub/c.txt"]
 
@@ -300,7 +308,7 @@ class TestSearchFiles:
         filler = "".join(f"filler line {i}\n" for i in range(150_000))  # 2.5 million characters
         (tmp_path / "log.txt").write_text(filler + "the needle at the end\n")
 
-        hits = _hits(search_files(str(tmp_path), "needle"))
+        hits = _hits(search_files(str(tmp_path), "needle"), tmp_path)
 
         assert hits == [f"log.txt:150001:{len(filler)}: the needle at the end"]
 
@@ -309,7 +317,7 @@ class TestSearchFiles:
         source = tmp_path / "wide.txt"
         source.write_text("short\n" + line + "\n")
 
-        (hit,) = _hits(search_files(str(tmp_path), "needle"))
+        (hit,) = _hits(search_files(str(tmp_path), "needle"), tmp_path)
 
         place, _, rest = hit.partition(": ")
         offset = int(place.split(":")[2])
@@ -322,7 +330,7 @@ class TestSearchFiles:
         monkeypatch.setattr(_filesystem, "_PIECE", 8)
         (tmp_path / "a.txt").write_text("abcdenee" + "dle and more text after it\n")
 
-        (hit,) = _hits(search_files(str(tmp_path), "needle"))
+        (hit,) = _hits(search_files(str(tmp_path), "needle"), tmp_path)
 
         assert hit.startswith("a.txt:1:")
 
@@ -410,6 +418,7 @@ class TestBounds:
         failure = _failure(lambda: read_file("disk.txt"))
         assert failure.error.type == "upstream"
         assert "Input/output error" in str(failure)
+        assert str(failure).endswith("; try again, or pick another path.")
 
     @pytest.mark.parametrize("pattern", ["", "/etc/*"])
     def test_an_unusable_pattern_is_a_validation_error(self, tmp_path, pattern):
@@ -422,7 +431,9 @@ def test_search_skips_binary_files(tmp_path):
     (tmp_path / "blob.dat").write_bytes(b"\xff\xfe needle \x00")
     (tmp_path / "notes.txt").write_text("a needle here\n")
 
-    assert _hits(search_files(str(tmp_path), "needle")) == ["notes.txt:1:0: a needle here"]
+    assert _hits(search_files(str(tmp_path), "needle"), tmp_path) == [
+        "notes.txt:1:0: a needle here"
+    ]
 
 
 class TestLinksOutOfTheFolder:
@@ -442,19 +453,19 @@ class TestLinksOutOfTheFolder:
         root, outside = self._folders(tmp_path)
         (root / "link.txt").symlink_to(outside / "secret.txt")
 
-        assert _hits(search_files(str(root), "needle")) == ["notes.txt:1:0: a needle here"]
+        assert _hits(search_files(str(root), "needle"), root) == ["notes.txt:1:0: a needle here"]
 
     def test_search_does_not_walk_a_folder_linked_from_outside(self, tmp_path):
         root, outside = self._folders(tmp_path)
         (root / "linked").symlink_to(outside, target_is_directory=True)
 
-        assert _hits(search_files(str(root), "needle")) == ["notes.txt:1:0: a needle here"]
+        assert _hits(search_files(str(root), "needle"), root) == ["notes.txt:1:0: a needle here"]
 
     def test_search_reads_a_link_that_stays_inside(self, tmp_path):
         root, _ = self._folders(tmp_path)
         (root / "alias.txt").symlink_to(root / "notes.txt")
 
-        assert _hits(search_files(str(root), "needle")) == [
+        assert _hits(search_files(str(root), "needle"), root) == [
             "alias.txt:1:0: a needle here",
             "notes.txt:1:0: a needle here",
         ]
@@ -464,7 +475,7 @@ class TestLinksOutOfTheFolder:
         alias = tmp_path / "alias"
         alias.symlink_to(root, target_is_directory=True)
 
-        assert _hits(search_files(str(alias), "needle")) == ["notes.txt:1:0: a needle here"]
+        assert _hits(search_files(str(alias), "needle"), alias) == ["notes.txt:1:0: a needle here"]
 
     def test_list_does_not_go_through_a_link_out_of_the_folder(self, tmp_path):
         root, outside = self._folders(tmp_path)
@@ -512,3 +523,127 @@ class TestLinksOutOfTheFolder:
         assert walked == 1_001
         assert failure.error.type == "validation_error"
         assert "narrow" in str(failure)
+
+
+class TestSearchPaths:
+    """Each path a search gives is one read_file takes as it is (contract point 6)."""
+
+    def test_a_relative_folder_gives_paths_read_file_reads(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "sub").mkdir()
+        (tmp_path / "sub" / "notes.txt").write_text("one\ntwo\n  the needle\n")
+        (tmp_path / "notes.txt").write_text("another file\n")
+
+        (hit,) = _hits(search_files("sub", "needle"))
+
+        path, line, offset, text = hit.split(":", 3)
+        assert (path, line, offset, text) == ("sub/notes.txt", "3", "10", " the needle")
+        assert _text(read_file(path, offset=int(offset))).startswith("the needle\n")
+
+    def test_an_absolute_folder_gives_absolute_paths(self, tmp_path):
+        (tmp_path / "notes.txt").write_text("a needle\n")
+
+        assert _hits(search_files(str(tmp_path), "needle")) == [
+            f"{tmp_path}/notes.txt:1:0: a needle"
+        ]
+
+
+class TestSearchCost:
+    """A search holds only its page, skips a binary file at its first chunk, and stops at its scan
+    budget, saying where and how to narrow."""
+
+    def test_the_hits_before_the_offset_are_not_kept(self, tmp_path):
+        (tmp_path / "hay.txt").write_text("".join(f"needle {n}\n" for n in range(50_000)))
+        tracemalloc.start()
+        try:
+            result = search_files(str(tmp_path), "needle", max_results=1, offset=49_990)
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+
+        assert _hits(result) == [f"{tmp_path}/hay.txt:49991:{_offset_of(49_990)}: needle 49990"]
+        assert peak < 1_000_000
+
+    def test_a_file_with_a_nul_in_its_first_chunk_is_skipped_as_binary(self, tmp_path):
+        (tmp_path / "zeros.bin").write_bytes(b"\0" * 100_000 + b"needle\n")
+        (tmp_path / "notes.txt").write_text("a needle here\n")
+
+        assert _hits(search_files(str(tmp_path), "needle")) == [
+            f"{tmp_path}/notes.txt:1:0: a needle here"
+        ]
+
+    def test_the_search_stops_at_its_budget_and_says_where_and_how_to_narrow(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(_filesystem, "_SCAN_CHARS", 1_000)
+        for name in ("a.txt", "b.txt", "c.txt"):
+            (tmp_path / name).write_text("needle\n" + "x" * 600 + "\n")
+
+        result = search_files(str(tmp_path), "needle")
+
+        assert _hits(result)[:2] == [
+            f"{tmp_path}/a.txt:1:0: needle",
+            f"{tmp_path}/b.txt:1:0: needle",
+        ]
+        assert _text(result).endswith(
+            f"\n[results 1-2 | stopped at the scan limit (1000 characters in 2 files) in "
+            f"{tmp_path}/b.txt; search a narrower directory to see the rest]"
+        )
+        assert _window(result)["next_call"] is None
+
+    def test_no_match_within_the_budget_says_the_search_stopped(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(_filesystem, "_SCAN_CHARS", 1_000)
+        for name in ("a.txt", "b.txt"):
+            (tmp_path / name).write_text("x" * 700 + "\n")
+
+        assert _text(search_files(str(tmp_path), "needle")) == (
+            f"No matches for 'needle' in {tmp_path} up to the scan limit (1000 characters in 2 "
+            f"files), which stopped in {tmp_path}/b.txt; search a narrower directory to see the "
+            "rest"
+        )
+
+    def test_a_full_page_within_the_budget_reads_on_as_usual(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(_filesystem, "_SCAN_CHARS", 1_000)
+        (tmp_path / "a.txt").write_text("needle\n" * 5 + "x" * 2_000 + "\n")
+
+        result = search_files(str(tmp_path), "needle", max_results=2)
+
+        assert _text(result).endswith("\n[results 1-2 | next: offset=2]")
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads any folder")
+class TestUnreadableFolders:
+    """A folder this process cannot read is a failure, or is named, never a false zero."""
+
+    @pytest.fixture
+    def locked(self, tmp_path: Path) -> Iterator[Path]:
+        folder = tmp_path / "locked"
+        folder.mkdir()
+        (folder / "a.txt").write_text("a needle\n")
+        folder.chmod(0)
+        yield folder
+        folder.chmod(0o755)
+
+    def test_searching_an_unreadable_folder_is_upstream(self, locked):
+        failure = _failure(lambda: search_files(str(locked), "needle"))
+
+        assert failure.error.type == "upstream"
+        assert str(failure).startswith(f"permission denied to search {str(locked)!r}")
+
+    def test_an_unreadable_subfolder_is_named(self, tmp_path, locked):
+        (tmp_path / "notes.txt").write_text("nothing\n")
+
+        assert _text(search_files(str(tmp_path), "needle")) == (
+            f"No matches for 'needle' in {tmp_path}; this process cannot read {locked}"
+        )
+
+    def test_listing_an_unreadable_folder_is_upstream(self, locked):
+        failure = _failure(lambda: list_directory(str(locked)))
+
+        assert failure.error.type == "upstream"
+        assert str(failure).startswith(f"permission denied to list {str(locked)!r}")
+
+
+def _offset_of(line: int) -> int:
+    """Where line ``line`` (0-based) of ``needle 0\\nneedle 1\\n...`` starts."""
+    return sum(len(f"needle {n}\n") for n in range(line))

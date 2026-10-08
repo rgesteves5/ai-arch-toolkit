@@ -21,7 +21,7 @@ from ai_arch_toolkit.core import Range, ToolResult, tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._http import Api, Reply
 from ai_arch_toolkit.toolkit.tools._mediawiki import mediawiki_error
-from ai_arch_toolkit.toolkit.tools._numbers import plain_number
+from ai_arch_toolkit.toolkit.tools._values import decimal_text, plain
 from ai_arch_toolkit.toolkit.tools._window import list_window, page_window
 
 
@@ -43,7 +43,7 @@ def _sparql_error(reply: Reply) -> ToolFailure | None:
         )
     malformed = re.search(r"MalformedQueryException: ([^\n]+)", body)
     if malformed:
-        said = " ".join(malformed[1].split())[:300]
+        said = " ".join(malformed[1].split())  # one line, of an error body the door caps
         return ToolFailure(
             "validation_error",
             f"the query service could not parse the query ({said}); fix the query",
@@ -71,18 +71,36 @@ _SPARQL = Api(
 _SEARCH_DEPTH = 10_000
 _STATEMENTS_PAGE = 40
 _LABELS_BATCH = 50
-# A page of 40 statements names at most 120 codes (properties, values, units), and the
-# properties of its time qualifiers: four requests label them all, save a hostile answer's.
+# A page of 40 statements names at most 120 codes (properties, values, units), and its
+# qualifiers': four requests label all but the most qualified pages' (the rest stay bare codes).
 _LABEL_REQUESTS = 4
 # The rows a SELECT without a LIMIT of its own may return.
 _ROW_CAP = 1000
 _ID_RE = re.compile(r"^[QP]\d+$")
 _LANG_RE = re.compile(r"^[a-z][a-z0-9-]{0,15}$", re.IGNORECASE)
+# The update keywords, as keywords: not a variable (``?add``) nor part of a prefixed name
+# (``ex:move``, ``copy:x``).
 _UNSAFE_SPARQL = re.compile(
-    r"\b(INSERT|DELETE|LOAD|CLEAR|CREATE|DROP|MOVE|COPY|ADD)\b",
+    r"(?<![?$:])\b(INSERT|DELETE|LOAD|CLEAR|CREATE|DROP|MOVE|COPY|ADD)\b(?!:)",
     re.IGNORECASE,
 )
 _PREFIXES = r"^(PREFIX\s+\w*:\s*<[^>]+>\s*)*"
+# The tokens of a query whose text is not its syntax: strings, IRIs and comments, which run from
+# a ``#`` to the line's end (https://www.w3.org/TR/sparql11-query/#grammar, STRING_LITERAL*,
+# IRIREF and section 19.4).
+_OPAQUE = re.compile(
+    r'"""(?:[^"\\]|\\.|"(?!""))*"""'
+    r"|'''(?:[^'\\]|\\.|'(?!''))*'''"
+    r'|"(?:[^"\\\n]|\\.)*"'
+    r"|'(?:[^'\\\n]|\\.)*'"
+    r'|<[^<>"{}|^`\\\s]*>'
+    r"|#[^\n]*",
+    re.DOTALL,
+)
+# A VALUES clause after the WHERE clause, which ends the query (the grammar's ValuesClause).
+_TRAILING_VALUES = re.compile(
+    r"\bVALUES\s*(?:[?$]\w+|\((?:\s*[?$]\w+)*\s*\))\s*\{[^{}]*\}\s*$", re.IGNORECASE
+)
 _ENTITY_URI = "http://www.wikidata.org/entity/"
 _EARTH = f"{_ENTITY_URI}Q2"
 _JULIAN = f"{_ENTITY_URI}Q1985786"
@@ -107,12 +125,12 @@ type _Part = tuple[bool, str]
 @dataclass(frozen=True, slots=True, kw_only=True)
 class _Claim:
     """One statement, read inside the door: its property, its value as parts, its rank and its
-    time qualifiers (``(property, value parts)``)."""
+    qualifiers (``(property, value parts)``, in the answer's order)."""
 
     prop: str
     value: tuple[_Part, ...]
     rank: str
-    when: tuple[tuple[str, tuple[_Part, ...]], ...]
+    qualifiers: tuple[tuple[str, tuple[_Part, ...]], ...]
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -195,8 +213,8 @@ def wikidata_entity(
     if entity is None:
         raise ToolFailure("not_found", missing)
     page = entity.claims[offset : offset + _STATEMENTS_PAGE]
-    labels = _labels(_codes(page), language)
-    return _entity_answer(entity, normalized, page, labels, offset)
+    labels, unlabelled = _labels(_codes(page), language)
+    return _entity_answer(entity, normalized, page, labels, offset, unlabelled)
 
 
 @tool(capability="network")
@@ -222,16 +240,17 @@ def wikidata_sparql(
     query = query.strip()
     if not query:
         raise ToolFailure("validation_error", "empty query; write a SPARQL SELECT or ASK query")
-    if _UNSAFE_SPARQL.search(query):
+    shape = _shape(query)
+    if _UNSAFE_SPARQL.search(shape):
         raise ToolFailure(
             "validation_error",
             "only read-only SELECT or ASK queries are allowed; remove the update keywords",
         )
-    if not re.match(_PREFIXES + r"(SELECT|ASK)\b", query, re.IGNORECASE):
+    if not re.match(_PREFIXES + r"(SELECT|ASK)\b", shape.lstrip(), re.IGNORECASE):
         raise ToolFailure(
             "validation_error", "the query must start with SELECT or ASK (after any PREFIX lines)"
         )
-    sparql, capped = _with_limit(query)
+    sparql, capped = _with_limit(query, shape)
     return _SPARQL.get_json(
         params={"query": sparql, "format": "json"},
         parse=lambda data: _sparql_answer(data, query, capped, max_results, offset),
@@ -309,17 +328,16 @@ def _claims(claims: Mapping[str, Any]) -> Iterable[_Claim]:
 
 def _claim(prop: str, statement: dict[str, Any]) -> _Claim:
     qualifiers = statement.get("qualifiers")
-    when = [
+    shown = [
         (str(key), _snak_parts(snak))
         for key, snaks in (qualifiers.items() if isinstance(qualifiers, dict) else ())
         for snak in (snaks if isinstance(snaks, list) else ())
-        if _datavalue(snak).get("type") == "time"
     ]
     return _Claim(
         prop=prop,
         value=_snak_parts(statement.get("mainsnak")),
         rank=_string(statement.get("rank")) or "normal",
-        when=tuple(when),
+        qualifiers=tuple(shown),
     )
 
 
@@ -349,7 +367,7 @@ def _entity_parts(value: dict[str, Any]) -> tuple[_Part, ...]:
 
 
 def _quantity_parts(value: dict[str, Any]) -> tuple[_Part, ...]:
-    amount: tuple[_Part, ...] = ((False, plain_number(_string(value.get("amount")))),)
+    amount: tuple[_Part, ...] = ((False, decimal_text(_string(value.get("amount")))),)
     unit = _code_of(_string(value.get("unit")))
     return (*amount, (False, " "), (True, unit)) if unit else amount
 
@@ -411,34 +429,56 @@ def _time_text(value: dict[str, Any]) -> str:
 
 
 def _codes(claims: Iterable[_Claim]) -> list[str]:
-    """The codes to label for ``claims``: properties, values, units and time qualifiers'
-    properties, in order, once each."""
+    """The codes to label for ``claims``: properties, values, units, and the qualifiers'
+    properties and values, in order, once each."""
     codes: dict[str, None] = {}
     for claim in claims:
         codes[claim.prop] = None
-        parts = [*claim.value, *(part for _, value in claim.when for part in value)]
+        parts = [*claim.value, *(part for _, value in claim.qualifiers for part in value)]
         codes.update(dict.fromkeys(text for is_code, text in parts if is_code))
-        codes.update(dict.fromkeys(prop for prop, _ in claim.when))
+        codes.update(dict.fromkeys(prop for prop, _ in claim.qualifiers))
     return list(codes)
 
 
-def _labels(codes: list[str], language: str) -> dict[str, str]:
-    """The labels of ``codes`` in ``language``, with English where it has none: one request per
-    50 codes, at most ``_LABEL_REQUESTS``; a code past them stays bare, which
-    ``wikidata_entity`` reads."""
+def _labels(codes: list[str], language: str) -> tuple[dict[str, str], str]:
+    """The labels of ``codes`` in ``language``, with English where it has none, and a note on
+    the codes a failed request left bare (empty when none did).
+
+    Only items and properties are asked (``wbgetentities`` refuses a whole batch for an ID it
+    does not hold, such as an EntitySchema's ``E10``): one request per 50 codes, at most
+    ``_LABEL_REQUESTS``. Labels are best effort, since the statements are read already: a code
+    past the requests, or in a batch the API refuses (a 429, a ``maxlag``), stays bare, which
+    ``wikidata_entity`` reads.
+    """
+    askable = [code for code in codes if _ID_RE.fullmatch(code)]
     languages = language if language == "en" else f"{language}|en"
     labels: dict[str, str] = {}
-    for start in range(0, min(len(codes), _LABELS_BATCH * _LABEL_REQUESTS), _LABELS_BATCH):
+    bare = 0
+    reasons: dict[str, None] = {}
+    for start in range(0, min(len(askable), _LABELS_BATCH * _LABEL_REQUESTS), _LABELS_BATCH):
+        batch = askable[start : start + _LABELS_BATCH]
         params = {
             "action": "wbgetentities",
-            "ids": "|".join(codes[start : start + _LABELS_BATCH]),
+            "ids": "|".join(batch),
             "props": "labels",
             "languages": languages,
             "languagefallback": "1",
             "format": "json",
         }
-        labels.update(_API.get_json(params=params, parse=lambda data: _label_map(data, language)))
-    return labels
+        try:
+            labels.update(
+                _API.get_json(params=params, parse=lambda data: _label_map(data, language))
+            )
+        except ToolFailure as failure:
+            bare += len(batch)
+            reasons[failure.error.message] = None
+    note = (
+        f"{bare} code{'' if bare == 1 else 's'} without their label; the label request failed: "
+        + "; ".join(reasons)
+        if bare
+        else ""
+    )
+    return labels, note
 
 
 def _label_map(data: dict[str, Any], language: str) -> dict[str, str]:
@@ -451,7 +491,12 @@ def _label_map(data: dict[str, Any], language: str) -> dict[str, str]:
 
 
 def _entity_answer(
-    entity: _Entity, asked: str, page: tuple[_Claim, ...], labels: Mapping[str, str], offset: int
+    entity: _Entity,
+    asked: str,
+    page: tuple[_Claim, ...],
+    labels: Mapping[str, str],
+    offset: int,
+    unlabelled: str,
 ) -> ToolResult:
     merged = f" (redirects to {entity.id})" if entity.id != asked else ""
     title = f"Wikidata entity {asked}{merged}: {entity.label or '(no label)'}"
@@ -463,6 +508,8 @@ def _entity_answer(
         heading = "\n".join(
             [title, *_details(entity), "Statements (wikidata_entity reads any Q or P code below):"]
         )
+    if unlabelled:
+        heading += f"\n({unlabelled})"
     lines = [_claim_text(number, claim, labels) for number, claim in enumerate(page, offset + 1)]
     end = offset + len(page)
     next_call = {"offset": end} if page and end < len(entity.claims) else None
@@ -490,7 +537,7 @@ def _claim_text(number: int, claim: _Claim, labels: Mapping[str, str]) -> str:
         return "".join(named(part) if is_code else part for is_code, part in parts)
 
     line = f"{number}. {named(claim.prop)}: {text(claim.value)}"
-    for prop, value in claim.when:
+    for prop, value in claim.qualifiers:
         line += f" ({labels.get(prop, prop)}: {text(value)})"
     return line + (f" [{claim.rank}]" if claim.rank != "normal" else "")
 
@@ -540,21 +587,39 @@ def _code_of(uri: str) -> str:
 
 def _number_text(value: object) -> str:
     if isinstance(value, int | float) and not isinstance(value, bool):
-        return plain_number(value)
-    return plain_number(_string(value))
+        return plain(value)
+    return decimal_text(_string(value))
 
 
 # --- SPARQL ------------------------------------------------------------------------------------
 
 
-def _with_limit(query: str) -> tuple[str, bool]:
+def _shape(query: str) -> str:
+    """``query``'s syntax, at the same length: comments as spaces, and the text inside strings
+    and IRIs as ``_``, so no word or brace in them reads as the query's."""
+
+    def blank(token: re.Match[str]) -> str:
+        text = token[0]
+        if text.startswith("#"):
+            return " " * len(text)
+        return text[0] + "_" * (len(text) - 2) + text[-1]
+
+    return _OPAQUE.sub(blank, query)
+
+
+def _with_limit(query: str, shape: str) -> tuple[str, bool]:
     """The query to send, and whether the tool added its LIMIT: a SELECT whose solution
-    modifiers (after its last ``}``) have none gets ``LIMIT 1000``."""
-    tail = query[query.rfind("}") + 1 :]
-    select = re.match(_PREFIXES + r"SELECT\b", query, re.IGNORECASE)
-    if select and not re.search(r"\bLIMIT\s+\d+", tail, re.IGNORECASE):
+    modifiers (after the WHERE clause's last ``}``, before a trailing VALUES clause) have none
+    gets ``LIMIT 1000``, where the modifiers go."""
+    if not re.match(_PREFIXES + r"SELECT\b", shape.lstrip(), re.IGNORECASE):
+        return query, False
+    values = _TRAILING_VALUES.search(shape)
+    end = values.start() if values else len(shape)
+    if re.search(r"\bLIMIT\s+\d+", shape[shape.rfind("}", 0, end) + 1 : end], re.IGNORECASE):
+        return query, False
+    if values is None:
         return f"{query}\nLIMIT {_ROW_CAP}", True
-    return query, False
+    return f"{query[:end].rstrip()}\nLIMIT {_ROW_CAP}\n{query[end:]}", True
 
 
 def _sparql_answer(
@@ -597,7 +662,7 @@ def _binding_text(value: dict[str, Any]) -> str:
     if value.get("type") == "uri":
         return _code_of(text) or text
     if _string(value.get("datatype")).endswith(_NUMERIC_TYPES):
-        return plain_number(text)
+        return decimal_text(text)
     return text
 
 

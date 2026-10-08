@@ -341,6 +341,43 @@ class TestWikidataEntity:
         assert set(labels["ids"][0].split("|")) == set(_NAMES)
 
     @patch(HTTP_OPEN)
+    def test_every_qualifier_is_shown_with_its_label(self, mock_urlopen):
+        # Only time qualifiers were kept: "educated at" lost its degree and major, with no word.
+        qualifiers = {
+            "P580": [_snak("P580", "time", _time("+1971-00-00T00:00:00Z", 9))],
+            "P512": [_snak("P512", "wikibase-entityid", _item("Q1765120"))],
+            "P812": [
+                _snak("P812", "wikibase-entityid", _item("Q186579")),
+                _snak("P812", "string", "drama"),
+            ],
+        }
+        claims = {
+            "P69": [
+                _statement("P69", "wikibase-entityid", _item("Q691283"), qualifiers=qualifiers)
+            ]
+        }
+        entity = {"entities": {"Q42": {"id": "Q42", "claims": claims}}}
+        names = {
+            "P69": "educated at",
+            "Q691283": "St John's College",
+            "P580": "start time",
+            "P512": "academic degree",
+            "Q1765120": "Bachelor of Arts",
+            "P812": "academic major",
+            "Q186579": "English literature",
+        }
+        mock_urlopen.side_effect = [respond(entity), respond(_labels(names))]
+
+        text = _text(wikidata_entity("Q42"))
+
+        assert text.splitlines()[-1] == (
+            "1. educated at (P69): St John's College (Q691283) (start time: 1971) (academic "
+            "degree: Bachelor of Arts (Q1765120)) (academic major: English literature (Q186579)) "
+            "(academic major: drama)"
+        )
+        assert set(_called_params(mock_urlopen, 1)["ids"][0].split("|")) == set(names)
+
+    @patch(HTTP_OPEN)
     def test_every_statement_reads_on(self, mock_urlopen):
         # It showed 15 claims from the first 20 properties, 3 values each.
         claims = {
@@ -484,16 +521,64 @@ class TestWikidataEntity:
         assert error.retryable
 
     @patch(HTTP_OPEN)
-    def test_a_label_request_the_wiki_refuses_says_why(self, mock_urlopen):
+    def test_a_label_request_the_wiki_refuses_leaves_the_codes_bare_and_says_why(
+        self, mock_urlopen
+    ):
+        # It failed the whole call, although the statements were read.
         mock_urlopen.side_effect = [
             respond(_ADAMS),
             respond({"error": {"code": "readonly", "info": "The wiki is in read-only mode."}}),
         ]
 
-        error = _failure(lambda: wikidata_entity("Q42"))
+        lines = _text(wikidata_entity("Q42")).splitlines()
 
-        assert error.type == "upstream"
-        assert error.message == "readonly: The wiki is in read-only mode."
+        assert lines[5:8] == [
+            "Statements (wikidata_entity reads any Q or P code below):",
+            "(14 codes without their label; the label request failed: readonly: The wiki is in "
+            "read-only mode.)",
+            "1. P31: Q5",
+        ]
+
+    @patch(HTTP_OPEN)
+    def test_a_later_label_request_that_fails_keeps_the_labels_already_read(self, mock_urlopen):
+        claims = {
+            f"P{1000 + number}": [
+                _statement(f"P{1000 + number}", "wikibase-entityid", _item(f"Q{100 + number}"))
+            ]
+            for number in range(40)
+        }
+        entity = {"entities": {"Q1": {"id": "Q1", "claims": claims}}}
+        mock_urlopen.side_effect = [
+            respond(entity),
+            respond(_labels({"P1000": "first property", "Q100": "first value"})),
+            http_error(429, "Too Many Requests"),
+        ]
+
+        text = _text(wikidata_entity("Q1", offset=0))
+
+        assert "1. first property (P1000): first value (Q100)" in text
+        assert "40. P1039: Q139" in text
+        assert "(30 codes without their label; the label request failed: rate limited" in text
+
+    @patch(HTTP_OPEN)
+    def test_only_items_and_properties_are_asked_for_labels(self, mock_urlopen):
+        # wbgetentities refuses the whole batch for an ID it does not hold, such as an
+        # EntitySchema (P12861 on Q5 holds E10): "no-such-entity".
+        schema = {"entity-type": "entity-schema", "id": "E10"}
+        claims = {
+            "P31": [_statement("P31", "wikibase-entityid", _item("Q5"))],
+            "P12861": [_statement("P12861", "wikibase-entityid", schema)],
+        }
+        entity = {"entities": {"Q5": {"id": "Q5", "claims": claims}}}
+        mock_urlopen.side_effect = [
+            respond(entity),
+            respond(_labels({"P31": "instance of", "Q5": "human", "P12861": "EntitySchema"})),
+        ]
+
+        text = _text(wikidata_entity("Q5"))
+
+        assert set(_called_params(mock_urlopen, 1)["ids"][0].split("|")) == {"P31", "Q5", "P12861"}
+        assert "2. EntitySchema (P12861): E10" in text
 
 
 @patch(HTTP_OPEN)
@@ -564,6 +649,47 @@ class TestWikidataSparql:
         wikidata_sparql("SELECT ?x WHERE { { SELECT ?x WHERE { ?x ?p ?o } LIMIT 5 } }")
 
         assert _called_params(mock_urlopen)["query"][0].endswith("}\nLIMIT 1000")
+
+    @patch(HTTP_OPEN)
+    def test_the_limit_goes_before_a_trailing_values_clause(self, mock_urlopen):
+        # A VALUES block after the WHERE clause is legal SPARQL; a LIMIT after it is not.
+        mock_urlopen.return_value = respond(_bindings(1))
+
+        wikidata_sparql("SELECT ?item WHERE { ?item wdt:P31 wd:Q5 } VALUES ?item { wd:Q42 }")
+
+        assert _called_params(mock_urlopen)["query"] == [
+            "SELECT ?item WHERE { ?item wdt:P31 wd:Q5 }\nLIMIT 1000\nVALUES ?item { wd:Q42 }"
+        ]
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "SELECT ?x WHERE { ?x ?p ?o } LIMIT 5 # see {docs}",
+            "# cats, with a LIMIT of their own\nSELECT ?x WHERE { ?x wdt:P31 wd:Q146 } LIMIT 3",
+            'SELECT ?x WHERE { ?x rdfs:label "Copy, then DELETE"@en } LIMIT 1',
+            "SELECT ?x WHERE { ?x <http://example.org/#p> ?o } LIMIT 2",
+            "SELECT ?add ?copy WHERE { ?add ex:move ?copy } LIMIT 4",
+        ],
+    )
+    @patch(HTTP_OPEN)
+    def test_comments_strings_and_iris_are_not_the_querys_words(self, mock_urlopen, query):
+        # The service answered "MalformedQuery" to a second LIMIT, and the tool refused a
+        # query that starts with a comment or names a word such as "copy" in a string.
+        mock_urlopen.return_value = respond(_bindings(1))
+
+        wikidata_sparql(query)
+
+        assert _called_params(mock_urlopen)["query"] == [query]
+
+    @patch(HTTP_OPEN)
+    def test_a_limit_in_a_comment_is_not_the_querys(self, mock_urlopen):
+        mock_urlopen.return_value = respond(_bindings(1))
+
+        wikidata_sparql("SELECT ?x WHERE { ?x ?p ?o } # LIMIT 10")
+
+        assert _called_params(mock_urlopen)["query"] == [
+            "SELECT ?x WHERE { ?x ?p ?o } # LIMIT 10\nLIMIT 1000"
+        ]
 
     @patch(HTTP_OPEN)
     def test_numbers_read_in_plain_digits(self, mock_urlopen):
@@ -661,6 +787,22 @@ class TestWikidataSparql:
         assert error.message == (
             'the query service could not parse the query (Encountered "<EOF>" at line 1.); '
             "fix the query"
+        )
+
+    @patch(HTTP_OPEN)
+    def test_the_parsers_message_is_kept_whole(self, mock_urlopen):
+        # It was cut at 300 characters without a word.
+        said = "Encountered " + '"x" ' * 120 + "at line 1, column 9."
+        mock_urlopen.side_effect = http_error(
+            400,
+            "Bad Request",
+            body=f"org.openrdf.query.MalformedQueryException: {said}\n\tat x".encode(),
+        )
+
+        error = _failure(lambda: wikidata_sparql("SELECT ?x WHERE { x }"))
+
+        assert error.message == (
+            f"the query service could not parse the query ({said}); fix the query"
         )
 
     @patch(HTTP_OPEN)

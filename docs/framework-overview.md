@@ -185,7 +185,7 @@ sources and variables; Prompt controls final section order; layouts produce mode
 
 ### Pre-built Tools (`toolkit/tools/`)
 
-130 pre-built tools across 43 modules, stdlib-only except the three `youtube_*` tools, which
+123 pre-built tools across 43 modules, stdlib-only except the three `youtube_*` tools, which
 need the `youtube` extra. The default public namespace is safe-by-default; shell execution,
 filesystem access, arbitrary URL fetching, and Python execution require explicit opt-in via
 `ai_arch_toolkit.toolkit.tools.dangerous`. The per-tool list is in the

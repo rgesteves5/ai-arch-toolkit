@@ -100,6 +100,72 @@ class TestHttpGet:
 
         assert "".join(parts) == page
 
+    @pytest.mark.parametrize(
+        ("charset", "page", "max_chars"),
+        [
+            # A BOM, then a character of four bytes: four bytes a character fall short.
+            ("utf-16", "😀abc" * 20, 1),
+            ("utf-32", "😀" * 50, 1),
+            ("utf-32", "😀" * 50, 3),
+            # Three-byte escapes at each switch of script: 4.5 bytes a character.
+            ("iso-2022-jp", "a日" * 50, 1),
+            ("iso-2022-jp", "a日" * 50, 2),
+            ("iso-2022-jp", "a日" * 50, 3),
+            ("iso-2022-jp", "日本語のテキスト" * 20, 7),
+        ],
+        ids=["utf16-bom", "utf32-bom", "utf32-bom-3", "jis-1", "jis-2", "jis-3", "jis-kana-7"],
+    )
+    @patch(HTTP_OPEN)
+    def test_every_footer_reads_on_past_its_offset_whatever_the_encoding(
+        self, mock_urlopen, charset, page, max_chars
+    ):
+        # Reading four bytes a character stopped short of the window: the footer then named its
+        # own offset (or one before it), and following it never ended.
+        body = page.encode(charset)
+        mock_urlopen.side_effect = lambda request, timeout: respond(
+            body, content_type=f"text/plain; charset={charset}"
+        )
+        parts: list[str] = []
+        offset: int | None = 0
+
+        while offset is not None and len(parts) <= len(page):
+            result = http_get("https://example.com", max_chars=max_chars, offset=offset)
+            window = _window(result)
+            assert window["first"] == offset
+            parts.append(_text(result)[: window["last"] - window["first"]])
+            following = (window["next_call"] or {}).get("offset")
+            assert following is None or following > offset
+            offset = following
+
+        assert "".join(parts) == page
+        assert window["total"] == len(page)
+
+    @patch(HTTP_OPEN)
+    def test_a_short_read_is_read_again_further_only_as_far_as_it_needs(self, mock_urlopen):
+        body = ("😀" * 50).encode("utf-32")  # a BOM, then four bytes a character
+        mock_urlopen.side_effect = lambda request, timeout: respond(
+            body, content_type="text/plain; charset=utf-32"
+        )
+
+        result = http_get("https://example.com", max_chars=1)
+
+        assert _text(result).startswith("😀\n[chars 0-1 ")
+        assert mock_urlopen.call_count == 2
+
+    @patch(HTTP_OPEN)
+    def test_an_offset_past_what_http_get_reads_is_not_moved_back(self, mock_urlopen, monkeypatch):
+        monkeypatch.setattr(_web, "_READ_BYTES", 200)
+        mock_urlopen.side_effect = lambda request, timeout: respond(_rows(100))
+
+        result = http_get("https://example.com", max_chars=100, offset=300)
+
+        lines = _text(result).splitlines()
+        assert lines[0] == (
+            "(https://example.com goes on past its first 200 bytes, all http_get reads)"
+        )
+        assert lines[-1] == "[chars 300-300 | end]"
+        assert (_window(result)["first"], _window(result)["next_call"]) == (300, None)
+
     @patch(HTTP_OPEN)
     def test_a_cut_page_names_the_next_offset_and_reads_no_more_than_it_needs(self, mock_urlopen):
         body = respond(_rows(100_000))
@@ -282,11 +348,32 @@ class TestScrapeText:
 
         lines = _text(result).splitlines()
         assert lines[0] == (
-            "(only the first 200 bytes of https://example.com's HTML were read: "
-            "its text stops there)"
+            "(only the first 200 bytes of https://example.com's HTML were read: its text stops "
+            "there; http_get with offset=200 reads the HTML on, or find= searches it)"
         )
         assert lines[1] == "Para 0."
         assert _window(result)["next_call"] is None
+
+    @patch(HTTP_OPEN)
+    def test_the_html_scrape_text_did_not_read_is_where_http_get_reads_on(
+        self, mock_urlopen, monkeypatch
+    ):
+        monkeypatch.setattr(_web, "_SCRAPE_MAX_BYTES", 200)
+        html = "".join(f"<p>Pará {n}.</p>" for n in range(100))  # two bytes for one "á"
+        mock_urlopen.side_effect = lambda request, timeout: respond(html)
+
+        note = _text(scrape_text("https://example.com")).splitlines()[0]
+        offset = int(note.split("offset=")[1].split()[0])
+        rest = ToolGroup(http_get, approval_handler=_approve_all).execute(
+            ToolCall(
+                id="c1",
+                name="http_get",
+                input={"url": "https://example.com", "offset": offset, "max_chars": 100_000},
+            )
+        )
+
+        assert offset < 200  # characters, not bytes
+        assert html[offset:].startswith(_text(rest).splitlines()[0][:20])
 
     @patch(HTTP_OPEN)
     def test_a_page_without_visible_text_says_so(self, mock_urlopen):

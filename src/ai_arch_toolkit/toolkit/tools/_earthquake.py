@@ -3,14 +3,15 @@ https://earthquake.usgs.gov/fdsnws/event/1/).
 
 A search asks the service's ``count`` method for the total, with the same filters, then the page
 (``limit``, ``offset``): the GeoJSON ``metadata.count`` of a page is not documented as a total.
-Times arrive in milliseconds since the epoch and are shown in ISO 8601 UTC.
+Times arrive in milliseconds since the epoch and are shown in ISO 8601 UTC. The service reads a
+bare date as the start of that day, so the last day of a period goes as its last microsecond.
 """
 
 from __future__ import annotations
 
 import re
 from datetime import date
-from typing import Annotated, Any, NoReturn
+from typing import Annotated, Any, Literal, NoReturn, get_args
 
 from ai_arch_toolkit.core import Range, ToolResult, tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
@@ -73,7 +74,14 @@ _API = Api(
 )
 _MAX_RESULTS = 50
 _EVENT_RE = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
-_ORDER_BY = {"time", "time-asc", "magnitude", "magnitude-asc"}
+# The ranges and orders the query method takes (https://earthquake.usgs.gov/fdsnws/event/1/).
+_MAX_RADIUS_KM = 20001.6
+_MIN_DEPTH_KM, _MAX_DEPTH_KM = -100, 1000
+type OrderBy = Literal["time", "time-asc", "magnitude", "magnitude-asc"]
+_ORDER_BY = frozenset(get_args(OrderBy.__value__))
+# The last instant of a day: FDSN times take up to microseconds (Commonalities 1.2, "Time
+# parameter values"), and ``endtime`` selects events "on or before" it.
+_END_OF_DAY = "T23:59:59.999999"
 
 
 @tool(capability="network")
@@ -82,12 +90,12 @@ def earthquake_search(
     end_time: str = "",
     min_magnitude: float = 0.0,
     max_magnitude: float = 10.0,
-    latitude: float | None = None,
-    longitude: float | None = None,
-    max_radius_km: float | None = None,
-    min_depth_km: float | None = None,
-    max_depth_km: float | None = None,
-    order_by: str = "time",
+    latitude: Annotated[float | None, Range(-90, 90)] = None,
+    longitude: Annotated[float | None, Range(-180, 180)] = None,
+    max_radius_km: Annotated[float | None, Range(0, _MAX_RADIUS_KM)] = None,
+    min_depth_km: Annotated[float | None, Range(_MIN_DEPTH_KM, _MAX_DEPTH_KM)] = None,
+    max_depth_km: Annotated[float | None, Range(_MIN_DEPTH_KM, _MAX_DEPTH_KM)] = None,
+    order_by: OrderBy = "time",
     max_results: Annotated[int, Range(1, _MAX_RESULTS)] = 10,
     offset: Annotated[int, Range(1)] = 1,
 ) -> ToolResult:
@@ -96,7 +104,7 @@ def earthquake_search(
 
     Args:
         start_time: The first day, YYYY-MM-DD, in UTC; USGS starts 30 days ago without one.
-        end_time: The last day, YYYY-MM-DD, in UTC; now without one.
+        end_time: The last day, YYYY-MM-DD, in UTC, included; now without one.
         min_magnitude: Lowest magnitude.
         max_magnitude: Highest magnitude.
         latitude: Center latitude, for a search around a point.
@@ -184,7 +192,7 @@ def earthquake_count(
 
     Args:
         start_time: The first day, YYYY-MM-DD, in UTC; USGS starts 30 days ago without one.
-        end_time: The last day, YYYY-MM-DD, in UTC; now without one.
+        end_time: The last day, YYYY-MM-DD, in UTC, included; now without one.
         min_magnitude: Lowest magnitude.
         max_magnitude: Highest magnitude.
 
@@ -310,28 +318,23 @@ def _search_filters(
     params = _period(start_time, end_time, min_magnitude, max_magnitude)
     _validate_circle(latitude, longitude, max_radius_km)
     if latitude is not None and longitude is not None and max_radius_km is not None:
-        params["latitude"] = str(latitude)
-        params["longitude"] = str(longitude)
-        params["maxradiuskm"] = str(max_radius_km)
+        params["latitude"] = plain(latitude)
+        params["longitude"] = plain(longitude)
+        params["maxradiuskm"] = plain(max_radius_km)
     if min_depth_km is not None:
-        params["mindepth"] = str(min_depth_km)
+        params["mindepth"] = plain(min_depth_km)
     if max_depth_km is not None:
-        params["maxdepth"] = str(max_depth_km)
+        params["maxdepth"] = plain(max_depth_km)
     return params
 
 
 def _validate_circle(
     latitude: float | None, longitude: float | None, max_radius_km: float | None
 ) -> None:
+    """The circle's three values come together (their ranges are the signature's)."""
     radius_values = [latitude is not None, longitude is not None, max_radius_km is not None]
     if any(radius_values) and not all(radius_values):
         _invalid("latitude, longitude, and max_radius_km must be provided together.")
-    if latitude is not None and not -90 <= latitude <= 90:
-        _invalid(f"latitude must be between -90 and 90, got {latitude}.")
-    if longitude is not None and not -180 <= longitude <= 180:
-        _invalid(f"longitude must be between -180 and 180, got {longitude}.")
-    if max_radius_km is not None and max_radius_km <= 0:
-        _invalid(f"max_radius_km must be greater than 0, got {max_radius_km}.")
 
 
 def _period(
@@ -340,8 +343,8 @@ def _period(
     min_magnitude: float,
     max_magnitude: float,
 ) -> dict[str, str]:
-    """The period's and the magnitudes' parameters, the days as YYYY-MM-DD; raises when
-    invalid."""
+    """The period's and the magnitudes' parameters; raises when invalid. The first day goes as
+    YYYY-MM-DD (its start), the last as its last instant, so that its events are included."""
     start = _parse_date(start_time.strip()) if start_time.strip() else None
     end = _parse_date(end_time.strip()) if end_time.strip() else None
     if start_time.strip() and start is None:
@@ -352,14 +355,14 @@ def _period(
         _invalid(f"start_time {start} must be before or equal to end_time {end}.")
     if min_magnitude > max_magnitude:
         _invalid(
-            f"min_magnitude {min_magnitude} must be less than or equal to "
-            f"max_magnitude {max_magnitude}."
+            f"min_magnitude {plain(min_magnitude)} must be less than or equal to "
+            f"max_magnitude {plain(max_magnitude)}."
         )
-    params = {"minmagnitude": str(min_magnitude), "maxmagnitude": str(max_magnitude)}
+    params = {"minmagnitude": plain(min_magnitude), "maxmagnitude": plain(max_magnitude)}
     if start:
         params["starttime"] = start.isoformat()
     if end:
-        params["endtime"] = end.isoformat()
+        params["endtime"] = f"{end.isoformat()}{_END_OF_DAY}"
     return params
 
 

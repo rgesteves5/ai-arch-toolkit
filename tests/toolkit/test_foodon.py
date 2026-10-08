@@ -84,6 +84,14 @@ class TestSearch:
 
         assert _text(foodon_search("zzz")) == "No FoodOn terms match 'zzz'."
 
+    @patch(HTTP_OPEN)
+    def test_a_start_past_the_last_term_gives_the_total(self, mock_urlopen: MagicMock):
+        mock_urlopen.return_value = respond(_payload([], total=57, start=100))
+
+        assert _text(foodon_search("apple", max_results=10, start=100)) == (
+            "start=100 is past the end: 57 FoodOn terms match 'apple'; the last page is start=50."
+        )
+
     @pytest.mark.parametrize(("max_results", "kept"), [(20, True), (21, False)])
     @patch(HTTP_OPEN)
     def test_max_results_is_refused_outside_its_limits(self, mock_urlopen, max_results, kept):

@@ -14,7 +14,7 @@ import re
 import urllib.parse
 from collections.abc import Callable
 from dataclasses import replace
-from datetime import datetime
+from datetime import date
 from typing import Annotated, Any
 
 from ai_arch_toolkit.core import Range, ToolResult, tool
@@ -32,14 +32,26 @@ from ai_arch_toolkit.toolkit.tools._window import (
 
 def _rxnav_error(reply: Reply) -> ToolFailure | None:
     """RxNav answers a call it cannot process for its parameters with HTTP 400 "Bad Request"
-    (https://lhncbc.nlm.nih.gov/RxNav/news/API-Changes-202107.html)."""
+    (https://lhncbc.nlm.nih.gov/RxNav/news/API-Changes-202107.html), with its reason when the
+    body gives one."""
     if reply.status != 400:
         return None
+    said = _said(reply.body)
     return ToolFailure(
         "validation_error",
-        "RxNorm could not process the request (HTTP 400, invalid parameters); check the "
-        "arguments: an RxCUI from rxnorm_drug_search, term types such as IN, BN, SCD",
+        f"RxNorm could not process the request (HTTP 400, {said or 'invalid parameters'}); check "
+        "the arguments: an RxCUI from rxnorm_drug_search, term types such as IN, BN, SCD",
     )
+
+
+def _said(body: object) -> str:
+    """An error body's words: a JSON object's ``message`` or ``error``, or a text that is not a
+    page; empty when it gives none."""
+    if isinstance(body, dict):
+        words = next((body[key] for key in ("message", "error") if body.get(key)), "")
+        return _string(words)[:300] if isinstance(words, str) else ""
+    text = _string(body) if isinstance(body, str) else ""
+    return "" if text.startswith(("<", "{", "[")) else text[:300]
 
 
 # A call that names one concept or one label declares it (``missing=``): a 404 there is that
@@ -67,6 +79,16 @@ _RXCUI_RE = re.compile(r"^\d{1,12}$")
 _NDC_RE = re.compile(r"^[0-9-]{4,20}$")
 _SETID_RE = re.compile(r"^[A-Fa-f0-9-]{32,40}$")
 _TTY_RE = re.compile(r"^[A-Za-z]{1,10}([\s,+]+[A-Za-z]{1,10}){0,19}$")
+# DailyMed writes ``published_date`` with English month names (``Jun 10, 2026``), whatever the
+# locale of the process that reads it.
+_PUBLISHED_RE = re.compile(r"^([A-Za-z]{3})\w* (\d{1,2}), (\d{4})$")
+_MONTHS = {
+    name: number
+    for number, name in enumerate(
+        ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"),
+        start=1,
+    )
+}
 # RxNorm's term types (https://www.nlm.nih.gov/research/umls/rxnorm/docs/appendix5.html).
 _TTY_NAMES = {
     "IN": "Ingredient",
@@ -433,12 +455,18 @@ def _labels_described(filters: dict[str, str]) -> str:
 def _labels_answer(data: dict[str, Any], described: str, page: int, size: int) -> ToolResult:
     items = [item for item in _list(data.get("data")) if isinstance(item, dict)]
     meta = _dict(data, "metadata")
+    pages, total = _int(meta.get("total_pages")), _int(meta.get("total_elements"))
+    first = (page - 1) * size + 1
+    if not items and total and first > total:
+        last = pages or -(-total // size)
+        return ToolResult.success(
+            f"Page {page} is past the end: {total} DailyMed labels match {described}, on {last} "
+            f"pages of {size}; the last is page={last}."
+        )
     if not items:
         later = f" on page {page}" if page > 1 else ""
         return ToolResult.success(f"No DailyMed labels match {described}{later}.")
-    first = (page - 1) * size + 1
     entries = [_label_entry(number, item) for number, item in enumerate(items, start=first)]
-    pages, total = _int(meta.get("total_pages")), _int(meta.get("total_elements"))
     shown = first - 1 + len(items)
     more = (pages is not None and page < pages) or (total is not None and shown < total)
     next_call = {"page": page + 1} if more else None
@@ -460,10 +488,14 @@ def _label_entry(number: int, item: dict[str, Any]) -> str:
 
 def _published(value: str) -> str:
     """DailyMed's ``published_date`` (``Jun 10, 2026``) in ISO 8601."""
-    try:
-        return datetime.strptime(value, "%b %d, %Y").date().isoformat()
-    except ValueError:
-        return value or "?"
+    match = _PUBLISHED_RE.match(value)
+    month = _MONTHS.get(match[1].lower()) if match else None
+    if match and month:
+        try:
+            return date(int(match[3]), month, int(match[2])).isoformat()
+        except ValueError:
+            pass
+    return value or "?"
 
 
 def _label[T](setid: str, read: Callable[[str, SplLabel], T]) -> T:

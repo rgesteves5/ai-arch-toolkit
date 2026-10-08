@@ -52,24 +52,36 @@ logger = logging.getLogger(__name__)
 # --- Resolution ---------------------------------------------------------------
 
 
-def _tool_name(fn: Callable[..., Any]) -> str:
-    """The name a tool is called by: its definition's, else its function's (a partial's too)."""
-    definition = getattr(fn, "__tool_definition__", None)
-    return definition.schema.name if definition is not None else callable_name(fn)
+def _entry_name(entry: object) -> str | None:
+    """The name the model calls an entry of a ``tools`` list by, or ``None`` for one without a
+    name of the app's: a server tool, a dict already in wire form, a ``ToolGroup`` (whose tools
+    ``prepare_tools`` names one by one), anything else that is not callable.
+
+    A tool's name is its definition's, else its function's (a partial's too); a tool dict's is
+    its ``"name"``. ``prepare_tools`` and the executor name entries with it, so that a list one
+    of them takes, the other takes too (D62).
+    """
+    if isinstance(entry, dict):
+        name = None if entry.get("_server_tool") else entry.get("name")
+        return name if isinstance(name, str) and name else None
+    if not callable(entry):
+        return None
+    definition = getattr(entry, "__tool_definition__", None)
+    return definition.schema.name if definition is not None else callable_name(entry)
 
 
 def _resolve_fn(tool_call: ToolCall, tools: list[Callable[..., Any]]) -> Callable[..., Any]:
-    """Find the callable a tool call names.
+    """Find the callable a tool call names; a tool dict names no callable.
 
     Raises:
         ValueError: Two different tools in ``tools`` share a name (D62); the same tool met
             again counts once.
-        KeyError: No tool has the call's name.
+        KeyError: No callable has the call's name.
     """
-    named = one_per_name((_tool_name(fn), fn, fn) for fn in tools)
-    for fn in named:
-        if _tool_name(fn) == tool_call.name:
-            return fn
+    named = one_per_name((_entry_name(entry), entry, entry) for entry in tools)
+    for entry in named:
+        if callable(entry) and _entry_name(entry) == tool_call.name:
+            return entry
     msg = f"Unknown tool: {tool_call.name!r}"
     raise KeyError(msg)
 

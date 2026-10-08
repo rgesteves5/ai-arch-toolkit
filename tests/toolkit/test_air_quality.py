@@ -7,7 +7,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
-from ai_arch_toolkit.core import ToolResult
+from ai_arch_toolkit.core import ToolCall, ToolGroup, ToolResult
 from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._air_quality import (
     air_quality_current,
@@ -31,6 +31,18 @@ def _called_params(mock_urlopen) -> dict[str, list[str]]:
 
 def _text(result: ToolResult | str) -> str:
     return result.value if isinstance(result, ToolResult) else result
+
+
+def _executed(fn, **args):
+    """What the executor answers a call with ``args`` (the schema's bounds are checked there)."""
+    return ToolGroup(fn).execute(ToolCall(id="c", name=fn.__name__, input=args))
+
+
+def _bounds(fn, *names: str) -> dict[str, tuple[object, object]]:
+    properties = fn.__tool_definition__.schema.input_schema["properties"]
+    return {
+        name: (properties[name].get("minimum"), properties[name].get("maximum")) for name in names
+    }
 
 
 class TestAirQualityCurrent:
@@ -57,8 +69,6 @@ class TestAirQualityCurrent:
     @pytest.mark.parametrize(
         ("kwargs", "words"),
         [
-            ({"latitude": -91, "longitude": 0}, "latitude must"),
-            ({"latitude": 0, "longitude": 181}, "longitude must"),
             ({"latitude": 0, "longitude": 0, "variables": ""}, "variables cannot be empty"),
             ({"latitude": 0, "longitude": 0, "variables": "bad"}, "invalid variables: bad"),
         ],
@@ -71,6 +81,38 @@ class TestAirQualityCurrent:
         assert caught.value.error.type == "validation_error"
         assert words in caught.value.error.message
         mock_urlopen.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "point", [{"latitude": -91.0, "longitude": 0.0}, {"latitude": 0.0, "longitude": 181.0}]
+    )
+    @patch(HTTP_OPEN)
+    def test_coordinates_out_of_range_are_refused_before_any_request(self, mock_urlopen, point):
+        mock_urlopen.side_effect = AssertionError("no request")
+
+        for tool_fn in (air_quality_current, air_quality_forecast):
+            result = _executed(tool_fn, **point)
+            assert result.error is not None
+            assert result.error.type == "validation_error"
+
+    def test_the_coordinates_are_bounded_in_the_schema(self):
+        for tool_fn in (air_quality_current, air_quality_forecast):
+            assert _bounds(tool_fn, "latitude", "longitude") == {
+                "latitude": (-90, 90),
+                "longitude": (-180, 180),
+            }
+
+    @patch(HTTP_OPEN)
+    def test_coordinates_go_in_decimal_notation(self, mock_urlopen):
+        # str(0.00001) is "1e-05".
+        mock_urlopen.side_effect = [respond(_CURRENT), respond(geo_answers.air_quality_hours(1))]
+
+        air_quality_current(0.00001, -0.00002)
+        current = _called_params(mock_urlopen)
+        air_quality_forecast(0.00001, -0.00002)
+        forecast = _called_params(mock_urlopen)
+
+        for params in (current, forecast):
+            assert (params["latitude"], params["longitude"]) == (["0.00001"], ["-0.00002"])
 
     @patch(HTTP_OPEN)
     def test_answer_without_current_values_is_upstream(self, mock_urlopen):

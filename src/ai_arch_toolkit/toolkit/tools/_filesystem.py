@@ -9,6 +9,7 @@ a chunk at a time, so neither a huge file nor one long line ever lands in memory
 from __future__ import annotations
 
 import errno
+import io
 import itertools
 import os
 import re
@@ -41,6 +42,15 @@ _PIECE = 1 << 16
 # A matching line longer than this shows the part around its first match.
 _EXCERPT = 300
 _BEFORE = 100
+# A search reads at most this many characters, in all its files: past them it stops and says
+# where, so a huge tree or file takes seconds (text reads at about 120 million characters a
+# second: 4 s), not past the executor's deadline.
+_SCAN_CHARS = 500_000_000
+# A file with a NUL in its first bytes is binary, as grep and git decide.
+_SNIFF = 8192
+# The folders and files a search names when it could not read them.
+_UNREAD_NAMED = 3
+_NARROWER = "search a narrower directory to see the rest"
 _BINARY_SUFFIXES = frozenset({".pyc", ".pyo", ".so", ".dylib", ".exe", ".bin", ".gz", ".zip"})
 
 
@@ -78,7 +88,8 @@ def path_failure(error: OSError | ValueError, action: str, path: str) -> ToolFai
     if isinstance(error, ValueError) or error.errno in _BAD_PATH_ERRNOS:
         msg = f"cannot {action} {path!r}: {_error_text(error)}; check the path."
         return ToolFailure("validation_error", msg)
-    return ToolFailure("upstream", f"cannot {action} {path!r}: {_error_text(error)}.")
+    msg = f"cannot {action} {path!r}: {_error_text(error)}; try again, or pick another path."
+    return ToolFailure("upstream", msg)
 
 
 # --- read_file ---------------------------------------------------------------------------------
@@ -99,7 +110,8 @@ def read_file(
 
     A window holds up to ``max_lines`` lines, and at most 100,000 characters, ending on a line;
     its footer gives the offset that reads on, and the file's size in characters once fewer than
-    100 million are left.
+    100 million are left. Reaching an offset reads the file up to it, so a deep one in a huge
+    file takes longer.
 
     Args:
         path: Path to the file (absolute or relative to cwd).
@@ -142,7 +154,13 @@ def _file_window(p: Path, path: str, offset: int, max_lines: int) -> Window:
 
 def _skip(handle: TextIO, count: int) -> int:
     """Read past ``count`` characters, a chunk at a time; how many there were (fewer when the
-    file ends first)."""
+    file ends first).
+
+    A character offset has no byte position in UTF-8 without decoding what comes before it, so
+    reaching one costs the file up to it: text decodes at about 3 GB/s, bytes that are not UTF-8
+    at about 0.12 GB/s. A window 10 GB deep in such a file takes about 80 s, and paging through
+    all of it costs the square of its size; the windows near the start stay cheap.
+    """
     skipped = 0
     while skipped < count and (chunk := handle.read(min(count - skipped, _CHUNK))):
         skipped += len(chunk)
@@ -178,8 +196,8 @@ def list_directory(
     """List files and directories with sizes and types, a page of 1000 at a time, by name.
 
     Args:
-        path: Directory path. Defaults to current directory.
-        pattern: Glob pattern to filter entries, e.g. "*.py", "*.md". Defaults to all.
+        path: Directory path.
+        pattern: Glob pattern to filter entries, e.g. "*.py", "*.md".
         offset: How many entries to skip; the footer gives the next offset.
 
     Raises:
@@ -190,6 +208,9 @@ def list_directory(
     p = Path(path).expanduser()
     try:
         is_directory = _is_directory(p)
+        if is_directory:
+            with os.scandir(p):  # a folder this process cannot read fails here, not as empty
+                pass
     except (OSError, ValueError) as e:
         raise path_failure(e, "list", path) from e
     if not is_directory:
@@ -308,54 +329,142 @@ def search_files(
     if not pattern:
         raise ToolFailure("validation_error", "pattern cannot be empty; give the text to find.")
     root = Path(directory).expanduser()
+    scan = _Scan(root, Path(directory))
     try:
         if not _is_directory(root):
             raise ToolFailure("validation_error", _not_a_directory(directory))
-        found = _first(_hits(root, pattern), offset + max_results + 1)
+        hits = _hits(root, pattern, scan)
+        # Only the page is kept: the hits before it are counted, not held.
+        skipped = sum(1 for _ in itertools.islice(hits, offset))
+        found = [line.render(path) for path, line in itertools.islice(hits, max_results + 1)]
     except (OSError, ValueError) as e:
         raise path_failure(e, "search", directory) from e
-    if not found:
-        return ToolResult.success(f"No matches for {pattern!r} in {directory}")
-    page = found[offset : offset + max_results]
-    more = len(found) > offset + max_results
-    window = list_window(
-        page,
-        first=offset + 1,
-        total=None if more else len(found),
-        next_call={"offset": offset + len(page)} if more else None,
+    return _search_answer(
+        directory,
+        pattern,
+        scan,
+        offset,
+        skipped,
+        found[:max_results],
+        more=len(found) > max_results,
     )
-    heading = f"Lines in {directory} that contain {pattern!r} (path:line:offset: text):"
-    return window.result(heading=heading)
 
 
-def _first(hits: Iterator[str], count: int) -> list[str]:
-    """The first ``count`` of ``hits``: the search stops there."""
-    found: list[str] = []
-    for hit in hits:
-        found.append(hit)
-        if len(found) >= count:
-            break
-    return found
+def _search_answer(
+    directory: str,
+    pattern: str,
+    scan: _Scan,
+    offset: int,
+    skipped: int,
+    page: list[str],
+    *,
+    more: bool,
+) -> ToolResult:
+    """A search's answer: its page of lines, with the window's footer, or what the search found
+    before its scan budget ran out, and where it stopped."""
+    unread = scan.unread_note()
+    if not skipped and not page:
+        if scan.stopped_in is None:
+            return ToolResult.success(f"No matches for {pattern!r} in {directory}{unread}")
+        return ToolResult.success(
+            f"No matches for {pattern!r} in {directory} up to the scan limit ({scan.limit()}), "
+            f"which stopped in {scan.stopped_in}; {_NARROWER}{unread}"
+        )
+    heading = f"Lines in {directory} that contain {pattern!r} (path:line:offset: text){unread}:"
+    if scan.stopped_in is None:
+        total = None if more else skipped + len(page)
+        window = list_window(
+            page,
+            first=offset + 1,
+            total=total,
+            next_call={"offset": offset + len(page)} if more else None,
+        )
+        return window.result(heading=heading)
+    # The scan stopped before the page was full: no call reads on, and no total is known.
+    shown = (
+        f"results {offset + 1}-{offset + len(page)}" if page else f"no results from {offset + 1}"
+    )
+    footer = (
+        f"[{shown} | stopped at the scan limit ({scan.limit()}) in {scan.stopped_in}; {_NARROWER}]"
+    )
+    window = {
+        "unit": "results",
+        "first": offset + 1,
+        "last": offset + len(page),
+        "total": None,
+        "next_call": None,
+    }
+    text = "\n".join([heading, *page, footer])
+    return ToolResult.success(text, metadata={"window": window})
 
 
-def _hits(root: Path, pattern: str) -> Iterator[str]:
-    """Each line under ``root`` that contains ``pattern``, as ``path:line:offset: text``."""
+class _Scan:
+    """How far a search went: the characters and the files it read, the file where its budget
+    ran out, and the folders and files it could not read. Paths are shown as the search's
+    ``directory`` names them, so ``read_file`` takes each as it is."""
+
+    __slots__ = ("_base", "_root", "chars", "files", "stopped_in", "unread")
+
+    def __init__(self, root: Path, base: Path) -> None:
+        self._root, self._base = root, base
+        self.chars = 0
+        self.files = 0
+        self.stopped_in: Path | None = None
+        self.unread: list[Path] = []
+
+    def shown(self, path: Path) -> Path:
+        """``path`` (under the root) as the search shows it: under ``directory``, as given."""
+        return self._base / path.relative_to(self._root)
+
+    def limit(self) -> str:
+        """The budget, and how many files it went to."""
+        return f"{_SCAN_CHARS} characters in {self.files} file{'' if self.files == 1 else 's'}"
+
+    def unread_note(self) -> str:
+        """What the search could not read, or ``""``."""
+        if not self.unread:
+            return ""
+        named = ", ".join(map(str, self.unread[:_UNREAD_NAMED]))
+        more = len(self.unread) - _UNREAD_NAMED
+        return f"; this process cannot read {named}" + (f" and {more} more" if more > 0 else "")
+
+
+def _hits(root: Path, pattern: str, scan: _Scan) -> Iterator[tuple[Path, _Line]]:
+    """Each line under ``root`` that contains ``pattern``, with its file's path as shown, until
+    the scan budget runs out."""
     finder = re.compile(re.escape(pattern), re.IGNORECASE)
     base = root.resolve()
-    for path in _files(root):
-        if path.suffix in _BINARY_SUFFIXES or not path.is_file():
+    for path in _files(root, scan):
+        try:
+            if path.suffix in _BINARY_SUFFIXES or not path.is_file():
+                continue
+            if path.is_symlink() and not path.resolve().is_relative_to(base):  # out (G-27)
+                continue
+        except OSError:
+            scan.unread.append(scan.shown(path))
             continue
-        if path.is_symlink() and not path.resolve().is_relative_to(base):  # out (G-27)
-            continue
-        name = path.relative_to(root)
-        for line in _matching_lines(path, finder, len(pattern)):
-            yield line.render(name)
+        shown = scan.shown(path)
+        for line in _matching_lines(path, shown, finder, len(pattern), scan):
+            yield shown, line
+        if scan.stopped_in is not None:
+            return
 
 
-def _files(root: Path) -> Iterator[Path]:
+def _files(root: Path, scan: _Scan) -> Iterator[Path]:
     """The files under ``root``, folder by folder, each folder's in name order (so a page holds
-    the same lines on every call). A link to a folder is not followed."""
-    for folder, folders, names in os.walk(root):
+    the same lines on every call). A link to a folder is not followed.
+
+    Raises:
+        OSError: ``root`` itself cannot be read; a subfolder that cannot is noted in ``scan``.
+    """
+
+    def unreadable(error: OSError) -> None:
+        folder = Path(error.filename) if error.filename is not None else root
+        if folder == root:
+            raise error
+        scan.unread.append(scan.shown(folder))
+
+    for folder, folders, names in os.walk(root, onerror=unreadable):
         folders.sort()
         for name in sorted(names):
             yield Path(folder, name)
@@ -380,18 +489,30 @@ class _Line:
         return f"{shown} [part of a {self.length}-char line; {reads_on}]"
 
 
-def _matching_lines(path: Path, finder: re.Pattern[str], width: int) -> Iterator[_Line]:
-    """The lines of ``path`` that contain a match; none from where it stops being UTF-8 text (a
-    binary file) or cannot be read."""
+def _matching_lines(
+    path: Path, shown: Path, finder: re.Pattern[str], width: int, scan: _Scan
+) -> Iterator[_Line]:
+    """The lines of ``path`` that contain a match: none when its first chunk has a NUL (a
+    binary file), none from where it stops being UTF-8 text, and none past the scan budget (the
+    file is then where the search stopped). A file that cannot be read is noted in ``scan``."""
     try:
-        with path.open(encoding="utf-8", errors="strict", newline="\n") as handle:
-            yield from _scan(handle, finder, width)
-    except (UnicodeDecodeError, OSError):
+        with path.open("rb") as raw:
+            if b"\0" in raw.peek(_SNIFF)[:_SNIFF]:
+                return
+            scan.files += 1
+            with io.TextIOWrapper(raw, encoding="utf-8", errors="strict", newline="\n") as text:
+                yield from _scan(text, finder, width, scan)
+    except UnicodeDecodeError:
         return
+    except OSError:
+        scan.unread.append(shown)
+        return
+    if scan.chars > _SCAN_CHARS:
+        scan.stopped_in = shown
 
 
-def _scan(handle: TextIO, finder: re.Pattern[str], width: int) -> Iterator[_Line]:
-    """Each line of ``handle`` that contains a match, once.
+def _scan(handle: TextIO, finder: re.Pattern[str], width: int, scan: _Scan) -> Iterator[_Line]:
+    """Each line of ``handle`` that contains a match, once, until ``scan`` has read its budget.
 
     A line is read in pieces of at most ``_PIECE`` characters, so one of any length is searched
     in bounded memory; the last ``width - 1`` characters of a piece go with the next one, so a
@@ -400,6 +521,9 @@ def _scan(handle: TextIO, finder: re.Pattern[str], width: int) -> Iterator[_Line
     number, start, read, carried, last = 1, 0, 0, "", ""
     first: tuple[int, str] | None = None
     while piece := handle.readline(_PIECE):
+        scan.chars += len(piece)
+        if scan.chars > _SCAN_CHARS:
+            return
         if first is None:
             first = _around(carried + piece, finder, read - len(carried))
         read, last = read + len(piece), piece

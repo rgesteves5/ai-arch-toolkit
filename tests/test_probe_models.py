@@ -13,7 +13,9 @@ from scripts.probe_models import (
     ProbeAssertionError,
     ProbeResult,
     _probe_vision,
+    _refused_by_adapter,
     _sanitize_error_message,
+    add_numbers,
     catalog_fragment,
     classify_exception,
     load_model_configs,
@@ -24,11 +26,14 @@ from scripts.probe_models import (
     select_scenarios,
 )
 
-from ai_arch_toolkit.core import ModelCatalog, Provenance
+from ai_arch_toolkit.core import ModelCatalog, Provenance, RequestError, prepare_tools, user
 from ai_arch_toolkit.core._content import ImagePart
-from ai_arch_toolkit.core._exceptions import APIError, RateLimitError
+from ai_arch_toolkit.core._exceptions import APIError, RateLimitError, UnpricedModelError
+from ai_arch_toolkit.core._providers import create_provider
+from ai_arch_toolkit.core._providers._base import refused_or_unread
 from ai_arch_toolkit.core._response import Response
 from tests.fake_provider import fake_llm
+from tests.provider_calls import prepare
 
 
 def test_load_model_configs(tmp_path: Path) -> None:
@@ -232,12 +237,27 @@ def _result(
     )
 
 
+def _refused(model: str, provider: str, scenario: str) -> ProbeResult:
+    """The adapter refused the call before sending it, as its own tables say."""
+    return ProbeResult(
+        model=model,
+        provider=provider,
+        scenario=scenario,
+        ok=False,
+        classification="unexpected_response",
+        latency_s=0.0,
+        error_type="RequestError",
+        message=f"{model} takes no output_schema",
+        refused_by_adapter=True,
+    )
+
+
 def test_the_catalog_fragment_states_only_what_a_run_proved(tmp_path: Path) -> None:
-    """C06d: a pass states the fact true, a refusal as unsupported false; a rate limit, a timeout
+    """C06d: a pass states the fact true, the adapter's refusal false; a rate limit, a timeout
     or a wrong answer states nothing. The fragment loads into a catalog as probe facts."""
     results = [
         _result("gpt-test", "openai", "tools_loop", "ok"),
-        _result("gpt-test", "openai", "structured", "unsupported_capability"),
+        _refused("gpt-test", "openai", "structured"),
         _result("gpt-test", "openai", "json_mode", "rate_limit"),
         _result("gpt-test", "openai", "stream", "timeout"),
         _result("gpt-test", "openai", "plain", "ok"),  # no catalog fact
@@ -270,3 +290,79 @@ def test_an_empty_run_gives_a_fragment_that_loads_empty(tmp_path: Path) -> None:
     catalog.load(path)
 
     assert catalog.entries() == []
+
+
+def test_a_provider_error_that_reads_as_unsupported_is_left_for_review(tmp_path: Path) -> None:
+    """C06d: only the adapter's refusal states a fact false. A provider's error that the
+    heuristic reads as unsupported may be a framework bug ("Invalid schema for
+    response_format"), so the fragment lists it as a comment, and states nothing."""
+    results = [
+        ProbeResult(
+            model="gpt-test",
+            provider="openai",
+            scenario="structured",
+            ok=False,
+            classification="unsupported_capability",
+            latency_s=0.2,
+            status_code=400,
+            error_type="APIError",
+            message="API 400: Invalid schema for response_format 'answer'",
+        ),
+        _refused("gpt-test", "openai", "tools_loop"),
+    ]
+    text = catalog_fragment(results, verified_at=date(2026, 10, 8), ref="run")
+    path = tmp_path / "run.catalog.toml"
+    path.write_text(text, encoding="utf-8")
+    catalog = ModelCatalog(defaults=False)
+
+    catalog.load(path)
+
+    found = catalog.get("gpt-test", provider="openai")
+    assert found is not None
+    assert found.tools is False and found.structured_output is None
+    flagged = [line for line in text.splitlines() if "structured_output" in line]
+    assert flagged and all(line.startswith("#") for line in flagged)
+
+
+def test_only_the_adapters_own_preparation_is_its_refusal() -> None:
+    """The adapter's ``prepare`` refusing what the model does not take is its refusal; the SDK's
+    validation, an unpriced model or the caller's arguments are not."""
+    agents = create_provider("grok-4.20-multi-agent", provider="xai", api_key="test-key")
+    with pytest.raises(RequestError) as refused:  # its client tools are not supported
+        prepare(agents, [user("hi")], tools=prepare_tools([add_numbers]))
+
+    assert _refused_by_adapter(refused.value)
+    for other in (
+        refused_or_unread(ValueError("bad field"), sent=False),
+        UnpricedModelError("gpt-test has no price"),
+        RequestError("json_mode and output_schema are mutually exclusive"),
+    ):
+        try:
+            raise other
+        except RequestError as raised:
+            assert not _refused_by_adapter(raised)
+
+
+def test_a_fragment_keyed_by_an_alias_loads_over_the_default_catalog(tmp_path: Path) -> None:
+    """The inventory names xAI's models by their aliases: the run's facts land on the entry of
+    the model, over the seed."""
+    results = [
+        _result("grok-4.20-reasoning", "xai", "tools_loop", "ok"),
+        _result("claude-haiku-4-5-20251001", "anthropic", "stream", "ok"),
+    ]
+    path = tmp_path / "run.catalog.toml"
+    path.write_text(
+        catalog_fragment(results, verified_at=date(2026, 10, 8), ref="probe run X"), "utf-8"
+    )
+    catalog = ModelCatalog()
+
+    catalog.load(path)
+
+    grok = catalog.get("grok-4.20-reasoning")
+    assert grok is not None and grok.model == "grok-4.20-0309-reasoning"
+    tools = grok.provenance("tools")
+    assert tools is not None and tools.kind == "probe"
+    assert grok.context_window == 1_000_000
+    haiku = catalog.get("claude-haiku-4-5")
+    streaming = haiku.provenance("streaming") if haiku is not None else None
+    assert streaming is not None and streaming.kind == "probe"

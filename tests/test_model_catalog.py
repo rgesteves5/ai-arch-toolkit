@@ -4,9 +4,13 @@ between each adapter and the facts the catalog takes from it."""
 from __future__ import annotations
 
 import ast
+import json
+import re
 import sys
+import threading
+import types
 import warnings
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +23,7 @@ from ai_arch_toolkit.core import (
     Provenance,
     RequestError,
     code_execution,
+    document,
     image_generation,
     model_catalog,
     prepare_tools,
@@ -27,6 +32,7 @@ from ai_arch_toolkit.core import (
     web_search,
 )
 from ai_arch_toolkit.core._providers import create_provider
+from ai_arch_toolkit.core._providers._base import SERVER_TOOL_TYPES
 from tests.provider_calls import prepare
 
 DOCS = Provenance(kind="docs", ref="https://example.com/models", verified_at=date(2026, 10, 8))
@@ -107,6 +113,50 @@ def test_an_alias_that_names_another_entry_is_refused() -> None:
         catalog.register(
             ModelCapabilities(provider="xai", model="grok-b", aliases=("grok-a",), tools=True)
         )
+
+
+def test_register_load_and_unregister_name_the_entry_get_finds(tmp_path: Path) -> None:
+    """An id names the entry ``get`` finds for it: its own, an alias's or a dated snapshot's.
+    xAI's inventory ids are aliases, and Anthropic's snapshots are dated."""
+    catalog = ModelCatalog()
+    catalog.register(
+        ModelCapabilities(provider="xai", model="grok-4.20-reasoning", output_token_limit=7)
+    )
+    catalog.load(
+        _write(tmp_path, f'[xai."grok-4.20-reasoning"]\nparallel_tool_calls = true\n{_SOURCE}\n')
+    )
+
+    found = catalog.get("grok-4.20-0309-reasoning")
+    assert found is not None and found.model == "grok-4.20-0309-reasoning"
+    assert (found.output_token_limit, found.parallel_tool_calls) == (7, True)
+    assert found.context_window == 1_000_000  # the seed's, kept
+    assert found.aliases == ("grok-4.20-reasoning",)
+    assert "grok-4.20-reasoning" not in {entry.model for entry in catalog.entries("xai")}
+
+    catalog.register(
+        ModelCapabilities(
+            provider="anthropic", model="claude-haiku-4-5-20251001", parallel_tool_calls=True
+        )
+    )
+    haiku = catalog.get("claude-haiku-4-5")
+    assert haiku is not None and haiku.parallel_tool_calls is True
+    assert haiku.context_window == 200_000
+
+    catalog.unregister("claude-haiku-4-5-20251001")
+    assert catalog.get("claude-haiku-4-5") is None
+
+
+def test_replace_through_an_alias_keeps_the_ids_that_name_the_entry() -> None:
+    catalog = ModelCatalog()
+
+    catalog.register(
+        ModelCapabilities(provider="xai", model="grok-4.20-reasoning", tools=False), replace=True
+    )
+
+    found = catalog.get("grok-4.20-reasoning")
+    assert found is not None and found.model == "grok-4.20-0309-reasoning"
+    assert found.tools is False and found.context_window is None
+    assert found.aliases == ("grok-4.20-reasoning",)
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +338,124 @@ def test_a_source_must_name_a_fact() -> None:
         ModelCapabilities(provider="openai", model="gpt-x").provenance("tool")
 
 
+@pytest.mark.parametrize(
+    ("fact", "value"),
+    [
+        ("tools", "yes"),
+        ("tools", 1),
+        ("context_window", -1),
+        ("context_window", True),
+        ("input_modalities", {"txt"}),
+        ("input_modalities", "text"),
+        ("output_modalities", {"audio"}),
+        ("tool_choice_modes", {"forced"}),
+        ("thinking_mode", "sometimes"),
+        ("thinking_efforts", ["hgh"]),
+        ("server_tools", {"web_serch"}),
+    ],
+)
+def test_register_refuses_what_load_refuses(fact: str, value: object) -> None:
+    catalog = ModelCatalog(defaults=False)
+
+    with pytest.raises(ValueError, match=fact):
+        catalog.register(ModelCapabilities(provider="openai", model="gpt-x", **{fact: value}))
+    assert catalog.entries() == []
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        {"kind": "rumour", "ref": "x"},
+        {"kind": "docs", "ref": ""},
+        {"kind": "docs", "ref": "x", "verified_at": datetime(2026, 10, 8, 10, 0)},
+    ],
+)
+def test_a_source_is_checked_as_the_loader_checks_it(source: dict[str, Any]) -> None:
+    with pytest.raises(ValueError):
+        Provenance(**source)
+
+
+def test_an_entry_keeps_its_sets_and_efforts_as_the_loader_does() -> None:
+    entry = ModelCapabilities(
+        provider="openai",
+        model="gpt-x",
+        aliases=["gpt-y"],  # type: ignore[arg-type]
+        input_modalities={"text", "image"},  # type: ignore[arg-type]
+        thinking_efforts=["high", "low", "low"],  # type: ignore[arg-type]
+        sources=(("input_modalities", DOCS),),
+    )
+
+    assert entry.aliases == ("gpt-y",)
+    assert isinstance(entry.input_modalities, frozenset)
+    assert entry.thinking_efforts == ("low", "high")
+    assert json.loads(json.dumps(entry.to_dict()))["input_modalities"] == ["image", "text"]
+
+
+# ---------------------------------------------------------------------------
+# Threads: a read that overlaps a change never keeps what it built before it
+# ---------------------------------------------------------------------------
+
+
+def test_a_read_that_overlaps_a_register_never_keeps_the_entry_it_built(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A reader building an entry is in the adapter's ``model_facts``, Python code where a
+    thread may switch; here it waits there, made certain, while the writer registers."""
+    from ai_arch_toolkit.core._providers._openai import OpenAIProvider
+
+    catalog = ModelCatalog()
+    building, written = threading.Event(), threading.Event()
+    real = OpenAIProvider.model_facts.__func__  # type: ignore[attr-defined]
+
+    def paused(cls: type[OpenAIProvider], model: str) -> Any:
+        if threading.current_thread().name == "reader":
+            building.set()
+            written.wait(timeout=5)
+        return real(cls, model)
+
+    monkeypatch.setattr(OpenAIProvider, "model_facts", classmethod(paused))
+    reader = threading.Thread(target=catalog.get, args=("gpt-5.4-mini",), name="reader")
+    reader.start()
+    assert building.wait(timeout=5)
+
+    catalog.register(ModelCapabilities(provider="openai", model="gpt-5.4-mini", context_window=7))
+    written.set()
+    reader.join(timeout=5)
+
+    found = catalog.get("gpt-5.4-mini")
+    assert found is not None and found.context_window == 7
+
+
+def test_a_read_that_overlaps_a_load_never_hides_the_model_it_added(tmp_path: Path) -> None:
+    """A reader walking an entry's aliases waits there, made certain, while the writer loads a
+    new model: the model is found after."""
+    reading, written = threading.Event(), threading.Event()
+
+    class PausedAliases(tuple[str, ...]):
+        def __iter__(self) -> Any:
+            if threading.current_thread().name == "reader" and not reading.is_set():
+                reading.set()
+                written.wait(timeout=5)
+            return super().__iter__()
+
+    catalog = ModelCatalog(defaults=False)
+    catalog.register(
+        ModelCapabilities(
+            provider="xai", model="grok-a", aliases=PausedAliases(("grok-b",)), context_window=1
+        )
+    )
+    reader = threading.Thread(target=catalog.get, args=("grok-a",), name="reader")
+    reader.start()
+    assert reading.wait(timeout=5)
+
+    catalog.load(_write(tmp_path, f'[ollama."llama3"]\ntools = true\n{_SOURCE}\n'))
+    written.set()
+    reader.join(timeout=5)
+
+    assert catalog.get("llama3", provider="ollama") is not None
+    assert catalog.get("grok-b") is not None
+
+
 # ---------------------------------------------------------------------------
 # The strict loader
 # ---------------------------------------------------------------------------
@@ -318,6 +486,10 @@ _SOURCE = 'source = { kind = "docs", ref = "https://example.com", verified_at = 
         (
             f'[openai."gpt-x"]\nthinking_efforts = ["low", "turbo"]\n{_SOURCE}\n',
             ("gpt-x", "thinking_efforts"),
+        ),
+        (
+            f'[openai."gpt-x"]\nserver_tools = ["web_serch"]\n{_SOURCE}\n',
+            ("gpt-x", "server_tools", "web_serch"),
         ),
         ('[openai."gpt-x"]\ntools = true\n', ("gpt-x", "tools", "source")),
         (
@@ -352,12 +524,34 @@ def test_the_loader_names_the_entry_and_the_key_it_refuses(
     assert catalog.entries() == []  # nothing of a refused file is kept
 
 
-def test_the_loader_needs_its_version(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "version", ["", "catalog_version = true\n", "catalog_version = 2\n", 'catalog_version = "1"\n']
+)
+def test_the_loader_needs_its_version(tmp_path: Path, version: str) -> None:
     path = tmp_path / "catalog.toml"
-    path.write_text(f'[openai."gpt-x"]\ntools = true\n{_SOURCE}\n', encoding="utf-8")
+    path.write_text(f'{version}[openai."gpt-x"]\ntools = true\n{_SOURCE}\n', encoding="utf-8")
 
     with pytest.raises(ValueError, match="catalog_version"):
         ModelCatalog(defaults=False).load(path)
+
+
+def test_a_file_that_is_not_toml_is_refused_by_its_path(tmp_path: Path) -> None:
+    path = _write(tmp_path, '[openai."gpt-x"\ntools = true\n')
+
+    with pytest.raises(ValueError, match=re.escape(str(path))):
+        ModelCatalog(defaults=False).load(path)
+
+
+def test_the_loader_lists_each_effort_once(tmp_path: Path) -> None:
+    catalog = ModelCatalog(defaults=False)
+    catalog.load(
+        _write(
+            tmp_path, f'[openai."gpt-x"]\nthinking_efforts = ["high", "low", "low"]\n{_SOURCE}\n'
+        )
+    )
+
+    found = catalog.get("gpt-x")
+    assert found is not None and found.thinking_efforts == ("low", "high")
 
 
 def test_the_loader_reads_every_fact_with_its_source(tmp_path: Path) -> None:
@@ -492,6 +686,64 @@ source = {{ kind = "probe", ref = "run 3", verified_at = 2026-10-08 }}
     narrowed = published.provenance("input_modalities")
     assert narrowed is not None and narrowed.kind == "adapter"
     assert seen is not None and seen.input_modalities == frozenset({"text", "image", "pdf"})
+
+
+def test_the_adapter_narrows_a_models_endpoint_list_too(tmp_path: Path) -> None:
+    """A list from the provider's models endpoint (``kind="api"``) is the provider's word, as
+    its page is."""
+    catalog = ModelCatalog()
+    catalog.load(
+        _write(
+            tmp_path,
+            """
+[xai."grok-9"]
+input_modalities = ["text", "image", "pdf"]
+source = { kind = "api", ref = "GET /v1/models/grok-9", verified_at = 2026-10-08 }
+""",
+        )
+    )
+
+    found = catalog.get("grok-9")
+
+    assert found is not None and found.input_modalities == frozenset({"text", "image"})
+    narrowed = found.provenance("input_modalities")
+    assert narrowed is not None and narrowed.kind == "adapter"
+
+
+def test_a_gemini_image_model_reads_the_pdfs_its_completions_carry() -> None:
+    """Gemini's image models complete: a PDF reaches them, video does not (C06.1)."""
+    found = model_catalog.get("gemini-3.1-flash-image")
+
+    assert found is not None
+    assert found.input_modalities == frozenset({"text", "image", "pdf"})
+
+
+def test_the_images_api_narrows_a_published_text_output() -> None:
+    """GPT Image 1.5's page says it writes images and text; the Images API, the adapter's only
+    way to it, answers with images (C06.1)."""
+    found = model_catalog.get("gpt-image-1.5")
+
+    assert found is not None and found.output_modalities == frozenset({"image"})
+    source = found.provenance("output_modalities")
+    assert source is not None and source.kind == "adapter"
+
+
+def test_a_broken_sdk_leaves_the_adapters_facts_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An installed SDK that fails to import (a protobuf built for another version raises
+    ``TypeError``) is as good as a missing one: the adapter's facts are unknown."""
+
+    class Broken(types.ModuleType):
+        def __getattr__(self, name: str) -> Any:
+            raise TypeError("Descriptors cannot be created directly")
+
+    monkeypatch.setitem(sys.modules, "ai_arch_toolkit.core._providers._xai", Broken("_xai"))
+    catalog = ModelCatalog()
+
+    found = catalog.get("grok-4.7")
+
+    assert found is not None and found.context_window == 500_000
+    assert found.tools is None and found.server_tools is None
+    assert all(entry.tools is None for entry in catalog.entries(provider="xai"))
 
 
 def test_without_the_sdk_extra_the_published_modalities_stand(
@@ -693,3 +945,55 @@ def test_structured_output_and_json_mode_are_what_the_adapter_sends(
     ):
         if fact is not None:
             assert _accepts(provider, model, **kwargs) is fact
+
+
+_PDF = document(b"%PDF-1.4 catalog contract", name="contract.pdf")
+
+
+@pytest.mark.parametrize(("provider", "model"), _SEEDED)
+def test_a_pdf_reaches_the_wire_where_the_catalog_says_the_model_reads_one(
+    provider: str, model: str
+) -> None:
+    """C06.1 for inputs: the adapter's own list is what its completions carry, and a PDF the
+    catalog lists reaches the wire."""
+    adapter = create_provider(model, provider=provider, api_key="test-key")
+    facts = type(adapter).model_facts(model)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # the xAI adapter warns as it drops the document
+        try:
+            prepared = prepare(adapter, [user(["Read it.", _PDF])], max_tokens=1024)
+        except RequestError:  # an image model no completion reaches
+            prepared = None
+    sent = prepared is not None and "application/pdf" in repr(prepared.params)
+
+    assert facts.input_modalities is not None
+    assert ("pdf" in facts.input_modalities) is sent
+    stated = _facts(provider, model).input_modalities
+    if stated is not None and "pdf" in stated:
+        assert sent
+
+
+@pytest.mark.parametrize(("provider", "model"), _SEEDED)
+def test_a_model_no_completion_reaches_writes_only_images(provider: str, model: str) -> None:
+    """C06.1 for outputs: what only draws answers with images, whatever its page says."""
+    adapter = type(create_provider(model, provider=provider, api_key="test-key"))
+    draws_only = not _accepts(provider, model)
+
+    assert (adapter.model_facts(model).output_modalities == frozenset({"image"})) is draws_only
+    if draws_only:
+        assert _facts(provider, model).output_modalities == frozenset({"image"})
+
+
+def test_the_server_tool_vocabulary_is_the_types_core_makes() -> None:
+    """The loader's words for ``server_tools`` are the types ``core/_server_tools.py`` builds,
+    and the wire contract above tries each of them."""
+    tree = ast.parse((SRC / "_server_tools.py").read_text())
+    made = {
+        keyword.value.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "ServerTool"
+        for keyword in node.keywords
+        if keyword.arg == "type" and isinstance(keyword.value, ast.Constant)
+    }
+
+    assert set(SERVER_TOOL_TYPES) == made == set(_SERVER_TOOLS)

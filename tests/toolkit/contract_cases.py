@@ -128,12 +128,28 @@ _WHOLE = """
 """
 WHOLE = frozenset(_WHOLE.split())
 
-# Tools whose output exists only for the call that made it, and why: reading on would run it
-# again, with its effects. Point 1 is a footer that says what was shown, the size and how to
-# narrow the output, in place of a next call (``Window.rest``); their window case proves it.
-ONCE: dict[str, str] = {
-    "run_command": "a shell command's output: reading on would run the command again",
-    "python_repl": "a program's output: reading on would run the program again",
+
+@dataclass(frozen=True, slots=True)
+class Once:
+    """Why a tool's output exists only for its call, and the words its footer uses to say how to
+    narrow the output, in place of a next call."""
+
+    why: str
+    narrow: str
+
+
+# Tools whose output exists only for the call that made it: reading on would run it again, with
+# its effects. Point 1 is a footer that says what was shown, the size and how to narrow the
+# output (``Window.rest``), in the words declared here; their window case proves it.
+ONCE: dict[str, Once] = {
+    "run_command": Once(
+        why="a shell command's output: reading on would run the command again",
+        narrow="run the command again narrowed",
+    ),
+    "python_repl": Once(
+        why="a program's output: reading on would run the program again",
+        narrow="run the code again printing less",
+    ),
 }
 
 # Network modules whose errors no source documents, and why: point 2, the source's errors, does
@@ -475,8 +491,9 @@ WINDOW_CASES: dict[str, Case] = {
     # A fixed command, as in test_shell.py: the contract never builds arguments for it.
     "run_command": Case(args={"command": "seq 1 3000", "max_output": 1000}),
     "python_repl": Case(args={"code": "for number in range(6000):\n    print(number)"}),
-    # Geo, weather and natural events (T08b). A source with no offset of its own is asked for
-    # its first results again, one more each time (``_first_results``).
+    # Geo, weather and natural events (T08b). A source with no offset of its own is asked again:
+    # Open-Meteo and Nominatim for all they give, EONET for one more each time
+    # (``_first_results``).
     "geocode": Case(
         args={"city": "Springfield", "max_results": 2},
         answers=(Answer(body=geo_answers.geocoding(3)),),
@@ -661,10 +678,8 @@ NOT_FOUND_CASES: dict[str, Case] = {
         "eurostat_dataset",
         "eurostat_series",
         "gbif_species",
-        "internet_archive_item",
         "open_library_isbn",
         "open_library_work",
-        "openfda_food_recall",
         "pdb_entry",
         "pdb_ligands",
         "pdb_chemical_component",
@@ -726,6 +741,9 @@ NOT_FOUND_CASES: dict[str, Case] = {
     "read_file": Case(args={"path": "missing.txt"}),
     "csv_read": Case(args={"path": "missing.csv"}),
     "list_directory": Case(args={"path": "missing"}),
+    # The Internet Archive's metadata API answers an unknown identifier with an empty array
+    # (https://archive.org/developers/md-read.html).
+    "internet_archive_item": Case(args={}, answers=(Answer(body=[]),)),
     # youtube-transcript-api raises VideoUnavailable for a video YouTube does not play
     # (https://github.com/jdepoix/youtube-transcript-api, _errors.py).
     **{
@@ -736,8 +754,19 @@ NOT_FOUND_CASES: dict[str, Case] = {
             "youtube_transcript_search",
         )
     },
-    # T07a, health: a 404 for a label or a product; OLS answers an unknown ID with no terms.
+    # T07a, health: a 404 for a label or a product; OLS answers an unknown ID with no terms, and
+    # openFDA an unknown recall number with its 404 NOT_FOUND
+    # (https://github.com/FDA/openfda/blob/master/api/faers/api.js).
     **_missing_by_404("dailymed_label_text", "open_food_facts_product", "open_food_facts_compare"),
+    "openfda_food_recall": Case(
+        args={},
+        answers=(
+            Answer(
+                status=404,
+                body={"error": {"code": "NOT_FOUND", "message": "No matches found!"}},
+            ),
+        ),
+    ),
     "foodon_term": Case(args={}, answers=(Answer(body=health.terms(0, total=0)),)),
     "json_extract": Case(args={"json_string": '{"a": [1, 2]}', "path": "missing"}),
 }

@@ -8,15 +8,20 @@ pure ``model_facts`` classmethod; no adapter reads the catalog. An app overrides
 ``load()`` over the seed and the adapter, ``register()`` over everything, field by field.
 
 Ids match as everywhere in ``core`` (``_model_id.lookup``): an entry's id, an alias, or a dated
-snapshot of either; never a family prefix, since a variant is another model.
+snapshot of either; never a family prefix, since a variant is another model. ``register``,
+``load`` and ``unregister`` name an entry the same way.
+
+A catalog is safe to share between threads: a change builds the next version of it, under a
+lock, and a read takes the current one, so what a read builds belongs to the version it read.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import threading
 import tomllib
-from collections.abc import Callable, Iterable
-from dataclasses import dataclass, fields
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass, field, fields
 from datetime import date
 from functools import cache
 from pathlib import Path
@@ -26,8 +31,10 @@ from ai_arch_toolkit.core._model_id import lookup
 from ai_arch_toolkit.core._providers import _match_provider
 from ai_arch_toolkit.core._providers._base import (
     EFFORT_ORDER,
+    SERVER_TOOL_TYPES,
     AdapterFacts,
     InputModality,
+    OutputModality,
     ThinkingMode,
     ToolChoiceMode,
     ordered_efforts,
@@ -39,10 +46,16 @@ if TYPE_CHECKING:
 __all__ = ["ModelCapabilities", "ModelCatalog", "Provenance", "model_catalog"]
 
 type SourceKind = Literal["docs", "probe", "api", "adapter", "override"]
-type OutputModality = Literal["text", "image"]
 
 CATALOG_VERSION = 1
 _SEED = Path(__file__).with_name("_default_catalog.toml")
+
+
+def _vocabulary(alias: Any) -> tuple[str, ...]:
+    return get_args(alias.__value__)
+
+
+_SOURCE_KINDS = _vocabulary(SourceKind)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -61,6 +74,16 @@ class Provenance:
     kind: SourceKind
     ref: str
     verified_at: date | None = None
+
+    def __post_init__(self) -> None:
+        if self.kind not in _SOURCE_KINDS:
+            raise ValueError(f"kind must be one of {', '.join(_SOURCE_KINDS)}, got {self.kind!r}")
+        if not isinstance(self.ref, str) or not self.ref:
+            raise ValueError(f"ref must name the page, run or code, got {self.ref!r}")
+        if self.verified_at is not None and type(self.verified_at) is not date:
+            raise ValueError(
+                f"verified_at must be a date (a datetime is not), got {self.verified_at!r}"
+            )
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -95,6 +118,11 @@ class ModelCapabilities:
         thinking_budget: It takes a ``thinking_budget`` in tokens.
         server_tools: The server tools it runs, by ``ServerTool.type``.
         sources: Each set fact's :class:`Provenance`, by field name.
+
+    Raises:
+        ValueError: A fact of the wrong type or outside its vocabulary, as
+            :meth:`ModelCatalog.load` refuses it. A set may be given as any collection, and is
+            kept as a ``frozenset`` (the efforts as a tuple, weakest first, each once).
     """
 
     provider: str
@@ -118,12 +146,28 @@ class ModelCapabilities:
     sources: tuple[tuple[str, Provenance], ...] = ()
 
     def __post_init__(self) -> None:
-        if not self.provider or not self.model:
+        named = isinstance(self.provider, str) and isinstance(self.model, str)
+        if not named or not self.provider or not self.model:
             raise ValueError(
                 f"an entry needs a provider and a model, got {self.provider!r}, {self.model!r}"
             )
-        for name, _ in self.sources:
+        where = f"{self.provider} {self.model!r}"
+        try:
+            aliases = _strings(self.aliases)
+        except ValueError as refused:
+            raise ValueError(f"{where}: aliases {refused}") from None
+        if not isinstance(self.aliases, tuple):
+            object.__setattr__(self, "aliases", tuple(aliases))
+        for name in _FACTS:
+            if (value := getattr(self, name)) is not None:
+                try:
+                    object.__setattr__(self, name, _PARSERS[name](value))
+                except ValueError as refused:
+                    raise ValueError(f"{where}: {name} {refused}") from None
+        for name, source in self.sources:
             _check_fact(name)
+            if not isinstance(source, Provenance):
+                raise ValueError(f"{where}: sources.{name} is not a Provenance, got {source!r}")
 
     def provenance(self, name: str) -> Provenance | None:
         """Where the fact ``name`` comes from; ``None`` when it is not set."""
@@ -160,8 +204,11 @@ _FACTS = tuple(
     for f in fields(ModelCapabilities)
     if f.name not in {"provider", "model", "aliases", "sources"}
 )
-# The adapter's facts a layer may leave unset; its input modalities narrow a published list.
-_ADAPTER_FACTS = tuple(f.name for f in fields(AdapterFacts) if f.name != "input_modalities")
+# The adapter's modalities narrow a published list (C06.1); its other facts fill in what no
+# layer sets. The provider's word is its page or its models endpoint.
+_NARROWED = ("input_modalities", "output_modalities")
+_ADAPTER_FACTS = tuple(f.name for f in fields(AdapterFacts) if f.name not in _NARROWED)
+_PUBLISHED: frozenset[str] = frozenset({"docs", "api"})
 _OVERRIDE = Provenance(kind="override", ref="ModelCatalog.register")
 
 
@@ -205,7 +252,7 @@ def _with_adapter(
     entry: ModelCapabilities, adapter: type[BaseProvider[Any, Any]]
 ) -> ModelCapabilities:
     """``entry`` with the adapter's facts where no layer set one, and a published modality list
-    narrowed to what the adapter sends (C06.1): an app's observation is never narrowed."""
+    narrowed to what the adapter carries (C06.1): an app's observation is never narrowed."""
     facts = adapter.model_facts(entry.model)
     source = Provenance(
         kind="adapter", ref=f"{adapter.__module__}.{adapter.__qualname__}.model_facts"
@@ -215,30 +262,33 @@ def _with_adapter(
         for name in _ADAPTER_FACTS
         if (value := getattr(facts, name)) is not None and getattr(entry, name) is None
     }
-    if (narrowed := _narrowed(entry, facts.input_modalities)) is not None:
-        changes["input_modalities"] = narrowed
+    for name in _NARROWED:
+        if (narrowed := _narrowed(entry, name, getattr(facts, name))) is not None:
+            changes[name] = narrowed
     sources = dict(entry.sources) | dict.fromkeys(changes, source)
     return dataclasses.replace(entry, sources=_sorted_sources(sources), **changes)
 
 
 def _narrowed(
-    entry: ModelCapabilities, sent: frozenset[InputModality] | None
-) -> frozenset[InputModality] | None:
-    """The published inputs without those the adapter does not send, when it drops some; an
-    input list of any other kind (a probe's, an override) is the app's word, left as it is."""
-    published = entry.input_modalities
-    stated = entry.provenance("input_modalities")
-    if published is None or sent is None or stated is None or stated.kind != "docs":
+    entry: ModelCapabilities, name: str, carried: frozenset[str] | None
+) -> frozenset[str] | None:
+    """The published modalities ``name`` without those the adapter does not carry, when it
+    drops some. A list of any other kind (a probe's, an override) is the app's word, left as
+    it is."""
+    published: frozenset[str] | None = getattr(entry, name)
+    stated = entry.provenance(name)
+    if published is None or carried is None or stated is None or stated.kind not in _PUBLISHED:
         return None
-    return None if published <= sent else published & sent
+    return None if published <= carried else published & carried
 
 
 def _adapter_of(provider: str) -> type[BaseProvider[Any, Any]] | None:
     """The adapter of a provider's own host; ``None`` for an app's namespace, or for an adapter
-    whose SDK extra is not installed (its facts are then unknown)."""
+    that does not import: its SDK extra is not installed, or the installed SDK is broken (a
+    protobuf built for another version raises ``TypeError``). Its facts are then unknown."""
     try:
         return _import_adapter(provider)
-    except ImportError:
+    except Exception:  # whatever an SDK raises on import, its facts are unknown
         return None
 
 
@@ -287,11 +337,13 @@ def _boolean(value: object) -> bool:
 
 
 def _strings(value: object, vocabulary: tuple[str, ...] | None = None) -> list[str]:
-    if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
+    """A list of names (a TOML array, or any collection but a string), each in ``vocabulary``."""
+    names = list(value) if isinstance(value, list | tuple | set | frozenset) else None
+    if names is None or not all(isinstance(item, str) and item for item in names):
         raise ValueError(f"must be a list of names, got {value!r}")
-    if vocabulary is not None and (unknown := sorted(set(value) - set(vocabulary))):
+    if vocabulary is not None and (unknown := sorted(set(names) - set(vocabulary))):
         raise ValueError(f"takes {', '.join(vocabulary)}; not {', '.join(unknown)}")
-    return value
+    return names
 
 
 def _choice(vocabulary: tuple[str, ...]) -> Callable[[object], object]:
@@ -303,12 +355,8 @@ def _choice(vocabulary: tuple[str, ...]) -> Callable[[object], object]:
     return parse
 
 
-def _set_of(vocabulary: tuple[str, ...] | None) -> Callable[[object], object]:
+def _set_of(vocabulary: tuple[str, ...]) -> Callable[[object], object]:
     return lambda value: frozenset(_strings(value, vocabulary))
-
-
-def _vocabulary(alias: Any) -> tuple[str, ...]:
-    return get_args(alias.__value__)
 
 
 _PARSERS: dict[str, Callable[[object], object]] = {
@@ -326,7 +374,7 @@ _PARSERS: dict[str, Callable[[object], object]] = {
     "thinking_mode": _choice(_vocabulary(ThinkingMode)),
     "thinking_efforts": lambda value: ordered_efforts(_strings(value, EFFORT_ORDER)),
     "thinking_budget": _boolean,
-    "server_tools": _set_of(None),
+    "server_tools": _set_of(SERVER_TOOL_TYPES),
 }
 
 
@@ -338,20 +386,16 @@ def _provenance(raw: object, where: str) -> Provenance:
         raise ValueError(
             f"{where}: unknown key {unknown[0]!r} (a source has kind, ref, verified_at)"
         )
-    kinds = _vocabulary(SourceKind)
-    if raw.get("kind") not in kinds:
-        raise ValueError(
-            f"{where}: kind must be one of {', '.join(kinds)}, got {raw.get('kind')!r}"
-        )
-    ref = raw.get("ref")
-    if not isinstance(ref, str) or not ref:
-        raise ValueError(f"{where}: ref must name the page, run or code, got {ref!r}")
     day = raw.get("verified_at")
     if type(day) is not date:  # a TOML datetime is a date too, and is refused
         raise ValueError(
             f"{where}: verified_at must be a TOML date such as 2026-10-08, got {day!r}"
         )
-    return Provenance(kind=raw["kind"], ref=ref, verified_at=day)
+    kind, ref = raw.get("kind"), raw.get("ref")
+    try:  # Provenance checks the kind and the ref
+        return Provenance(kind=kind, ref=ref, verified_at=day)  # type: ignore[arg-type]
+    except ValueError as refused:
+        raise ValueError(f"{where}: {refused}") from None
 
 
 def _sources(values: dict[str, Any], facts: Iterable[str], where: str) -> dict[str, Provenance]:
@@ -400,11 +444,14 @@ def _entry(provider: str, model: str, values: object, where: str) -> ModelCapabi
 
 
 def _parse(path: Path) -> list[ModelCapabilities]:
-    """Every entry of a catalog file, or ``ValueError`` naming the entry and the key."""
-    with path.open("rb") as file:
-        data = tomllib.load(file)
+    """Every entry of a catalog file, or ``ValueError`` naming the file, the entry and the key."""
+    try:
+        with path.open("rb") as file:
+            data = tomllib.load(file)
+    except tomllib.TOMLDecodeError as refused:
+        raise ValueError(f"{path}: not a TOML file: {refused}") from refused
     version = data.pop("catalog_version", None)
-    if version != CATALOG_VERSION:
+    if type(version) is not int or version != CATALOG_VERSION:  # true == 1, and is refused
         raise ValueError(f"{path}: catalog_version must be {CATALOG_VERSION}, got {version!r}")
     entries: list[ModelCapabilities] = []
     for provider, models in data.items():
@@ -427,6 +474,65 @@ def _seed() -> tuple[ModelCapabilities, ...]:
 # ---------------------------------------------------------------------------
 
 type _Key = tuple[str, str]  # (provider, the canonical id)
+type _Names = Mapping[str, Mapping[str, str]]  # provider -> an id or an alias -> the entry's id
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _State:
+    """One version of a catalog. Its layers never change once it is built: a change builds the
+    next version, so an entry built from this one is kept with it (``built``) and never read
+    after the change, and a read never waits for a writer."""
+
+    seeded: Mapping[_Key, ModelCapabilities]
+    loaded: Mapping[_Key, ModelCapabilities]
+    registered: Mapping[_Key, ModelCapabilities]
+    replaced: frozenset[_Key]
+    names: _Names
+    built: dict[_Key, ModelCapabilities] = field(default_factory=dict)
+
+
+def _state(
+    seeded: Mapping[_Key, ModelCapabilities],
+    loaded: Mapping[_Key, ModelCapabilities],
+    registered: Mapping[_Key, ModelCapabilities],
+    replaced: frozenset[_Key] = frozenset(),
+) -> _State:
+    """The version with these layers, and the index of every id and alias they name."""
+    names: dict[str, dict[str, str]] = {}
+    for layer in (seeded, loaded, registered):
+        for (provider, model), entry in layer.items():
+            names.setdefault(provider, {}).update(dict.fromkeys((model, *entry.aliases), model))
+    return _State(
+        seeded=seeded, loaded=loaded, registered=registered, replaced=replaced, names=names
+    )
+
+
+def _canonical(names: _Names, entries: Iterable[ModelCapabilities]) -> list[ModelCapabilities]:
+    """Each entry under the id of the one its id names, as :meth:`ModelCatalog.get` finds it
+    (an id, an alias, or a dated snapshot of either), so a fact about an alias or a snapshot
+    lands on its model; an alias that names another model of the provider is refused."""
+    claimed = {provider: dict(own) for provider, own in names.items()}
+    canonical: list[ModelCapabilities] = []
+    for entry in entries:
+        own = claimed.setdefault(entry.provider, {})
+        found = lookup(entry.model, own)
+        model = found.value if found is not None else entry.model
+        own.setdefault(model, model)
+        for alias in entry.aliases:
+            owner = lookup(alias, own)
+            if owner is not None and owner.value != model:
+                raise ValueError(
+                    f"{entry.provider}: {alias!r} already names {owner.value!r}, not {model!r}"
+                )
+            own.setdefault(alias, model)
+        canonical.append(
+            entry if model == entry.model else dataclasses.replace(entry, model=model)
+        )
+    return canonical
+
+
+def _joined_aliases(entries: Iterable[ModelCapabilities]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(alias for entry in entries for alias in entry.aliases))
 
 
 class ModelCatalog:
@@ -435,7 +541,7 @@ class ModelCatalog:
     It ships with the seed and the adapters' facts (``defaults=False`` starts empty, with
     neither). Layers, field by field: the seed and the adapters, then what ``load()`` read, then
     what ``register()`` said. Nothing in the toolkit reads the catalog: the adapters keep their
-    own rules, and the catalog only tells them (D63).
+    own rules, and the catalog only tells them (D63). It is safe to share between threads.
 
     Usage::
 
@@ -450,13 +556,8 @@ class ModelCatalog:
 
     def __init__(self, *, defaults: bool = True) -> None:
         self._defaults = defaults
-        self._seeded: dict[_Key, ModelCapabilities] = {}
-        self._loaded: dict[_Key, ModelCapabilities] = {}
-        self._registered: dict[_Key, ModelCapabilities] = {}
-        self._replaced: set[_Key] = set()
-        self._cache: dict[_Key, ModelCapabilities] = {}
-        self._names: dict[str, dict[str, str]] | None = None  # provider -> id or alias -> id
-        self.reset()
+        self._writing = threading.Lock()  # one change at a time; a read takes the current state
+        self._state = self._shipped()
 
     # ── Query ──
 
@@ -467,14 +568,18 @@ class ModelCatalog:
         provider = provider or _match_provider(model)
         if provider is None:
             return None
-        found = lookup(model, self._index().get(provider, {}))
-        return self._resolve((provider, found.value)) if found is not None else None
+        state = self._state
+        found = lookup(model, state.names.get(provider, {}))
+        return self._resolve(state, (provider, found.value)) if found is not None else None
 
     def entries(self, provider: str | None = None) -> list[ModelCapabilities]:
         """Every entry, or ``provider``'s, sorted by provider and id."""
-        keys = {*self._seeded, *self._loaded, *self._registered}
+        state = self._state
+        keys = {*state.seeded, *state.loaded, *state.registered}
         return [
-            self._resolve(key) for key in sorted(keys) if provider is None or key[0] == provider
+            self._resolve(state, key)
+            for key in sorted(keys)
+            if provider is None or key[0] == provider
         ]
 
     # ── Overrides ──
@@ -484,98 +589,90 @@ class ModelCatalog:
         fact left ``None`` keeps the one below it. A fact without a source is an override.
 
         Args:
-            capabilities: The entry; its id and aliases must name no other model of its
-                provider.
-            replace: The entry is the whole of what is known: nothing below it shows through.
+            capabilities: The entry, by the model's id, an alias or a dated snapshot of either
+                (the facts land on the entry ``get`` finds for it); its aliases must name no
+                other model of its provider.
+            replace: The entry is the whole of what is known: no fact below it shows through.
         """
-        entry = _sourced(capabilities, _OVERRIDE)
-        self._claim([entry])
-        key = (entry.provider, entry.model)
-        current = self._registered.get(key)
-        if replace:
-            self._registered[key] = entry
-            self._replaced.add(key)
-        else:
-            self._registered[key] = _merged(current, entry) if current else entry
-        self._changed()
+        given = _sourced(capabilities, _OVERRIDE)
+        with self._writing:
+            state = self._state
+            (entry,) = _canonical(state.names, [given])
+            key = (entry.provider, entry.model)
+            registered = dict(state.registered)
+            current = registered.get(key)
+            replaced = state.replaced
+            if replace:
+                registered[key] = entry
+                replaced = replaced | {key}
+            else:
+                registered[key] = _merged(current, entry) if current else entry
+            self._state = _state(state.seeded, state.loaded, registered, replaced)
 
     def load(self, path: str | Path) -> None:
-        """Read a catalog file over the seed and the adapters, field by field.
+        """Read a catalog file over the seed and the adapters, field by field. An entry may be
+        keyed by the model's id, an alias or a dated snapshot of either.
 
         Raises:
-            ValueError: A key, a type, a vocabulary word or a source is wrong; the message
-                names the entry and the key, and nothing of the file is kept.
+            ValueError: The file is not TOML, or a key, a type, a vocabulary word or a source is
+                wrong; the message names the file, the entry and the key, and nothing of the
+                file is kept.
         """
         entries = _parse(Path(path))
-        self._claim(entries)
-        for entry in entries:
-            key = (entry.provider, entry.model)
-            current = self._loaded.get(key)
-            self._loaded[key] = _merged(current, entry) if current else entry
-        self._changed()
+        with self._writing:
+            state = self._state
+            loaded = dict(state.loaded)
+            for entry in _canonical(state.names, entries):
+                key = (entry.provider, entry.model)
+                current = loaded.get(key)
+                loaded[key] = _merged(current, entry) if current else entry
+            self._state = _state(state.seeded, loaded, state.registered, state.replaced)
 
     def unregister(self, model: str, *, provider: str | None = None) -> None:
-        """Forget ``model`` (its id or an alias) in every layer, until :meth:`reset`."""
+        """Forget ``model`` (its id, an alias or a dated snapshot of either) in every layer,
+        until :meth:`reset`."""
         provider = provider or _match_provider(model)
-        canonical = self._index().get(provider or "", {}).get(model)
-        if provider is None or canonical is None:
+        if provider is None:
             return
-        key = (provider, canonical)
-        for layer in (self._seeded, self._loaded, self._registered):
-            layer.pop(key, None)
-        self._replaced.discard(key)
-        self._changed()
+        with self._writing:
+            state = self._state
+            found = lookup(model, state.names.get(provider, {}))
+            if found is None:
+                return
+            key = (provider, found.value)
+            seeded, loaded, registered = (
+                {k: entry for k, entry in layer.items() if k != key}
+                for layer in (state.seeded, state.loaded, state.registered)
+            )
+            self._state = _state(seeded, loaded, registered, state.replaced - {key})
 
     def reset(self) -> None:
         """Back to the shipped seed and the adapters, discarding what was loaded or said."""
-        self._seeded = {(e.provider, e.model): e for e in _seed()} if self._defaults else {}
-        self._loaded.clear()
-        self._registered.clear()
-        self._replaced.clear()
-        self._changed()
+        with self._writing:
+            self._state = self._shipped()
 
     # ── Internals ──
 
-    def _changed(self) -> None:
-        self._cache.clear()
-        self._names = None
+    def _shipped(self) -> _State:
+        seeded = {(e.provider, e.model): e for e in _seed()} if self._defaults else {}
+        return _state(seeded, {}, {})
 
-    def _index(self) -> dict[str, dict[str, str]]:
-        if self._names is None:
-            names: dict[str, dict[str, str]] = {}
-            for layer in (self._seeded, self._loaded, self._registered):
-                for (provider, model), entry in layer.items():
-                    own = names.setdefault(provider, {})
-                    own.update(dict.fromkeys((model, *entry.aliases), model))
-            self._names = names
-        return self._names
+    def _resolve(self, state: _State, key: _Key) -> ModelCapabilities:
+        found = state.built.get(key)
+        if found is None:
+            found = state.built.setdefault(key, self._build(state, key))
+        return found
 
-    def _claim(self, entries: Iterable[ModelCapabilities]) -> None:
-        """Refuse an id or an alias that already names another model of the provider."""
-        names = {provider: dict(own) for provider, own in self._index().items()}
-        for entry in entries:
-            own = names.setdefault(entry.provider, {})
-            for name in (entry.model, *entry.aliases):
-                owner = own.setdefault(name, entry.model)
-                if owner != entry.model:
-                    raise ValueError(
-                        f"{entry.provider}: {name!r} already names {owner!r}; "
-                        f"register {entry.model!r} under its own id"
-                    )
-
-    def _resolve(self, key: _Key) -> ModelCapabilities:
-        if key not in self._cache:
-            self._cache[key] = self._build(key)
-        return self._cache[key]
-
-    def _build(self, key: _Key) -> ModelCapabilities:
-        if key in self._replaced:
-            return self._registered[key]
+    def _build(self, state: _State, key: _Key) -> ModelCapabilities:
+        layers = [
+            layer[key] for layer in (state.seeded, state.loaded, state.registered) if key in layer
+        ]
+        if key in state.replaced:  # no fact below shows through; every id that names it does
+            return dataclasses.replace(state.registered[key], aliases=_joined_aliases(layers))
         provider, model = key
         entry = ModelCapabilities(provider=provider, model=model)
-        for layer in (self._seeded, self._loaded, self._registered):
-            if key in layer:
-                entry = _merged(entry, layer[key])
+        for layer_entry in layers:
+            entry = _merged(entry, layer_entry)
         adapter = _adapter_of(provider) if self._defaults else None
         return _with_adapter(entry, adapter) if adapter is not None else entry
 

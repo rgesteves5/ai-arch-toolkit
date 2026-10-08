@@ -94,6 +94,12 @@ _NOVA = {
     3: "processed foods",
     4: "ultra-processed foods",
 }
+# A score that is no grade: the product's kind has none, or its data does not give one
+# (https://world.openfoodfacts.org/nutriscore).
+_NO_GRADE = {
+    "NOT-APPLICABLE": ("not applicable", "it does not apply to this kind of product"),
+    "UNKNOWN": ("unknown", "not computed: data is missing"),
+}
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -307,14 +313,21 @@ def _scores(product: _Product, *, labelled: bool = False) -> list[str]:
     """Nutri-Score, NOVA group and Eco-Score, with what the first two mean when ``labelled``."""
     scores: list[str] = []
     if product.nutriscore:
-        meaning = _NUTRISCORE.get(product.nutriscore, "unknown")
-        scores.append(f"Nutri-Score: {product.nutriscore}" + (f" ({meaning})" if labelled else ""))
+        grade, meaning = _grade(product.nutriscore)
+        meaning = _NUTRISCORE.get(grade, meaning)
+        scores.append(f"Nutri-Score: {grade}" + (f" ({meaning})" if labelled and meaning else ""))
     if product.nova_group is not None:
         meaning = _NOVA.get(product.nova_group, "unknown")
         scores.append(f"NOVA: {product.nova_group}" + (f" ({meaning})" if labelled else ""))
     if product.ecoscore:
-        scores.append(f"Eco-Score: {product.ecoscore}")
+        scores.append(f"Eco-Score: {_grade(product.ecoscore)[0]}")
     return scores
+
+
+def _grade(value: str) -> tuple[str, str]:
+    """A score's grade as written (``E``, or ``not applicable``) and, for one that is no grade,
+    what it means."""
+    return _NO_GRADE.get(value, (value, ""))
 
 
 def _compare_row(number: int, product: _Product) -> str:
@@ -334,8 +347,13 @@ def _compare_row(number: int, product: _Product) -> str:
 
 
 def _nutrients(value: object) -> tuple[tuple[str, str], ...]:
-    """Each nutrient per 100 g with its unit (the answer's ``<nutrient>_unit``, or kcal for
-    energy and g for the rest)."""
+    """Each nutrient per 100 g in its standard unit: kcal for energy, g for the rest.
+
+    ``<nutrient>_100g`` is normalized to the standard unit, while ``<nutrient>_unit`` is the unit
+    the contributor entered ``<nutrient>_value`` in (``mg`` of sodium on a US label), so it says
+    nothing of ``_100g`` (``docs/api/ref/schemas/product_nutrition.yaml`` in
+    https://github.com/openfoodfacts/openfoodfacts-server).
+    """
     if not isinstance(value, dict):
         return ()
     amounts: list[tuple[str, str]] = []
@@ -343,7 +361,7 @@ def _nutrients(value: object) -> tuple[tuple[str, str], ...]:
         amount = value.get(f"{key}_100g")
         if amount is None or isinstance(amount, dict | list):
             continue
-        unit = _string(value.get(f"{key}_unit")) or ("kcal" if key == "energy-kcal" else "g")
+        unit = "kcal" if key == "energy-kcal" else "g"
         amounts.append((_nutrient_name(key), f"{_number(amount)} {unit}"))
     return tuple(amounts)
 
@@ -376,11 +394,17 @@ def _search_answer(data: dict[str, Any], described: str, page: int, size: int) -
         if (product := _parse_product(item))
     ]
     skip = (page - 1) * size
+    count = data.get("count")
+    total = count if isinstance(count, int) and not isinstance(count, bool) else None
+    if not products and total and skip >= total:
+        last = -(-total // size)
+        return ToolResult.success(
+            f"Page {page} is past the end: {total} Open Food Facts products match {described}, "
+            f"on {last} pages of {size}; the last is page={last}."
+        )
     if not products:
         later = f" on page {page}" if page > 1 else ""
         return ToolResult.success(f"No Open Food Facts products match {described}{later}.")
-    count = data.get("count")
-    total = count if isinstance(count, int) and not isinstance(count, bool) else None
     more = total is not None and skip + len(products) < total
     entries = [
         _search_entry(number, product) for number, product in enumerate(products, start=skip + 1)

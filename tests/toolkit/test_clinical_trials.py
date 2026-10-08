@@ -172,6 +172,42 @@ class TestSearch:
         assert _params(mock_urlopen)["pageToken"] == ["NEXT"]
 
     @patch(HTTP_OPEN)
+    def test_the_search_asks_only_for_the_modules_it_lists(self, mock_urlopen: MagicMock):
+        mock_urlopen.return_value = respond(_page("NCT04280705", total=1))
+
+        clinical_trials_search("covid")
+
+        fields = _params(mock_urlopen)["fields"][0].split(",")
+        assert sorted(fields) == [
+            "ArmsInterventionsModule",
+            "ConditionsModule",
+            "DesignModule",
+            "HasResults",
+            "IdentificationModule",
+            "SponsorCollaboratorsModule",
+            "StatusModule",
+        ]
+
+    @patch(HTTP_OPEN)
+    def test_an_empty_page_with_a_token_keeps_the_window(self, mock_urlopen: MagicMock):
+        mock_urlopen.return_value = respond({"studies": [], "nextPageToken": "T3"})
+
+        result = clinical_trials_search("covid", page_token="T2", offset=20)
+
+        assert isinstance(result, ToolResult)
+        assert result.value == (
+            "ClinicalTrials.gov sent an empty page for query 'covid'; read on with "
+            "page_token='T3', offset=20."
+        )
+        assert result.metadata["window"] == {
+            "unit": "results",
+            "first": 21,
+            "last": 20,
+            "total": None,
+            "next_call": {"page_token": "T3", "offset": 20},
+        }
+
+    @patch(HTTP_OPEN)
     def test_the_search_lists_no_summary_and_names_the_record_tool(self, mock_urlopen):
         mock_urlopen.return_value = respond(_page("NCT04280705", total=1))
 
@@ -314,6 +350,44 @@ class TestStudy:
             "* Pregnancy or breast feeding.",
             "* Allergy to any study medication.",
         ]
+
+    @patch(HTTP_OPEN)
+    def test_the_criteria_keep_their_nesting_and_read_without_markdown_escapes(
+        self, mock_urlopen: MagicMock
+    ):
+        record = study()
+        record["protocolSection"]["eligibilityModule"]["eligibilityCriteria"] = (
+            "Inclusion Criteria:\n\n"
+            "* Aged \\>= 18 years\n"
+            "* One of:\n\n"
+            "  * diabetes\n"
+            "  * hypertension \\(stage 2\\)\n\n"
+            "    * on treatment\n\n"
+            "Exclusion Criteria:\n\n"
+            "* Pregnancy"
+        )
+        mock_urlopen.return_value = respond(record)
+
+        text = _text(clinical_trial_study("NCT04280705", section="eligibility"))
+
+        assert text.splitlines()[5:] == [
+            "Inclusion Criteria:",
+            "* Aged >= 18 years",
+            "* One of:",
+            "  * diabetes",
+            "  * hypertension (stage 2)",
+            "    * on treatment",
+            "Exclusion Criteria:",
+            "* Pregnancy",
+        ]
+
+    @patch(HTTP_OPEN)
+    def test_the_record_asks_for_the_protocol_and_not_the_results(self, mock_urlopen):
+        mock_urlopen.return_value = respond(study())
+
+        clinical_trial_study("NCT04280705")
+
+        assert _params(mock_urlopen)["fields"] == ["ProtocolSection,HasResults"]
 
     @pytest.mark.parametrize(
         ("section", "count", "line"),

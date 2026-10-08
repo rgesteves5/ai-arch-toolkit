@@ -11,7 +11,7 @@ reason, and a failed search with a 500 ``SERVER_ERROR``, each as ``{"error": {"c
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from typing import Annotated, Any
 
@@ -36,8 +36,16 @@ def _openfda_error(reply: Reply) -> ToolFailure | str | None:
     return ": ".join(text for text in (code, message) if text)
 
 
-# A search that matches nothing is a 404, so searches declare ``empty_on_404`` and the recall
-# lookup ``missing=``; the reader reads every other error.
+def _no_matches(reply: Reply) -> bool:
+    """openFDA's 404 for a search that matches nothing, ``NOT_FOUND`` "No matches found!": any
+    other 404 (a page, another body) is the endpoint gone."""
+    error = reply.body.get("error") if isinstance(reply.body, dict) else None
+    return isinstance(error, dict) and error.get("code") == "NOT_FOUND"
+
+
+# A search that matches nothing is openFDA's 404 ``NOT_FOUND``, which every request declares
+# (``empty_on_404``): a search says so, the recall lookup is ``not_found``. The reader reads every
+# other error.
 _API = Api(
     base="https://api.fda.gov/food/enforcement.json",
     name="openFDA",
@@ -129,7 +137,7 @@ def openfda_food_recall_search(
     return _API.get_json(
         params=params,
         parse=lambda data: _search_answer(data, described, skip),
-        empty_on_404=True,
+        empty_on_404=_no_matches,
     )
 
 
@@ -157,7 +165,7 @@ def openfda_food_recall(recall_number: str) -> str:
     recalls = _API.get_json(
         params={"search": f'recall_number:"{normalized}"', "limit": "1"},
         parse=_recalls_from_data,
-        missing=missing,
+        empty_on_404=_no_matches,
     )
 
     if not recalls:
@@ -177,15 +185,15 @@ def _search_answer(data: dict[str, Any], described: str, skip: int) -> ToolResul
     shown = skip + len(recalls)
     more = total is not None and shown < total
     next_call = {"skip": shown} if more and shown <= _SKIP_MAX else None
-    heading = f"openFDA food recalls for {described}:"
-    if more and next_call is None:
-        heading += (
-            f" (openFDA pages up to skip={_SKIP_MAX}; narrow with from_date and to_date for the "
-            "rest)"
-        )
     entries = [_entry(number, recall) for number, recall in enumerate(recalls, start=skip + 1)]
-    window = list_window(entries, first=skip + 1, total=total, next_call=next_call)
-    return window.result(heading=heading)
+    window = replace(
+        list_window(entries, first=skip + 1, total=total, next_call=next_call),
+        rest=(
+            f"openFDA reads no further than skip={_SKIP_MAX}: narrow the search with from_date "
+            "and to_date for the rest"
+        ),
+    )
+    return window.result(heading=f"openFDA food recalls for {described}:")
 
 
 def _described(filters: dict[str, str], start: str, end: str) -> str:

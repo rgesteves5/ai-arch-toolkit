@@ -11,7 +11,7 @@ and an entry's ligands two.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Annotated, Any
 
@@ -21,30 +21,47 @@ from ai_arch_toolkit.toolkit.tools._http import Api, Reply
 from ai_arch_toolkit.toolkit.tools._window import list_window
 
 
-def _rcsb_error(reply: Reply) -> ToolFailure | str | None:
-    """The error an RCSB answer explains; ``None`` for a result.
+def _refused(reply: Reply, step: str) -> ToolFailure | None:
+    """A 400's ``message``: a request RCSB refused, ``validation_error`` in its words with
+    ``step``; ``None`` for anything else.
 
-    The GraphQL endpoint always answers 200 and puts its errors in ``errors``
-    (https://data.rcsb.org/index.html#gql-api; RCSB's client reads ``errors[].message``,
-    https://github.com/rcsb/py-rcsb-api, ``rcsbapi/data/data_query.py``). The REST and Search
-    APIs explain an error status in ``message``; a 400 is a request RCSB refused, which the
-    caller rephrases (RCSB's own agent tools read it so:
-    https://github.com/rcsb/rcsb-mcp, ``src/rcsb_mcp/client.py``).
+    The REST and Search APIs explain an error status in ``message`` (RCSB's own agent tools
+    read it so: https://github.com/rcsb/rcsb-mcp, ``src/rcsb_mcp/client.py``).
     """
     body = reply.body
-    if not isinstance(body, dict):
-        return None
-    errors = body.get("errors")
-    if isinstance(errors, list) and errors:
-        said = "; ".join(_string(e.get("message")) for e in errors if isinstance(e, dict))
-        return f"RCSB PDB's Data API said: {said or 'the query failed'}"
-    message = _string(body.get("message"))
+    message = _string(body.get("message")) if isinstance(body, dict) else ""
     if message and reply.status == 400:
-        return ToolFailure(
-            "validation_error",
-            f"RCSB PDB refused the request: {message}; rephrase the query in plain words",
-        )
+        return ToolFailure("validation_error", f"RCSB PDB refused the request: {message}; {step}")
     return None
+
+
+def _search_error(reply: Reply) -> ToolFailure | None:
+    """The error a Search API answer explains; ``None`` for a result."""
+    return _refused(reply, "rephrase the query in plain words")
+
+
+def _data_error(reply: Reply) -> ToolFailure | None:
+    """The error a Data API (REST) answer explains; ``None`` for a result."""
+    return _refused(reply, "check the ID, or find one with pdb_search")
+
+
+def _graphql_error(reply: Reply) -> ToolFailure | str | None:
+    """The errors a GraphQL answer reports; ``None`` for a result.
+
+    The endpoint answers 200 and puts its errors in ``errors``
+    (https://data.rcsb.org/index.html#gql-api; RCSB's client reads ``errors[].message``,
+    https://github.com/rcsb/py-rcsb-api, ``rcsbapi/data/data_query.py``). The query is the
+    tool's, not the caller's, so the step is the tool that reads an entry without it.
+    """
+    body = reply.body
+    errors = body.get("errors") if isinstance(body, dict) else None
+    if not isinstance(errors, list) or not errors:
+        return _refused(reply, "pdb_entry reads an entry without it")
+    said = "; ".join(_string(e.get("message")) for e in errors if isinstance(e, dict))
+    return (
+        f"RCSB PDB's GraphQL endpoint said: {said or 'the query failed'}; pdb_entry reads an "
+        "entry without it, or try again later"
+    )
 
 
 # The Data API answers a record it does not have with a 404, so each REST call declares the
@@ -53,16 +70,19 @@ _DATA = Api(
     base="https://data.rcsb.org/rest/v1/core",
     name="RCSB PDB",
     timeout_s=20,
-    error_reader=_rcsb_error,
+    error_reader=_data_error,
 )
 _GRAPHQL = Api(
-    base="https://data.rcsb.org/graphql", name="RCSB PDB", timeout_s=20, error_reader=_rcsb_error
+    base="https://data.rcsb.org/graphql",
+    name="RCSB PDB",
+    timeout_s=20,
+    error_reader=_graphql_error,
 )
 _SEARCH = Api(
     base="https://search.rcsb.org/rcsbsearch/v2/query",
     name="RCSB PDB",
     timeout_s=20,
-    error_reader=_rcsb_error,
+    error_reader=_search_error,
 )
 _PDB_ID_RE = re.compile(r"[A-Za-z0-9]{4}")
 _CHEM_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,12}")
@@ -123,13 +143,11 @@ def pdb_search(
     hits = _SEARCH.post_json(payload=payload, parse=_hits, allow_empty=True)
     if not hits.ids and start == 0:
         return ToolResult.success(f"No RCSB PDB entries match {text!r}.")
-    found = _records(_ENTRIES_QUERY, "entries", hits.ids) if hits.ids else {}
-    lines = [
-        f"{start + number}. {_hit_line(entry_id, found.get(entry_id))}"
-        for number, entry_id in enumerate(hits.ids, start=1)
-    ]
+    described = _described(_ENTRIES_QUERY, "entries", hits.ids, _hit_line) if hits.ids else []
+    lines = [f"{start + number}. {line}" for number, line in enumerate(described, start=1)]
     shown = start + len(lines)
-    next_call = {"start": shown} if lines and shown < hits.total else None
+    more = hits.total is not None and shown < hits.total
+    next_call = {"start": shown} if lines and more else None
     window = list_window(lines, first=start + 1, total=hits.total, next_call=next_call)
     return window.result(heading=f"RCSB PDB entries that match {text!r}, the most relevant first:")
 
@@ -172,14 +190,16 @@ def pdb_ligands(pdb_id: str) -> str:
     )
     if not entities:
         return f"RCSB PDB entry {normalized} has no ligands."
-    ids = tuple(f"{normalized}_{entity}" for entity in entities)
-    found = _records(_LIGANDS_QUERY, "nonpolymer_entities", ids)
+    entity_of = {f"{normalized}_{entity}": entity for entity in entities}
+    described = _described(
+        _LIGANDS_QUERY,
+        "nonpolymer_entities",
+        tuple(entity_of),
+        lambda entity_id, record: _ligand_line(entity_of[entity_id], record),
+    )
     lines = [
         f"Ligands of RCSB PDB entry {normalized} (read one with pdb_chemical_component):",
-        *(
-            f"{number}. {_ligand_line(entity, found.get(entity_id))}"
-            for number, (entity, entity_id) in enumerate(zip(entities, ids, strict=True), 1)
-        ),
+        *(f"{number}. {line}" for number, line in enumerate(described, start=1)),
     ]
     return "\n".join(lines)
 
@@ -219,10 +239,11 @@ def pdb_chemical_component(component_id: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class _Hits:
-    """A page of search hits: their identifiers, in order, and the total."""
+    """A page of search hits: their identifiers, in order, and the total (``None`` when the
+    answer gives none: a 204)."""
 
     ids: tuple[str, ...]
-    total: int
+    total: int | None
 
 
 def _hits(data: dict[str, Any]) -> _Hits:
@@ -233,23 +254,34 @@ def _hits(data: dict[str, Any]) -> _Hits:
         if isinstance(item, dict) and _string(item.get("identifier"))
     )
     total = data.get("total_count")
-    return _Hits(ids=ids, total=total if isinstance(total, int) else len(ids))
+    known = isinstance(total, int) and not isinstance(total, bool)
+    return _Hits(ids=ids, total=total if known else None)
 
 
-def _records(query: str, field: str, ids: tuple[str, ...]) -> Mapping[str, dict[str, Any]]:
-    """The Data API's records for ``ids``, by ``rcsb_id``, in one GraphQL request; an ID it has
-    no record of is left out."""
+def _described(
+    query: str,
+    field: str,
+    ids: tuple[str, ...],
+    describe: Callable[[str, dict[str, Any] | None], str],
+) -> list[str]:
+    """Each of ``ids`` described from the GraphQL endpoint's record of it (``None`` when it has
+    none), in one request.
 
-    def by_id(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    The lines are built inside the parse, so a record of a shape nobody expected is the door's
+    parse failure, never a crash of the tool.
+    """
+
+    def read(data: dict[str, Any]) -> list[str]:
         found = (data.get("data") or {}).get(field) or []
-        return {
+        by_id = {
             _string(item.get("rcsb_id")): item
             for item in found
             if isinstance(item, dict) and _string(item.get("rcsb_id"))
         }
+        return [describe(entry_id, by_id.get(entry_id)) for entry_id in ids]
 
     payload = {"query": query, "variables": {"ids": list(ids)}}
-    return _GRAPHQL.post_json(payload=payload, parse=by_id)
+    return _GRAPHQL.post_json(payload=payload, parse=read)
 
 
 def _nonpolymer_ids(entry: dict[str, Any]) -> list[str]:
@@ -299,7 +331,7 @@ def _ligand_line(entity: str, record: dict[str, Any] | None) -> str:
 
 
 def _entry_text(data: dict[str, Any], pdb_id: str) -> str:
-    info = data.get("rcsb_entry_info") or {}
+    info = _object(data.get("rcsb_entry_info"))
     method = _methods(data) or _join(info.get("experimental_method")) or "?"
     resolution = _resolution(data)
     deposited = _date(_nested(data, "rcsb_accession_info", "deposit_date")) or "?"
@@ -336,8 +368,8 @@ def _citation(citation: object) -> str:
 
 
 def _component_text(data: dict[str, Any], component_id: str) -> str:
-    chem = data.get("chem_comp") or {}
-    descriptors = data.get("rcsb_chem_comp_descriptor") or {}
+    chem = _object(data.get("chem_comp"))
+    descriptors = _object(data.get("rcsb_chem_comp_descriptor"))
     weight = _string(chem.get("formula_weight"))
     lines = [
         f"RCSB chemical component {component_id}:",
@@ -360,7 +392,7 @@ def _methods(record: dict[str, Any]) -> str:
 
 def _resolution(record: dict[str, Any]) -> str:
     """The resolution in ångströms; empty when there is none (NMR, most EM maps)."""
-    values = (record.get("rcsb_entry_info") or {}).get("resolution_combined")
+    values = _object(record.get("rcsb_entry_info")).get("resolution_combined")
     first = values[0] if isinstance(values, list) and values else values
     if isinstance(first, bool) or not isinstance(first, int | float):
         return ""
@@ -370,6 +402,11 @@ def _resolution(record: dict[str, Any]) -> str:
 def _date(value: str) -> str:
     """The day of an RCSB timestamp (``1984-07-17T00:00:00Z``), in ISO 8601."""
     return value[:10] if re.match(r"\d{4}-\d{2}-\d{2}", value) else value
+
+
+def _object(value: object) -> dict[str, Any]:
+    """``value`` when it is an object; ``{}`` for anything else (none, text, a list)."""
+    return value if isinstance(value, dict) else {}
 
 
 def _dicts(value: object) -> list[dict[str, Any]]:

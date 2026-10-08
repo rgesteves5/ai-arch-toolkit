@@ -29,9 +29,25 @@ from ai_arch_toolkit.toolkit.tools._window import Window
 # ``count`` results (https://api-dashboard.search.brave.com/api-reference/web/search/get).
 _BRAVE_PAGE = 20
 _BRAVE_LAST_OFFSET = 9
+# The countries Brave searches from: its reference lists ``country`` as these codes, US by default
+# (https://api-dashboard.search.brave.com/api-reference/web/search/get, read 2026-10-08).
+_BRAVE_COUNTRIES = (
+    "AR", "AU", "AT", "BE", "BR", "CA", "CL", "DK", "FI", "FR", "DE", "GR", "HK", "IN", "ID",
+    "IT", "JP", "KR", "MY", "MX", "NL", "NZ", "NO", "CN", "PL", "PT", "PH", "RU", "SA", "ZA",
+    "ES", "SE", "CH", "TW", "TR", "GB", "US", "ALL",
+)  # fmt: skip
+_BRAVE_ARGUMENTS = (
+    "query (at most 600 characters and 75 words), max_results, offset, country and freshness"
+)
+# Brave limits "using a 1-second sliding window" and answers a 429 with X-RateLimit-Reset, not
+# Retry-After (https://api-dashboard.search.brave.com/documentation/guides/rate-limiting).
+_BRAVE_COOLDOWN_S = 1.0
 # Tavily returns 0 to 20 results, in one page: it takes no offset
 # (https://docs.tavily.com/documentation/api-reference/endpoint/search).
 _TAVILY_MOST = 20
+# Tavily's limits are requests per minute, and its 429 carries a Retry-After only sometimes
+# (https://docs.tavily.com/documentation/rate-limits): without one, the host rests a minute.
+_TAVILY_COOLDOWN_S = 60.0
 _MARKUP = re.compile(r"<[^>]+>")
 _WEB_SCHEMES = frozenset({"http", "https"})
 _TOPICS = ("general", "news")
@@ -44,24 +60,47 @@ _FRESHNESS = ("pd", "pw", "pm", "py")
 
 def _said(reply: Reply) -> str | None:
     """What Brave or Tavily says in an error answer, in its own words: Brave's ``error.detail``
-    (its ``ErrorResponse``), Tavily's ``detail.error``, or the fields Tavily's 422 names (a
-    ``detail`` list of ``loc`` and ``msg``). A success says nothing."""
+    (its ``ErrorResponse``), with the fields its ``error.meta`` names, Tavily's ``detail.error``,
+    or the fields Tavily's 422 names (a ``detail`` list of ``loc`` and ``msg``). A success says
+    nothing."""
     answer = reply.body
     if reply.status < 400 or not isinstance(answer, dict):
         return None
     said = answer.get("error") or answer.get("detail")
+    fields = ""
     if isinstance(said, dict):
+        fields = _fields(_meta_errors(said.get("meta")))
         said = said.get("detail") or said.get("error") or said.get("message")
     if isinstance(said, list):
-        said = "; ".join(_field_error(item) for item in said if isinstance(item, dict))
-    if not isinstance(said, str):
-        return None
-    return " ".join(said.split()) or None
+        said = _fields(said)
+    if not isinstance(said, str) or not (said := " ".join(said.split())):
+        return fields or None
+    return f"{said.rstrip('.')} ({fields})" if fields else said
+
+
+def _meta_errors(meta: object) -> object:
+    """The fields a Brave error's ``meta`` names. The reference leaves ``meta`` open ("non-standard
+    meta-information"); a validation error's lists them under ``errors``, each with ``loc`` and
+    ``msg``. Anything else names none."""
+    return meta.get("errors") if isinstance(meta, dict) else None
+
+
+def _fields(items: object) -> str:
+    """The fields a validation error lists, as ``query: Input should be a valid string``."""
+    if not isinstance(items, list):
+        return ""
+    return "; ".join(_field_error(item) for item in items if isinstance(item, dict))
+
+
+# Where a validation error's ``loc`` starts: the part of the request, not the field.
+_LOCATIONS = frozenset({"body", "query", "path", "header", "cookie"})
 
 
 def _field_error(item: dict[str, Any]) -> str:
     """One field a 422 rejects, as ``query: Input should be a valid string``."""
-    where = [str(part) for part in item.get("loc") or [] if part != "body"]
+    where = [str(part) for part in item.get("loc") or []]
+    if len(where) > 1 and where[0] in _LOCATIONS:
+        where = where[1:]
     message = " ".join(str(item.get("msg") or "").split())
     return f"{'.'.join(where)}: {message}" if where else message
 
@@ -96,7 +135,7 @@ def _brave_error(reply: Reply) -> ToolFailure | str | None:
             "Brave", "BRAVE_SEARCH_API_KEY", "https://brave.com/search/api/", reply
         )
     if reply.status == 422:
-        return _refused_search("Brave", reply, "a query takes at most 600 characters and 75 words")
+        return _refused_search("Brave", reply, f"check the arguments: {_BRAVE_ARGUMENTS}")
     return _said(reply)
 
 
@@ -138,6 +177,7 @@ _BRAVE = Api(
     key_required=True,
     billed_as="brave_search",
     error_reader=_brave_error,
+    cooldown_s=_BRAVE_COOLDOWN_S,
 )
 
 
@@ -160,6 +200,7 @@ _TAVILY = Api(
     billed_as="tavily_search",
     bill_units=_tavily_credits,
     error_reader=_tavily_error,
+    cooldown_s=_TAVILY_COOLDOWN_S,
 )
 
 
@@ -265,16 +306,19 @@ def _brave_page(data: dict[str, Any], offset: int, count: int) -> _Found:
 
 
 def _brave_answer(found: _Found, query: str, offset: int, count: int) -> ToolResult:
-    """A page of Brave's results; while Brave has more, the footer names the next page."""
+    """A page of Brave's results; while Brave has more, the footer names the next page, and on
+    the last page Brave serves, that it has more it does not serve."""
     if not found.results and offset == 0 and not found.more:
         return _nothing(query, "Brave", found)
     lines = _lines(found)
     onward = found.more and offset < _BRAVE_LAST_OFFSET
-    if found.more and not onward:
-        lines.append(
-            f"(Brave serves no page past offset {_BRAVE_LAST_OFFSET}: refine the query for "
-            "other results.)"
-        )
+    next_call = {"offset": offset + 1, "max_results": count} if onward else None
+    last_page = (
+        f"Brave serves no page past offset {_BRAVE_LAST_OFFSET}: refine the query for other "
+        "results"
+        if found.more and not onward
+        else ""
+    )
     first = offset * count + 1
     window = Window(
         body="\n".join(lines),
@@ -282,7 +326,8 @@ def _brave_answer(found: _Found, query: str, offset: int, count: int) -> ToolRes
         first=first,
         last=first + found.sent - 1,
         total=None,
-        next_call={"offset": offset + 1, "max_results": count} if onward else None,
+        next_call=next_call,
+        rest=last_page,
     )
     return window.result(heading=f"Web results for {query!r} (Brave):")
 
@@ -338,21 +383,24 @@ def brave_search(
     Args:
         query: What to search for; Brave takes operators such as quotes, -word and site:.
         max_results: How many results a page holds.
-        country: Optional two-letter country code to search from, e.g. "PT" or "US".
+        country: Optional country to search from, by the code Brave takes: "PT", "US", "GB"
+            (not "UK"), or "ALL" for none in particular; Brave searches from the US by default.
         freshness: Optional age limit: "pd" (a day), "pw" (a week), "pm" (a month), "py" (a year).
         offset: How many pages of ``max_results`` results to skip; the footer gives the next
             call.
 
     Raises:
-        ToolFailure: validation_error when the query is empty, the freshness is unknown,
-            BRAVE_SEARCH_API_KEY is not set or Brave refuses the arguments; upstream (not
-            retryable) when Brave refuses the key.
+        ToolFailure: validation_error when the query is empty, the country or the freshness is
+            one Brave does not take, BRAVE_SEARCH_API_KEY is not set or Brave refuses the
+            arguments; upstream (not retryable) when Brave refuses the key.
     """
     query = _query(query)
     _choice(freshness, _FRESHNESS, "freshness")
+    country = country.strip().upper()
+    _choice(country, _BRAVE_COUNTRIES, "country")
     params = {"q": query, "count": str(max_results)}
-    if country.strip():
-        params["country"] = country.strip().upper()
+    if country:
+        params["country"] = country
     if freshness:
         params["freshness"] = freshness
     if offset:

@@ -24,6 +24,18 @@ _DEFAULT_MAX_CHARS = 12_000
 _MAX_SEARCH_RESULTS = 20
 # The languages list is short but for its translation targets (about a hundred on YouTube).
 _LANGUAGES_CHARS = 4000
+# What reading a page of an unexpected shape raises in the library: a missing key (its
+# ``caption["name"]["runs"]``), malformed XML (``ElementTree.ParseError``, a ``SyntaxError``), a
+# null where an object was. The door's ``_SHAPE_ERRORS``, for a source the door does not reach.
+_SHAPE_ERRORS = (
+    ArithmeticError,
+    AttributeError,
+    LookupError,
+    RecursionError,
+    SyntaxError,
+    TypeError,
+    ValueError,
+)
 _OPTIONAL_DEP_ERROR = (
     "youtube-transcript-api is not installed. Install the optional extra with "
     "`uv sync --extra youtube` or `pip install 'ai-arch-toolkit[youtube]'`."
@@ -137,8 +149,8 @@ def youtube_transcript_languages(
         raise _transcript_failure(e, video_id) from e
     except OSError as e:  # requests' network errors
         raise _network_failure(e) from e
-    except (AttributeError, TypeError, ValueError) as e:
-        raise ToolFailure("upstream", f"could not parse the transcript list: {e}") from e
+    except _SHAPE_ERRORS as e:
+        raise ToolFailure("upstream", f"could not parse the transcript list: {e!r}") from e
 
     if not infos:
         return ToolResult.success(f"No YouTube transcripts found for video {video_id}.")
@@ -198,7 +210,7 @@ def youtube_transcript_search(
         index for index, segment in enumerate(segments) if needle in segment.text.casefold()
     ]
     if not matches:
-        return ToolResult.success(f"No passages of the {where}, mention {query!r}.")
+        return ToolResult.success(f"The {where}, has no passage that mentions {query!r}.")
 
     lines = [
         f"{number}. {_passage(segments, index, context_segments)}"
@@ -297,8 +309,8 @@ def _fetch_transcript(
         raise _transcript_failure(e, video_id, languages, translate_to) from e
     except OSError as e:  # requests' network errors
         raise _network_failure(e) from e
-    except (AttributeError, TypeError, ValueError) as e:
-        raise ToolFailure("upstream", f"could not parse the transcript response: {e}") from e
+    except _SHAPE_ERRORS as e:
+        raise ToolFailure("upstream", f"could not parse the transcript response: {e!r}") from e
     return transcript, segments, source
 
 

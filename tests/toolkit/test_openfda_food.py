@@ -111,13 +111,18 @@ class TestRecallSearch:
         assert "report_date:[20160101 TO 20161231]" in params["search"][0]
 
     @patch(HTTP_OPEN)
-    def test_past_the_deepest_skip_the_heading_says_how_to_narrow(self, mock_urlopen):
+    def test_past_the_deepest_skip_the_footer_says_how_to_narrow(self, mock_urlopen):
         mock_urlopen.return_value = respond(_results(20, total=40_000, skip=24_990))
 
-        text = _text(openfda_food_recall_search(query="milk", max_results=20, skip=24_990))
+        result = openfda_food_recall_search(query="milk", max_results=20, skip=24_990)
 
-        assert text.endswith("[results 24991-25010 of 40000 | the rest cannot be read here]")
-        assert "openFDA pages up to skip=25000; narrow with from_date and to_date" in text
+        assert isinstance(result, ToolResult)
+        assert result.value.splitlines()[0] == "openFDA food recalls for query 'milk':"
+        assert result.value.endswith(
+            "[results 24991-25010 of 40000 | openFDA reads no further than skip=25000: narrow "
+            "the search with from_date and to_date for the rest]"
+        )
+        assert result.metadata["window"]["next_call"] is None
 
     @pytest.mark.parametrize(("skip", "kept"), [(25_000, True), (25_001, False)])
     @patch(HTTP_OPEN)
@@ -136,6 +141,20 @@ class TestRecallSearch:
         assert _text(openfda_food_recall_search(query="missing")) == (
             "No openFDA food recalls match query 'missing'."
         )
+
+    @pytest.mark.parametrize(
+        "body", [b'{"message": "Not Found"}', b"<html><body>404 Not Found</body></html>", b""]
+    )
+    @patch(HTTP_OPEN)
+    def test_a_404_that_is_not_openfdas_no_match_is_a_moved_endpoint(
+        self, mock_urlopen: MagicMock, body: bytes
+    ):
+        mock_urlopen.side_effect = http_error(404, "Not Found", body=body)
+
+        failure = _failure(openfda_food_recall_search, query="milk")
+
+        assert failure.error.type == "upstream"
+        assert "openFDA: endpoint not found (HTTP 404)" in failure.error.message
 
     @patch(HTTP_OPEN)
     def test_invalid_search_options_do_not_call_api(self, mock_urlopen: MagicMock):
@@ -211,6 +230,15 @@ class TestRecall:
         assert failure.error.message == (
             "openFDA has no food recall F-0000-2016; find recalls with openfda_food_recall_search"
         )
+
+    @patch(HTTP_OPEN)
+    def test_a_404_that_is_not_openfdas_no_match_is_not_a_missing_recall(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(404, "Not Found", body=b"<html>404</html>")
+
+        failure = _failure(openfda_food_recall, "F-2473-2016")
+
+        assert failure.error.type == "upstream"
+        assert "openFDA: endpoint not found (HTTP 404)" in failure.error.message
 
     @patch(HTTP_OPEN)
     def test_an_answer_without_the_recall_is_not_found(self, mock_urlopen: MagicMock):

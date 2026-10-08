@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import base64
+import json
 import re
+import subprocess
+import sys
 from collections.abc import Sequence
 from typing import Annotated
 
@@ -11,9 +14,27 @@ from ai_arch_toolkit.core import Range, ToolResult, tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._window import list_window
 
-# A regex match runs in C holding the GIL: no timeout can stop it, not even the executor's. The
-# guards bound it before it starts. One unbounded quantifier over 20 000 characters stays under a
-# second; a shape that backtracks exponentially is refused whatever its size.
+# A regex match runs in C holding the GIL: no timeout can stop it in this process, not even the
+# executor's. A static check cannot bound it either: two quantifiers over the same characters
+# backtrack polynomially (a*a*b takes n³ steps, about 18 minutes on 20,000 characters), and a
+# check strict enough to catch every such shape would refuse ordinary patterns such as \d+-\d+.
+# So the match runs in a child Python process (-I -S: stdlib only, no site), which is killed
+# past _MATCH_S seconds while this process waits without the GIL. That bounds every pattern: the
+# worst case allowed is 5 s of a child's CPU, and a match costs the child's start, about 25 ms.
+# The heaviest pattern with one quantifier measured on 20,000 characters, [a-z]+\d on "a" * 20000
+# (n² steps), takes 1.8 s, well within. The guards below still refuse at once what is too long,
+# back-references, and the shapes that backtrack exponentially.
+_MATCH_S = 5.0
+_WORKER = """
+import json, re, sys
+job = json.load(sys.stdin)
+first, last, total, spans = job["offset"], job["offset"] + job["count"], 0, []
+for match in re.finditer(job["pattern"], job["text"]):
+    if first <= total < last:
+        spans.append(match.regs)
+    total += 1
+json.dump({"total": total, "spans": spans}, sys.stdout)
+"""
 _MAX_PATTERN_CHARS = 500
 _MAX_TEXT_CHARS = 20_000
 # A page of matches: at most this many, within this many characters (one match at least).
@@ -39,7 +60,7 @@ def regex_search(text: str, pattern: str, offset: Annotated[int, Range(0)] = 0) 
     """Find all regex matches in text, each on a line of its own with its position and groups.
 
     A page holds up to 1000 matches; the heading gives how many there are, and the footer the
-    offset of the next page.
+    offset of the next page. The match runs in a separate process, given 5 seconds.
 
     Args:
         text: The text to search in (up to 20000 characters).
@@ -49,30 +70,87 @@ def regex_search(text: str, pattern: str, offset: Annotated[int, Range(0)] = 0) 
 
     Raises:
         ToolFailure: validation_error when the text or the pattern is too long, the pattern is
-            not a valid regex, or its shape can backtrack exponentially.
+            not a valid regex, its shape can backtrack exponentially, or matching it takes
+            longer than 5 seconds; upstream when the process that matches cannot run.
     """
-    matches = list(_compiled(text, pattern).finditer(text))
-    if not matches:
+    _check(text, pattern)
+    total, spans = _matches(text, pattern, offset)
+    if not total:
         return ToolResult.success(f"No matches for {pattern!r}.")
-    lines = _page(matches, offset)
+    lines = _page(text, spans)
     end = offset + len(lines)
     window = list_window(
         lines,
         first=offset + 1,
-        total=len(matches),
-        next_call={"offset": end} if end < len(matches) else None,
+        total=total,
+        next_call={"offset": end} if end < total else None,
     )
-    return window.result(heading=f"{len(matches)} match(es) for {pattern!r}:")
+    return window.result(heading=f"{total} match(es) for {pattern!r}:")
 
 
-def _page(matches: Sequence[re.Match[str]], offset: int) -> list[str]:
-    """The lines of the matches from ``offset``: up to ``_PAGE_MATCHES``, within ``_PAGE_CHARS``
+type _Spans = Sequence[Sequence[Sequence[int]]]
+
+
+def _matches(text: str, pattern: str, offset: int) -> tuple[int, _Spans]:
+    """How many matches ``pattern`` has in ``text``, and the spans (the match's, then each
+    group's; ``-1`` for a group that took no part) of up to ``_PAGE_MATCHES`` from ``offset``,
+    found in a child process within ``_MATCH_S`` seconds.
+
+    Raises:
+        ToolFailure: validation_error when the match takes longer; upstream when the child
+            cannot run.
+    """
+    job = {"pattern": pattern, "text": text, "offset": offset, "count": _PAGE_MATCHES}
+    try:
+        done = subprocess.run(
+            [_interpreter(), "-I", "-S", "-c", _WORKER],
+            input=json.dumps(job),  # ASCII: any character, a lone surrogate too, is escaped
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=_MATCH_S,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as e:  # the child is killed
+        raise ToolFailure(
+            "validation_error",
+            f"pattern refused: matching it on this text took longer than {_MATCH_S:g}s, so its "
+            "quantifiers backtrack (as a*a*b does on a long run of a); rewrite it so that no two "
+            "repetitions can match the same characters, or search a shorter text.",
+        ) from e
+    except OSError as e:
+        raise ToolFailure("upstream", f"could not start the process that matches: {e}") from e
+    if done.returncode != 0:
+        reason = done.stderr.strip().rsplit("\n", 1)[-1]
+        raise ToolFailure("upstream", f"the process that matches failed: {reason}")
+    answer = json.loads(done.stdout)
+    return answer["total"], answer["spans"]
+
+
+def _interpreter() -> str:
+    """The Python that runs the match: this one.
+
+    Raises:
+        ToolFailure: upstream when this program has no Python to start (an embedded or frozen
+            one, whose ``sys.executable`` is not a Python).
+    """
+    if not sys.executable or getattr(sys, "frozen", False):
+        raise ToolFailure(
+            "upstream",
+            "regex_search matches in a child Python process, and this program has no Python "
+            "interpreter to start (sys.executable), so it cannot match here.",
+        )
+    return sys.executable
+
+
+def _page(text: str, spans: _Spans) -> list[str]:
+    """The lines of the matches at ``spans``: up to ``_PAGE_MATCHES``, within ``_PAGE_CHARS``
     characters (the first one whatever its length)."""
     lines: list[str] = []
     used = 0
-    for match in matches[offset : offset + _PAGE_MATCHES]:
-        groups = match.groups()
-        line = f"  [{match.start()}:{match.end()}] {match.group()!r}"
+    for (start, end), *regs in spans:
+        groups = tuple(None if low < 0 else text[low:high] for low, high in regs)
+        line = f"  [{start}:{end}] {text[start:end]!r}"
         line += f" groups={groups}" if groups else ""
         if lines and used + len(line) > _PAGE_CHARS:
             break
@@ -81,8 +159,8 @@ def _page(matches: Sequence[re.Match[str]], offset: int) -> list[str]:
     return lines
 
 
-def _compiled(text: str, pattern: str) -> re.Pattern[str]:
-    """``pattern``, compiled, once the guards let it run on ``text``.
+def _check(text: str, pattern: str) -> None:
+    """Refuse ``pattern`` or ``text`` before a child starts on them.
 
     Raises:
         ToolFailure: validation_error when either is too long, the pattern is not a valid regex,
@@ -101,7 +179,7 @@ def _compiled(text: str, pattern: str) -> re.Pattern[str]:
             "shorten it.",
         )
     try:
-        compiled = re.compile(pattern)
+        re.compile(pattern)
     except (re.error, OverflowError, RecursionError) as e:  # a{4294967296}, deep nesting
         raise ToolFailure(
             "validation_error",
@@ -114,7 +192,6 @@ def _compiled(text: str, pattern: str) -> re.Pattern[str]:
             f"pattern refused: {risk}, which can backtrack exponentially; rewrite it without "
             "nested repetition or back-references.",
         )
-    return compiled
 
 
 def _backtracking_risk(pattern: str) -> str:

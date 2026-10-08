@@ -131,6 +131,11 @@ class TestUnitConvert:
         assert "beyond" in _refused(unit_convert, 1e308, "km", "mm")
         assert "finite" in _refused(unit_convert, float("nan"), "km", "mi")
 
+    def test_an_integer_beyond_a_float_is_a_validation_error(self):
+        # The validator keeps an int as it is; 10**400 has no float.
+        assert "beyond a float's range" in _refused(unit_convert, 10**400, "km", "m")
+        assert unit_convert(10**20, "km", "m").startswith("100000000000000000000 km = ")
+
 
 class TestMathGuards:
     def test_a_long_expression_is_refused(self):

@@ -112,7 +112,7 @@ Before any gate runs, the arguments are checked against the tool's input schema 
 | `null` | `null` | nothing |
 | `enum` | listed values | checked after coercion |
 | `minimum` / `maximum` at a parameter's top level (a `Range`, or a `schema=` override) | numbers inside the bounds, both included | checked after coercion; the refusal names the range |
-| `anyOf`, `oneOf`, a `type` list (`["integer", "null"]`) | a value that already matches a branch | otherwise the first branch that coerces it (`int \| str` keeps `"1"` a string); a `oneOf` is read as an `anyOf` |
+| `anyOf`, `oneOf`, a `type` list (`["integer", "null"]`) | a value that already matches a branch | otherwise the first branch that coerces it (`int \| str` keeps `"1"` a string); a `oneOf` is read as an `anyOf`, and each branch keeps its parent's other keywords (`{"type": "integer", "oneOf": [{"const": 1}, …]}` coerces `"2"` to `2`). Past 1,000 alternatives the value passes as it came, for the tool's own validation |
 | `string`, `array`, `object`, untyped | anything | nothing, nested values included |
 
 Required arguments must be present, arguments the schema doesn't declare are refused unless the function takes `**kwargs` and the schema's root leaves them open — `additionalProperties: false` at the root refuses them even then — and the call must bind to the function's signature. A parameter typed `X | None` without a default is optional in the schema; when the model omits it, the function receives `None`. An explicit `null` is accepted only where the parameter admits it — a `None` default, an annotation that includes `None`, or no usable annotation (`Any`, untyped); elsewhere it is a `validation_error` like any other wrong type (`width: int` refuses `null`). An argument that arrives through `**kwargs` — every argument of a [`tool_from_schema`](tools.md#tools-from-a-json-schema) tool — has no annotation to read, so its schema decides: `null` passes where the schema is untyped or names `null` among its types or branches. A failure returns `validation_error` with a message the model can act on; when one argument is at fault, `result.error.details["argument"]` names it. A string too long for Python to convert to an integer is a validation error too, never an exception.
@@ -172,7 +172,7 @@ The message is written for the person the model repeats it to.
 An app that wants a person to see each query re-decorates the tool, which keeps its name, schema and price, or adds a [gate of its own](#custom-gates) that reads `ctx.tool_call.input["query"]`:
 
 ```python
-from ai_arch_toolkit import ToolGroup, tool
+from ai_arch_toolkit import ApprovalDecision, ToolGroup, tool
 from ai_arch_toolkit.toolkit.tools import brave_search
 
 reviewed_search = tool(
@@ -182,8 +182,16 @@ reviewed_search = tool(
     approval_reason="Sends the query to Brave Search, billed per search.",
 )(brave_search)
 
-group = ToolGroup(reviewed_search, approval_handler=approve_handler)  # no handler: every call denied
+
+def review(request):  # request.arguments holds the query as the model wrote it
+    answer = input(f"Search Brave for {request.arguments['query']!r}? [y/N] ")
+    return ApprovalDecision.approve() if answer == "y" else ApprovalDecision.deny(reason="declined")
+
+
+group = ToolGroup(reviewed_search, approval_handler=review)  # no handler: every call denied
 ```
+
+The handler is the one [Human approval](#human-approval) describes: it may also be async, on the async path.
 
 ### Human approval
 

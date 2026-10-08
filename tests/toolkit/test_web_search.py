@@ -20,7 +20,7 @@ from ai_arch_toolkit.core import (
     tool,
 )
 from ai_arch_toolkit.core._tools._result import ToolFailure
-from ai_arch_toolkit.toolkit.tools import brave_search, tavily_search
+from ai_arch_toolkit.toolkit.tools import _http, brave_search, tavily_search
 from tests.toolkit.http_fakes import HTTP_OPEN, http_error, respond
 
 BRAVE_ANSWER = {
@@ -108,6 +108,11 @@ def _execute(fn: Any, **arguments: Any) -> ToolResult:
     return ToolGroup(fn).execute(ToolCall(id="t1", name=fn.__name__, input=arguments))
 
 
+def _now() -> float:
+    """A clock that stands still, so a rest the throttle takes is all left when it is read."""
+    return 1000.0
+
+
 class TestBraveSearch:
     @patch(HTTP_OPEN)
     def test_asks_brave_with_the_key_and_lists_the_results(self, mock_open, keys) -> None:
@@ -148,14 +153,27 @@ class TestBraveSearch:
         assert second.endswith("[results 3-4 | end]")
 
     @patch(HTTP_OPEN)
-    def test_the_tenth_page_says_brave_serves_no_more(self, mock_open, keys) -> None:
+    def test_the_footer_of_an_empty_page_brave_has_more_after_names_the_call(
+        self, mock_open, keys
+    ) -> None:
+        # The text said "[no results from 1 | end]" while metadata named offset=1.
+        mock_open.return_value = respond(_brave_page([], more=True))
+
+        result = brave_search("physics")
+
+        assert _text(result).endswith("[no results from 1 | next: offset=1, max_results=10]")
+        assert result.metadata["window"]["next_call"] == {"offset": 1, "max_results": 10}
+
+    @patch(HTTP_OPEN)
+    def test_the_footer_of_the_tenth_page_says_brave_has_more_it_does_not_serve(
+        self, mock_open, keys
+    ) -> None:
         mock_open.return_value = respond(_brave_page(["Omega"], more=True))
 
-        text = _text(brave_search("physics", max_results=1, offset=9))
-
-        assert "10. Omega" in text
-        assert "Brave serves no page past offset 9" in text
-        assert text.endswith("[results 10-10 | end]")
+        assert _text(brave_search("physics", max_results=1, offset=9)).endswith(
+            "[results 10-10 | Brave serves no page past offset 9: refine the query for other "
+            "results]"
+        )
 
     @patch(HTTP_OPEN)
     def test_an_empty_later_page_says_so(self, mock_open, keys) -> None:
@@ -273,7 +291,75 @@ class TestBraveSearch:
         assert failure.error.message.startswith(
             "Brave refused the search (HTTP 422): Unable to validate request parameter(s);"
         )
-        assert "600 characters and 75 words" in failure.error.message
+        # It named only the query, whatever Brave refused.
+        assert failure.error.message.endswith(
+            "; check the arguments: query (at most 600 characters and 75 words), max_results, "
+            "offset, country and freshness."
+        )
+
+    @patch(HTTP_OPEN)
+    def test_the_fields_brave_names_in_its_meta_are_said(self, mock_open, keys) -> None:
+        # ``error.meta`` is "non-standard meta-information" in Brave's reference; when it lists
+        # the fields it refused, as a validation error's ``loc`` and ``msg``, they are named.
+        error = {
+            "id": "x",
+            "status": 422,
+            "code": "VALIDATION",
+            "detail": "Unable to validate request parameter(s)",
+            "meta": {
+                "errors": [
+                    {
+                        "type": "string_too_long",
+                        "loc": ["query", "q"],
+                        "msg": "String should have at most 400 characters",
+                    }
+                ]
+            },
+        }
+        body = json.dumps({"type": "ErrorResponse", "error": error, "time": 1}).encode()
+        mock_open.side_effect = http_error(422, "Unprocessable", body=body)
+
+        failure = _failure(lambda: brave_search("x"))
+
+        assert failure.error.type == "validation_error"
+        assert failure.error.message.startswith(
+            "Brave refused the search (HTTP 422): Unable to validate request parameter(s) "
+            "(q: String should have at most 400 characters);"
+        )
+
+    @pytest.mark.parametrize(("given", "sent"), [("gb", "GB"), (" pt ", "PT"), ("all", "ALL")])
+    @patch(HTTP_OPEN)
+    def test_a_country_brave_serves_is_sent_in_its_form(self, mock_open, keys, given, sent):
+        mock_open.return_value = respond(BRAVE_ANSWER)
+
+        brave_search("weather", country=given)
+
+        assert _sent_query(mock_open)["country"] == [sent]
+
+    @patch(HTTP_OPEN)
+    def test_a_country_brave_does_not_serve_is_refused_before_asking(self, mock_open, keys):
+        # "UK" went out, and Brave's 422 sent the agent to shorten the query.
+        failure = _failure(lambda: brave_search("weather london", country="uk"))
+
+        assert failure.error.type == "validation_error"
+        assert failure.error.message.startswith("invalid country 'UK'; use AR, AU, AT, ")
+        assert "GB" in failure.error.message
+        mock_open.assert_not_called()
+
+    @patch(HTTP_OPEN)
+    def test_after_a_429_brave_rests_for_its_one_second_window(
+        self, mock_open, keys, monkeypatch
+    ) -> None:
+        # Brave limits "using a 1-second sliding window" and sends no Retry-After.
+        monkeypatch.setattr(_http, "_THROTTLE", _http._Throttle(sleep=lambda _s: None, clock=_now))
+        mock_open.side_effect = http_error(429, "Too Many Requests")
+        _failure(lambda: brave_search("x"))
+
+        failure = _failure(lambda: brave_search("y"))
+
+        assert failure.error.type == "rate_limited"
+        assert str(failure) == "Brave Search asked to slow down: try again in 1 s."
+        assert mock_open.call_count == 1  # the second search did not go out
 
     @patch(HTTP_OPEN)
     def test_the_rate_limit_carries_braves_words(self, mock_open, keys) -> None:
@@ -295,7 +381,7 @@ class TestBraveSearch:
         brave_search("lisbon weather")
         assert BRAVE_KEY not in mock_open.call_args.args[0].full_url
 
-        for status in (401, 403, 422, 429, 500):
+        for status in (401, 403, 422, 500, 429):  # the 429 last: the host rests after it
             mock_open.side_effect = http_error(status, "Error")
             assert BRAVE_KEY not in _failure(lambda: brave_search("x")).error.message
 
@@ -504,7 +590,7 @@ class TestTavilySearch:
         assert "(HTTP 422): query: Input should be a valid string;" in failure.error.message
 
     @patch(HTTP_OPEN)
-    def test_the_rate_limit_and_a_server_error_carry_tavilys_words(self, mock_open, keys) -> None:
+    def test_the_rate_limit_carries_tavilys_words(self, mock_open, keys) -> None:
         said = "Your request has been blocked due to excessive requests."
         body = json.dumps({"detail": {"error": said}}).encode()
         mock_open.side_effect = http_error(429, "Too Many", body=body)
@@ -513,6 +599,23 @@ class TestTavilySearch:
         assert failure.error.retryable
         assert said in failure.error.message
 
+    @patch(HTTP_OPEN)
+    def test_after_a_429_without_retry_after_tavily_rests_a_minute(
+        self, mock_open, keys, monkeypatch
+    ) -> None:
+        # Tavily's limits are requests per minute; a 429 carries Retry-After only sometimes.
+        monkeypatch.setattr(_http, "_THROTTLE", _http._Throttle(sleep=lambda _s: None, clock=_now))
+        mock_open.side_effect = http_error(429, "Too Many Requests")
+        _failure(lambda: tavily_search("x"))
+
+        failure = _failure(lambda: tavily_search("y"))
+
+        assert failure.error.type == "rate_limited"
+        assert str(failure) == "Tavily asked to slow down: try again in 60 s."
+        assert mock_open.call_count == 1
+
+    @patch(HTTP_OPEN)
+    def test_a_server_error_carries_tavilys_words(self, mock_open, keys) -> None:
         body = json.dumps({"detail": {"error": "Internal Server Error"}}).encode()
         mock_open.side_effect = http_error(500, "Error", body=body)
         failure = _failure(lambda: tavily_search("y"))

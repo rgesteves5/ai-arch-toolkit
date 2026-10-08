@@ -37,7 +37,8 @@ tools. Whether to ask, probe, or drop a model with an unknown fact is the app's 
 A set (`input_modalities`, `output_modalities`, `tool_choice_modes`, `server_tools`) lists what
 its source states. For a published modality list, a modality the provider's page does not name
 is not stated (Gemini 2.5 Flash's page lists no PDF, for example). A modality the adapter does
-not send is left out with `kind="adapter"` (see below): it does not reach the model.
+not carry is left out with `kind="adapter"` (see below): it does not reach the model, or does
+not come back.
 
 The three limits are kept as each provider publishes them. OpenAI gives a context window shared
 by input and output, and for some models a maximum input; Gemini gives an input and an output
@@ -52,7 +53,7 @@ maximum output.
 | `input_token_limit` | Input tokens | the provider's page |
 | `output_token_limit` | Output tokens, reasoning included | the provider's page |
 | `input_modalities` | What the model reads through the adapter: `text`, `image`, `pdf`, `audio`, `video` | the page, narrowed by the adapter |
-| `output_modalities` | What it writes: `text`, `image` | the provider's page |
+| `output_modalities` | What it writes through the adapter: `text`, `image` | the page, narrowed by the adapter |
 | `tools` | It calls function tools | the adapter |
 | `tool_choice_modes` | `auto`, `none`, `required`, `named` (a tool's name) | the adapter |
 | `parallel_tool_calls` | It calls several tools in one turn | the app (no shipped value) |
@@ -77,14 +78,24 @@ A fact says what works through the toolkit's adapter, not what the model can do 
   frozenset()`, though xAI runs web search;
 - Meta's Muse Spark reads video and audio, but no content part of the toolkit carries them:
   its `input_modalities` is `{"text", "image", "pdf"}`, with `kind="adapter"`;
-- the image models only draw from a prompt and input images, so `tools` is `False`.
+- the image models take no tools (`tools` is `False`). Gemini's and Meta's also complete, so a
+  PDF reaches them (Gemini 3.1 Flash Image: `{"text", "image", "pdf"}`, video left out);
+  OpenAI's and xAI's only draw, from a prompt and input images;
+- GPT Image 1.5's page says it writes images and text, but the Images API, the adapter's only
+  way to it, answers with images: its `output_modalities` is `{"image"}`, with
+  `kind="adapter"`.
+
+A list the provider states, on its page (`kind="docs"`) or from its models endpoint
+(`kind="api"`), is narrowed this way; a list the app observed (a probe's, an override) never
+is.
 
 These facts come from each adapter's own tables, through a pure classmethod,
 `BaseProvider.model_facts(model)`. The adapters never read the catalog: what limits a call is
 the adapter, with the catalog or without it, and the catalog only tells it and whose limit it
 is. Fixing an adapter's table fixes the catalog; overriding the catalog changes nothing on the
-wire. Without the adapter's SDK extra (`pip install ai-arch-toolkit[xai]`, …), its facts are
-`None`, and the published modalities are not narrowed.
+wire. Without the adapter's SDK extra (`pip install ai-arch-toolkit[xai]`, …), or with an
+installed SDK that fails to import, its facts are `None`, and the published modalities are not
+narrowed.
 
 Some facts the adapter's tables do not hold stay `None`: whether an adaptive Claude model
 thinks unasked (`thinking_mode`), and whether a Gemini 2.5 model that can stop thinking does
@@ -107,7 +118,9 @@ An id finds its entry by the entry's own id, an alias, or a dated snapshot of ei
 family prefix: `claude-fable-5-1` is not `claude-fable-5`. A `-latest` pointer, which moves
 between models, is never an alias. The keys are the provider's own ids: xAI calls
 `grok-4.20-reasoning` `grok-4.20-0309-reasoning`, and `get("grok-4.20-reasoning")` returns
-that entry.
+that entry. `register()`, `load()` and `unregister()` name an entry the same way: a fact
+registered for `grok-4.20-reasoning`, or for `claude-haiku-4-5-20251001`, lands on the entry
+`get()` finds for it.
 
 `get(model)` asks the provider the id routes to (`claude-` → `anthropic`, as `LLM` routes).
 Models on a local or compatible server go in a namespace of the app's, asked by name, which
@@ -149,14 +162,21 @@ A fact registered without a source gets `Provenance(kind="override", ref=
 "ModelCatalog.register")`. `register(..., replace=True)` makes the entry the whole of what is
 known: nothing below it shows through. `unregister(model)` forgets a model in every layer and
 `reset()` returns to the seed. `ModelCatalog(defaults=False)` starts empty, with no seed and no
-adapter facts. An id or alias that already names another model of the provider raises
-`ValueError`.
+adapter facts. An alias that already names another model of the provider raises `ValueError`.
+`ModelCapabilities` and `Provenance` check their facts as `load()` does: a wrong type or a word
+outside a field's vocabulary raises `ValueError`, and a set may be given as any collection.
+
+A catalog is safe to share between threads. A change builds the next version of the catalog,
+one change at a time; a read takes the current version and never waits, and what it builds
+belongs to that version, so a read that overlaps a change never keeps a stale entry.
 
 ## The file format
 
-`load()` reads TOML in the seed's shape, and is strict: an unknown key, a wrong type, a word
-outside a field's vocabulary, or a fact without a dated source raises `ValueError` naming the
-entry and the key, and nothing of the file is kept.
+`load()` reads TOML in the seed's shape, and is strict: a file that is not TOML, an unknown key,
+a wrong type, a word outside a field's vocabulary (`server_tools` takes the `ServerTool.type`
+values the core builds), or a fact without a dated source raises `ValueError` naming the file,
+the entry and the key, and nothing of the file is kept. `catalog_version` is the integer `1`.
+An effort listed twice is kept once.
 
 ```toml
 catalog_version = 1
@@ -179,9 +199,12 @@ source has a `kind` (`docs`, `probe`, `api`, `adapter`, `override`), a `ref`, an
 
 `scripts/probe_models.py` writes, next to each run's report, `<run_id>.catalog.toml`: what the
 run proved, as `kind = "probe"` facts dated the day of the run. A passed scenario states its
-fact true, one refused as unsupported states it false, and any other outcome (a rate limit, a
-timeout) states nothing. The fragment is local: compare it with the adapter's facts, or load
-it with `model_catalog.load()`. It never goes into the seed.
+fact true, one the adapter refused (its `prepare`, before sending) states it false, and any
+other outcome (a rate limit, a timeout) states nothing. A provider's error that only reads as
+unsupported may be a framework bug as well, so it states nothing either: the fragment lists it
+in a comment, for review against the report. The fragment is keyed by the inventory's ids,
+aliases included, and is local: compare it with the adapter's facts, or load it with
+`model_catalog.load()`. It never goes into the seed.
 
 ## Next to pricing and the compatibility matrix
 

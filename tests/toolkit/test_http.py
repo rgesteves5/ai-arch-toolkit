@@ -510,10 +510,11 @@ class TestRedirects:
     ) -> None:
         web.add("https://api.example.org/v1/old", b"", status=302, Location=target)
 
-        with pytest.raises(HttpError, match="refused a redirect to"):
+        with pytest.raises(HttpError, match="refused a redirect to") as refused:
             API.get_json("old", parse=dict)
 
         assert [request.full_url for request in web.seen] == ["https://api.example.org/v1/old"]
+        assert refused.value.redirect == target  # a tool may name where the source points
 
 
 class TestWithin:
@@ -776,6 +777,27 @@ class TestDeclaredAnswers:
         web.add("https://api.example.org/v1/x", {"error": {"code": "NOT_FOUND"}}, status=404)
 
         assert getattr(API, method)("x", parse=lambda data: data, empty_on_404=True) == empty
+
+    @pytest.mark.parametrize(("method", "empty"), [("get_json", {}), ("get_json_list", [])])
+    def test_a_404_is_nothing_only_where_the_sources_answer_says_so(
+        self, web: _Transport, method: str, empty: object
+    ) -> None:
+        def no_matches(reply: Reply) -> bool:
+            return reply.body["error"]["code"] == "NOT_FOUND"  # type: ignore[index]
+
+        web.add("https://api.example.org/v1/x", {"error": {"code": "NOT_FOUND"}}, status=404)
+        assert getattr(API, method)("x", parse=lambda data: data, empty_on_404=no_matches) == (
+            empty
+        )
+
+        for moved in ({"error": {"code": "GONE"}}, {"message": "Unknown route"}, "<html>404"):
+            web.add("https://api.example.org/v1/x", moved, status=404)
+            with pytest.raises(HttpError) as caught:
+                getattr(API, method)("x", parse=_refuse, empty_on_404=no_matches)
+            assert caught.value.error.type == "upstream"
+            assert str(caught.value).startswith(
+                "Example: endpoint not found (HTTP 404); the API may have changed"
+            )
 
     def test_the_declaration_wins_over_the_reader(self, web: _Transport) -> None:
         web.add("https://api.example.org/v1/x", {"error": "no such dataset"}, status=404)

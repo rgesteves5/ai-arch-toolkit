@@ -371,7 +371,13 @@ def unit_convert(value: float, from_unit: str, to_unit: str) -> str:
         ToolFailure: validation_error when a unit is unknown, the two are not in the same
             category, or the value or the result is not a finite number.
     """
-    if not math.isfinite(value):
+    try:
+        finite = math.isfinite(value)
+    except OverflowError as e:  # an int the validator kept, which no float holds
+        raise ToolFailure(
+            "validation_error", "the value is beyond a float's range; convert a smaller value"
+        ) from e
+    if not finite:
         raise ToolFailure("validation_error", f"value {value!r} is not a finite number; give one")
     result = _converted(value, from_unit.lower().strip(), to_unit.lower().strip())
     if result is None:

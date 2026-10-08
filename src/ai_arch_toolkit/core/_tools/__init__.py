@@ -24,6 +24,7 @@ from ai_arch_toolkit.core._tools._definition import (
 from ai_arch_toolkit.core._tools._dynamic import tool_from_schema
 from ai_arch_toolkit.core._tools._executor import (
     _definition_for,
+    _entry_name,
     async_execute_tool,
     execute_tool,
 )
@@ -122,15 +123,20 @@ type _Wire = tuple[str | None, object, dict[str, Any]]
 
 
 def _wire_entries(item: object) -> list[_Wire]:
-    """The tools ``item`` holds, as wire entries; none for an entry that is skipped."""
-    if isinstance(item, ServerTool):
-        return [(None, item, {"_server_tool": True, "type": item.type, **item.config})]
-    if isinstance(item, dict):
-        return _dict_entries(item)
+    """The tools ``item`` holds, as wire entries; none for an entry that is skipped.
+
+    An entry is named by the executor's ``_entry_name``, so ``execute_tool`` and ``run_tools``
+    take the lists this takes; a group's tools by their definitions'.
+    """
     if isinstance(item, ToolGroup):
         return [_definition_entry(definition) for definition in item.runtime_definitions]
+    name = _entry_name(item)
+    if isinstance(item, ServerTool):
+        return [(name, item, {"_server_tool": True, "type": item.type, **item.config})]
+    if isinstance(item, dict):
+        return _dict_entries(name, item)
     if callable(item):
-        return [_definition_entry(_definition_for(item))]
+        return [(name, item, _definition_for(item).schema.to_provider_dict())]
     warnings.warn(f"Skipping unsupported tool entry of type {type(item).__name__}", stacklevel=4)
     return []
 
@@ -139,12 +145,11 @@ def _definition_entry(definition: ToolDefinition) -> _Wire:
     return definition.schema.name, definition.fn, definition.schema.to_provider_dict()
 
 
-def _dict_entries(item: dict[str, Any]) -> list[_Wire]:
+def _dict_entries(name: str | None, item: dict[str, Any]) -> list[_Wire]:
     if item.get("_server_tool"):  # already in wire form (e.g. a request after middleware)
-        return [(None, item, item)]
-    name = item.get("name")
-    if not name:
+        return [(name, item, item)]
+    if not item.get("name"):
         warnings.warn("Tool dict missing 'name' field; skipping", stacklevel=5)
         return []
-    check_tool_name(name)
+    check_tool_name(item["name"])
     return [(name, item, item)]

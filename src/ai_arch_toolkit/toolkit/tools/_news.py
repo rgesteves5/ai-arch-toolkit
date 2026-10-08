@@ -11,12 +11,12 @@ reads those words.
 from __future__ import annotations
 
 import html
-from datetime import UTC, datetime
 from typing import Annotated, Any, NoReturn
 
 from ai_arch_toolkit.core import Range, ToolResult, tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._http import Api
+from ai_arch_toolkit.toolkit.tools._values import utc
 from ai_arch_toolkit.toolkit.tools._window import list_window
 
 _API = Api(base="https://hacker-news.firebaseio.com/v0", name="Hacker News")
@@ -106,6 +106,6 @@ def _story_text(item: dict[str, Any], story_id: str) -> str:
 
 def _iso(seconds: int) -> str:
     try:
-        return datetime.fromtimestamp(seconds, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-    except (OverflowError, OSError, ValueError):  # no time a story could have
+        return utc(seconds)
+    except OverflowError:  # no time a story could have
         return str(seconds)

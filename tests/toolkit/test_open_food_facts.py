@@ -112,6 +112,64 @@ class TestProduct:
         assert "   Ingredients: Sugar, palm oil, hazelnuts, cocoa." in lines
         assert "https://world.openfoodfacts.org/product/3017620422003" in text
 
+    @patch(HTTP_OPEN)
+    def test_nutrients_per_100_g_are_in_standard_units_whatever_unit_was_entered(
+        self, mock_urlopen: MagicMock
+    ):
+        # A US label enters sodium in mg: ``_unit`` is the contributor's, ``_100g`` is in g
+        # (docs/api/ref/schemas/product_nutrition.yaml in openfoodfacts-server).
+        nutriments = {
+            "energy-kcal_100g": 250,
+            "energy-kcal_unit": "kJ",
+            "salt_100g": 1,
+            "salt_unit": "mg",
+            "sodium_100g": 0.4,
+            "sodium_value": 400,
+            "sodium_unit": "mg",
+        }
+        mock_urlopen.side_effect = [
+            respond(_found({**_PRODUCT, "nutriments": nutriments})) for _ in range(2)
+        ]
+
+        product = open_food_facts_product("3017620422003")
+        compared = open_food_facts_compare("3017620422003")
+
+        assert "   Nutrients per 100 g: energy 250 kcal | salt 1 g | sodium 0.4 g" in (
+            product.splitlines()
+        )
+        assert "energy 250 kcal | salt 1 g" in compared
+
+    @pytest.mark.parametrize(
+        ("grade", "labelled", "listed"),
+        [
+            (
+                "not-applicable",
+                "Nutri-Score: not applicable (it does not apply to this kind of product)",
+                "Nutri-Score: not applicable",
+            ),
+            (
+                "unknown",
+                "Nutri-Score: unknown (not computed: data is missing)",
+                "Nutri-Score: unknown",
+            ),
+        ],
+    )
+    @patch(HTTP_OPEN)
+    def test_a_nutri_score_that_is_no_grade_says_what_it_is(
+        self, mock_urlopen: MagicMock, grade: str, labelled: str, listed: str
+    ):
+        product = {**_PRODUCT, "nutriscore_grade": grade, "ecoscore_grade": grade}
+        mock_urlopen.side_effect = [respond(_found(product)) for _ in range(2)]
+
+        record = open_food_facts_product("3017620422003")
+        compared = open_food_facts_compare("3017620422003")
+
+        assert labelled in record
+        assert f"Eco-Score: {grade.replace('-', ' ')}" in record
+        assert "NOT-APPLICABLE" not in record
+        assert "UNKNOWN" not in record
+        assert f"| {listed} |" in compared
+
     @pytest.mark.parametrize(
         ("label", "count"),
         [
@@ -309,6 +367,19 @@ class TestSearch:
 
         assert _text(open_food_facts_search(product_name="zzqqxx")) == (
             "No Open Food Facts products match product name 'zzqqxx'."
+        )
+
+    @patch(HTTP_OPEN)
+    def test_a_page_past_the_last_gives_the_count_and_the_last_page(self, mock_urlopen):
+        mock_urlopen.return_value = respond(
+            {"count": 57, "page": 20, "page_count": 0, "page_size": 5, "products": []}
+        )
+
+        text = _text(open_food_facts_search(brand="ferrero", max_results=5, page=20))
+
+        assert text == (
+            "Page 20 is past the end: 57 Open Food Facts products match brand 'ferrero', on 12 "
+            "pages of 5; the last is page=12."
         )
 
     @patch(HTTP_OPEN)

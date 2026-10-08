@@ -58,9 +58,11 @@ def tool_from_schema(
     Raises:
         ValueError: ``name`` is not portable (1 to 64 letters, digits, ``_`` or ``-``, starting
             with a letter or ``_``); ``input_schema`` is not JSON (``NaN``, a set), its root is
-            not an object, it refers outside itself (``https://...``, another file), it nests
-            deeper than 100 levels, or inlining its references would make it larger than about
-            1,000,000 characters or deeper than 100 levels.
+            not an object, it refers outside itself (``https://...``, another file) or to a
+            definition that is not an object schema (``true``, a list), it nests deeper than 100
+            levels, or inlining its references would make it larger than about 100,000
+            characters or deeper than 100 levels (each reference followed counts as one). No
+            other exception escapes for a schema that is JSON.
     """
     schema = ToolSchema(
         name=name, description=description, input_schema=_standalone(name, input_schema)
@@ -109,6 +111,8 @@ def _standalone(name: str, input_schema: Mapping[str, object]) -> dict[str, obje
         schema = _inline_local_refs(schema)
     except ValueError as exc:
         raise ValueError(f"input_schema of tool {name!r}: {exc}") from exc
+    except RecursionError as exc:  # the walk is bounded; a caller deep in its own stack is not
+        raise ValueError(f"input_schema of tool {name!r} nests too deep to walk") from exc
     if schema.get("type") != "object":
         raise ValueError(
             f'input_schema of tool {name!r} must describe an object: its root needs "type": '

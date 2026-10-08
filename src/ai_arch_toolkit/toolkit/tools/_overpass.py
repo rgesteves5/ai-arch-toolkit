@@ -74,6 +74,13 @@ _MAX_QUERY_CHARS = 4000
 _MAX_RADIUS_M = 50_000
 _TAG_RE = re.compile(r"^[A-Za-z0-9_:-]{1,80}$")
 _VALUE_RE = re.compile(r"^[\w\s,.'()/%:+-]{1,120}$", re.UNICODE)
+# What overpass_query needs of a query to read its answer: the JSON output setting, and an out
+# statement, which may follow a statement, open a block or name its input set (``.a out;``;
+# https://wiki.openstreetmap.org/wiki/Overpass_API/Overpass_QL, "Settings" and "Out"). Without
+# one, Overpass returns no elements at all.
+_JSON_OUTPUT_RE = re.compile(r"\[\s*out\s*:\s*json\s*\]")
+_OUT_STATEMENT_RE = re.compile(r"[;{]\s*(?:\.\w+\s+)?out\b")
+_QUERY_EXAMPLE = "'[out:json][timeout:25];node[amenity=cafe](38,-10,39,-9);out;'"
 _ATTRIBUTION = "Overpass API; data © OpenStreetMap contributors, ODbL"
 # The tags worth a line under each element, besides its name.
 _SHOWN_TAGS = ("amenity", "shop", "tourism", "leisure", "website", "phone", "opening_hours")
@@ -94,21 +101,11 @@ def overpass_query(
         offset: How many elements to skip; the footer gives the next offset.
 
     Raises:
-        ToolFailure: validation_error when the query is empty, too long, has no output format,
-            or Overpass cannot read it (HTTP 400); upstream when Overpass reports a runtime
-            error (a timeout, out of memory).
+        ToolFailure: validation_error when the query is empty, too long, does not ask for JSON
+            output, has no out statement, or Overpass cannot read it (HTTP 400); upstream when
+            Overpass reports a runtime error (a timeout, out of memory).
     """
-    if not query.strip() or len(query) > _MAX_QUERY_CHARS:
-        raise ToolFailure(
-            "validation_error",
-            f"query must be 1-{_MAX_QUERY_CHARS} characters (got {len(query)}).",
-        )
-    if "[out:" not in query or "out" not in query:
-        raise ToolFailure(
-            "validation_error",
-            "the query has no output format; start it with [out:json] and end it with an out "
-            "statement, e.g. '[out:json][timeout:25];node[amenity=cafe](38,-10,39,-9);out;'.",
-        )
+    _check_query(query)
     return _run(
         query,
         offset,
@@ -123,8 +120,8 @@ def overpass_pois(
     tag_key: str,
     tag_value: str = "",
     bbox: str = "",
-    latitude: float | None = None,
-    longitude: float | None = None,
+    latitude: Annotated[float | None, Range(-90, 90)] = None,
+    longitude: Annotated[float | None, Range(-180, 180)] = None,
     radius_m: Annotated[int, Range(1, _MAX_RADIUS_M)] = 1000,
     max_results: Annotated[int, Range(1, _MAX_RESULTS)] = 25,
     offset: Annotated[int, Range(0)] = 0,
@@ -178,6 +175,29 @@ def overpass_pois(
     )
 
 
+def _check_query(query: str) -> None:
+    """Refuse a query whose answer the tool could not read: empty or too long, without JSON
+    output (XML or CSV would not parse), or without an out statement (no elements would come,
+    and nothing would read as "no match")."""
+    if not query.strip() or len(query) > _MAX_QUERY_CHARS:
+        raise ToolFailure(
+            "validation_error",
+            f"query must be 1-{_MAX_QUERY_CHARS} characters (got {len(query)}).",
+        )
+    if not _JSON_OUTPUT_RE.search(query):
+        raise ToolFailure(
+            "validation_error",
+            "the query does not ask for JSON output, the only one this tool reads; start it "
+            f"with [out:json], e.g. {_QUERY_EXAMPLE}.",
+        )
+    if not _OUT_STATEMENT_RE.search(query):
+        raise ToolFailure(
+            "validation_error",
+            "the query has no out statement, so Overpass would return no elements; end it with "
+            f"one (out; or out center tags;), e.g. {_QUERY_EXAMPLE}.",
+        )
+
+
 def _run(query: str, offset: int, limit: int, *, heading: str, nothing: str) -> ToolResult:
     return _API.post_form(
         form={"data": query},
@@ -203,21 +223,16 @@ def _area_clause(
 ) -> tuple[str, str]:
     """The area filter of the query, and how the answer names it."""
     if bbox.strip():
-        south, west, north, east = _bbox(bbox)
+        south, west, north, east = (plain(side) for side in _bbox(bbox))
         where = f"in the box south {south}, west {west}, north {north}, east {east}"
         return f"({south},{west},{north},{east})", where
     if latitude is None or longitude is None:
         raise ToolFailure(
             "validation_error", "no area to search; provide bbox or latitude and longitude."
         )
-    if not -90 <= latitude <= 90 or not -180 <= longitude <= 180:
-        raise ToolFailure(
-            "validation_error",
-            f"invalid coordinates {latitude}, {longitude}; latitude must be between -90 and 90 "
-            "and longitude between -180 and 180.",
-        )
+    center = f"{plain(latitude)},{plain(longitude)}"
     where = f"within {radius_m} m of latitude {plain(latitude)}, longitude {plain(longitude)}"
-    return f"(around:{radius_m},{latitude},{longitude})", where
+    return f"(around:{radius_m},{center})", where
 
 
 def _bbox(bbox: str) -> tuple[float, float, float, float]:

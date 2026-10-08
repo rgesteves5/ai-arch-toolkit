@@ -9,8 +9,9 @@ result (https://archive.org/help/aboutsearch.htm), and the metadata read API
 
 from __future__ import annotations
 
+import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Annotated, Any
 
 from ai_arch_toolkit.core import Range, ToolResult, tool
@@ -60,10 +61,12 @@ def _metadata_error(reply: Reply) -> ToolFailure | str | None:
 
     It answers an error with a human-readable ``error``, and with ``extended_err=1`` an
     ``errcode`` beside it (https://archive.org/developers/md-read.html): 104 is a deleted item;
-    101, 102 and 105 an item that cannot be read for now; any other is the source's words.
+    101, 102 and 105 an item that cannot be read for now; any other is the source's words. An
+    ``error`` beside the item's ``metadata`` is a warning, not an error: 106 says "a secondary
+    copy was used", so the item came with it (``_item_answer`` shows it).
     """
     said = _said(reply)
-    if not said:
+    if not said or (isinstance(reply.body, dict) and isinstance(reply.body.get("metadata"), dict)):
         return None
     code = reply.body.get("errcode") if isinstance(reply.body, dict) else None
     if code == _DELETED:
@@ -109,6 +112,7 @@ class _Item:
     description: str = ""
     files: tuple[str, ...] = ()
     files_count: int | None = None
+    warning: str = ""
 
 
 @tool(capability="network")
@@ -205,20 +209,23 @@ def internet_archive_item(
         f"no Internet Archive item {normalized!r}; find its identifier with "
         "internet_archive_search"
     )
-    # An unknown identifier is an empty answer with HTTP 200 (``_item_of``); a 404 says the same.
-    item = _METADATA.get_json(
-        normalized, params={"extended_err": "1"}, parse=_item_of, missing=missing
+    # An unknown identifier is an empty answer with HTTP 200, an array by the documentation: read
+    # as text (``_item_answer``), since get_json takes only an object. A 404 says the same; the
+    # error reader still reads every error status.
+    item = _METADATA.get_text(
+        normalized, params={"extended_err": "1"}, parse=_item_answer, missing=missing
     )
     if item is None:
         raise ToolFailure("not_found", missing)
 
     text, term = _item_text(item), find.strip()
+    warned = f" (the Internet Archive says: {item.warning})" if item.warning else ""
     if term:
         window = find_window(text, term, offset=offset, limit=max_chars)
-        heading = f"Internet Archive item {normalized}, passages that mention {term!r}:"
+        heading = f"Internet Archive item {normalized}{warned}, passages that mention {term!r}:"
     else:
         window = text_window(text, offset=offset, limit=max_chars)
-        heading = f"Internet Archive item {normalized}:"
+        heading = f"Internet Archive item {normalized}{warned}:"
     return window.result(heading=heading)
 
 
@@ -304,6 +311,32 @@ def _some(values: tuple[str, ...], shown: int) -> str:
 
 
 # --- The item ----------------------------------------------------------------------------------
+
+
+def _item_answer(text: str) -> _Item | None:
+    """The item of a metadata answer, read from its text; ``None`` for an unknown identifier.
+
+    The documentation answers an unknown identifier with an empty array
+    (https://archive.org/developers/md-read.html); that, and an empty object, are ``None``. Any
+    other answer is an object, whose ``error`` :func:`_metadata_error` reads, as the door reads a
+    JSON answer's.
+
+    Raises:
+        ToolFailure: The error the answer reports.
+        ValueError: The answer is not JSON, or JSON of another shape (a parse error).
+    """
+    data = json.loads(text)
+    if data == []:
+        return None
+    if not isinstance(data, dict):
+        raise ValueError(f"expected a JSON object or an empty array, got {type(data).__name__}")
+    error = _metadata_error(Reply(status=200, headers={}, body=data))
+    if isinstance(error, ToolFailure):
+        raise error
+    if error:
+        raise ToolFailure("upstream", error)
+    item = _item_of(data)
+    return replace(item, warning=_said(Reply(status=200, headers={}, body=data))) if item else None
 
 
 def _item_of(data: dict[str, Any]) -> _Item | None:

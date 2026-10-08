@@ -163,6 +163,28 @@ class TestSpeciesSearch:
         assert _query(mock_urlopen)["offset"] == ["2"]
 
     @patch(HTTP_OPEN)
+    def test_the_search_pages_to_the_last_offset_gbif_takes(self, mock_urlopen: MagicMock) -> None:
+        # GBIF refuses only an offset past 100,000 (checklistbank, SpeciesResource
+        # .checkDeepPaging): the footer stopped at 99,990 while 100,000 was still served.
+        rows = [{"key": n, "scientificName": "Puma"} for n in range(10)]
+        mock_urlopen.side_effect = [
+            respond({"offset": 99_990, "endOfRecords": False, "count": 200_000, "results": rows}),
+            respond({"offset": 100_000, "endOfRecords": False, "count": 200_000, "results": rows}),
+        ]
+
+        before = _text(gbif_species_search("Puma", offset=99_990))
+        last = _text(gbif_species_search("Puma", offset=100_000))
+
+        assert before.endswith("[results 99991-100000 of 200000 | next: offset=100000]")
+        assert last.endswith(
+            "[results 100001-100010 of 200000 | GBIF's species search pages no further than "
+            "offset 100000; narrow the query, the rank or the higher taxon for the rest]"
+        )
+        assert (
+            "(GBIF's species search pages no further than offset 100000;" in (last.splitlines()[0])
+        )
+
+    @patch(HTTP_OPEN)
     def test_no_taxa_is_a_success_that_names_the_query(self, mock_urlopen: MagicMock) -> None:
         mock_urlopen.return_value = respond({"count": 0, "endOfRecords": True, "results": []})
 
@@ -275,7 +297,29 @@ class TestOccurrences:
 
         assert _query(mock_urlopen)["limit"] == ["5"]
         assert "(GBIF's search reaches the first 100000;" in text.splitlines()[0]
-        assert text.endswith("[results 99996-100000 of 400000 | the rest cannot be read here]")
+        # The page asked for 5, not max_results' 10, and said nothing of it.
+        assert text.endswith(
+            "[results 99996-100000 of 400000 | GBIF's search reaches the first 100000 "
+            "(max_results=10 stops there: 5 on this page); narrow the filters, or use GBIF's "
+            "download service, for the rest]"
+        )
+
+    @patch(HTTP_OPEN)
+    def test_a_page_that_ends_at_gbifs_depth_names_no_shortfall(
+        self, mock_urlopen: MagicMock
+    ) -> None:
+        rows = [{"key": n, "scientificName": "Puma concolor"} for n in range(10)]
+        mock_urlopen.return_value = respond(
+            {"offset": 99_990, "endOfRecords": False, "count": 400_000, "results": rows}
+        )
+
+        text = _text(gbif_occurrence_search(country="PT", max_results=10, offset=99_990))
+
+        assert _query(mock_urlopen)["limit"] == ["10"]
+        assert text.endswith(
+            "[results 99991-100000 of 400000 | GBIF's search reaches the first 100000; narrow "
+            "the filters, or use GBIF's download service, for the rest]"
+        )
 
     @patch(HTTP_OPEN)
     def test_no_occurrences_is_a_success_that_names_the_filters(

@@ -7,7 +7,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
-from ai_arch_toolkit.core import ToolResult
+from ai_arch_toolkit.core import ToolCall, ToolGroup, ToolResult
 from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._geo import (
     country_info,
@@ -16,6 +16,7 @@ from ai_arch_toolkit.toolkit.tools._geo import (
     ip_lookup,
     timezone_lookup,
 )
+from ai_arch_toolkit.toolkit.tools._values import plain
 from tests.toolkit import geo_answers
 from tests.toolkit.http_fakes import HTTP_OPEN, http_error, respond
 
@@ -34,6 +35,18 @@ def _query(mock_urlopen: MagicMock) -> dict[str, list[str]]:
     return parse_qs(urlparse(mock_urlopen.call_args.args[0].full_url).query)
 
 
+def _executed(fn, **args):
+    """What the executor answers a call with ``args`` (the schema's bounds are checked there)."""
+    return ToolGroup(fn).execute(ToolCall(id="c", name=fn.__name__, input=args))
+
+
+def _bounds(fn, *names: str) -> dict[str, tuple[object, object]]:
+    properties = fn.__tool_definition__.schema.input_schema["properties"]
+    return {
+        name: (properties[name].get("minimum"), properties[name].get("maximum")) for name in names
+    }
+
+
 class TestGeocode:
     @patch(HTTP_OPEN)
     def test_lists_the_places_labelled_with_signed_coordinates(self, mock_urlopen):
@@ -44,7 +57,7 @@ class TestGeocode:
         assert text == (
             "Places named 'Tokyo' (Open-Meteo geocoding):\n"
             "1. Tokyo, State 1, United States (US) | latitude 39.80172, longitude -89.64371 | "
-            "time zone America/Chicago | population 116250 | elevation 182.0 m"
+            f"time zone America/Chicago | population 116250 | elevation {plain(182.0)} m"
         )
 
     @patch(HTTP_OPEN)
@@ -57,8 +70,9 @@ class TestGeocode:
         text = _text(result)
         assert "5. Springfield, State 5" in text
         assert "6. Springfield" not in text
-        assert text.endswith("[results 1-5 | next: offset=5]")
-        assert _query(mock_urlopen)["count"] == ["6"]  # the page and one more
+        # All the places Open-Meteo gives, so every page is cut from one answer, with its total.
+        assert text.endswith("[results 1-5 of 6 | next: offset=5]")
+        assert _query(mock_urlopen)["count"] == ["100"]
         assert isinstance(result, ToolResult)
         assert result.metadata["window"]["next_call"] == {"offset": 5}
 
@@ -68,7 +82,7 @@ class TestGeocode:
 
         text = _text(geocode("Springfield", max_results=5, offset=5))
 
-        assert _query(mock_urlopen)["count"] == ["11"]
+        assert _query(mock_urlopen)["count"] == ["100"]
         lines = text.splitlines()
         assert [line.split(" |")[0] for line in lines[1:3]] == [
             "6. Springfield, State 6, United States (US)",
@@ -191,6 +205,12 @@ class TestIpLookup:
         failure = _failure(lambda: ip_lookup("8.8.8.8"))
         assert failure.error.type == "upstream"
 
+    def test_the_address_is_required(self):
+        # It defaulted to "", which always failed.
+        schema = ip_lookup.__tool_definition__.schema.input_schema
+        assert "ip" in schema["required"]
+        assert "default" not in schema["properties"]["ip"]
+
 
 class TestTimezoneLookup:
     @patch(HTTP_OPEN)
@@ -229,10 +249,28 @@ class TestTimezoneLookup:
         failure = _failure(lambda: timezone_lookup(35.6762, 139.6503))
         assert failure.error.type == "upstream"
 
-    def test_invalid_coordinates(self):
-        failure = _failure(lambda: timezone_lookup(10.0, 200.0))
-        assert failure.error.type == "validation_error"
-        assert "longitude out of range" in str(failure)
+    @patch(HTTP_OPEN)
+    def test_invalid_coordinates(self, mock_urlopen):
+        mock_urlopen.side_effect = AssertionError("no request")
+
+        result = _executed(timezone_lookup, lat=10.0, lon=200.0)
+
+        assert result.error is not None
+        assert result.error.type == "validation_error"
+        assert "'lon'" in result.error.message
+
+    def test_the_coordinates_are_bounded_in_the_schema(self):
+        assert _bounds(timezone_lookup, "lat", "lon") == {"lat": (-90, 90), "lon": (-180, 180)}
+
+    @patch(HTTP_OPEN)
+    def test_coordinates_go_in_decimal_notation(self, mock_urlopen):
+        # str(0.00001) is "1e-05".
+        mock_urlopen.return_value = respond({"timezone": "Etc/GMT", "utc_offset_seconds": 0})
+
+        timezone_lookup(0.00001, -0.00002)
+
+        query = _query(mock_urlopen)
+        assert (query["latitude"], query["longitude"]) == (["0.00001"], ["-0.00002"])
 
 
 class TestDistanceBetween:
@@ -252,9 +290,25 @@ class TestDistanceBetween:
         assert "invalid unit" in str(failure)
 
     def test_invalid_coordinates_say_which_end(self):
-        failure = _failure(lambda: distance_between(0.0, 0.0, 91.0, 1.0))
-        assert failure.error.type == "validation_error"
-        assert str(failure).startswith("end latitude out of range")
+        result = _executed(distance_between, lat1=0.0, lon1=0.0, lat2=91.0, lon2=1.0)
+        assert result.error is not None
+        assert result.error.type == "validation_error"
+        assert "'lat2'" in result.error.message
+
+    def test_the_coordinates_and_units_are_in_the_schema(self):
+        assert _bounds(distance_between, "lat1", "lon1", "lat2", "lon2") == {
+            "lat1": (-90, 90),
+            "lon1": (-180, 180),
+            "lat2": (-90, 90),
+            "lon2": (-180, 180),
+        }
+        unit = distance_between.__tool_definition__.schema.input_schema["properties"]["unit"]
+        assert unit["enum"] == ["km", "mi"]
+        assert "Defaults" not in unit.get("description", "")  # the schema gives the default
+
+    def test_the_points_are_written_in_decimal_notation(self):
+        # str(0.00001) is "1e-05".
+        assert distance_between(0.00001, 0.0, 0.0, 1.0).startswith("0.00001, ")
 
 
 def _fact(qid, prop, value, *, label=None, extra=None):

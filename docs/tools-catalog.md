@@ -1,6 +1,6 @@
 # Tools Catalog
 
-The complete list of pre-built tools, grouped by domain. All are built on the [`@tool`](tools.md) decorator, use the standard library only (zero extra pip dependencies; the three `youtube_*` tools need the `youtube` extra), and raise a typed `ToolFailure` when they cannot answer, which the executor returns as a failed result — so agents degrade gracefully. The wiki family declares its limits as [`Range`](tools.md#defining-tools) bounds, which the executor enforces; the other tools still move a numeric argument outside a limit given below to the nearest limit without a word.
+The complete list of pre-built tools, grouped by domain. All are built on the [`@tool`](tools.md) decorator, use the standard library only (zero extra pip dependencies; the three `youtube_*` tools need the `youtube` extra), and raise a typed `ToolFailure` when they cannot answer, which the executor returns as a failed result — so agents degrade gracefully. Every tool declares its limits as [`Range`](tools.md#defining-tools) bounds, which the executor enforces: a value outside a limit given below is refused with a `validation_error`. A long answer is a window whose last line gives the call that reads on.
 
 Import any of them and drop them into a `ToolGroup`:
 
@@ -32,7 +32,7 @@ For the conceptual guide (`@tool`, `ToolGroup`, server tools), see [Tools](tools
 
 **Text processing** — `_text.py`
 
-- `regex_search` — Find regex matches with positions and groups, a page of up to 1000 with the total and the next `offset`; text up to 20 000 characters, pattern up to 500, and back-references or groups that repeat while holding a quantifier or an alternation are refused
+- `regex_search` — Find regex matches with positions and groups, a page of up to 1000 with the total and the next `offset`; text up to 20 000 characters, pattern up to 500, and back-references or groups that repeat while holding a quantifier or an alternation are refused; the match runs in a child Python process given 5 s, so a pattern that backtracks (`a*a*b`) is refused when they run out and never freezes the program
 - `text_stats` — Count words, characters, lines, sentences, paragraphs
 - `base64_encode` — Encode text to base64
 - `base64_decode` — Decode base64 to text
@@ -228,7 +228,7 @@ costs two, the second naming its authors.
 - `chembl_target_search` — Search ChEMBL biological targets, with the total
 - `chembl_target` — Read a ChEMBL target, with the UniProt accessions of its components
 - `chembl_activity_search` — Search ChEMBL bioactivity measurements of a molecule, on a target,
-  or both, with names, units and the assay
+  in an assay, or any of them together, with names, units and the assay
 
 **Medication labels** — `_rxnorm_dailymed.py`, `_spl.py`
 
@@ -342,12 +342,12 @@ These execute real side effects and live in the explicit `ai_arch_toolkit.toolki
 
 - `read_file` — Read a text file window by window: up to `max_lines` lines (1–10 000) and 100 000 characters a window, from a character `offset`; the footer gives the next offset, so following it reads the whole file, and the file's size once fewer than 100 million characters are left. The file is read a chunk at a time, never whole
 - `list_directory` — List files/dirs with sizes and types, by name, a page of 1000 with the total and the next `offset`; a pattern that matches more than 100 000 entries is refused with a request to narrow it. Lists only entries inside the folder, so a pattern that climbs out (`../*`) or goes through a link (`link/*`) finds nothing there
-- `search_files` — Recursively search the text files under a folder for the lines that contain a text (1–1000 a page, with the next `offset`), each as `path:line:offset: text`, where `read_file(path, offset=…)` reads from; whole files are searched, and a line over 300 characters shows the part around the match and says its length. A link that points out of the folder is not read
-- `csv_read` — Read a CSV file as a table: the header, then a page of rows (1–10 000) from an `offset`, with the whole file's row count and the next offset
+- `search_files` — Recursively search the text files under a folder for the lines that contain a text (1–1000 a page, with the next `offset`), each as `path:line:offset: text`, the path as `read_file` takes it (under `directory` as you passed it), where `read_file(path, offset=…)` reads from; whole files are searched, up to 500 million characters a call (then it says where it stopped), a file with a NUL in its first 8 KiB is skipped as binary, and a line over 300 characters shows the part around the match and says its length. A link that points out of the folder is not read; a folder or file it cannot read is named
+- `csv_read` — Read a CSV file as a table: the header, then a page of rows (1–10 000, at most 100 000 characters, columns padded to 40) from an `offset`, with the file's row count (counted up to 50 million characters past the page, then "at least") and the next offset
 
 **Shell** — `dangerous`
 
-- `run_command` — Execute shell commands and return output (timeout 1–600 s, output 1–100 000 characters, stdout and stderr together; `cwd` runs the command in another folder, without moving the process). An output over the limit shows its start, its size and how to narrow the command (`| grep`, `| tail -n`, `| sed -n 'A,Bp'`): it is not kept, so no call reads on. The exit code and stderr always show, and the output is read as it comes, so memory stays within the limit. Governed execution gives up at the tool's default 120 s `timeout_s` with a `timeout` failure, and the command runs on until it ends or its own timeout stops it
+- `run_command` — Execute shell commands and return output (timeout 1–600 s, output 1–100 000 characters, stdout and stderr together; `cwd` runs the command in another folder, without moving the process). An output over the limit shows its start, its size and how to narrow the command (`| grep`, `| tail -n`, `| sed -n 'A,Bp'`): it is not kept, so no call reads on. The exit code and stderr always show, and the output is read as it comes, so memory stays within the limit. The command gets no input and runs in a process group of its own, killed when the call returns, so nothing it started in the background is left running (end the command with `wait` to let such a process finish); POSIX only. Governed execution gives up at the tool's default 120 s `timeout_s` with a `timeout` failure, and the command runs on until it ends or its own timeout stops it
 
 **Python** — `dangerous`
 

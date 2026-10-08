@@ -87,9 +87,9 @@ def date_add(
 
     Args:
         date_str: Date/time in "YYYY-MM-DD" or "YYYY-MM-DD HH:MM" format.
-        days: Number of days to add (negative to subtract). Defaults to 0.
-        hours: Number of hours to add. Defaults to 0.
-        minutes: Number of minutes to add. Defaults to 0.
+        days: Number of days to add (negative to subtract).
+        hours: Number of hours to add.
+        minutes: Number of minutes to add.
 
     Raises:
         ToolFailure: validation_error when the date is malformed or the result falls outside
@@ -160,7 +160,10 @@ def _zone(name: str, value: str) -> ZoneInfo:
 
 
 def _out_of_range(error: OverflowError) -> ToolFailure:
-    msg = f"the result falls outside the calendar (years 1-9999): {error}."
+    msg = (
+        f"the result falls outside the calendar (years 1-9999): {error}; use a smaller shift or a "
+        "date further from the calendar's ends."
+    )
     return ToolFailure("validation_error", msg)
 
 

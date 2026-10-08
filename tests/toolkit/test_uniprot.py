@@ -7,7 +7,12 @@ header and counts in ``x-total-results``; an error says why in ``messages``.
 
 from __future__ import annotations
 
+import email.message
+import http
+import io
 import json
+import urllib.request
+import urllib.response
 from typing import Any
 from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qs, urlparse
@@ -15,6 +20,7 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 
 from ai_arch_toolkit.core import ToolFailure, ToolResult
+from ai_arch_toolkit.toolkit.tools import _http
 from ai_arch_toolkit.toolkit.tools._uniprot import (
     uniprot_crossrefs,
     uniprot_entry,
@@ -162,6 +168,20 @@ class TestSearch:
 
         assert failure.error.type == "validation_error"
         assert "cursor" in failure.error.message
+        mock_urlopen.assert_not_called()
+
+    @patch(HTTP_OPEN)
+    def test_a_cursor_without_its_offset_is_refused_before_any_request(
+        self, mock_urlopen: MagicMock
+    ) -> None:
+        # The page the cursor reaches was numbered from 1 again, and the next offset from there.
+        failure = _failure(lambda: uniprot_search("insulin", cursor="c2"))
+
+        assert failure.error.type == "validation_error"
+        assert failure.error.message == (
+            "UniProt pages by cursor, and the offset numbers the page the cursor reaches: pass "
+            "both from the previous page's footer, or neither for the first page"
+        )
         mock_urlopen.assert_not_called()
 
     @patch(HTTP_OPEN)
@@ -369,6 +389,109 @@ class TestEntry:
         )
 
 
+class _Transport(urllib.request.BaseHandler):
+    """Answers the real opener (its redirect handling included) from canned routes, before the
+    socket handlers are tried."""
+
+    handler_order = 50
+
+    def __init__(self) -> None:
+        self.routes: dict[str, tuple[int, dict[str, str], bytes]] = {}
+        self.seen: list[str] = []
+
+    def add(self, url: str, body: bytes = b"", *, status: int = 200, **headers: str) -> None:
+        headers.setdefault("Content-Type", "application/json")
+        self.routes[url] = (status, headers, body)
+
+    def _serve(self, request: urllib.request.Request) -> urllib.response.addinfourl:
+        self.seen.append(request.full_url)
+        status, headers, body = self.routes[request.full_url]
+        message = email.message.Message()
+        for key, value in headers.items():
+            message[key] = value
+        response = urllib.response.addinfourl(io.BytesIO(body), message, request.full_url, status)
+        response.msg = http.HTTPStatus(status).phrase  # what urllib's error processor reads
+        return response
+
+    https_open = _serve
+    http_open = _serve
+
+
+@pytest.fixture
+def web(monkeypatch: pytest.MonkeyPatch) -> _Transport:
+    transport = _Transport()
+    monkeypatch.setattr(_http, "_OPENER", _http._build_opener(transport))
+    return transport
+
+
+_REST = "https://rest.uniprot.org/uniprotkb"
+_EST1 = json.dumps({**_ENTRY, "primaryAccession": "P23141", "uniProtkbId": "EST1_HUMAN"})
+
+
+class TestRedirect:
+    """An inactive accession answers ``303 See Other`` to its entry, ``Location:
+    /uniprotkb/P23141?from=Q00015`` (https://www.uniprot.org/help/rest-api-headers), served here
+    through the door's own opener."""
+
+    def test_the_documented_redirect_is_followed_and_the_heading_names_the_entry(
+        self, web: _Transport
+    ) -> None:
+        web.add(
+            f"{_REST}/Q00015?format=json", status=303, Location="/uniprotkb/P23141?from=Q00015"
+        )
+        web.add(f"{_REST}/P23141?from=Q00015", _EST1.encode())
+
+        text = _text(uniprot_entry("Q00015"))
+
+        assert text.splitlines()[0] == (
+            "UniProtKB entry P23141 (EST1_HUMAN), which UniProt gives for Q00015:"
+        )
+        assert web.seen == [f"{_REST}/Q00015?format=json", f"{_REST}/P23141?from=Q00015"]
+
+    @pytest.mark.parametrize(
+        ("tool", "asked", "location"),
+        [
+            (uniprot_entry, "Q00015?format=json", "P23141?from=Q00015"),
+            (uniprot_features, "Q00015?format=json", "P23141?from=Q00015"),
+            (uniprot_crossrefs, "Q00015?format=json", "P23141?from=Q00015"),
+            (uniprot_sequence, "Q00015.fasta", "P23141.fasta?from=Q00015"),
+        ],
+    )
+    def test_a_redirect_down_to_http_names_the_accession_to_look_up(
+        self, web: _Transport, tool: Any, asked: str, location: str
+    ) -> None:
+        # UniProt has answered redirects to plain HTTP (the bare collection path does); the door
+        # refuses the downgrade, and the failure was an upstream one with no next step.
+        web.add(
+            f"{_REST}/{asked}",
+            status=303,
+            Location=f"http://rest.uniprot.org/uniprotkb/{location}",
+        )
+
+        failure = _failure(lambda: tool("Q00015"))
+
+        assert failure.error.type == "not_found"
+        assert failure.error.message == (
+            f"Q00015 is inactive: UniProt redirects it to P23141; look up P23141 with "
+            f"{tool.__name__}"
+        )
+        assert web.seen == [f"{_REST}/{asked}"]  # the plain-HTTP target is never asked
+
+    def test_a_refused_redirect_to_the_same_accession_stays_the_doors_failure(
+        self, web: _Transport
+    ) -> None:
+        web.add(
+            f"{_REST}/P01308?format=json",
+            status=303,
+            Location="http://rest.uniprot.org:8080/uniprotkb/P01308?format=json",
+        )
+
+        failure = _failure(lambda: uniprot_entry("P01308"))
+
+        assert failure.error.type == "upstream"
+        assert "refused a redirect" in failure.error.message
+
+
 class TestFeatures:
     @patch(HTTP_OPEN)
     def test_every_feature_can_be_read_page_by_page(self, mock_urlopen: MagicMock) -> None:
@@ -405,6 +528,20 @@ class TestFeatures:
 
         assert "1. Chain 25-54: Insulin B chain" in text
         assert "2. Natural variant 34: H -> D, in MODY10 [VAR_003971]" in text
+        # An ID no tool takes is said to be one (T00, point 6), once a page.
+        assert text.splitlines()[2] == (
+            "In brackets: UniProt's feature ID, for citing (no tool takes it)."
+        )
+
+    @patch(HTTP_OPEN)
+    def test_a_page_without_feature_ids_says_nothing_of_them(
+        self, mock_urlopen: MagicMock
+    ) -> None:
+        mock_urlopen.return_value = respond(_ENTRY)
+
+        text = _text(uniprot_features("P01308", feature_type="Chain"))
+
+        assert "In brackets" not in text
 
     @patch(HTTP_OPEN)
     def test_a_type_with_no_features_names_the_types_there_are(

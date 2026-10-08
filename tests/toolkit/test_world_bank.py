@@ -119,10 +119,22 @@ class TestWorldBankCatalog:
             "3. Economy & Growth (ID 3)",
         ]
         assert ("Economic indicators and growth measures. " * 30).strip() in text  # whole
-        assert text.endswith("[results 3-4 of 21 | next: page=3]")
-        assert result.metadata["window"]["next_call"] == {"page": 3}
+        assert text.endswith("[results 3-4 of 21 | next: page=3, max_results=2]")
+        assert result.metadata["window"]["next_call"] == {"page": 3, "max_results": 2}
         assert _called_params(mock_urlopen)["per_page"] == ["2"]
         assert _called_params(mock_urlopen)["page"] == ["2"]
+
+    @patch(HTTP_OPEN)
+    def test_the_next_page_keeps_the_pages_size(self, mock_urlopen):
+        # A page counts from its size: "next: page=2" called with the default 100 per page read
+        # "[no results from 101 of 64 | end]", and skipped results 11-64.
+        mock_urlopen.return_value = respond(
+            _payload([_TOPIC] * 10, page=1, pages=7, per_page=10, total=64)
+        )
+
+        result = world_bank_topics(max_results=10)
+
+        assert result.metadata["window"]["next_call"] == {"page": 2, "max_results": 10}
 
     @patch(HTTP_OPEN)
     def test_sources(self, mock_urlopen):
@@ -158,7 +170,7 @@ class TestWorldBankCatalog:
         text = _text(world_bank_countries(region="ECS", max_results=3, page=2))
 
         assert text.splitlines()[1] == "4. Country 4 (C04, ISO2 PT)"
-        assert text.endswith("[results 4-6 of 7 | next: page=3]")
+        assert text.endswith("[results 4-6 of 7 | next: page=3, max_results=3]")
 
     @patch(HTTP_OPEN)
     def test_no_countries_say_so_with_the_filters(self, mock_urlopen):
@@ -183,7 +195,7 @@ class TestWorldBankIndicators:
             "Development Indicators (2) | topics: Topic 1 (1), Topic 2 (2), Topic 3 (3), Topic 4 "
             "(4), Topic 5 (5), Topic 6 (6), Topic 7 (7), Topic 8 (8)"
         )
-        assert text.endswith("[results 1-1 of 306 | next: page=2]")
+        assert text.endswith("[results 1-1 of 306 | next: page=2, max_results=3]")
         assert urlparse(_called_request(mock_urlopen).full_url).path == "/v2/topic/3/indicator"
 
     @patch(HTTP_OPEN)
@@ -206,7 +218,7 @@ class TestWorldBankIndicators:
         )
         assert text.splitlines()[1].startswith("3. CPI.3: Consumer prices, inflation 3")
         assert "SP.POP.TOTL" not in text
-        assert text.endswith("[results 3-4 of 5 | next: page=3]")
+        assert text.endswith("[results 3-4 of 5 | next: page=3, max_results=2]")
         assert _called_params(mock_urlopen)["page"] == ["1"]
         assert _called_params(mock_urlopen)["per_page"] == ["1000"]
 
@@ -300,7 +312,7 @@ class TestWorldBankSeries:
 
         assert text.splitlines() == [
             "World Bank, NY.GDP.MKTP.CD: GDP (current US$):",
-            "1. Portugal (PRT), 2023: 29184912345600",
+            "1. Portugal (PRT), 2023: 29184912345600.0",
             "2. Portugal (PRT), 2022: no value",
             "3. Portugal (PRT), 2021-07: 1.23456789012",
         ]
@@ -334,8 +346,8 @@ class TestWorldBankSeries:
         )
         assert _called_params(mock_urlopen)["page"] == ["2"]
         assert text.splitlines()[1] == "3. Spain (ESP), 2019: 3019"
-        assert text.endswith("[results 3-4 of 6 | next: page=3]")
-        assert result.metadata["window"]["next_call"] == {"page": 3}
+        assert text.endswith("[results 3-4 of 6 | next: page=3, max_results=2]")
+        assert result.metadata["window"]["next_call"] == {"page": 3, "max_results": 2}
 
     @patch(HTTP_OPEN)
     def test_no_observations_say_so(self, mock_urlopen):
@@ -472,7 +484,7 @@ def test_a_service_the_api_says_is_unavailable_is_worth_a_retry(mock_urlopen):
 
 
 @patch(HTTP_OPEN)
-def test_every_message_the_api_reports_is_kept(mock_urlopen):
+def test_every_message_the_api_reports_is_kept_with_a_next_step(mock_urlopen):
     mock_urlopen.return_value = respond(
         [
             {
@@ -484,9 +496,59 @@ def test_every_message_the_api_reports_is_kept(mock_urlopen):
         ]
     )
 
-    assert _failure(lambda: world_bank_series("PRT", "SP.POP.TOTL")).message == (
-        "Unexpected error: Bad country; Invalid format: Bad indicator"
+    error = _failure(lambda: world_bank_series("PRT", "SP.POP.TOTL"))
+
+    assert error.type == "upstream"
+    assert error.message == (
+        "Unexpected error: Bad country; Invalid format: Bad indicator; check the codes and IDs "
+        "given (world_bank_countries, world_bank_indicators, world_bank_sources and "
+        "world_bank_topics list them), or try again later"
     )
+
+
+# What the API answers, with HTTP 200, for a data query of an indicator it does not hold
+# (api.worldbank.org, seen by the review of T08a, 2026-10-08): error 175, which its error table
+# (https://datahelpdesk.worldbank.org/knowledgebase/articles/898620-api-error-codes) does not
+# list.
+_INDICATOR_NOT_FOUND = [
+    {
+        "message": [
+            {
+                "id": "175",
+                "key": "Invalid format",
+                "value": "The indicator was not found. It may have been deleted or archived.",
+            }
+        ]
+    }
+]
+
+
+@patch(HTTP_OPEN)
+def test_a_series_of_an_indicator_the_api_does_not_hold_is_not_found(mock_urlopen):
+    mock_urlopen.return_value = respond(_INDICATOR_NOT_FOUND)
+
+    error = _failure(lambda: world_bank_series("PRT", "NOT.AN.INDICATOR"))
+
+    assert error.type == "not_found"
+    assert error.message == (
+        "the World Bank has no indicator NOT.AN.INDICATOR or no country or aggregate among PRT "
+        "(error 175, Invalid format: The indicator was not found. It may have been deleted or "
+        "archived); find the indicator with world_bank_indicators and the codes with "
+        "world_bank_countries"
+    )
+
+
+@patch(HTTP_OPEN)
+def test_an_indicator_lookup_of_one_the_api_does_not_hold_is_not_found(mock_urlopen):
+    mock_urlopen.return_value = respond(_INDICATOR_NOT_FOUND)
+
+    error = _failure(lambda: world_bank_indicator("NOT.AN.INDICATOR"))
+
+    assert error.type == "not_found"
+    assert error.message.startswith(
+        "the World Bank has no indicator NOT.AN.INDICATOR (error 175, Invalid format:"
+    )
+    assert error.message.endswith("; search for one with world_bank_indicators")
 
 
 @patch(HTTP_OPEN)
@@ -512,7 +574,7 @@ def test_another_error_on_an_indicator_lookup_stays_the_sources_words(mock_urlop
     error = _failure(lambda: world_bank_indicator("SP.POP.TOTL"))
 
     assert error.type == "upstream"
-    assert error.message == "Unexpected error: is not supported"
+    assert error.message.startswith("Unexpected error: is not supported; check the codes")
 
 
 @pytest.mark.parametrize(

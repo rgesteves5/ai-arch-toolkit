@@ -5,8 +5,10 @@ and hands the next page's token (``nextPageToken``), which the footer gives back
 so the next page is numbered on. A study's record is read whole and served through the window: by
 section, by offset, or as the passages around a term, so no summary, criterion, arm, outcome,
 site or reference is cut where nothing reads on (D39). The ``markup`` fields (summary,
-description, eligibility criteria) come in markdown, one line per paragraph or list item, and
-keep their lines (https://clinicaltrials.gov/api/oas/v2).
+description, eligibility criteria) come in markdown, one line per paragraph or list item: they
+keep their lines and their nesting, two spaces a level, and read without markdown's backslash
+escapes (https://clinicaltrials.gov/api/oas/v2). Both requests ask only for the parts they read
+(``fields``): never the posted results, the largest part of a record.
 """
 
 from __future__ import annotations
@@ -45,6 +47,24 @@ _MAX_CHARS = 20_000
 _DEFAULT_CHARS = 6_000
 _NCT_ID_RE = re.compile(r"^NCT\d{8}$", re.IGNORECASE)
 _STUDY_URL = "https://clinicaltrials.gov/study/"
+# The parts each request reads, by the piece names ``fields`` takes ("area name, piece name, field
+# name", its examples ``ProtocolSection``, ``HasResults``, ``ConditionsModule``;
+# https://clinicaltrials.gov/api/oas/v2): a search lists a study from these modules, a record reads
+# the whole protocol.
+_SEARCH_FIELDS = (
+    "IdentificationModule",
+    "StatusModule",
+    "SponsorCollaboratorsModule",
+    "ConditionsModule",
+    "DesignModule",
+    "ArmsInterventionsModule",
+    "HasResults",
+)
+_RECORD_FIELDS = ("ProtocolSection", "HasResults")
+_MAX_INDENT = 10
+# Markdown's backslash escapes: any ASCII punctuation
+# (https://spec.commonmark.org/0.31.2/#backslash-escapes).
+_ESCAPED = re.compile(r"\\([!-/:-@\[-`{-~])")
 # The search terms' parameters, in Essie syntax (https://clinicaltrials.gov/api/oas/v2).
 _TERM_PARAMS = {
     "query": "query.term",
@@ -114,6 +134,7 @@ def clinical_trials_search(
         "format": "json",
         "pageSize": str(max_results),
         "countTotal": "true",
+        "fields": ",".join(_SEARCH_FIELDS),
         "filter.overallStatus": kinds["status"],
         "filter.advanced": _advanced_filter(study_type, phase),
         "pageToken": page_token.strip(),
@@ -164,7 +185,11 @@ def clinical_trial_study(
         "clinical_trials_search."
     )
     record = _API.get_json(
-        "studies", normalized, params={"format": "json"}, parse=_record, missing=missing
+        "studies",
+        normalized,
+        params={"format": "json", "fields": ",".join(_RECORD_FIELDS)},
+        parse=_record,
+        missing=missing,
     )
     if record is None:
         raise ToolFailure("not_found", missing)
@@ -440,11 +465,6 @@ def _search_answer(data: dict[str, Any], described: str, offset: int) -> ToolRes
     if not studies and not token:
         more = f" after the first {offset}" if offset else ""
         return ToolResult.success(f"No ClinicalTrials.gov studies match {described}{more}.")
-    if not studies:
-        return ToolResult.success(
-            f"ClinicalTrials.gov sent an empty page for {described}; read on with "
-            f"page_token={token!r}, offset={offset}."
-        )
     entries = [_entry(number, item) for number, item in enumerate(studies, start=offset + 1)]
     next_call = {"page_token": token, "offset": offset + len(studies)} if token else None
     window = list_window(
@@ -453,6 +473,12 @@ def _search_answer(data: dict[str, Any], described: str, offset: int) -> ToolRes
         total=total if isinstance(total, int) and not isinstance(total, bool) else None,
         next_call=next_call,
     )
+    if not studies:  # the API may send an empty page with a token: it says how to read on
+        return ToolResult.success(
+            f"ClinicalTrials.gov sent an empty page for {described}; read on with "
+            f"page_token={token!r}, offset={offset}.",
+            metadata=window.result().metadata,
+        )
     return window.result(
         heading=f"ClinicalTrials.gov studies for {described} (read one with clinical_trial_study):"
     )
@@ -517,10 +543,24 @@ def _normalize_phase(value: str) -> str:
 
 
 def _markup(value: object) -> list[str]:
-    """A ``markup`` field's lines (markdown): each paragraph or list item on a line of its own."""
+    """A ``markup`` field's lines (markdown): each paragraph or list item on a line of its own,
+    indented two spaces a level as the source nests it, without backslash escapes."""
     if not isinstance(value, str):
         return []
-    return [line for line in (" ".join(raw.split()) for raw in value.splitlines()) if line]
+    lines: list[str] = []
+    indents: list[int] = []  # the indents of the levels open above this line
+    for raw in value.expandtabs(4).splitlines():
+        text = " ".join(raw.split())
+        if not text:
+            continue
+        indent = len(raw) - len(raw.lstrip())
+        while indents and indent < indents[-1]:
+            indents.pop()
+        if not indents or indent > indents[-1]:
+            indents.append(indent)
+        level = min(len(indents) - 1, _MAX_INDENT)
+        lines.append("  " * level + _ESCAPED.sub(r"\1", text))
+    return lines
 
 
 def _labelled(label: str, value: str) -> str:

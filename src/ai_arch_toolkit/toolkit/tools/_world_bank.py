@@ -19,7 +19,7 @@ from typing import Annotated, Any
 from ai_arch_toolkit.core import Range, ToolResult, tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._http import Api, Reply
-from ai_arch_toolkit.toolkit.tools._numbers import plain_number
+from ai_arch_toolkit.toolkit.tools._values import decimal_text, plain
 from ai_arch_toolkit.toolkit.tools._window import Window, list_window
 
 # The errors of a request at fault: a missing parameter (115), an invalid value (120), an
@@ -27,7 +27,10 @@ from ai_arch_toolkit.toolkit.tools._window import Window, list_window
 _REQUEST_ERRORS = frozenset({"115", "120", "150", "160"})
 # The service is temporarily unavailable (105).
 _UNAVAILABLE = frozenset({"105"})
-_INVALID_VALUE = "120"
+# The errors of a code the World Bank does not hold: an invalid value (120), and, for a data
+# query, an indicator "not found. It may have been deleted or archived" (175, seen live; the
+# table does not list it).
+_NOT_HELD = frozenset({"120", "175"})
 _LISTS = (
     "check the codes and IDs given (world_bank_countries, world_bank_indicators, "
     "world_bank_sources and world_bank_topics list them)"
@@ -46,17 +49,17 @@ def _messages(payload: object) -> list[dict[str, Any]] | None:
 def _api_message(reply: Reply) -> ToolFailure | str | None:
     """The error a World Bank answer reports, in the source's words (``key: value``); ``None``
     for a result. Errors of the request are a ``validation_error``; error 105, the service
-    unavailable, is worth a retry; any other is the words."""
+    unavailable, is worth a retry; any other is the words, and what to check."""
     messages = _messages(reply.body)
     if messages is None:
         return None
-    said = _said(messages)
+    said = _said(messages).rstrip(".")
     ids = {_string(item.get("id")) for item in messages}
     if ids and ids <= _REQUEST_ERRORS:
-        return ToolFailure("validation_error", f"{said.rstrip('.')}; {_LISTS}")
+        return ToolFailure("validation_error", f"{said}; {_LISTS}")
     if ids and ids <= _UNAVAILABLE:
-        return ToolFailure("upstream", f"{said.rstrip('.')}; try again later", retryable=True)
-    return said
+        return ToolFailure("upstream", f"{said}; try again later", retryable=True)
+    return f"{said}; {_LISTS}, or try again later"
 
 
 def _said(messages: list[dict[str, Any]]) -> str:
@@ -69,15 +72,18 @@ def _said(messages: list[dict[str, Any]]) -> str:
 
 
 def _lookup_error(what: str, next_step: str) -> Callable[[Reply], ToolFailure | str | None]:
-    """The reader of a request for named codes: error 120 ("Invalid value") is a code the World
-    Bank does not have (``not_found``: ``what``, the source's words, ``next_step``); any other
-    error as :func:`_api_message` reads it."""
+    """The reader of a request for named codes: errors 120 ("Invalid value") and 175 (an
+    indicator "not found") are a code the World Bank does not hold (``not_found``: ``what``, the
+    error and the source's words, ``next_step``); any other error as :func:`_api_message` reads
+    it."""
 
     def read(reply: Reply) -> ToolFailure | str | None:
-        messages = _messages(reply.body)
-        if messages and all(_string(item.get("id")) == _INVALID_VALUE for item in messages):
+        messages = _messages(reply.body) or []
+        ids = sorted({_string(item.get("id")) for item in messages})
+        if messages and set(ids) <= _NOT_HELD:
             said = _said(messages).rstrip(".")
-            return ToolFailure("not_found", f"{what} (error 120, {said}); {next_step}")
+            error = f"error{'s' if len(ids) > 1 else ''} {' and '.join(ids)}"
+            return ToolFailure("not_found", f"{what} ({error}, {said}); {next_step}")
         return _api_message(reply)
 
     return read
@@ -357,8 +363,8 @@ def _page(payload: list[Any]) -> tuple[dict[str, Any], list[Any]]:
 
 def _paged(lines: list[str], *, page: int, per_page: int, total: int | None, pages: int) -> Window:
     """A page of a list the API (or the tool) paged: numbered from the page's start, with the
-    total and the next page."""
-    next_call = {"page": page + 1} if lines and page < pages else None
+    total and the next page, at this page's size (a page counts from it)."""
+    next_call = {"page": page + 1, "max_results": per_page} if lines and page < pages else None
     return list_window(lines, first=(page - 1) * per_page + 1, total=total, next_call=next_call)
 
 
@@ -625,7 +631,10 @@ def _point_text(number: int, point: dict[str, Any]) -> str:
     name = _string(country.get("value"))
     place = f"{name} ({code})" if name and code else name or code or "(no country)"
     value = point.get("value")
-    shown = plain_number(value) if isinstance(value, int | float | str) else "no value"
+    if isinstance(value, str):
+        shown = decimal_text(value)
+    else:
+        shown = plain(value) if isinstance(value, int | float) else "no value"
     status = _string(point.get("obs_status"))
     return f"{number}. {place}, {_date(_string(point.get('date')))}: {shown}" + (
         f" (status: {status})" if status else ""

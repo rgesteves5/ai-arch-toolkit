@@ -1,8 +1,9 @@
 """GDELT tools: global news search and the volume timeline of a query (DOC 2.0 API).
 
 The API (https://blog.gdeltproject.org/gdelt-doc-2-0-api-debuts/) lists at most 250 articles a
-query (``maxrecords``), with no offset and no total: the search asks for the articles up to the
-end of the page shown and reads on by ``offset``, through the window (D39). A timeline has one
+query (``maxrecords``), with no offset and no total: the search pages GDELT's first results with
+``_first_results``, asking for the articles up to the end of the page shown and one more, and
+reads on by ``offset``, through the window (D39). A timeline has one
 point per 15 minutes under 72 hours, per hour up to a week, and per day beyond; its points read
 on by ``offset`` too. Times are ISO 8601 UTC.
 """
@@ -16,9 +17,10 @@ from typing import Annotated, Any
 
 from ai_arch_toolkit.core import Range, ToolResult, tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
+from ai_arch_toolkit.toolkit.tools._first_results import asked, first_results_window
 from ai_arch_toolkit.toolkit.tools._http import Api, Reply
-from ai_arch_toolkit.toolkit.tools._numbers import plain_number
-from ai_arch_toolkit.toolkit.tools._window import list_window, page_window
+from ai_arch_toolkit.toolkit.tools._values import plain
+from ai_arch_toolkit.toolkit.tools._window import page_window
 
 
 def _query_error(reply: Reply) -> ToolFailure | None:
@@ -107,12 +109,11 @@ def gdelt_news_search(
         raise ToolFailure("validation_error", msg)
 
     # GDELT has no offset: the tool asks for the articles up to the page's end, and one more.
-    end = offset + max_results
     params = {
         "query": query,
         "mode": "artlist",
         "format": "json",
-        "maxrecords": str(min(end + 1, _MAX_RECORDS)),
+        "maxrecords": str(asked(offset, max_results, _MAX_RECORDS)),
         "timespan": timespan,
         "sort": _SORT_VALUES[sort],
     }
@@ -120,7 +121,7 @@ def gdelt_news_search(
     return _API.get_json(
         params=params,
         parse=lambda data: _articles_answer(
-            data, where=where, order=_SORT_WORDS[sort], offset=offset, end=end
+            data, where=where, order=_SORT_WORDS[sort], offset=offset, limit=max_results
         ),
     )
 
@@ -171,35 +172,24 @@ def _timespan(timespan: str, default: str) -> str:
 
 
 def _articles_answer(
-    data: dict[str, Any], *, where: str, order: str, offset: int, end: int
+    data: dict[str, Any], *, where: str, order: str, offset: int, limit: int
 ) -> ToolResult:
-    """The page of articles from ``offset`` to ``end``: GDELT's list holds every article up to
-    the page's end, and one more.
-
-    The one more says there is a next page; a list that stops before it is all there is (its
-    length is the total); a list cut at GDELT's cap may go on past it, where no call reads.
-    """
+    """The page of ``limit`` articles from ``offset``: GDELT's list holds every article up to
+    the page's end, and one more (``first_results_window`` reads what that says)."""
     parsed = (_parse_article(item) for item in data.get("articles", []) if isinstance(item, dict))
     articles = [article for article in parsed if article is not None]
     if not articles:
         return ToolResult.success(f"No GDELT articles match {where}.")
-    page = articles[offset:end]
-    lines = [_article_text(number, article) for number, article in enumerate(page, offset + 1)]
-    complete = len(articles) < min(end + 1, _MAX_RECORDS)
-    more = len(articles) > end
-    window = list_window(
+    lines = [_article_text(number, article) for number, article in enumerate(articles, 1)]
+    window = first_results_window(
         lines,
-        first=offset + 1,
-        total=len(articles) if complete else None,
-        next_call={"offset": end} if more and page else None,
+        offset=offset,
+        limit=limit,
+        requested=asked(offset, limit, _MAX_RECORDS),
+        depth=_MAX_RECORDS,
+        narrow="narrow the timespan or the query, or change the sort, to see others",
     )
-    heading = f"GDELT articles that match {where}, {order}:"
-    if not complete and not more:  # cut at GDELT's cap, at the page's end
-        heading += (
-            f"\nGDELT lists at most {_MAX_RECORDS} articles for a query: narrow the timespan or "
-            "the query, or change the sort, to see others."
-        )
-    return window.result(heading=heading)
+    return window.result(heading=f"GDELT articles that match {where}, {order}:")
 
 
 def _timeline_answer(data: dict[str, Any], *, where: str, offset: int) -> ToolResult:
@@ -230,7 +220,7 @@ def _parse_article(data: dict[str, Any]) -> _GdeltArticle | None:
         domain=_string(data.get("domain")),
         language=_string(data.get("language")),
         seendate=_iso(_string(data.get("seendate"))),
-        tone=_float_or_none(data.get("tone")),
+        tone=_number(data.get("tone")),
     )
 
 
@@ -244,7 +234,7 @@ def _article_text(number: int, article: _GdeltArticle) -> str:
         if value:
             meta.append(f"{label}: {value}")
     if article.tone is not None:
-        meta.append(f"tone: {plain_number(round(article.tone, 2))}")
+        meta.append(f"tone: {plain(round(article.tone, 2))}")
     lines = [f"{number}. {article.title}"]
     if meta:
         lines.append("   " + " | ".join(meta))
@@ -258,10 +248,10 @@ def _point_text(data: object) -> str:
     if not isinstance(data, dict):
         return ""
     date = _iso(_string(data.get("date") or data.get("datetime")))
-    value = _float_or_none(data.get("value"))
+    value = _number(data.get("value"))
     if not date and value is None:
         return ""
-    return f"{date or '(no time)'}: {'no value' if value is None else plain_number(value) + '%'}"
+    return f"{date or '(no time)'}: {'no value' if value is None else plain(value) + '%'}"
 
 
 def _iso(stamp: str) -> str:
@@ -275,11 +265,13 @@ def _iso(stamp: str) -> str:
     )
 
 
-def _float_or_none(value: Any) -> float | None:
+def _number(value: Any) -> float | None:
+    """A JSON number as it came (an integer stays one), a numeric text as a float, anything
+    else as ``None``."""
     if isinstance(value, bool):
         return None
-    if isinstance(value, (int, float)):
-        return float(value)
+    if isinstance(value, int | float):
+        return value
     try:
         if value is not None and str(value).strip():
             return float(value)

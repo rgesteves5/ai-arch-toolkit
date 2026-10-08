@@ -17,6 +17,7 @@ from typing import Annotated, Any
 from ai_arch_toolkit.core import Range, ToolResult, tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._http import Api, Reply
+from ai_arch_toolkit.toolkit.tools._values import decimal_text, plain
 from ai_arch_toolkit.toolkit.tools._window import list_window
 
 
@@ -173,8 +174,10 @@ def chembl_activity_search(
     standard_type: str = "",
     max_results: Annotated[int, Range(1, 25)] = 10,
     offset: Annotated[int, Range(0)] = 0,
+    assay_chembl_id: str = "",
 ) -> ToolResult:
-    """Search ChEMBL bioactivity measurements of a molecule, on a target, or both.
+    """Search ChEMBL bioactivity measurements of a molecule, on a target, in an assay, or any
+    of them together.
 
     Args:
         molecule_chembl_id: The molecule's ChEMBL ID.
@@ -182,6 +185,7 @@ def chembl_activity_search(
         standard_type: Only this measurement type, e.g. "IC50", "Ki" or "EC50".
         max_results: How many measurements to list.
         offset: How many measurements to skip; the footer gives the next offset.
+        assay_chembl_id: The assay's ChEMBL ID, as each measurement names it.
 
     Raises:
         ToolFailure: validation_error when no ID is given, an argument is invalid, or ChEMBL
@@ -189,8 +193,9 @@ def chembl_activity_search(
     """
     molecule = _optional_id("molecule_chembl_id", molecule_chembl_id)
     target = _optional_id("target_chembl_id", target_chembl_id)
-    if not (molecule or target):
-        msg = "provide molecule_chembl_id or target_chembl_id, e.g. CHEMBL25"
+    assay = _optional_id("assay_chembl_id", assay_chembl_id)
+    if not (molecule or target or assay):
+        msg = "provide molecule_chembl_id, target_chembl_id or assay_chembl_id, e.g. CHEMBL25"
         raise ToolFailure("validation_error", msg)
     kind = standard_type.strip()
     if kind and not _TEXT_RE.fullmatch(kind):
@@ -199,6 +204,7 @@ def chembl_activity_search(
     filters = (
         ("molecule_chembl_id", "molecule", molecule),
         ("target_chembl_id", "target", target),
+        ("assay_chembl_id", "assay", assay),
         ("standard_type", "type", kind),
     )
     params = {"limit": str(max_results), "offset": str(offset)}
@@ -375,7 +381,7 @@ def _activity_line(number: int, item: dict[str, Any]) -> str:
     )
     target = _named(item.get("target_chembl_id"), target_names)
     parts = [f"{number}. {molecule} -> {target}", _measure(item)]
-    if pchembl := _string(item.get("pchembl_value")):
+    if pchembl := _number(item.get("pchembl_value")):
         parts.append(f"pChEMBL {pchembl}")
     assay = _string(item.get("assay_chembl_id"))
     description = _string(item.get("assay_description"))
@@ -405,12 +411,18 @@ def _measure(item: dict[str, Any]) -> str:
         part
         for part in (
             relation if relation != "=" else "",
-            _string(item.get("standard_value")),
+            _number(item.get("standard_value")),
             _string(item.get("standard_units")),
         )
         if part
     )
     return f"{_string(item.get('standard_type')) or '?'}: {value or '?'}"
+
+
+def _number(value: object) -> str:
+    """A ChEMBL number as its digits: ChEMBL sends its decimals as text, a small one in
+    scientific notation ("1E-7"), and a number as JSON now and then."""
+    return decimal_text(value) if isinstance(value, str) else plain(value)
 
 
 def _string(value: Any) -> str:

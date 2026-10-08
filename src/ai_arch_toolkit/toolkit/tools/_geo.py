@@ -7,11 +7,11 @@ import ipaddress
 import math
 import re
 from decimal import Decimal
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from ai_arch_toolkit.core import Range, ToolResult, tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
-from ai_arch_toolkit.toolkit.tools._first_results import asked, first_results_window
+from ai_arch_toolkit.toolkit.tools._first_results import first_results_window
 from ai_arch_toolkit.toolkit.tools._http import Api, Reply
 from ai_arch_toolkit.toolkit.tools._mediawiki import mediawiki_error
 from ai_arch_toolkit.toolkit.tools._open_meteo import (
@@ -115,7 +115,7 @@ def geocode(
             f"invalid city {city[:100]!r}; give a place name of 1 to {_NAME_CHARS} characters, "
             "e.g. 'Lisbon'",
         )
-    params = geocoding_params(name, asked(offset, max_results, GEOCODING_DEPTH))
+    params = geocoding_params(name, GEOCODING_DEPTH)  # each page is cut from all of them
     return GEOCODING.get_json(
         "search",
         params=params,
@@ -124,7 +124,9 @@ def geocode(
 
 
 @tool(capability="network")
-def timezone_lookup(lat: float, lon: float) -> str:
+def timezone_lookup(
+    lat: Annotated[float, Range(-90, 90)], lon: Annotated[float, Range(-180, 180)]
+) -> str:
     """Look up the time zone of a point and its UTC offset now, from Open-Meteo.
 
     Args:
@@ -132,12 +134,12 @@ def timezone_lookup(lat: float, lon: float) -> str:
         lon: Longitude in decimal degrees.
 
     Raises:
-        ToolFailure: validation_error when the coordinates are out of range.
+        ToolFailure: validation_error when Open-Meteo rejects the request; upstream when it
+            answers without a time zone.
     """
-    _validate_coords(lat, lon)
     params = {
-        "latitude": lat,
-        "longitude": lon,
+        "latitude": plain(lat),
+        "longitude": plain(lon),
         "current": "temperature_2m",
         "forecast_days": "1",
         "timezone": "auto",
@@ -149,11 +151,11 @@ def timezone_lookup(lat: float, lon: float) -> str:
 
 @tool(capability="compute")
 def distance_between(
-    lat1: float,
-    lon1: float,
-    lat2: float,
-    lon2: float,
-    unit: str = "km",
+    lat1: Annotated[float, Range(-90, 90)],
+    lon1: Annotated[float, Range(-180, 180)],
+    lat2: Annotated[float, Range(-90, 90)],
+    lon2: Annotated[float, Range(-180, 180)],
+    unit: Literal["km", "mi"] = "km",
 ) -> str:
     """Calculate the great-circle distance between two coordinate pairs.
 
@@ -162,15 +164,11 @@ def distance_between(
         lon1: Starting longitude in decimal degrees.
         lat2: Ending latitude in decimal degrees.
         lon2: Ending longitude in decimal degrees.
-        unit: Output unit: "km" or "mi". Defaults to kilometers.
+        unit: Output unit: kilometers or miles.
 
     Raises:
-        ToolFailure: validation_error when a coordinate is out of range or ``unit`` is unknown.
+        ToolFailure: validation_error when ``unit`` is unknown.
     """
-    _validate_coords(lat1, lon1, "start ")
-    _validate_coords(lat2, lon2, "end ")
-
-    unit = unit.lower().strip()
     if unit not in {"km", "mi"}:
         raise ToolFailure("validation_error", f"invalid unit {unit!r}; use 'km' or 'mi'.")
 
@@ -187,11 +185,12 @@ def distance_between(
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     distance = radius * c
 
-    return f"{lat1}, {lon1} → {lat2}, {lon2} = {distance:.2f} {unit}"
+    start, end = f"{plain(lat1)}, {plain(lon1)}", f"{plain(lat2)}, {plain(lon2)}"
+    return f"{start} → {end} = {distance:.2f} {unit}"
 
 
 @tool(capability="network")
-def ip_lookup(ip: str = "") -> str:
+def ip_lookup(ip: str) -> str:
     """Look up the approximate location, time zone and network of a public IP address, from
     ipwho.is (1000 requests a day per client IP).
 
@@ -268,6 +267,7 @@ def _geocode_answer(found: list[Place], name: str, offset: int, limit: int) -> T
         lines,
         offset=offset,
         limit=limit,
+        requested=GEOCODING_DEPTH,
         depth=GEOCODING_DEPTH,
         narrow="add the region or country to the name, or search with osm_search_place",
     )
@@ -416,16 +416,6 @@ def _utc_minutes(label: str) -> int:
         return 0
     sign, hours, minutes = match.groups()
     return (-1 if sign in {"-", "\u2212"} else 1) * (int(hours) * 60 + int(minutes))
-
-
-def _validate_coords(lat: float, lon: float, which: str = "") -> None:
-    """Validate a latitude/longitude pair; ``which`` names it ("start ") in the message."""
-    if not -90 <= lat <= 90:
-        msg = f"{which}latitude out of range: it must be between -90 and 90, got {lat}."
-        raise ToolFailure("validation_error", msg)
-    if not -180 <= lon <= 180:
-        msg = f"{which}longitude out of range: it must be between -180 and 180, got {lon}."
-        raise ToolFailure("validation_error", msg)
 
 
 def _format_utc_offset(offset_seconds: int | None) -> str:

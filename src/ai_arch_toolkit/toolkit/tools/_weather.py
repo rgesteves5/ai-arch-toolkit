@@ -83,8 +83,8 @@ _WMO_CODES: dict[int, str] = {
 @tool(capability="network")
 def get_weather(
     city: str = "",
-    latitude: float | None = None,
-    longitude: float | None = None,
+    latitude: Annotated[float | None, Range(-90, 90)] = None,
+    longitude: Annotated[float | None, Range(-180, 180)] = None,
     units: Units = "metric",
 ) -> str:
     """Get the current weather at a city or a point, from Open-Meteo: conditions, temperature
@@ -99,15 +99,14 @@ def get_weather(
         units: "metric" (°C, km/h, mm) or "imperial" (°F, mph, inch).
 
     Raises:
-        ToolFailure: validation_error when neither a city nor both coordinates are given, a
-            coordinate is out of range or ``units`` is unknown; not_found when Open-Meteo knows
-            no place by that name.
+        ToolFailure: validation_error when neither a city nor both coordinates are given, or
+            ``units`` is unknown; not_found when Open-Meteo knows no place by that name.
     """
     unit_params = _unit_params(units)
     where = _where(city, latitude, longitude)
     params = {
-        "latitude": where.latitude,
-        "longitude": where.longitude,
+        "latitude": plain(where.latitude),
+        "longitude": plain(where.longitude),
         "current": _CURRENT_FIELDS,
         "timezone": "auto",
         "timeformat": "unixtime",
@@ -121,8 +120,8 @@ def get_weather(
 @tool(capability="network")
 def get_forecast(
     city: str = "",
-    latitude: float | None = None,
-    longitude: float | None = None,
+    latitude: Annotated[float | None, Range(-90, 90)] = None,
+    longitude: Annotated[float | None, Range(-180, 180)] = None,
     days: Annotated[int, Range(1, _MAX_DAYS)] = 3,
     units: Units = "metric",
 ) -> str:
@@ -139,15 +138,14 @@ def get_forecast(
         units: "metric" (°C, km/h, mm) or "imperial" (°F, mph, inch).
 
     Raises:
-        ToolFailure: validation_error when neither a city nor both coordinates are given, a
-            coordinate is out of range or ``units`` is unknown; not_found when Open-Meteo knows
-            no place by that name.
+        ToolFailure: validation_error when neither a city nor both coordinates are given, or
+            ``units`` is unknown; not_found when Open-Meteo knows no place by that name.
     """
     unit_params = _unit_params(units)
     where = _where(city, latitude, longitude)
     params = {
-        "latitude": where.latitude,
-        "longitude": where.longitude,
+        "latitude": plain(where.latitude),
+        "longitude": plain(where.longitude),
         "daily": _DAILY_FIELDS,
         "timezone": "auto",
         "forecast_days": days,
@@ -181,11 +179,12 @@ def _unit_params(units: str) -> dict[str, str]:
 
 
 def _where(city: str, latitude: float | None, longitude: float | None) -> _Where:
-    """The point the caller gave, or the first place Open-Meteo finds for ``city``.
+    """The point the caller gave (its ranges are the signature's), or the first place
+    Open-Meteo finds for ``city``.
 
     Raises:
-        ToolFailure: validation_error without a city or both coordinates, or for a coordinate out
-            of range; not_found when no place has that name.
+        ToolFailure: validation_error without a city or both coordinates; not_found when no
+            place has that name.
     """
     name = " ".join(city.split())
     if latitude is not None or longitude is not None:
@@ -194,7 +193,6 @@ def _where(city: str, latitude: float | None, longitude: float | None) -> _Where
                 "validation_error",
                 "give both latitude and longitude, or a city instead of them",
             )
-        _validate_coords(latitude, longitude)
         position = f"latitude {plain(latitude)}, longitude {plain(longitude)}"
         return _Where(
             latitude=latitude,
@@ -229,17 +227,6 @@ def _chosen(found: Sequence[Place], name: str) -> _Where:
         name=f"{first.label()} ({first.position()})",
         note=note,
     )
-
-
-def _validate_coords(latitude: float, longitude: float) -> None:
-    if not -90 <= latitude <= 90:
-        raise ToolFailure(
-            "validation_error", f"latitude must be between -90 and 90, got {latitude}"
-        )
-    if not -180 <= longitude <= 180:
-        raise ToolFailure(
-            "validation_error", f"longitude must be between -180 and 180, got {longitude}"
-        )
 
 
 # --- Answers -----------------------------------------------------------------------------------

@@ -11,6 +11,7 @@ import pytest
 from ai_arch_toolkit.core import ToolCall, ToolGroup
 from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools import _weather
+from ai_arch_toolkit.toolkit.tools._values import plain
 from ai_arch_toolkit.toolkit.tools._weather import get_forecast, get_weather
 from tests.toolkit import geo_answers
 from tests.toolkit.http_fakes import HTTP_OPEN, http_error, respond
@@ -72,6 +73,18 @@ def _query(mock_urlopen: MagicMock, call: int = -1) -> dict[str, list[str]]:
     return parse_qs(urlparse(mock_urlopen.call_args_list[call].args[0].full_url).query)
 
 
+def _executed(fn, **args):
+    """What the executor answers a call with ``args`` (the schema's bounds are checked there)."""
+    return ToolGroup(fn).execute(ToolCall(id="c", name=fn.__name__, input=args))
+
+
+def _bounds(fn, *names: str) -> dict[str, tuple[object, object]]:
+    properties = fn.__tool_definition__.schema.input_schema["properties"]
+    return {
+        name: (properties[name].get("minimum"), properties[name].get("maximum")) for name in names
+    }
+
+
 class TestTheCity:
     @patch(HTTP_OPEN)
     def test_a_city_shared_by_several_places_says_which_one_and_how_to_pick_another(
@@ -130,10 +143,10 @@ class TestThePoint:
             "Current weather at latitude 35.6762, longitude 139.6503, time zone America/Chicago "
             "(UTC-05:00), as of 2026-06-12T16:00:00Z:\n"
             "  Conditions: Mainly clear (WMO code 1)\n"
-            "  Temperature: 22.5 °C, feels like 21.0 °C\n"
+            f"  Temperature: 22.5 °C, feels like {plain(21.0)} °C\n"
             "  Humidity: 65 %\n"
-            "  Precipitation: 0.0 mm\n"
-            "  Wind: 12.0 km/h from 180 °"
+            f"  Precipitation: {plain(0.0)} mm\n"
+            f"  Wind: {plain(12.0)} km/h from 180 °"
         )
         assert mock_urlopen.call_count == 1
         query = _query(mock_urlopen)
@@ -149,22 +162,44 @@ class TestThePoint:
         assert text.startswith("Current weather at Home (latitude 38.7, longitude -9.1),")
         assert mock_urlopen.call_count == 1
 
+    @patch(HTTP_OPEN)
+    def test_a_lone_coordinate_is_refused_before_any_request(self, mock_urlopen):
+        mock_urlopen.side_effect = AssertionError("no request")
+
+        for tool_fn in (get_weather, get_forecast):
+            failure = _failure(tool_fn, latitude=10.0)
+            assert failure.error.type == "validation_error"
+            assert "give both latitude and longitude" in failure.error.message
+
     @pytest.mark.parametrize(
-        ("kwargs", "words"),
-        [
-            ({"latitude": 91.0, "longitude": 0.0}, "latitude must be between -90 and 90"),
-            ({"latitude": 0.0, "longitude": 181.0}, "longitude must be between -180 and 180"),
-            ({"latitude": 10.0}, "give both latitude and longitude"),
-        ],
+        "point", [{"latitude": 91.0, "longitude": 0.0}, {"latitude": 0.0, "longitude": 181.0}]
     )
     @patch(HTTP_OPEN)
-    def test_bad_coordinates_are_refused_before_any_request(self, mock_urlopen, kwargs, words):
+    def test_coordinates_out_of_range_are_refused_before_any_request(self, mock_urlopen, point):
         # get_weather_by_coords sent them unchecked.
+        mock_urlopen.side_effect = AssertionError("no request")
+
         for tool_fn in (get_weather, get_forecast):
-            failure = _failure(tool_fn, **kwargs)
-            assert failure.error.type == "validation_error"
-            assert words in failure.error.message
-        mock_urlopen.assert_not_called()
+            result = _executed(tool_fn, **point)
+            assert result.error is not None
+            assert result.error.type == "validation_error"
+
+    def test_the_coordinates_are_bounded_in_the_schema(self):
+        for tool_fn in (get_weather, get_forecast):
+            assert _bounds(tool_fn, "latitude", "longitude") == {
+                "latitude": (-90, 90),
+                "longitude": (-180, 180),
+            }
+
+    @patch(HTTP_OPEN)
+    def test_coordinates_go_in_decimal_notation(self, mock_urlopen):
+        # str(0.00001) is "1e-05".
+        mock_urlopen.return_value = respond(_CURRENT)
+
+        get_weather(latitude=0.00001, longitude=-0.00002)
+
+        query = _query(mock_urlopen)
+        assert (query["latitude"], query["longitude"]) == (["0.00001"], ["-0.00002"])
 
     @patch(HTTP_OPEN)
     def test_open_meteos_reason_for_a_refusal_reaches_the_agent(self, mock_urlopen):
@@ -191,8 +226,8 @@ class TestUnitsAndForecast:
         assert text.splitlines() == [
             "Daily forecast at latitude 39.8, longitude -89.6, time zone America/Chicago "
             "(UTC-05:00):",
-            "  2026-06-12: Clear sky (WMO code 0); 60.0 °F to 75.2 °F; precipitation 0.0 inch; "
-            "wind up to 10.0 mph",
+            f"  2026-06-12: Clear sky (WMO code 0); {plain(60.0)} °F to 75.2 °F; precipitation "
+            f"{plain(0.0)} inch; wind up to {plain(10.0)} mph",
             "  2026-06-13: Moderate rain (WMO code 63); 62.6 °F to 80.1 °F; precipitation "
             "0.25 inch; wind up to 15.3 mph",
         ]

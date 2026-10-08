@@ -32,7 +32,8 @@ from ai_arch_toolkit import (
     tool,
     user,
 )
-from ai_arch_toolkit.core._exceptions import RateLimitError
+from ai_arch_toolkit.core import _providers
+from ai_arch_toolkit.core._exceptions import RateLimitError, RequestError
 from ai_arch_toolkit.core._model_catalog import CATALOG_VERSION
 
 type ScenarioName = Literal[
@@ -113,6 +114,8 @@ class ProbeResult:
     final_text_preview: str = ""
     tool_calls: tuple[dict[str, Any], ...] = ()
     thinking_blocks: int = 0
+    # The adapter's prepare() refused the call, nothing sent: what its tables say it does not take.
+    refused_by_adapter: bool = False
 
 
 class ProbeAssertionError(AssertionError):
@@ -280,15 +283,23 @@ def render_markdown_report(results: Sequence[ProbeResult], *, started_at: str) -
 def catalog_fragment(results: Sequence[ProbeResult], *, verified_at: date, ref: str) -> str:
     """A model catalog file of what a run proved, as ``kind = "probe"`` facts.
 
-    A scenario that passed states its fact true and one the provider refused as unsupported
-    states it false; any other outcome (a rate limit, a timeout, a wrong answer) states nothing.
+    A scenario that passed states its fact true, and one the adapter refused (its ``prepare``,
+    nothing sent) states it false; any other outcome (a rate limit, a timeout, a wrong answer)
+    states nothing. A provider's error that reads as unsupported may be a framework bug as well
+    ("Invalid schema for response_format"), so it states nothing either: the fragment lists it
+    in a comment, for review against the report.
     """
     stated: dict[tuple[str, str], dict[str, bool]] = {}
+    review: dict[str, None] = {}
     for result in results:
         fact = CATALOG_FACTS.get(result.scenario)
-        value = _proved(result)
-        if fact is not None and value is not None and result.provider:
-            stated.setdefault((result.provider, result.model), {})[fact] = value
+        if fact is None or not result.provider:
+            continue
+        key = (result.provider, result.model)
+        if (value := _proved(result)) is not None:
+            stated.setdefault(key, {})[fact] = value
+        elif result.classification == "unsupported_capability":
+            review[f"# [{json.dumps(key[0])}.{json.dumps(key[1])}] {fact} = false"] = None
     source = (
         f'{{ kind = "probe", ref = {json.dumps(ref)}, verified_at = {verified_at.isoformat()} }}'
     )
@@ -297,13 +308,41 @@ def catalog_fragment(results: Sequence[ProbeResult], *, verified_at: date, ref: 
         lines += ["", f"[{json.dumps(provider)}.{json.dumps(model)}]"]
         lines += [f"{name} = {str(value).lower()}" for name, value in sorted(facts.items())]
         lines.append(f"source = {source}")
+    if review:
+        lines += [
+            "",
+            "# To review: the provider's error reads as unsupported, but the adapter did not",
+            "# refuse the call, so the run states nothing. Check the report before saying so.",
+            *review,
+        ]
     return "\n".join(lines) + "\n"
+
+
+_ADAPTERS = Path(_providers.__file__).parent
+
+
+def _refused_by_adapter(exc: BaseException) -> bool:
+    """Whether an adapter's ``prepare`` refused the call: a ``RequestError`` raised while an
+    adapter in ``core/_providers`` prepared it, so nothing was sent and the refusal is the
+    adapter's own table. Not the SDK's validation (raised when sending), an unpriced model, or
+    the caller's own arguments (refused before an adapter sees them)."""
+    if type(exc) is not RequestError:
+        return False
+    trace = exc.__traceback__
+    while trace is not None:
+        code = trace.tb_frame.f_code
+        if code.co_name in ("prepare", "prepare_image") and (
+            Path(code.co_filename).parent == _ADAPTERS
+        ):
+            return True
+        trace = trace.tb_next
+    return False
 
 
 def _proved(result: ProbeResult) -> bool | None:
     if result.ok:
         return True
-    if result.classification == "unsupported_capability":
+    if result.refused_by_adapter:
         return False
     return None
 
@@ -344,6 +383,7 @@ async def run_probe(
             status_code=getattr(exc, "status_code", None),
             error_type=type(exc).__name__,
             message=_sanitize_error_message(str(exc), 600),
+            refused_by_adapter=_refused_by_adapter(exc),
         )
 
 

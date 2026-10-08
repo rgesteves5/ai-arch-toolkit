@@ -183,6 +183,9 @@ class TestRange:
 
         assert caught.value.error.type == "validation_error"
         assert "outside the calendar" in caught.value.error.message
+        assert caught.value.error.message.endswith(
+            "; use a smaller shift or a date further from the calendar's ends."
+        )
 
     def test_a_conversion_past_the_calendar_is_a_validation_error(self):
         with pytest.raises(ToolFailure) as caught:

@@ -44,6 +44,28 @@ flows, manifests) needs these changes; each one is detailed below.
     table below gives each old call's replacement. Their answers are text from the page the wiki
     renders, and a long one is a window: called directly, the tool returns a `ToolResult` whose
     `value` is the text (the executor hands the model that text, as before).
+  - Every other toolkit tool now keeps the tools contract too (T06 to T09, C08), so the wiki
+    family's rules hold for all of them: a tool whose answer can be long is a window and, called
+    directly, returns a `ToolResult` whose `value` is the text; numeric limits are `Range` bounds,
+    so a value outside is refused (`validation_error`) instead of moved to the nearest limit; and
+    a request the source refuses for its arguments is a `validation_error`, where it was
+    `upstream`. Eight tools are gone into others of their source, and `ror_search` no longer
+    takes `max_results` (the table below).
+  - Some arguments changed meaning: `uniprot_search` pages by `cursor` and `offset`, both from
+    the footer; `world_bank_indicators(page=…)` pages through the matches, no longer the
+    catalogue; `wikidata_sparql`'s `max_results` is the rows shown per call, no longer the
+    `LIMIT` it appended. `search_files` lines read `path:line:offset: text`; `list_directory`
+    refuses a pattern that matches more than 100,000 entries; `run_command` and `python_repl`
+    show the start of an output that does not fit, with how to narrow it (no call reads on).
+  - `search_files` gives each path under `directory` as you passed it (`sub/notes.txt`, or an
+    absolute path), which `read_file` reads as it is; it was relative to `directory`.
+    `run_command` stops every process the command starts when the call returns (one left in the
+    background half a second after the command ends: end the command with `wait`), gives the
+    command no input, and refuses to run on Windows (a typed `upstream` failure).
+  - Tool names must be portable, `^[A-Za-z_][A-Za-z0-9_-]{0,63}$`, or `ValueError` (C02, D62);
+    two different tools with one name in a `tools=[...]` list raise `ValueError` before anything
+    is sent or runs; and `@tool(schema=...)` takes per-parameter overrides only (a complete
+    schema raises `TypeError`: build that tool with `tool_from_schema`).
   - Every tool call has a 120-second deadline and a 200,000-character output cap: set
     `timeout_s`/`max_output_chars` (or `None`) on a tool that needs more.
   - On the sync path a synchronous tool runs in a thread of its own: open thread-bound resources
@@ -89,6 +111,16 @@ flows, manifests) needs these changes; each one is detailed below.
 | `mediawiki_sections(title, api_url)` | `wiki_outline(title, wiki=…)` |
 | `wiktionary_entry(term, language, max_chars)` | `wiktionary_entry(term, language, offset=…, max_chars=…)`; a language the entry lacks is `not_found` and names those it has, where the whole entry came back |
 | `define_word(word)` | `wiktionary_entry(word)` (dictionaryapi.dev answered 522) |
+| `ror_search(query, max_results=5, page=2)` | `ror_search(query, page=2)`: ROR's whole page of 20, numbered |
+| `open_food_facts_nutrition(barcode)` | `open_food_facts_product(barcode)`: the same product, whole, with the Nutri-Score and NOVA group labelled |
+| `dailymed_label(setid, max_sections)` | `dailymed_label(setid, offset=…)`, every section numbered; a section's text: `dailymed_label_text(setid, section=N)` |
+| `eurostat_dimensions(dataset_id, max_values)` | `eurostat_dataset(dataset_id, dimension="geo")`: every code with its label, page by page |
+| `eurostat_compare(dataset_id, geo_codes, filters, last_time_periods)` | `eurostat_series(dataset_id, filters="geo=PT+ES+FR,…", last_time_periods=…)` |
+| `world_bank_compare(indicator, countries, year, start_year, end_year, max_points)` | `world_bank_series("PRT,ESP,DEU", indicator, start_year=…, end_year=…, max_results=…, page=…)`; one year is `start_year` alone |
+| `reverse_geocode(lat, lon)` | `osm_reverse_geocode(latitude, longitude, zoom=10)` (zoom 10 is the city; 18, the default, a building) |
+| `get_weather_by_coords(lat, lon)` | `get_weather(latitude=lat, longitude=lon)` |
+| `weather_units(city, unit="f")` | `get_weather(city, units="imperial")`: °F, mph and inch, converted by Open-Meteo |
+| `get_forecast_by_coords(lat, lon, days)` | `get_forecast(latitude=lat, longitude=lon, days=days)` |
 
 The `api_url` of the old MediaWiki tools is now `wiki`, the wiki's host (`"en.wikibooks.org"`);
 English Wikipedia is the default, where the MediaWiki tools defaulted to the English Wiktionary.
@@ -96,6 +128,48 @@ English Wikipedia is the default, where the MediaWiki tools defaulted to the Eng
 tools moved it into their own limits without a word (1 to 100,000, or 200 to 4,000).
 
 ### Added
+- **Dynamic tools** (C02, D62): `tool_from_schema(handler, name=, description=, input_schema=,
+  policy=)` builds a governed tool from a complete JSON Schema, for tools that arrive as data (an
+  MCP server's, for one). The handler receives the arguments in one `dict`, so keys need not be
+  Python names; an `async def` handler runs on the loop, a synchronous one in a thread. The tool
+  goes through the same executor as `@tool` (validation, gates, approval, `max_calls`,
+  metering) and is accepted by `ToolGroup`, `prepare_tools`, `execute_tool` and `run_tools`. Its
+  schema is copied and sent as it came (`title`, `$schema`, `x-*` keys included), with local
+  `#/$defs/...` references inlined. A schema that is not JSON, whose root is not an object, that
+  refers outside itself or to a definition that is not an object schema (`true`, a list), that
+  nests deeper than 100 levels, or whose references would inline to more than about 100,000
+  characters or 100 levels (each reference followed counts as one) raises `ValueError`, and
+  nothing else does.
+- `ToolGroup.add(fn, replace=True)` swaps the tool held under a name, and
+  `ToolGroup.remove(name)` takes one out and returns its definition (`KeyError` if absent). A
+  group changes copy-on-write: the next read (the next ReAct turn) sees the change, a call
+  already running ends with the tool it started with, and `max_calls` keeps counting (C02).
+- **A technical model catalog** (C06, D63): `model_catalog`, `ModelCatalog`, `ModelCapabilities`
+  and `Provenance` (`ai_arch_toolkit.core`) say what each model takes through its adapter:
+  context window, input and output limits as each provider publishes them, input and output
+  modalities, tools and tool choices, structured output, JSON mode, streaming, reasoning mode
+  and efforts, thinking budget, server tools. Each fact carries its source (`docs`, `probe`,
+  `api`, `adapter`, `override`) and the day it was read, and is `None` when unknown, never "no".
+  The shipped seed covers the current line (30 chat models still served) and the image models,
+  read from the providers' pages on 2026-10-08; the rest comes from each adapter's own rules,
+  through a pure `model_facts` classmethod, which also narrows a published modality list to what
+  the adapter carries. Override with `load()` (a strict TOML loader) and `register()`, which
+  checks its facts as `load()` does, field by field; both, and `unregister()`, name a model by its
+  id, an alias or a dated snapshot, as `get()` does. `ModelCatalog(defaults=False)` starts empty,
+  and a catalog is safe to share between threads. Nothing in the toolkit reads the catalog: the
+  adapters keep their rules. See [Model catalog](docs/model-catalog.md).
+- `scripts/probe_models.py` writes `<run_id>.catalog.toml` next to each report: what the run
+  proved, as `kind = "probe"` catalog facts, for review or `model_catalog.load()` (C06d). A fact
+  is false only where the adapter refused the call; a provider error that reads as unsupported is
+  left in a comment, for review.
+- `dailymed_label_text` (T07) reads a DailyMed label's text, whole, one section (by the number
+  `dailymed_label` gives, subsections included) or the passages around a term (`find=`), window
+  by window; lists come one item per line and tables one row per line. No tool returned a
+  section's text before. `dailymed_label_search` takes `rxcui`, so the RxCUIs the `rxnorm_*`
+  tools return find their labels, and `chembl_activity_search` takes `assay_chembl_id`, the assay
+  each measurement names (T07b).
+- Example 49 runs an agent on a local model that searches the web with `brave_search` or
+  `tavily_search`, whichever has a key (C08).
 - **Typed tool failures** (T01, D37, D42): `ToolFailure(type, message, *, retryable=False,
   details=None)` and `ToolFailureType`, public in `ai_arch_toolkit` and `ai_arch_toolkit.core`. A
   tool raises it when it cannot answer; the executor returns `ToolResult(ok=False)` with its type,
@@ -362,6 +436,197 @@ tools moved it into their own limits without a word (1 to 100,000, or 200 to 4,0
   [docs/agents.md](docs/agents.md#file-backed-agent-manifests).
 
 ### Changed
+- **Breaking:** every toolkit tool keeps the tools contract (T06 to T09, C08; D37 to D42): the
+  contract's debt list is empty. A cut is a window whose footer says what was shown, the total
+  when the source gives one and the exact call for the rest; a limit is a `Range` bound in the
+  schema, refused outside it; a failure is typed with the source's words and the next step; zero
+  results name the query; dates are ISO 8601 UTC, numbers carry no scientific notation, codes
+  come with the labels the answer brings. The entries below give each family's changes.
+- **Breaking:** tool names must be portable, `^[A-Za-z_][A-Za-z0-9_-]{0,63}$` (the names every
+  provider and MCP accept), checked by `ToolSchema`: `@tool(name="a.b")`, `tool_schema()`, a
+  `lambda` in a `ToolGroup` or in `prepare_tools`, and a tool dict with another name raise
+  `ValueError` (C02, D62). Every tool the toolkit ships complies.
+- **Breaking:** two different tools with one name, in a `tools=[...]` list or across the groups
+  in it, raise `ValueError` in `prepare_tools` (so in `llm.complete`), `execute_tool`,
+  `async_execute_tool` and `run_tools`, before anything is sent or runs (C02). The provider used
+  to refuse the request with a 400, and execution silently ran the first match. A tool that
+  appears twice is sent and counted once; server tools, dicts in wire form and groups never clash
+  by their type's name, so a list `llm.complete` takes, `execute_tool` and `run_tools` take too.
+- **Breaking:** `@tool(schema=...)` raises `TypeError` unless it maps parameter names to JSON
+  Schema keywords (C02). A complete schema used to be merged in as parameters named `type` and
+  `properties`; build such a tool with `tool_from_schema`.
+- Argument validation (D7, extended by D62): `oneOf` and a `type` list (`["integer", "null"]`)
+  coerce like `anyOf`, and a branch is read with its parent's keywords, so `{"type": "integer",
+  "oneOf": [{"minimum": 1}, ...]}` and MCP's titled enums coerce `"5"` (past 1,000 alternatives a
+  value passes as it came, and a refusal stays under about 1,000 characters);
+  `additionalProperties: false` at the schema's root refuses an unknown
+  argument even when the function takes `**kwargs`; an argument that arrives through `**kwargs`
+  accepts `null` only where its schema admits it. Nested values are still left as they came.
+  `prepare_tools` accepts a single plain callable, as it does in a list.
+- **Literature and identifiers** (T06): `arxiv_*`, `crossref_*`, `datacite_*`, `europe_pmc_*`,
+  `pubmed_*`, `semantic_scholar_*`, `ror_*` and `nvd_*`.
+  - **Breaking:** `ror_search` no longer takes `max_results`: it shows ROR's whole page of 20,
+    numbered, and pages by `page` (1 to 500). `max_results` cut each page on our side, so rows 6
+    to 20 of every page were never shown.
+  - A search numbers its results and ends with the source's total and the next call, or, past
+    how deep the source pages (arXiv 30,000; Crossref, DataCite, PubMed and ROR 10,000; Semantic
+    Scholar 1,000), says that the rest cannot be read here. A record tool gives the whole record,
+    window by window (`offset`, `max_chars`): no abstract cut at 700, 900 or 1,200 characters,
+    and every author, reference, link, MeSH heading, CPE and location listed. A search shows the
+    first 8 names of a long list, how many more there are, and the call that lists them all.
+  - `europe_pmc_citations` takes `page`, with the total; `europe_pmc_search`'s footer gives the
+    next `cursor_mark` with an `offset` that numbers its page. Requests to arXiv go 3 s apart, as
+    its manual asks.
+  - `semantic_scholar_search` is a keyword search: a DOI or an arXiv ID is refused, pointing to
+    `semantic_scholar_paper`; `semantic_scholar_citations` shows every citation context, whole.
+  - `nvd_cve_search` refuses a publication range over NVD's 120 days before the request, saying
+    how to split it; CVSS scores show their version (`CVSS 3.1: 10.0 CRITICAL`), and `nvd_cve`
+    lists every score, CPE and reference.
+  - `ror_search` takes any printable query ("Franklin & Marshall College"); `ror_organization`
+    shows every location.
+- **Health** (T07a): `clinical_trial*`, `rxnorm_*`, `dailymed_*`, `openfda_food_*`,
+  `open_food_facts_*` and `foodon_*`.
+  - **Breaking:** `open_food_facts_nutrition` is gone into `open_food_facts_product`, which reads
+    the product whole: every allergen, trace, additive, category, label and country (once cut at
+    10, 8 or 5), nutrients per 100 g in grams (energy in kcal), and the Nutri-Score and NOVA
+    group with what they mean. `open_food_facts_compare` lists every allergen.
+  - **Breaking:** `dailymed_label` drops `max_sections` and lists every section, numbered, with
+    its LOINC code and size (50 a page, `offset=`); `dailymed_label_text` reads one.
+  - `clinical_trial_study` reads the whole record (summary, eligibility criteria, every arm,
+    outcome, site and reference, once cut at 900 and 1,200 characters and at 6 and 5 items) by
+    section, offset or term, and the eligibility criteria keep their lines;
+    `clinical_trials_search` gives the total and the next page's token with its position.
+  - `rxnorm_drug_search`, `rxnorm_related` and `rxnorm_ndcs` page their whole lists with the
+    total, where they kept the first 25; the searches of openFDA, Open Food Facts, DailyMed and
+    FoodOn give the total and the next `skip`, `page` or `start`; FoodOn definitions are whole
+    and `foodon_term` gives the synonyms.
+  - **Breaking:** an openFDA `BAD_REQUEST`, a ClinicalTrials.gov 400 and an RxNav 400 are
+    `validation_error`s in the source's words, where they were `upstream`.
+- **Life sciences** (T07b): `uniprot_*`, `pdb_*`, `chembl_*` and `gbif_*`.
+  - **Breaking:** `uniprot_search` pages by cursor, as UniProt does: `offset` alone was ignored
+    and every page was the first. The footer gives `next: cursor="…", offset=N`; pass both. The
+    total comes from UniProt's `x-total-results` header.
+  - `uniprot_entry` reads every annotation in full (function, catalytic activity, location,
+    disease, cofactors, isoforms, interactions, kinetics), window by window; the function text
+    was cut at 500 characters. `uniprot_features` and `uniprot_crossrefs` page through every
+    item and count them by type or database; they kept the first 25.
+  - `pdb_search` lists each entry with its title, method, resolution and release date (one more
+    request a page); `pdb_ligands` reads every ligand in one request (it made one per ligand);
+    `pdb_entry` shows dates, the resolution in Å, entity counts and the citation's DOI and
+    PubMed ID.
+  - ChEMBL answers show the max phase with its label (`4 (approved)`), properties with units,
+    and activities with the molecule's and the target's names; a search under 3 characters is
+    refused before the request, as ChEMBL refuses it.
+  - **Breaking:** `gbif_species_match` resolves scientific names only, as GBIF's match service
+    does: a name it cannot resolve is `not_found`, pointing common names to
+    `gbif_species_search`. `gbif_occurrence_search` stops at GBIF's 100,000-record depth with a
+    note.
+- **Data and news** (T08a): `eurostat_*`, `world_bank_*`, `who_*`, `gdelt_*`, `wikidata_*` and
+  `hacker_news`.
+  - **Breaking:** `eurostat_dataset` absorbs `eurostat_dimensions`, `eurostat_series` absorbs
+    `eurostat_compare`, and `world_bank_series` absorbs `world_bank_compare` (D41; the table in
+    the Upgrade notes). `eurostat_series` takes several codes of a dimension (`geo=PT+ES+FR`) in
+    one request and names the series of each row; `world_bank_series` takes several countries
+    (`"PRT,ESP,DEU"`) and pages.
+  - `wikidata_entity` reads every statement, 40 at a time, each code with its label
+    (`instance of (P31): human (Q5)`), quantities with their unit, dates to their precision,
+    coordinates as latitude and longitude, ranks and every qualifier; it takes property IDs
+    too. Labels are best effort: a label request that fails leaves its codes bare, and says why.
+  - `wikidata_sparql` keeps every row the query asks for and reads them on by `offset`; a SELECT
+    without a `LIMIT` gets `LIMIT 1000`, and the answer says when it reached it. A query the
+    service cannot parse is a `validation_error`, one past its 60 s deadline an `upstream`
+    failure that says how to narrow it. Comments, strings and IRIs are not read as the query's
+    words: a trailing `VALUES` clause gets the `LIMIT` before it, and a query that starts with a
+    comment or has a variable such as `?add` is accepted.
+  - `gdelt_news_search` reads up to the 250 articles GDELT lists for a query, and
+    `gdelt_timeline` every point, by `offset`; `hacker_news` reads the whole top-stories list (up
+    to 500), a story that fails named in its place; `who_indicators` and `who_series` say when
+    there is more, and `who_series` names each code's dimension and takes any place code its
+    rows show (`SEAR`, `GLOBAL`, `WB_LMI`) as `country`.
+  - Eurostat errors follow its guide: no data (error 100) is `not_found`, naming the query; a
+    code the dataset does not have is a `validation_error`. World Bank errors follow its table:
+    an unknown indicator or country is `not_found`, and so is error 175 (an indicator deleted or
+    archived); error 105 is worth a retry; any other error says what to check.
+  - `eurostat_series` gives each flag its label (`p: provisional`), upper-cases `geo` codes and
+    refuses `format` and `lang` as filters; `eurostat_dataset` names the dimension a window of
+    codes continues. A World Bank list's next call keeps its `max_results`.
+- **Geo, weather and natural events** (T08b): `geocode`, `osm_*`, `overpass_*`, `get_weather`,
+  `get_forecast`, `air_quality_*`, `eonet_*`, `earthquake_*` and the `_geo` tools.
+  - **Breaking:** `get_weather` and `get_forecast` take a city or a point (`latitude`,
+    `longitude`) and `units="metric"|"imperial"`, replacing `get_weather_by_coords`,
+    `get_forecast_by_coords` and `weather_units`; with a city they still use Open-Meteo's first
+    match, and say when other places share the name. `osm_reverse_geocode` takes the `zoom` that
+    `reverse_geocode` fixed at 10 (the table in the Upgrade notes).
+  - Every cut reads on: `geocode` lists up to 100 places (it showed 3), `osm_search_place` up to
+    40 (it stopped at 10), each page cut from one answer, `overpass_*` and
+    `air_quality_forecast` page through the whole answer,
+    `eonet_event` reads an event's whole track (only its last point was shown), and
+    `earthquake_search`'s total is USGS's `count` for the same filters (it was the page's).
+  - **Breaking:** limits are `Range` bounds: `get_forecast` takes up to 16 days (it cut to 7),
+    `air_quality_forecast` up to 92 past days, `eonet_events` up to 365 days. Coordinates are
+    `Range` bounds too (latitude -90 to 90, longitude -180 to 180), as are `earthquake_search`'s
+    radius and depths; `order_by`, EONET's `status` and `distance_between`'s `unit` are enums;
+    `ip_lookup` requires its `ip`. `eonet_events` takes several categories or sources,
+    comma-separated.
+  - Times are ISO 8601 UTC (`earthquake_*` gave epoch milliseconds), coordinates are labelled,
+    weather codes carry their WMO label, and units are the ones the source names.
+- **Local tools** (T09a): `read_file`, `list_directory`, `search_files`, `csv_read`,
+  `regex_search`, `run_command`, `python_repl`, `json_extract`, `unit_convert`, `date_add`.
+  - `read_file` reads a file window by window, by characters from its start, a chunk at a time;
+    following the footers rebuilds the file. `search_files` searches whole files (it read the
+    first million characters of each) and shows the part of a long line around the match, with
+    the line's length; `csv_read` repeats the header on every page and counts every row of the
+    file; `list_directory` pages 1,000 entries by name with the total; `regex_search` pages 1,000
+    matches with the total. A `csv_read` page holds at most 100,000 characters (a longer row
+    comes alone) and pads a column to 40 at most; its rows are counted up to 50 million
+    characters past the page, then the heading says "at least". `search_files` skips a file with
+    a NUL in its first 8 KiB, reads at most 500 million characters a call (then it says where it
+    stopped), and names the folders and files it cannot read; a folder `search_files` or
+    `list_directory` cannot read is an `upstream` failure, not an empty answer. `regex_search`
+    matches in a child Python process given 5 seconds: a pattern that backtracks polynomially
+    (`a*a*b`) is refused when they run out, and the program never freezes.
+  - **Breaking:** `run_command` and `python_repl` show the start of an output that does not fit,
+    with its size and how to narrow the command or print less: the output is not kept, so no
+    call reads on. `run_command` keeps stderr and the exit code under a long stdout, reads its
+    streams as they come, so memory stays within the limit, and runs the command in a process
+    group of its own, which it kills when the call returns: no process or reader is left behind
+    (a process left in the background is stopped half a second after the command ends, with a
+    note to end the command with `wait`). It keeps what was printed when the command times out,
+    gives the command no input (`/dev/null`), and refuses to run on Windows. `python_repl` shows
+    at most 20,000 characters, and a long print never pushes out the last value or the error.
+  - `unit_convert` says it rounds to 6 significant digits, writes numbers without scientific
+    notation, and converts with the exact unit definitions; `json_extract`'s `not_found` names
+    the keys or the length where the path failed.
+  - The gates and capabilities of the dangerous tools are unchanged.
+- **Web, transcripts and archives** (T09b): `http_get`, `scrape_text`, `youtube_transcript*`,
+  `internet_archive_*` and `open_library_*`.
+  - `http_get` and `scrape_text` read a page window by window (`offset`, and `find=` for the
+    passages around a term); `http_get` reads only as much of the page as the window needs, at
+    most its first 10 MB, and reads further when a page's characters take more than four bytes
+    (a byte-order mark, ISO-2022-JP), so every footer reads on. `scrape_text`, stopping at its
+    2 MB of HTML, names the `http_get` offset that reads the rest. Every call, a continuation
+    included, still asks for approval.
+  - `youtube_transcript` reads a transcript window by window, and its footer names the next
+    offset instead of "Increase max_chars", which it said at the ceiling too;
+    `youtube_transcript_search` pages its matches with their total, and
+    `youtube_transcript_languages` lists every translation target.
+  - The Internet Archive and Open Library searches number their results and give the total and
+    the next page; their records come whole (every file, subject, link and ISBN, the whole
+    description), window by window. Open Library names authors (`J. R. R. Tolkien (OL26320A)`),
+    not `/authors/OL…A` keys (when the author search fails, the record still reads, its authors
+    by key and the reason given), and its requests go one a second, as it asks of callers that
+    send no email.
+- **Web search** (C08, D65): `brave_search` takes `offset` (0 to 9, in pages of `max_results`)
+  and ends a page with the call for the next while Brave has more; `tavily_search` says when its
+  one page is full. `max_results` is a `Range` (Brave 1 to 20, Tavily 0 to 20; 0 asks for the
+  answer alone, with `include_answer=True`). Each title and snippet comes whole (it was cut at
+  500 characters), and a result whose URL is not `http(s)` is left out, with a count. Brave's
+  422 and Tavily's 400 and 422 are `validation_error`s in the service's words, and Brave's names
+  the fields its `error.meta` lists; a `country` Brave does not list (`UK`: Brave's code is `GB`)
+  is refused before any request. After a 429 without `Retry-After`, Brave's host rests 1 s and
+  Tavily's 60 s (D53). Both stay
+  network tools of low risk without approval; `docs/tools.md` compares them with the hosted
+  `web_search()`.
 - **Breaking:** the wiki family (T05, D39 to D41). `wiki_search`, `wiki_outline`, `wiki_read`
   and `wiktionary_entry` replace `wikipedia_search`, `wikipedia_article`, `wikipedia_related`,
   `mediawiki_search`, `mediawiki_page`, `mediawiki_sections`, `wiktionary_entry` and
@@ -750,6 +1015,84 @@ tools moved it into their own limits without a word (1 to 100,000, or 200 to 4,0
   - `select` or `serialize_as` on an inline template (they were ignored).
 
 ### Fixed
+- Inlining a schema's `$ref` references (a Pydantic parameter's, or a `tool_from_schema`
+  schema's) is bounded at about 100,000 characters and 100 levels, a reference followed counting
+  as one: a schema whose references multiply (1.9 KB that became 17.5 MB in 1.4 s), or a chain of
+  2,000 references alone, raises `ValueError` in milliseconds (C02).
+- `datacite_search` sends `resource_type` in the kebab case DataCite's `resource-type-id` takes
+  (`JournalArticle` → `journal-article`); lower case alone broke every type of more than one word
+  (T06).
+- Europe PMC's error answer (`errCode`/`errMsg`, sent with HTTP 200) is the tool's error, where it
+  read as no results, and `europe_pmc_citations` of a record Europe PMC does not have is
+  `not_found`, where it read as a record nobody cites (T06).
+- `pubmed_article`: an error EFetch reports is that error, not a missing article; the last page
+  within arXiv's, PubMed's and Semantic Scholar's reach asks for what is left of it, instead of a
+  request the source refuses; an empty arXiv page inside the total is a retryable `upstream`
+  failure, not the end of the results (T06).
+- `rxnorm_related` sends its term types space-separated, as RxNav reads them (`tty="IN+BN"` went
+  out as one literal `IN+BN`), and without `tty` asks for every related concept, where it called
+  `related.json` without the parameter RxNav requires (T07a).
+- `uniprot_search` quotes an organism name with a space (`organism_name:Homo sapiens` went out
+  unquoted), and an `OR` in the query no longer takes the filters with it; an unreviewed (TrEMBL)
+  entry shows its submission name, not "(no protein name)" (T07b).
+- `gbif_occurrence_search(has_coordinate=False)` asked GBIF for records *without* coordinates; it
+  applies no coordinate filter, as documented (T07b).
+- `wikidata_sparql` returned 20 rows to a query with `LIMIT 100`, with no note; `wikidata_entity`
+  showed 15 claims from the first 20 properties, 3 values each, as bare codes, without units, and
+  coordinates as a Python dict (T08a).
+- World Bank values were rounded to six digits without a word, and large ones written in
+  scientific notation (`2.91849e+13`); `eurostat_series` sent several codes of a dimension as one
+  value (`geo=PT+ES`), which the API does not define, and cut `last_time_periods` to 20 without a
+  word; `eurostat_compare` kept the first points in index order, an arbitrary series when a
+  dimension other than `geo` stayed open (T08a).
+- `eonet_events` sends its `bbox` in EONET's order: the latitudes went out swapped (T08b).
+- `earthquake_search` and `earthquake_event` read USGS's `204 No Content` as no results, where it
+  read as "could not parse"; a deleted event (409) is `not_found`, and a query USGS rejects (400,
+  413) a `validation_error` with its detail (T08b).
+- `get_weather` with coordinates checks them, and Open-Meteo's reason for refusing a request
+  reaches the agent as a `validation_error` in every Open-Meteo tool; `ip_lookup` reports a
+  private or reserved address as a `validation_error` (T08b).
+- `run_command` failed with "remove the null byte" on an output that is not UTF-8; it reads it
+  with replacement characters. `csv_read`'s total counted the line breaks in the first million
+  characters: wrong for a longer file or for fields over several lines (T09a).
+- `internet_archive_item` asks the metadata API for its extended error codes: a deleted item is
+  `not_found`, and an item it cannot read for now a retryable `upstream` failure (T09b).
+- `brave_search` and `tavily_search` keep the service's words on a 429, where they lost them
+  (C08).
+- Open Food Facts nutrients per 100 g are in grams (energy in kcal): the unit a contributor
+  entered (`mg` of sodium on a US label) was printed beside the gram value, 1000 times too low
+  (T07a).
+- An openFDA 404 reads as no recalls only when openFDA says `NOT_FOUND`; any other 404 is an
+  `upstream` "endpoint not found" (T07a). The door's `empty_on_404=` takes a test over the 404's
+  `Reply` for that.
+- `dailymed_label_text` lays out table cells that span rows or columns (the wiki converter's grid,
+  now shared), and reads the label's Highlights and the captions of lists and figures;
+  `clinical_trial_study` keeps the nesting of the eligibility criteria without markdown's escapes;
+  the ClinicalTrials.gov tools ask only for the parts they read, so a page of studies with posted
+  results no longer passes the 10 MB limit; DailyMed dates read as ISO 8601 under any locale
+  (T07a).
+- `uniprot_search` refuses a `cursor` without its `offset`; `pdb_search` no longer fails on a
+  record of an unexpected shape, nor says "of 0" past the hits; `gbif_species_search` reads on to
+  offset 100,000, which GBIF serves; ChEMBL values show no scientific notation; an inactive UniProt
+  accession redirected to plain HTTP is `not_found` naming its entry (the door's `HttpError` keeps
+  a refused redirect's URL in `redirect`) (T07b).
+- `earthquake_search` and `earthquake_count` include the last day of the period (USGS read the
+  bare date as its first instant, so a one-day search found nothing); `overpass_query` refuses a
+  query without `[out:json]` or an out statement; coordinates and other floats go to Overpass and
+  USGS in decimal notation (`1e-05` was refused) (T08b).
+- `run_command` left a process the command started in the background running, with two threads
+  reading its output, after the call returned; `regex_search` froze the whole process (it held
+  the GIL) on a pattern that backtracks polynomially, such as `a*a*b` on 20,000 characters (about
+  18 minutes); `csv_read` built a page as wide as its widest cell on every row (1.3 GB for a
+  200 KB file); `python_repl` showed `None` for an expression whose value is an empty string;
+  `unit_convert` failed untyped on an integer beyond a float's range (T09a).
+- `internet_archive_item` reads the empty array the metadata API answers for an unknown identifier
+  as `not_found`, and an item that comes with a warning (code 106) as the item; the `youtube_*`
+  tools report a page `youtube-transcript-api` cannot read as an `upstream` parse failure, not a
+  retryable `runtime_error` (T09b).
+- A window's footer names the next call on a page that came back empty, and says what is left
+  where no call reads on although the source gives no total: a Brave page with no web results
+  while Brave has more said "end" (C08).
 - **A `Range` behind a PEP 695 alias reaches the schema** (T05). A bound written once as
   `type Chars = Annotated[int, Range(500, 20_000)]` and used as a parameter's type turned that
   parameter into a `string` with no bounds: the alias hid the `Annotated` from the schema. The

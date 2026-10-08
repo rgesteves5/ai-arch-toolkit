@@ -22,6 +22,8 @@ from collections import Counter
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 
+from ai_arch_toolkit.toolkit.tools._tables import Cell, cell, table_lines
+
 # What the wiki marks as not part of the content: edit links, footnote markers and lists, the
 # table of contents, navigation boxes, maintenance notices, error text, and everything hidden, not
 # printed, or left out of mobile views and excerpts. The core classes are in
@@ -100,12 +102,8 @@ _LIST_PARTS = frozenset({"ul", "ol", "li", "dd"})
 _HIDDEN_STYLE = re.compile(r"display\s*:\s*none", re.IGNORECASE)
 _MATH_IMAGES = frozenset({"mwe-math-fallback-image-inline", "mwe-math-fallback-image-display"})
 _TEX_STYLE = re.compile(r"^\{\\(?:display|text)style\s*(.*)\}$", re.DOTALL)
-# A span larger than this is the HTML's mistake, not a table's shape; past this many laid-out
-# cells a table stops repeating its spans (each row keeps its own cells), and past this depth
-# lists stop indenting, so hostile markup cannot multiply the text it reads as.
-_MAX_ROWSPAN = 500
-_MAX_COLSPAN = 50
-_MAX_TABLE_CELLS = 100_000
+# Past this depth lists stop indenting, so hostile markup cannot multiply the text it reads as
+# (tables keep their own budgets, ``_tables``).
 _MAX_INDENT = 10
 
 
@@ -143,78 +141,22 @@ def wiki_text(html: str) -> WikiText:
 
 
 @dataclass(slots=True)
-class _Cell:
-    parts: list[str] = field(default_factory=list)
-    rowspan: int = 1
-    colspan: int = 1
-
-    def text(self) -> str:
-        return "; ".join(part for part in self.parts if part)
-
-
-@dataclass(slots=True)
 class _Table:
-    rows: list[list[_Cell]] = field(default_factory=list)
+    rows: list[list[Cell]] = field(default_factory=list)
     caption: list[str] = field(default_factory=list)
-    cell: _Cell | None = None
+    cell: Cell | None = None
     in_caption: bool = False
 
     def lines(self) -> list[str]:
-        caption = " ".join(" ".join(self.caption).split())
-        rows = []
-        for row in _grid(self.rows):
-            while row and not row[-1]:
-                row.pop()
-            if row:
-                rows.append(" | ".join(row))
-        return ([f"Table: {caption}"] if caption else []) + rows
-
-
-def _grid(rows: list[list[_Cell]]) -> list[list[str]]:
-    """The rows with every span laid out: a row-spanning cell repeats below, a column-spanning
-    one leaves its other columns empty, until the table has laid out ``_MAX_TABLE_CELLS``."""
-    grid: list[list[str]] = []
-    below: dict[int, tuple[str, int]] = {}  # column -> (text, rows still to fill)
-    laid = 0
-    for row in rows:
-        out: list[str] = []
-        far = max(below, default=-1)  # the last column a span from above fills in this row
-        cells = iter(row)
-        cell = next(cells, None)
-        while cell is not None or len(out) <= far:
-            column = len(out)
-            if column in below:
-                text, left = below.pop(column)
-                out.append(text)
-                if left > 1:
-                    below[column] = (text, left - 1)
-            elif cell is None:  # only spans from above remain, further right
-                out.append("")
-            else:
-                spanning = laid < _MAX_TABLE_CELLS
-                text = cell.text()
-                for offset in range(cell.colspan if spanning else 1):
-                    out.append(text if offset == 0 else "")
-                    if spanning and cell.rowspan > 1:
-                        below[column + offset] = (text if offset == 0 else "", cell.rowspan - 1)
-                cell = next(cells, None)
-            laid += 1
-        if laid >= _MAX_TABLE_CELLS:
-            below.clear()
-        grid.append(out)
-    return grid
+        return table_lines(self.rows, " ".join(" ".join(self.caption).split()))
 
 
 def _classes(attributes: dict[str, str | None]) -> list[str]:
     return (attributes.get("class") or "").split()
 
 
-def _span(value: str | None, ceiling: int) -> int:
-    return min(max(_number(value) or 1, 1), ceiling)
-
-
 def _number(value: str | None) -> int | None:
-    """An attribute's integer (``start``, ``value``, a span); ``None`` when it is not one."""
+    """An attribute's integer (``start``, ``value``); ``None`` when it is not one."""
     try:
         return int(value or "")
     except ValueError:
@@ -384,10 +326,7 @@ class _Converter(HTMLParser):
             return
         if not table.rows:
             table.rows.append([])
-        table.cell = _Cell(
-            rowspan=_span(attributes.get("rowspan"), _MAX_ROWSPAN),
-            colspan=_span(attributes.get("colspan"), _MAX_COLSPAN),
-        )
+        table.cell = cell(attributes.get("rowspan"), attributes.get("colspan"))
         table.rows[-1].append(table.cell)
 
     def _end_table_part(self, tag: str) -> None:

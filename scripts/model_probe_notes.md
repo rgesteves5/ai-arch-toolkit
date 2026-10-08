@@ -167,7 +167,12 @@ Keep entries factual: model ID, scenario, observed error, and the local action t
   reports: what the run proved, as model catalog facts of `kind = "probe"` dated the day of the
   run (C06d). A scenario that passed states its fact true (`tools_loop` → `tools`,
   `structured` → `structured_output`, `json_mode` → `json_mode`, `stream` → `streaming`); one
-  classified `unsupported_capability` states it false; any other outcome states nothing.
+  the adapter refused (a `RequestError` from its `prepare`, nothing sent; the row's
+  `refused_by_adapter`) states it false; any other outcome states nothing. A provider's error
+  classified `unsupported_capability` is a heuristic on its words, and may be a framework bug
+  ("Invalid schema for response_format"): the fragment lists it in a comment, for review.
+- The fragment is keyed by the inventory's ids. xAI's are aliases (`grok-4.20-reasoning` names
+  `grok-4.20-0309-reasoning`): `model_catalog.load()` puts their facts on the model's entry.
 - The fragment is local, like the reports. Compare it with the adapter's facts
   (`model_catalog.get(model)`, `kind="adapter"`): a disagreement is an adapter table to fix,
   which fixes the catalog too (D63). An app may load it with `model_catalog.load(path)`. It

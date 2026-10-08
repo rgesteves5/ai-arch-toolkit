@@ -556,6 +556,26 @@ ERROR_BODIES: dict[str, tuple[ErrorBody, ...]] = {
             tools=frozenset({"world_bank_indicator", "world_bank_series"}),
         ),
         ErrorBody(
+            source="live, review of T08a, 2026-10-08 (error 175, sent with HTTP 200; the table "
+            "does not list it)",
+            status=200,
+            body=[
+                {
+                    "message": [
+                        {
+                            "id": "175",
+                            "key": "Invalid format",
+                            "value": "The indicator was not found. It may have been deleted "
+                            "or archived.",
+                        }
+                    ]
+                }
+            ],
+            type="not_found",
+            says="The indicator was not found",
+            tools=frozenset({"world_bank_indicator", "world_bank_series"}),
+        ),
+        ErrorBody(
             source=_WORLD_BANK_ERRORS + " (error 105)",
             status=200,
             body=[
@@ -730,17 +750,10 @@ ERROR_BODIES: dict[str, tuple[ErrorBody, ...]] = {
             type="validation_error",
             says="JSON schema validation failed for query",
         ),
-        # GraphQL answers 200 and puts its errors in the body
-        # (https://data.rcsb.org/index.html#gql-api; https://github.com/rcsb/py-rcsb-api,
-        # rcsbapi/data/data_query.py).
-        ErrorBody(
-            source="https://data.rcsb.org/index.html#gql-api",
-            status=200,
-            body={"errors": [{"message": "Field 'x' in type 'CoreEntry' is undefined"}]},
-            type="upstream",
-            says="Field 'x' in type 'CoreEntry' is undefined",
-            tools=frozenset({"pdb_search"}),
-        ),
+        # GraphQL's errors come in a 200 (https://data.rcsb.org/index.html#gql-api), and only
+        # to the second request of pdb_search and pdb_ligands: a case here serves its one
+        # answer to the first. test_pdb.py serves them in turn
+        # (test_an_error_the_graphql_endpoint_reports_in_a_200_is_a_failure).
     ),
     # A refused request answers 400 with its reason in ``error_message``
     # (https://github.com/chembl/chembl_webservices_py3, src/chembl_webservices/core/resource.py).

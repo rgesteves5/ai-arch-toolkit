@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 from unittest.mock import patch
+from xml.etree import ElementTree
 
 import pytest
 
@@ -19,6 +20,7 @@ from ai_arch_toolkit.toolkit.tools._youtube import (
 )
 from tests.toolkit.youtube_fakes import (
     LOADER,
+    FakeError,
     FakeTranscript,
     FakeTranscriptList,
     library,
@@ -260,8 +262,8 @@ class TestYouTubeTranscriptSearch:
         result = _text(youtube_transcript_search("dQw4w9WgXcQ", "missing"))
 
         assert result == (
-            "No passages of the YouTube transcript of dQw4w9WgXcQ, en (English), manual, "
-            "mention 'missing'."
+            "The YouTube transcript of dQw4w9WgXcQ, en (English), manual, has no passage that "
+            "mentions 'missing'."
         )
 
 
@@ -291,6 +293,52 @@ def test_a_network_failure_is_a_retryable_upstream_failure(mock_loader, call):
     assert error.type == "upstream"
     assert error.retryable
     assert "network is unreachable" in error.message
+
+
+class _Unreadable(FakeTranscript):
+    """A transcript whose snippets the library cannot read: an empty XML body."""
+
+    def fetch(self, *, preserve_formatting: bool = False):
+        raise ElementTree.ParseError("no element found: line 1, column 0")
+
+
+def _listing_raises(error: Exception):
+    class _Api:
+        def list(self, video_id: str):
+            raise error
+
+    return lambda: (_Api, FakeError)
+
+
+@pytest.mark.parametrize(
+    ("loader", "call", "words"),
+    [
+        # The library reads caption["name"]["runs"] from the watch page, without a guard.
+        (
+            _listing_raises(KeyError("runs")),
+            lambda: youtube_transcript("dQw4w9WgXcQ"),
+            "response: KeyError('runs')",
+        ),
+        (
+            _listing_raises(KeyError("runs")),
+            lambda: youtube_transcript_languages("dQw4w9WgXcQ"),
+            "list: KeyError('runs')",
+        ),
+        (
+            library(FakeTranscriptList(manual=_Unreadable())),
+            lambda: youtube_transcript_search("dQw4w9WgXcQ", "love"),
+            "response: ParseError('no element found: line 1, column 0')",
+        ),
+    ],
+    ids=["key-error", "key-error-languages", "parse-error"],
+)
+def test_a_page_the_library_cannot_read_is_an_upstream_parse_failure(loader, call, words):
+    # Both escaped as a runtime_error, retryable, with the bare messages.
+    with patch(LOADER, loader):
+        failure = _failure(call)
+
+    assert (failure.type, failure.retryable) == ("upstream", False)
+    assert failure.message == f"could not parse the transcript {words}"
 
 
 @pytest.mark.parametrize(

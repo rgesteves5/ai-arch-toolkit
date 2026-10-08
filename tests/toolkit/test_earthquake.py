@@ -7,13 +7,14 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
-from ai_arch_toolkit.core import ToolResult
+from ai_arch_toolkit.core import ToolCall, ToolGroup, ToolResult
 from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._earthquake import (
     earthquake_count,
     earthquake_event,
     earthquake_search,
 )
+from ai_arch_toolkit.toolkit.tools._values import plain
 from tests.toolkit import geo_answers
 from tests.toolkit.http_fakes import HTTP_OPEN, http_error, respond
 
@@ -51,7 +52,7 @@ class TestEarthquakeSearch:
         assert count_path.endswith("/count") and page_path.endswith("/query")
         assert count_query == {
             "minmagnitude": ["4.5"],
-            "maxmagnitude": ["10.0"],
+            "maxmagnitude": [plain(10.0)],
             "starttime": ["2024-01-01"],
         }
         assert page_query["limit"] == ["2"]
@@ -66,10 +67,10 @@ class TestEarthquakeSearch:
         text = _text(earthquake_search())
 
         assert text.splitlines() == [
-            "USGS earthquakes for minmagnitude=0.0, maxmagnitude=10.0:",
+            f"USGS earthquakes for minmagnitude={plain(0.0)}, maxmagnitude={plain(10.0)}:",
             "1. M 5.1 - Portugal | id: us1",
             "   time: 2024-03-09T16:00:00Z | magnitude 5.1 mww | type: earthquake",
-            "   latitude 38.7, longitude -9.1, depth 10.0 km",
+            f"   latitude 38.7, longitude -9.1, depth {plain(10.0)} km",
         ]
 
     @patch(HTTP_OPEN)
@@ -89,7 +90,7 @@ class TestEarthquakeSearch:
         mock_urlopen.return_value = respond("0")
 
         assert _text(earthquake_search(start_time="2024-01-01")) == (
-            "No USGS earthquakes match minmagnitude=0.0, maxmagnitude=10.0, "
+            f"No USGS earthquakes match minmagnitude={plain(0.0)}, maxmagnitude={plain(10.0)}, "
             "starttime=2024-01-01; widen the dates, the magnitudes or the area."
         )
         assert mock_urlopen.call_count == 1
@@ -109,7 +110,7 @@ class TestEarthquakeSearch:
         body = geo_answers.fdsn_error(400, "Bad Request", geo_answers.USGS_BAD_START)
         mock_urlopen.side_effect = http_error(400, "Bad Request", body=body)
 
-        failure = _failure(earthquake_search, max_depth_km=5000.0)
+        failure = _failure(earthquake_search, start_time="2024-01-01")
 
         assert failure.error.type == "validation_error"
         assert failure.error.message == (
@@ -128,13 +129,98 @@ class TestEarthquakeSearch:
         assert failure.error.type == "validation_error"
         assert "Query exceeds the 20000 event limit; narrow the dates" in failure.error.message
 
+    @patch(HTTP_OPEN)
+    def test_the_end_day_is_included(self, mock_urlopen):
+        # USGS reads a bare date as the start of that day, 00:00:00
+        # (https://earthquake.usgs.gov/fdsnws/event/1/), so the end day's events were left out:
+        # a one-day search counted 0 and said to widen the dates.
+        mock_urlopen.side_effect = [respond("2"), respond(geo_answers.usgs_features(1, 2))]
+
+        text = _text(earthquake_search(start_time="2024-01-01", end_time="2024-01-01"))
+
+        for call in (0, 1):
+            query = _sent(mock_urlopen, call)[1]
+            assert query["starttime"] == ["2024-01-01"]
+            assert query["endtime"] == ["2024-01-01T23:59:59.999999"]
+        assert "endtime=2024-01-01T23:59:59.999999" in text.splitlines()[0]
+
+    @patch(HTTP_OPEN)
+    def test_numbers_go_in_decimal_notation(self, mock_urlopen):
+        # FDSN services refuse scientific notation (Commonalities 1.2, "Float type parameters"),
+        # and str(0.00001) is "1e-05".
+        mock_urlopen.return_value = respond("0")
+
+        text = _text(
+            earthquake_search(
+                min_magnitude=0.00001,
+                latitude=0.00001,
+                longitude=-0.00002,
+                max_radius_km=0.00003,
+                min_depth_km=0.00004,
+                max_depth_km=0.00005,
+            )
+        )
+
+        query = _sent(mock_urlopen)[1]
+        assert {name: query[name] for name in ("minmagnitude", "latitude", "longitude")} == {
+            "minmagnitude": ["0.00001"],
+            "latitude": ["0.00001"],
+            "longitude": ["-0.00002"],
+        }
+        assert (query["maxradiuskm"], query["mindepth"], query["maxdepth"]) == (
+            ["0.00003"],
+            ["0.00004"],
+            ["0.00005"],
+        )
+        assert "e-0" not in text
+
     def test_the_limits_are_in_the_schema(self):
         properties = earthquake_search.__tool_definition__.schema.input_schema["properties"]
-        assert (properties["max_results"]["minimum"], properties["max_results"]["maximum"]) == (
-            1,
-            50,
+        bounds = {
+            name: (properties[name].get("minimum"), properties[name].get("maximum"))
+            for name in (
+                "max_results",
+                "offset",
+                "latitude",
+                "longitude",
+                "max_radius_km",
+                "min_depth_km",
+                "max_depth_km",
+            )
+        }
+        # USGS's documented ranges (https://earthquake.usgs.gov/fdsnws/event/1/).
+        assert bounds == {
+            "max_results": (1, 50),
+            "offset": (1, None),
+            "latitude": (-90, 90),
+            "longitude": (-180, 180),
+            "max_radius_km": (0, 20001.6),
+            "min_depth_km": (-100, 1000),
+            "max_depth_km": (-100, 1000),
+        }
+        assert properties["order_by"]["enum"] == ["time", "time-asc", "magnitude", "magnitude-asc"]
+
+    @pytest.mark.parametrize(
+        "args",
+        [
+            {"latitude": 91.0, "longitude": 0.0, "max_radius_km": 10.0},
+            {"latitude": 0.0, "longitude": 181.0, "max_radius_km": 10.0},
+            {"latitude": 0.0, "longitude": 0.0, "max_radius_km": -1.0},
+            {"max_depth_km": 5000.0},
+            {"order_by": "size"},
+        ],
+    )
+    @patch(HTTP_OPEN)
+    def test_values_usgs_does_not_take_are_refused_before_any_request(self, mock_urlopen, args):
+        mock_urlopen.side_effect = AssertionError("no request")
+
+        result = ToolGroup(earthquake_search).execute(
+            ToolCall(id="c", name="earthquake_search", input=args)
         )
-        assert properties["offset"]["minimum"] == 1
+
+        assert result.error is not None
+        assert result.error.type == "validation_error"
+        mock_urlopen.assert_not_called()
 
     @pytest.mark.parametrize(
         ("call", "words"),
@@ -142,10 +228,6 @@ class TestEarthquakeSearch:
             (lambda: earthquake_search(start_time="2024"), "invalid start_time '2024'"),
             (lambda: earthquake_search(order_by="size"), "invalid order_by 'size'"),
             (lambda: earthquake_search(latitude=10.0), "must be provided together"),
-            (
-                lambda: earthquake_search(latitude=91.0, longitude=0.0, max_radius_km=10.0),
-                "latitude must be between -90 and 90",
-            ),
             (lambda: earthquake_event("bad/id"), "invalid event_id 'bad/id'"),
             (
                 lambda: earthquake_count(min_magnitude=6.0, max_magnitude=5.0),
@@ -175,7 +257,7 @@ class TestEarthquakeEvent:
             "USGS earthquake us1:",
             "M 5.1 - Portugal | id: us1",
             "   time: 2024-03-09T16:00:00Z | magnitude 5.1 mww | type: earthquake",
-            "   latitude 38.7, longitude -9.1, depth 10.0 km",
+            f"   latitude 38.7, longitude -9.1, depth {plain(10.0)} km",
             "   review status: reviewed | felt reports: 12 | PAGER alert: green | tsunami flag: 0 "
             "| significance: 400",
             "   updated: 2024-03-09T16:01:00Z",
@@ -226,9 +308,17 @@ class TestEarthquakeCount:
         mock_urlopen.return_value = respond("42")
 
         assert earthquake_count(start_time="2024-01-01") == (
-            "USGS earthquake count for minmagnitude=0.0, maxmagnitude=10.0, "
+            f"USGS earthquake count for minmagnitude={plain(0.0)}, maxmagnitude={plain(10.0)}, "
             "starttime=2024-01-01: 42"
         )
+
+    @patch(HTTP_OPEN)
+    def test_the_end_day_is_counted(self, mock_urlopen):
+        mock_urlopen.return_value = respond("3")
+
+        earthquake_count(start_time="2024-01-01", end_time="2024-01-31")
+
+        assert _sent(mock_urlopen)[1]["endtime"] == ["2024-01-31T23:59:59.999999"]
 
     @patch(HTTP_OPEN)
     def test_upstream_failure_propagates(self, mock_urlopen):

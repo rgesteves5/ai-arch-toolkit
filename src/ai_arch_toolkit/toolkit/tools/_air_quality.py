@@ -71,8 +71,8 @@ _VALID_VARIABLES = {
 
 @tool(capability="network")
 def air_quality_current(
-    latitude: float,
-    longitude: float,
+    latitude: Annotated[float, Range(-90, 90)],
+    longitude: Annotated[float, Range(-180, 180)],
     variables: str = _DEFAULT_VARIABLES,
     timezone: str = "auto",
 ) -> str:
@@ -86,15 +86,13 @@ def air_quality_current(
         timezone: An IANA time zone, e.g. "Europe/Lisbon", or "auto" for the point's own.
 
     Raises:
-        ToolFailure: validation_error when the coordinates, the variables or the timezone are
-            invalid (Open-Meteo rejects the request); upstream when Open-Meteo fails or answers
-            without the values.
+        ToolFailure: validation_error when the variables or the timezone are invalid (Open-Meteo
+            rejects the request); upstream when Open-Meteo fails or answers without the values.
     """
-    _validate_location(latitude, longitude)
     parsed = _parse_variables(variables)
     params = {
-        "latitude": str(latitude),
-        "longitude": str(longitude),
+        "latitude": plain(latitude),
+        "longitude": plain(longitude),
         "current": ",".join(parsed),
         "timezone": timezone.strip() or "auto",
         "timeformat": "unixtime",
@@ -104,8 +102,8 @@ def air_quality_current(
 
 @tool(capability="network")
 def air_quality_forecast(
-    latitude: float,
-    longitude: float,
+    latitude: Annotated[float, Range(-90, 90)],
+    longitude: Annotated[float, Range(-180, 180)],
     variables: str = _DEFAULT_VARIABLES,
     forecast_days: Annotated[int, Range(1, _MAX_FORECAST_DAYS)] = 3,
     past_days: Annotated[int, Range(0, _MAX_PAST_DAYS)] = 0,
@@ -128,15 +126,13 @@ def air_quality_forecast(
         offset: How many hours to skip; the footer gives the next offset.
 
     Raises:
-        ToolFailure: validation_error when the coordinates, the variables or the timezone are
-            invalid (Open-Meteo rejects the request); upstream when Open-Meteo fails or answers
-            without the values.
+        ToolFailure: validation_error when the variables or the timezone are invalid (Open-Meteo
+            rejects the request); upstream when Open-Meteo fails or answers without the values.
     """
-    _validate_location(latitude, longitude)
     parsed = _parse_variables(variables)
     params = {
-        "latitude": str(latitude),
-        "longitude": str(longitude),
+        "latitude": plain(latitude),
+        "longitude": plain(longitude),
         "hourly": ",".join(parsed),
         "forecast_days": str(forecast_days),
         "past_days": str(past_days),
@@ -203,15 +199,6 @@ def _parse_variables(value: str) -> tuple[str, ...]:
         )
         raise ToolFailure("validation_error", msg)
     return variables
-
-
-def _validate_location(latitude: float, longitude: float) -> None:
-    if not -90 <= latitude <= 90:
-        msg = f"latitude must be between -90 and 90, got {latitude}."
-        raise ToolFailure("validation_error", msg)
-    if not -180 <= longitude <= 180:
-        msg = f"longitude must be between -180 and 180, got {longitude}."
-        raise ToolFailure("validation_error", msg)
 
 
 def _point(data: dict[str, Any]) -> str:

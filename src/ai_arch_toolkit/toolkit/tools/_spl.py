@@ -3,14 +3,19 @@
 An SPL is an HL7 v3 document (namespace ``urn:hl7-org:v3``) whose body holds sections, each with a
 LOINC ``code`` and its ``displayName``, a ``title``, a narrative ``text`` and its subsections under
 ``component/section`` (https://www.fda.gov/industry/structured-product-labeling/section-headings-loinc).
-The narrative is CDA's: ``paragraph``, ``list`` of ``item``, ``table`` with a ``caption`` and rows
-of ``th``/``td``, and inline ``content``, ``sub``, ``sup``, ``linkHtml``, ``footnote`` and ``br``;
-an image (``renderMultiMedia``) has no text (https://hl7.org/cda/stds/core/narrative.html).
+The narrative is CDA's: ``paragraph``, ``list`` of ``item`` with a ``caption``, ``table`` with a
+``caption`` and rows of ``th``/``td`` that may span rows and columns, and inline ``content``,
+``sub``, ``sup``, ``linkHtml``, ``footnote`` and ``br``; an image (``renderMultiMedia``) has no
+text but its ``caption`` (https://hl7.org/cda/stds/core/narrative.html). A section's Highlights,
+the summary atop a prescribing label, are its ``excerpt/highlight/text``
+(https://www.fda.gov/media/84201/download, SPL Implementation Guide, 2.2.4 Highlights).
 
 The label's text has every section in document order under a heading (``##`` for a top-level
 section, one ``#`` more per level), lists one item per line, and tables one row per line with
-`` | `` between cells. A section is numbered by its place in that order, and its text runs to the
-end of its last subsection: what ``dailymed_label_text(section=N)`` returns.
+`` | `` between cells, every span laid out (``_tables``). A section's highlights follow its text,
+under a ``Highlights:`` line; captions are ``Table:``, ``List:`` and ``Figure:`` lines. A section
+is numbered by its place in that order, and its text runs to the end of its last subsection: what
+``dailymed_label_text(section=N)`` returns.
 """
 
 from __future__ import annotations
@@ -18,6 +23,8 @@ from __future__ import annotations
 import xml.etree.ElementTree as ET
 from collections.abc import Iterator
 from dataclasses import dataclass
+
+from ai_arch_toolkit.toolkit.tools._tables import cell, table_lines
 
 _V3 = "{urn:hl7-org:v3}"
 _NS = {"v3": "urn:hl7-org:v3"}
@@ -113,7 +120,8 @@ class _Writer:
         return "".join(f"{line}\n" for line in self.lines)
 
     def section(self, element: ET.Element, depth: int) -> None:
-        """Write ``element``'s heading, narrative and subsections, numbered in order."""
+        """Write ``element``'s heading, narrative, highlights and subsections, numbered in
+        order."""
         code = element.find("v3:code", _NS)
         name = _attribute(code, "displayName")
         title = _inline(element.find("v3:title", _NS)) or name or "(untitled)"
@@ -122,6 +130,11 @@ class _Writer:
         self.add(f"{'#' * min(depth + 2, 6)} {title}")
         for line in _blocks(element.find("v3:text", _NS), 0):
             self.add(line)
+        for highlight in element.iterfind("v3:excerpt/v3:highlight/v3:text", _NS):
+            if lines := _blocks(highlight, 0):
+                self.add("Highlights:")
+                for line in lines:
+                    self.add(line)
         for subsection in _subsections(element):
             self.section(subsection, depth + 1)
         loinc = _attribute(code, "code")
@@ -167,7 +180,8 @@ def _blocks(element: ET.Element | None, depth: int) -> list[str]:
 def _list(element: ET.Element, depth: int) -> list[str]:
     ordered = element.get("listType") == "ordered"
     indent = "  " * min(depth, _MAX_INDENT)
-    lines: list[str] = []
+    caption = _inline(element.find("v3:caption", _NS))
+    lines = [f"{indent}List: {caption}"] if caption else []
     items = (child for child in element if _tag(child) == "item")
     for number, item in enumerate(items, start=1):
         marker = f"{number}." if ordered else "-"
@@ -179,17 +193,21 @@ def _list(element: ET.Element, depth: int) -> list[str]:
 
 
 def _table(element: ET.Element) -> list[str]:
-    """A table's caption and its own rows, one per line (a table in a cell stays in the cell, so
-    each element is read once)."""
+    """A table's caption and its own rows, one per line, with the cells that span rows or columns
+    laid out (a table in a cell stays in the cell, so each element is read once)."""
     caption = _inline(element.find("v3:caption", _NS))
     groups = [element, *(child for child in element if _tag(child) in _ROW_GROUPS)]
     rows = [
-        " | ".join(_inline(cell) for cell in row if _tag(cell) in ("th", "td"))
+        [
+            cell(item.get("rowspan"), item.get("colspan"), _inline(item))
+            for item in row
+            if _tag(item) in ("th", "td")
+        ]
         for group in groups
         for row in group
         if _tag(row) == "tr"
     ]
-    return ([f"Table: {caption}"] if caption else []) + [row for row in rows if row.strip(" |")]
+    return table_lines(rows, caption)
 
 
 def _inline(element: ET.Element | None, *, skip: str = "") -> str:
@@ -202,12 +220,14 @@ def _inline(element: ET.Element | None, *, skip: str = "") -> str:
 
 def _pieces(element: ET.Element, skip: str) -> Iterator[str]:
     """The text of ``element`` and its descendants in order (not its own tail): a ``br`` is a
-    break, a block or a cell inside is set apart by spaces, an image has no text."""
+    break, a block or a cell inside is set apart by spaces, an image is its caption."""
     tag = _tag(element)
     if tag == "br":
         yield _BREAK
         return
-    if tag == "renderMultiMedia":
+    if tag == "renderMultiMedia":  # an image: its caption, on a line of its own
+        if caption := _inline(element.find("v3:caption", _NS)):
+            yield f"{_BREAK}Figure: {caption}{_BREAK}"
         return
     space = " " if tag in _BLOCKS or tag in _CELLS else ""
     yield space + (element.text or "")

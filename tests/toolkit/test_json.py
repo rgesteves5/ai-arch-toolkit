@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import errno
+import re
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,7 @@ import pytest
 
 from ai_arch_toolkit.core import ApprovalDecision, ToolCall, ToolGroup, ToolResult
 from ai_arch_toolkit.core._tools._result import ToolFailure
+from ai_arch_toolkit.toolkit.tools import _json
 from ai_arch_toolkit.toolkit.tools._json import csv_read, json_extract
 
 
@@ -149,6 +151,79 @@ class TestCsvRead:
         f = tmp_path / "header.csv"
         f.write_text("a,b\n")
         assert _text(csv_read(str(f))) == f"{f} (0 rows):\na | b\n--+--"
+
+
+class TestCsvPageBounds:
+    """A page is bounded by characters, not only by rows; a cell is padded only up to a cap; and
+    the rows are counted only so far past the page."""
+
+    @staticmethod
+    def _wide(tmp_path: Path) -> Path:
+        """A 9,999-row CSV whose second row has one 130,000-character field."""
+        rows = [f"{n},short {n}" for n in range(9_999)]
+        rows[1] = f"1,{'w' * 130_000}"
+        path = tmp_path / "wide.csv"
+        path.write_text("id,text\n" + "\n".join(rows) + "\n")
+        return path
+
+    def test_a_page_stops_before_a_row_that_would_pass_its_characters(self, tmp_path):
+        path = self._wide(tmp_path)
+
+        first = _text(csv_read(str(path), max_rows=10_000))
+
+        assert len(first) - len(str(path)) < 150
+        assert first.endswith("[results 1-1 of 9999 | next: offset=1]")
+
+    def test_a_row_longer_than_a_page_comes_alone(self, tmp_path):
+        alone = _text(csv_read(str(self._wide(tmp_path)), offset=1, max_rows=10_000))
+
+        assert "w" * 130_000 in alone and len(alone) < 130_300
+        assert alone.endswith("[results 2-2 of 9999 | next: offset=2]")
+
+    def test_the_short_rows_after_it_fill_a_page_of_characters(self, tmp_path):
+        later = _text(csv_read(str(self._wide(tmp_path)), offset=2, max_rows=10_000))
+
+        assert _json._PAGE_CHARS - 100 < len(later) < _json._PAGE_CHARS + 300
+        assert max(len(line) for line in later.splitlines()[1:]) < 60  # after the path
+
+    def test_following_the_footers_reads_every_row_once(self, tmp_path):
+        rows, call = [], {"offset": 0}
+        while call is not None:
+            result = csv_read(str(self._wide(tmp_path)), max_rows=10_000, **call)
+            rows += [line.split("|")[0].strip() for line in _text(result).splitlines()[3:-1]]
+            call = _window(result)["next_call"]
+
+        assert rows == [str(n) for n in range(9_999)]
+
+    def test_cells_are_padded_only_up_to_the_column_cap(self, tmp_path):
+        path = tmp_path / "padded.csv"
+        path.write_text(f"name,note\nlong,{'n' * 1000}\nshort,x\n")
+
+        lines = _text(csv_read(str(path))).splitlines()
+
+        assert lines[1] == "name  | " + "note".ljust(_json._PAD_CHARS)
+        assert lines[-1] == "short | " + "x".ljust(_json._PAD_CHARS)
+        assert lines[-2] == "long  | " + "n" * 1000
+
+    def test_the_count_stops_past_its_cap_and_says_so(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(_json, "_COUNT_CHARS", 1_000)
+        path = tmp_path / "many.csv"
+        path.write_text("n\n" + "".join(f"{n}\n" for n in range(10_000)))
+
+        first = csv_read(str(path), max_rows=10)
+        second = csv_read(str(path), offset=10, max_rows=10)
+
+        heading = re.match(r"(.*) \(at least (\d+) rows, counted up to 1000 ", _text(first))
+        assert heading is not None and heading[1] == str(path) and int(heading[2]) > 10
+        assert _window(first)["total"] is None
+        assert _text(first).endswith("[results 1-10 | next: offset=10]")
+        assert _text(second).splitlines()[3].strip() == "10"
+
+    def test_the_count_still_reaches_the_end_of_a_file_within_the_cap(self, tmp_path):
+        path = tmp_path / "rows.csv"
+        path.write_text("n\n" + "".join(f"{n}\n" for n in range(5_000)))
+
+        assert _window(csv_read(str(path), max_rows=10))["total"] == 5_000
 
 
 class TestBounds:

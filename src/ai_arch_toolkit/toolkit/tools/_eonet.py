@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 from datetime import date
-from typing import Annotated, Any, NoReturn
+from typing import Annotated, Any, Literal, NoReturn, get_args
 
 from ai_arch_toolkit.core import Range, ToolResult, tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
@@ -50,6 +50,11 @@ _DEPTH = 1000
 _MAX_DAYS = 365
 _MAX_POINTS = 200
 _ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
+# Categories and sources go as one ID or several, comma-separated, read as "any of them"
+# (https://eonet.gsfc.nasa.gov/docs/v3, "source" and "category").
+_IDS_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}(?:,[A-Za-z0-9_.:-]{1,80})*$")
+type Status = Literal["open", "closed", "all"]
+_STATUSES = frozenset(get_args(Status.__value__))
 
 
 @tool(capability="network")
@@ -61,7 +66,7 @@ def eonet_categories() -> str:
 @tool(capability="network")
 def eonet_events(
     category: str = "",
-    status: str = "open",
+    status: Status = "open",
     source: str = "",
     bbox: str = "",
     days: Annotated[int, Range(1, _MAX_DAYS)] = 30,
@@ -74,9 +79,10 @@ def eonet_events(
     track ends.
 
     Args:
-        category: A category ID from eonet_categories, e.g. "wildfires" or "severeStorms".
-        status: "open" (still going), "closed" or "all".
-        source: An EONET source ID, e.g. "InciWeb".
+        category: A category ID from eonet_categories, e.g. "wildfires", or several separated by
+            commas for events in any of them.
+        status: Open (still going), closed or all.
+        source: An EONET source ID, e.g. "InciWeb", or several separated by commas.
         bbox: A box as west,south,east,north in degrees, e.g. "-125,32,-114,42".
         days: The last days to search, today included, without dates; for a longer period give
             start_date and end_date.
@@ -90,7 +96,7 @@ def eonet_events(
     """
     _validate_events(category, status, source, bbox, start_date, end_date)
     filters = {
-        "status": status.strip().lower(),
+        "status": status,
         "category": category.strip(),
         "source": source.strip(),
         **_period(days, start_date, end_date),
@@ -188,6 +194,7 @@ def _events_answer(
         lines,
         offset=offset,
         limit=limit,
+        requested=asked(offset, limit, _DEPTH),
         depth=_DEPTH,
         narrow="narrow the period (start_date, end_date), the category or the bbox",
     )
@@ -299,11 +306,16 @@ def _validate_events(
     start_date: str,
     end_date: str,
 ) -> None:
-    if category and not _ID_RE.fullmatch(category.strip()):
-        _invalid(f"invalid category {category!r}; eonet_categories lists the category IDs.")
-    if source and not _ID_RE.fullmatch(source.strip()):
-        _invalid(f"invalid source {source!r}; pass an EONET source ID such as InciWeb.")
-    if status.strip().lower() not in {"open", "closed", "all"}:
+    if category and not _IDS_RE.fullmatch(category.strip()):
+        _invalid(
+            f"invalid category {category!r}; eonet_categories lists the category IDs, given "
+            "alone or separated by commas."
+        )
+    if source and not _IDS_RE.fullmatch(source.strip()):
+        _invalid(
+            f"invalid source {source!r}; pass EONET source IDs such as InciWeb or InciWeb,EO."
+        )
+    if status not in _STATUSES:
         _invalid(f"status must be open, closed, or all, got {status!r}.")
     if bbox.strip() and not _valid_bbox(bbox):
         _invalid(f"bbox must be west,south,east,north in degrees, got {bbox!r}.")

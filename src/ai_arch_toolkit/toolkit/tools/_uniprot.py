@@ -24,7 +24,7 @@ from typing import Annotated, Any
 
 from ai_arch_toolkit.core import Range, ToolResult, tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
-from ai_arch_toolkit.toolkit.tools._http import Api, Reply
+from ai_arch_toolkit.toolkit.tools._http import Api, HttpError, Reply
 from ai_arch_toolkit.toolkit.tools._window import list_window, page_window, text_window
 
 
@@ -125,8 +125,8 @@ def uniprot_search(
         offset: How many results came before that page, from the same footer.
 
     Raises:
-        ToolFailure: validation_error when an argument is invalid, an offset comes without its
-            cursor, or UniProt refuses the query (with its reason).
+        ToolFailure: validation_error when an argument is invalid, a cursor or an offset comes
+            without the other, or UniProt refuses the query (with its reason).
     """
     text = _free_text("query", query, _QUERY_CHARS)
     place = _free_text("organism", organism, _FILTER_CHARS) if organism.strip() else ""
@@ -135,10 +135,10 @@ def uniprot_search(
             "validation_error",
             f"invalid reviewed {reviewed[:100]!r}; use 'true', 'false', or '' for both",
         )
-    if offset and not cursor.strip():
+    if bool(offset) != bool(cursor.strip()):  # a footer's cursor always comes with its offset
         raise ToolFailure(
             "validation_error",
-            "UniProt pages by cursor: an offset only numbers the page its cursor reaches; pass "
+            "UniProt pages by cursor, and the offset numbers the page the cursor reaches: pass "
             "both from the previous page's footer, or neither for the first page",
         )
     params = {
@@ -181,7 +181,7 @@ def uniprot_entry(
         window = text_window(_annotation(data), offset=offset, limit=max_chars)
         return window.result(heading=f"UniProtKB entry {_named(data, asked)}:")
 
-    return _API.get_json(asked, params={"format": "json"}, parse=read, missing=_missing(asked))
+    return _entry(asked, read, "uniprot_entry")
 
 
 @tool(capability="network")
@@ -211,7 +211,7 @@ def uniprot_features(
     def read(data: dict[str, Any]) -> ToolResult:
         return _FEATURES.answer(data, asked, wanted, offset=offset, limit=max_results)
 
-    return _API.get_json(asked, params={"format": "json"}, parse=read, missing=_missing(asked))
+    return _entry(asked, read, "uniprot_features")
 
 
 @tool(capability="network")
@@ -242,7 +242,7 @@ def uniprot_crossrefs(
     def read(data: dict[str, Any]) -> ToolResult:
         return _CROSSREFS.answer(data, asked, wanted, offset=offset, limit=max_results)
 
-    return _API.get_json(asked, params={"format": "json"}, parse=read, missing=_missing(asked))
+    return _entry(asked, read, "uniprot_crossrefs")
 
 
 @tool(capability="network")
@@ -257,7 +257,11 @@ def uniprot_sequence(accession: str) -> str:
             has no entry or no sequence for it.
     """
     asked = _accession(accession)
-    fasta = _API.get_text(f"{asked}.fasta", parse=str.strip, missing=_missing(asked))
+    try:
+        fasta = _API.get_text(f"{asked}.fasta", parse=str.strip, missing=_missing(asked))
+    except HttpError as failure:
+        _redirected(failure, asked, "uniprot_sequence")
+        raise
     if not fasta:
         msg = f"UniProt has no sequence for {asked}; check the entry with uniprot_entry"
         raise ToolFailure("not_found", msg)
@@ -311,6 +315,41 @@ def _filter(name: str, value: str) -> str:
 def _missing(accession: str) -> str:
     """The not_found message for an accession UniProt has no entry for (its 404)."""
     return f"UniProt has no entry {accession}; find one with uniprot_search"
+
+
+def _entry[T](asked: str, read: Callable[[dict[str, Any]], T], tool: str) -> T:
+    """The entry of ``asked``, as JSON, read with ``read``; ``tool`` is the one to name if
+    UniProt sends it to another accession by a redirect the door does not follow."""
+    try:
+        return _API.get_json(asked, params={"format": "json"}, parse=read, missing=_missing(asked))
+    except HttpError as failure:
+        _redirected(failure, asked, tool)
+        raise
+
+
+# The entry a UniProtKB redirect leads to: ``/uniprotkb/P23141?from=Q00015``, or with the format
+# asked for (``P23141.fasta``).
+_ENTRY_PATH_RE = re.compile(rf"/uniprotkb/({_ACCESSION_RE.pattern})(?:\.[a-z]+)?")
+
+
+def _redirected(failure: HttpError, asked: str, tool: str) -> None:
+    """``not_found`` naming the accession to look up, when ``failure`` is the door's refusal of
+    a redirect to another entry; nothing for any other failure.
+
+    An inactive accession answers ``303 See Other`` to its entry (``Location:
+    /uniprotkb/P23141?from=Q00015``, https://www.uniprot.org/help/rest-api-headers), which the
+    door follows on the same host over HTTPS. UniProt has also answered redirects to plain HTTP,
+    which the door refuses as a downgrade: the entry is still the one to read, by its accession.
+    """
+    if failure.redirect is None:
+        return
+    path = urllib.parse.urlsplit(failure.redirect).path
+    match = _ENTRY_PATH_RE.fullmatch(path)
+    if match is None or match[1] == asked:
+        return
+    moved = match[1]
+    msg = f"{asked} is inactive: UniProt redirects it to {moved}; look up {moved} with {tool}"
+    raise ToolFailure("not_found", msg) from failure
 
 
 def _quoted(value: str) -> str:
@@ -589,6 +628,9 @@ class _Part:
         line: The item's line, numbered.
         unmatched: The answer when no item matches, from the entry's accession, the value asked
             for and the count by ``field``.
+        own_id: The key of an ID the item's line shows that no tool takes (T00, point 6); a
+            page that shows one says so once, in ``own_id_note``.
+        own_id_note: What that ID is, for the heading.
     """
 
     key: str
@@ -597,6 +639,8 @@ class _Part:
     count_label: str
     line: Callable[[int, dict[str, Any]], str]
     unmatched: Callable[[str, str, str], str]
+    own_id: str = ""
+    own_id_note: str = ""
 
     def answer(
         self, data: dict[str, Any], asked: str, wanted: str, *, offset: int, limit: int
@@ -615,6 +659,9 @@ class _Part:
         heading = f"{what} of {_named(data, asked)}:"
         if not wanted and offset == 0:
             heading += f"\n{self.count_label}: {_tally(self._value(item) for item in items)}"
+        shown = kept[window.first - 1 : window.last]
+        if self.own_id and any(_string(item.get(self.own_id)) for item in shown):
+            heading += f"\n{self.own_id_note}"
         return window.result(heading=heading)
 
     def _matches(self, item: dict[str, Any], wanted: str) -> bool:
@@ -698,6 +745,8 @@ _FEATURES = _Part(
     unmatched=lambda accession, wanted, tally: (
         f"{accession} has no features of type {wanted!r}; its types: {tally}."
     ),
+    own_id="featureId",
+    own_id_note="In brackets: UniProt's feature ID, for citing (no tool takes it).",
 )
 _CROSSREFS = _Part(
     key="uniProtKBCrossReferences",

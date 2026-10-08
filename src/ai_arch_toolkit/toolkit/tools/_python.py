@@ -368,8 +368,12 @@ class _SafeEvaluator:
             after.add(f"Error: {error}")
         elif self._last_expr_value is not None:
             after.add(str(self._last_expr_value))
-        shown = fit((self.printed, after), limit=_MAX_OUTPUT, rest=_PRINT_LESS)
-        return "\n\n".join(part for part in (shown[0].rstrip("\n"), shown[1]) if part) or "None"
+        printed, value = fit((self.printed, after), limit=_MAX_OUTPUT, rest=_PRINT_LESS)
+        printed = printed.rstrip("\n")
+        # Whether there is a value, not its length: an empty string shows as one.
+        if error is None and self._last_expr_value is None:
+            return printed or "None"
+        return f"{printed}\n\n{value}" if printed else value
 
     def shown_output(self) -> str:
         """What the program printed, within ``_MAX_OUTPUT`` characters."""

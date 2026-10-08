@@ -128,6 +128,45 @@ class TestSearch:
         assert lines[1] == "1. 1D3Z: Ubiquitin | SOLUTION NMR"
         assert lines[2] == "2. 9ZZZ: (no record in the Data API; try pdb_entry)"
 
+    @pytest.mark.parametrize("info", ["n/a", [{"resolution_combined": [1.74]}]])
+    @patch(HTTP_OPEN)
+    def test_a_record_of_another_shape_reads_without_what_it_lacks(
+        self, mock_urlopen: MagicMock, info: object
+    ) -> None:
+        # The lines were built after the parse, and rcsb_entry_info as text or a list raised a
+        # bare AttributeError out of the tool.
+        odd = {**_entries("4HHB")["data"]["entries"][0], "rcsb_entry_info": info}
+        mock_urlopen.side_effect = [
+            respond(_hits("4HHB", total=1)),
+            respond({"data": {"entries": [odd]}}),
+        ]
+
+        assert _text(pdb_search("hemoglobin")).splitlines()[1] == (
+            "1. 4HHB: Structure of 4HHB | X-RAY DIFFRACTION | released 1984-07-17"
+        )
+
+    @patch(HTTP_OPEN)
+    def test_records_the_parse_cannot_read_are_a_typed_failure(
+        self, mock_urlopen: MagicMock
+    ) -> None:
+        mock_urlopen.side_effect = [
+            respond(_hits("4HHB", total=1)),
+            respond({"data": ["not", "an", "object"]}),
+        ]
+
+        failure = _failure(pdb_search, "hemoglobin")
+
+        assert failure.error.type == "upstream"
+
+    @patch(HTTP_OPEN)
+    def test_a_page_past_the_hits_does_not_claim_a_total_of_zero(
+        self, mock_urlopen: MagicMock
+    ) -> None:
+        # A 204 has no total_count: it is not known, and the footer said "of 0".
+        mock_urlopen.return_value = respond(b"", content_type="application/json", status=204)
+
+        assert _text(pdb_search("hemoglobin", start=10)).endswith("[no results from 11 | end]")
+
     @patch(HTTP_OPEN)
     def test_a_search_without_hits_is_a_success_that_names_the_query(
         self, mock_urlopen: MagicMock
@@ -154,21 +193,41 @@ class TestSearch:
             "rephrase the query in plain words"
         )
 
+    @pytest.mark.parametrize(
+        ("tool", "first"),
+        [
+            (pdb_search, _hits("4HHB", total=1)),
+            (pdb_ligands, {"rcsb_entry_container_identifiers": {"non_polymer_entity_ids": ["3"]}}),
+        ],
+    )
     @patch(HTTP_OPEN)
     def test_an_error_the_graphql_endpoint_reports_in_a_200_is_a_failure(
-        self, mock_urlopen: MagicMock
+        self, mock_urlopen: MagicMock, tool: Any, first: dict[str, Any]
     ) -> None:
+        # GraphQL answers its errors in a 200 (https://data.rcsb.org/index.html#gql-api). The
+        # message named the "Data API" on the search too, and gave no next step.
         mock_urlopen.side_effect = [
-            respond(_hits("4HHB", total=1)),
+            respond(first),
             respond({"errors": [{"message": "Field 'x' in type 'CoreEntry' is undefined"}]}),
         ]
 
-        failure = _failure(pdb_search, "hemoglobin")
+        failure = _failure(tool, "4HHB")
 
         assert failure.error.type == "upstream"
         assert failure.error.message == (
-            "RCSB PDB's Data API said: Field 'x' in type 'CoreEntry' is undefined"
+            "RCSB PDB's GraphQL endpoint said: Field 'x' in type 'CoreEntry' is undefined; "
+            "pdb_entry reads an entry without it, or try again later"
         )
+
+    @patch(HTTP_OPEN)
+    def test_the_search_api_does_not_read_graphqls_errors(self, mock_urlopen: MagicMock) -> None:
+        # Only the GraphQL endpoint answers errors in a 200; the search's own answer is its hits.
+        mock_urlopen.side_effect = [
+            respond({**_hits("4HHB", total=1), "errors": [{"message": "not the search's"}]}),
+            respond(_entries("4HHB")),
+        ]
+
+        assert "1. 4HHB: Structure of 4HHB" in _text(pdb_search("hemoglobin"))
 
     @patch(HTTP_OPEN)
     def test_a_404_on_the_search_is_an_endpoint_not_found(self, mock_urlopen: MagicMock) -> None:
@@ -217,6 +276,22 @@ class TestEntry:
             "Citation: The crystal structure of human deoxyhaemoglobin. J Mol Biol, 1984. "
             "DOI 10.1016/0022-2836(84)90472-8, PubMed 6726807",
         ]
+
+    @patch(HTTP_OPEN)
+    def test_a_request_the_data_api_refuses_names_a_step_that_fits(
+        self, mock_urlopen: MagicMock
+    ) -> None:
+        # The search's step ("rephrase the query") came with an entry's 400 too.
+        body = b'{"status": 400, "message": "Invalid entry ID"}'
+        mock_urlopen.side_effect = http_error(400, "Bad Request", body=body)
+
+        failure = _failure(pdb_entry, "4HHB")
+
+        assert failure.error.type == "validation_error"
+        assert failure.error.message == (
+            "RCSB PDB refused the request: Invalid entry ID; check the ID, or find one with "
+            "pdb_search"
+        )
 
     @pytest.mark.parametrize("tool", [pdb_entry, pdb_ligands])
     @patch(HTTP_OPEN)

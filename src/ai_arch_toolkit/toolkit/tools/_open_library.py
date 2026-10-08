@@ -57,6 +57,7 @@ class _Book:
     Attributes:
         authors: Each author as shown: ``Name (OL…A)``.
         author_keys: A record's authors by key (``OL…A``), until their names are read.
+        names_unread: Why the authors' names could not be read, when they could not.
         works: The works an edition belongs to, by ID (``OL…W``).
     """
 
@@ -64,6 +65,7 @@ class _Book:
     title: str
     authors: tuple[str, ...] = ()
     author_keys: tuple[str, ...] = ()
+    names_unread: str = ""
     first_published: str = ""
     edition_count: int | None = None
     publishers: tuple[str, ...] = ()
@@ -322,7 +324,11 @@ def _author_keys(entries: object) -> tuple[str, ...]:
 
 def _named(book: _Book) -> _Book:
     """``book`` with its authors' names, read in one request for the first ``_AUTHOR_NAMES``; an
-    author the search does not know keeps its key, and says so."""
+    author the search does not know keeps its key, and says so.
+
+    The record is read already: a failure of the author search, which has outages of its own,
+    leaves the authors by key and says why, instead of failing the read.
+    """
     if not book.author_keys:
         return book
     asked = book.author_keys[:_AUTHOR_NAMES]
@@ -331,7 +337,12 @@ def _named(book: _Book) -> _Book:
         "fields": "key,name",
         "limit": str(len(asked)),
     }
-    names = _API.get_json("search", "authors.json", params=params, parse=_names)
+    try:
+        names = _API.get_json("search", "authors.json", params=params, parse=_names)
+    except ToolFailure as failure:  # the names only: the record stands, with its keys
+        again = "; call again to read them" if failure.error.retryable else ""
+        unread = f"names not read: {failure.error.message.rstrip('.')}{again}"
+        return replace(book, authors=book.author_keys, author_keys=(), names_unread=unread)
     shown = tuple(
         f"{names[key]} ({key})"
         if key in names
@@ -353,7 +364,7 @@ def _names(data: dict[str, Any]) -> dict[str, str]:
 def _work_text(book: _Book) -> str:
     lines = [
         f"Title: {book.title}",
-        *_labelled("Authors", book.authors),
+        *_labelled("Authors", book.authors, book.names_unread),
         *_facts(("First published", book.first_published)),
         f"Page: https://openlibrary.org{book.key}" if book.key else "",
         *_facts(("Cover", _cover_url(book.cover_id)), ("Description", book.description)),
@@ -369,7 +380,7 @@ def _edition_text(book: _Book) -> str:
     works = ", ".join(book.works)
     lines = [
         f"Title: {book.title}",
-        *_labelled("Authors", book.authors),
+        *_labelled("Authors", book.authors, book.names_unread),
         " | ".join(_facts(("Published", book.published), ("Pages", pages))),
         *_labelled("Publishers", book.publishers),
         *_labelled("Languages", book.languages),
@@ -384,8 +395,8 @@ def _edition_text(book: _Book) -> str:
     return "\n".join(line for line in lines if line)
 
 
-def _labelled(label: str, values: tuple[str, ...]) -> list[str]:
-    return [f"{label}: {', '.join(values)}"] if values else []
+def _labelled(label: str, values: tuple[str, ...], note: str = "") -> list[str]:
+    return [f"{label}: {', '.join(values)}" + (f" ({note})" if note else "")] if values else []
 
 
 def _facts(*pairs: tuple[str, str]) -> list[str]:

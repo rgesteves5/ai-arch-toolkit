@@ -51,3 +51,17 @@ def test_a_refusal_keeps_what_was_printed_within_the_limit() -> None:
 
     output = caught.value.error.details["output"]
     assert output.startswith("0\n1\n2\n") and "| the rest is not kept" in output
+
+
+@pytest.mark.parametrize(
+    ("code", "shown"),
+    [
+        ('"a".strip("a")', ""),  # an empty string is a value, not None
+        ('print("x")\n""', "x\n\n"),
+        ("None", "None"),
+        ("x = 1", "None"),
+        ('print("x")', "x"),
+    ],
+)
+def test_a_value_shows_when_there_is_one_even_empty(code: str, shown: str) -> None:
+    assert python_repl(code) == shown

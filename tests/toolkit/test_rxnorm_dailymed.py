@@ -8,6 +8,7 @@ SPL document: HL7 v3 sections with a LOINC code, a title, CDA narrative and subs
 
 from __future__ import annotations
 
+import locale
 from typing import Any
 from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qs, urlparse
@@ -244,6 +245,29 @@ class TestRxNormConcept:
         assert "HTTP 400" in failure.error.message
         assert "term types such as IN, BN, SCD" in failure.error.message
 
+    @pytest.mark.parametrize(
+        "body",
+        [b"Invalid parameter value: tty=XYZ", b'{"message": "Invalid parameter value: tty=XYZ"}'],
+    )
+    @patch(HTTP_OPEN)
+    def test_rxnavs_400_keeps_the_sources_words(self, mock_urlopen: MagicMock, body: bytes):
+        mock_urlopen.side_effect = http_error(400, "Bad Request", body=body)
+
+        failure = _failure(rxnorm_related, "1191", tty="XYZ")
+
+        assert failure.error.type == "validation_error"
+        assert "Invalid parameter value: tty=XYZ" in failure.error.message
+        assert "term types such as IN, BN, SCD" in failure.error.message
+
+    @patch(HTTP_OPEN)
+    def test_rxnavs_400_page_is_not_quoted(self, mock_urlopen: MagicMock):
+        mock_urlopen.side_effect = http_error(400, "Bad Request", body=b"<html><body>400</body>")
+
+        failure = _failure(rxnorm_related, "1191", tty="XYZ")
+
+        assert "<html>" not in failure.error.message
+        assert "HTTP 400" in failure.error.message
+
 
 class TestDailyMedSearch:
     @patch(HTTP_OPEN)
@@ -288,6 +312,40 @@ class TestDailyMedSearch:
 
         assert "11. B" in text
         assert text.endswith("[results 11-11 of 11 | end]")
+
+    @patch(HTTP_OPEN)
+    def test_a_page_past_the_last_gives_the_total_and_the_last_page(self, mock_urlopen):
+        mock_urlopen.return_value = respond(
+            {"data": [], "metadata": {"total_elements": "57", "total_pages": "6"}}
+        )
+
+        text = _text(dailymed_label_search(drug_name="ibuprofen", max_results=10, page=9))
+
+        assert text == (
+            "Page 9 is past the end: 57 DailyMed labels match drug name 'ibuprofen', on 6 pages "
+            "of 10; the last is page=6."
+        )
+
+    @pytest.mark.parametrize("locale_name", ["fr_FR.UTF-8", "de_DE.UTF-8", "pt_PT.UTF-8"])
+    @patch(HTTP_OPEN)
+    def test_published_dates_read_whatever_the_locale(self, mock_urlopen, locale_name: str):
+        saved = locale.setlocale(locale.LC_TIME)
+        try:
+            locale.setlocale(locale.LC_TIME, locale_name)
+        except locale.Error:
+            pytest.skip(f"no {locale_name} locale here")
+        mock_urlopen.return_value = respond(
+            {
+                "metadata": {"total_elements": "1", "total_pages": "1"},
+                "data": [{"title": "A", "setid": SETID, "published_date": "Oct 10, 2026"}],
+            }
+        )
+        try:
+            text = _text(dailymed_label_search(drug_name="aspirin"))
+        finally:
+            locale.setlocale(locale.LC_TIME, saved)
+
+        assert f"setid: {SETID} | published 2026-10-10" in text
 
     @patch(HTTP_OPEN)
     def test_no_label_says_so_with_the_search(self, mock_urlopen: MagicMock):
@@ -346,6 +404,24 @@ class TestDailyMedLabel:
         assert lines[6].startswith("3. 2 DOSAGE AND ADMINISTRATION")
         assert lines[7].startswith("4. 3 OVERDOSAGE")
         assert _path(mock_urlopen) == f"/dailymed/services/v2/spls/{SETID}.xml"
+
+    @patch(HTTP_OPEN)
+    def test_a_section_with_only_highlights_lists_their_size(self, mock_urlopen: MagicMock):
+        changes = (
+            '<component><section><code code="43683-2" displayName="RECENT MAJOR CHANGES SECTION"/>'
+            "<title>RECENT MAJOR CHANGES</title><excerpt><highlight><text><paragraph>"
+            "Warnings and Precautions (5.1) 6/2026</paragraph></text></highlight></excerpt>"
+            "</section></component>"
+        )
+        mock_urlopen.side_effect = [respond(spl(changes)) for _ in range(2)]
+
+        outline = _text(dailymed_label(SETID)).splitlines()
+        text = _text(dailymed_label_text(SETID, section=1))
+
+        assert outline[4] == (
+            "1. RECENT MAJOR CHANGES [LOINC 43683-2: RECENT MAJOR CHANGES SECTION]: 74 chars"
+        )
+        assert "Warnings and Precautions (5.1) 6/2026" in text
 
     @patch(HTTP_OPEN)
     def test_a_section_size_is_what_dailymed_label_text_returns(self, mock_urlopen):
@@ -499,6 +575,83 @@ class TestSpl:
         label = spl_label(spl(section("1 TABLE", outer)))
 
         assert label.text.splitlines()[1:] == ["outer | inner"]
+
+    def test_a_cell_that_spans_rows_or_columns_is_laid_out(self) -> None:
+        table = (
+            "<table><thead><tr><th>System</th><th>Reaction</th><th>Drug (%)</th>"
+            "<th>Placebo (%)</th></tr></thead><tbody>"
+            "<tr><td rowspan='2'>Gastrointestinal</td><td>Nausea</td><td>12</td><td>4</td></tr>"
+            "<tr><td>Vomiting</td><td>8</td><td>2</td></tr>"
+            "<tr><td colspan='2'>Any reaction</td><td>30</td><td>10</td></tr>"
+            "</tbody></table>"
+        )
+
+        label = spl_label(spl(section("6 ADVERSE REACTIONS", table)))
+
+        assert label.text.splitlines()[1:] == [
+            "System | Reaction | Drug (%) | Placebo (%)",
+            "Gastrointestinal | Nausea | 12 | 4",
+            "Gastrointestinal | Vomiting | 8 | 2",
+            "Any reaction |  | 30 | 10",
+        ]
+
+    def test_spans_are_capped_as_the_wikis_are(self) -> None:
+        table = "<table><tbody><tr><td colspan='100000'>a</td><td>b</td></tr></tbody></table>"
+
+        line = spl_label(spl(section("1 TABLE", table))).text.splitlines()[1]
+
+        assert line.count(" | ") == 50
+        assert line.endswith(" | b")
+
+    def test_the_highlights_of_a_section_are_read_under_their_own_line(self) -> None:
+        changes = (
+            '<component><section><code code="43683-2" displayName="RECENT MAJOR CHANGES SECTION"/>'
+            "<title>RECENT MAJOR CHANGES</title><excerpt><highlight><text><paragraph>"
+            "Warnings and Precautions (5.1) 6/2026</paragraph></text></highlight></excerpt>"
+            "</section></component>"
+        )
+        indications = (
+            '<component><section><code code="34067-9" displayName="INDICATIONS"/>'
+            "<title>1 INDICATIONS</title><text><paragraph>Aspirin relieves pain.</paragraph>"
+            "</text><excerpt><highlight><text><list><item>pain (1)</item></list></text>"
+            "</highlight></excerpt></section></component>"
+        )
+
+        label = spl_label(spl(changes, indications))
+
+        assert label.text.splitlines() == [
+            "## RECENT MAJOR CHANGES",
+            "Highlights:",
+            "Warnings and Precautions (5.1) 6/2026",
+            "## 1 INDICATIONS",
+            "Aspirin relieves pain.",
+            "Highlights:",
+            "- pain (1)",
+        ]
+
+    def test_list_and_figure_captions_are_kept(self) -> None:
+        text = (
+            "<list><caption>Common reactions</caption><item>nausea</item>"
+            "<item>rash<list><caption>Rash types</caption><item>hives</item></list></item></list>"
+            "<paragraph>See below.</paragraph>"
+            "<renderMultiMedia referencedObject='MM1'><caption>Figure 1: Mean plasma "
+            "levels</caption></renderMultiMedia>"
+            "<table><tbody><tr><td>x<renderMultiMedia referencedObject='MM2'/></td></tr></tbody>"
+            "</table>"
+        )
+
+        label = spl_label(spl(section("12 PHARMACOLOGY", text)))
+
+        assert label.text.splitlines()[1:] == [
+            "List: Common reactions",
+            "- nausea",
+            "- rash",
+            "  List: Rash types",
+            "  - hives",
+            "See below.",
+            "Figure: Figure 1: Mean plasma levels",
+            "x",
+        ]
 
 
 class TestDailyMedEdges:
