@@ -21,25 +21,25 @@ For the conceptual guide (`@tool`, `ToolGroup`, server tools), see [Tools](tools
 
 - `datetime_now` — Current date/time in a given timezone
 - `timezone_convert` — Convert time between timezones
-- `date_add` — Add days/hours/minutes to a date or datetime
+- `date_add` — Add days/hours/minutes to a date or datetime; each shift is bounded by the calendar's span (years 1–9999)
 - `date_diff` — Difference between two dates/datetimes in a chosen unit
 - `date_format` — Reformat a date/datetime using strftime syntax
 
 **Math** — `_math.py`
 
 - `math_eval` — Safely evaluate math expressions (functions, constants, operators); up to 1000 characters, and a result too large to print is refused before it is computed
-- `unit_convert` — Convert between units (length, mass, volume, speed, area, time, temp)
+- `unit_convert` — Convert between units (length, mass, volume, speed, area, time, temp) with the exact unit definitions; the answer is rounded to 6 significant digits and says so, never in scientific notation
 
 **Text processing** — `_text.py`
 
-- `regex_search` — Find regex matches with positions (up to 1000); text up to 20 000 characters, pattern up to 500, and back-references or groups that repeat while holding a quantifier or an alternation are refused
+- `regex_search` — Find regex matches with positions and groups, a page of up to 1000 with the total and the next `offset`; text up to 20 000 characters, pattern up to 500, and back-references or groups that repeat while holding a quantifier or an alternation are refused
 - `text_stats` — Count words, characters, lines, sentences, paragraphs
 - `base64_encode` — Encode text to base64
 - `base64_decode` — Decode base64 to text
 
 **Data** — `_json.py`
 
-- `json_extract` — Extract values from JSON via dot-notation paths
+- `json_extract` — Extract values from JSON via dot-notation paths; a key or index the JSON lacks is `not_found`, naming the keys (or the length) there
 
 ---
 
@@ -301,18 +301,18 @@ These execute real side effects and live in the explicit `ai_arch_toolkit.toolki
 
 **Filesystem** — `dangerous`
 
-- `read_file` — Read file contents with a line limit (1–10 000); reads at most 100 000 characters
-- `list_directory` — List files/dirs with sizes and types (up to 1000 entries); lists only entries inside the folder, so a pattern that climbs out (`../*`) or goes through a link (`link/*`) finds nothing there
-- `search_files` — Recursively search for text in files (1–1000 results; matching lines cut at 300 characters); a link that points out of the folder is not read
-- `csv_read` — Read CSV files, return a formatted table (1–10 000 rows)
+- `read_file` — Read a text file window by window: up to `max_lines` lines (1–10 000) and 100 000 characters a window, from a character `offset`; the footer gives the next offset, so following it reads the whole file, and the file's size once fewer than 100 million characters are left. The file is read a chunk at a time, never whole
+- `list_directory` — List files/dirs with sizes and types, by name, a page of 1000 with the total and the next `offset`; a pattern that matches more than 100 000 entries is refused with a request to narrow it. Lists only entries inside the folder, so a pattern that climbs out (`../*`) or goes through a link (`link/*`) finds nothing there
+- `search_files` — Recursively search the text files under a folder for the lines that contain a text (1–1000 a page, with the next `offset`), each as `path:line:offset: text`, where `read_file(path, offset=…)` reads from; whole files are searched, and a line over 300 characters shows the part around the match and says its length. A link that points out of the folder is not read
+- `csv_read` — Read a CSV file as a table: the header, then a page of rows (1–10 000) from an `offset`, with the whole file's row count and the next offset
 
 **Shell** — `dangerous`
 
-- `run_command` — Execute shell commands and return output (timeout 1–600 s, output 1–100 000 characters; `cwd` runs the command in another folder, without moving the process); governed execution gives up at the tool's default 120 s `timeout_s` with a `timeout` failure, and the command runs on until it ends or its own timeout stops it
+- `run_command` — Execute shell commands and return output (timeout 1–600 s, output 1–100 000 characters, stdout and stderr together; `cwd` runs the command in another folder, without moving the process). An output over the limit shows its start, its size and how to narrow the command (`| grep`, `| tail -n`, `| sed -n 'A,Bp'`): it is not kept, so no call reads on. The exit code and stderr always show, and the output is read as it comes, so memory stays within the limit. Governed execution gives up at the tool's default 120 s `timeout_s` with a `timeout` failure, and the command runs on until it ends or its own timeout stops it
 
 **Python** — `dangerous`
 
-- `python_repl` — Execute Python-like code in the restricted toolkit evaluator
+- `python_repl` — Execute Python-like code in the restricted toolkit evaluator; an output over 20 000 characters shows its start, its size and how to print less, and a long print never pushes out the last value or the error
 
 **Web** — `dangerous`
 

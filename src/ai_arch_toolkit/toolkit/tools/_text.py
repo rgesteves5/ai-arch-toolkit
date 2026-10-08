@@ -1,19 +1,24 @@
-"""Text processing tools — regex, statistics, encoding."""
+"""Text processing tools — regex, statistics, encoding (T09)."""
 
 from __future__ import annotations
 
 import base64
 import re
+from collections.abc import Sequence
+from typing import Annotated
 
-from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.core import Range, ToolResult, tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
+from ai_arch_toolkit.toolkit.tools._window import list_window
 
 # A regex match runs in C holding the GIL: no timeout can stop it, not even the executor's. The
 # guards bound it before it starts. One unbounded quantifier over 20 000 characters stays under a
 # second; a shape that backtracks exponentially is refused whatever its size.
 _MAX_PATTERN_CHARS = 500
 _MAX_TEXT_CHARS = 20_000
-_MAX_MATCHES = 1000
+# A page of matches: at most this many, within this many characters (one match at least).
+_PAGE_MATCHES = 1000
+_PAGE_CHARS = 20_000
 _QUANTIFIER = r"[*+?]|\{\d*(?:,\d*)?\}"
 _TOKEN = re.compile(
     r"(?P<ref>\\[1-9]|\(\?P=|\(\?\()"
@@ -30,19 +35,58 @@ _TOKEN = re.compile(
 
 
 @tool(capability="compute")
-def regex_search(text: str, pattern: str) -> str:
-    """Find all regex matches in text.
+def regex_search(text: str, pattern: str, offset: Annotated[int, Range(0)] = 0) -> ToolResult:
+    """Find all regex matches in text, each on a line of its own with its position and groups.
 
-    Returns each match on a separate line with its position.
+    A page holds up to 1000 matches; the heading gives how many there are, and the footer the
+    offset of the next page.
 
     Args:
         text: The text to search in (up to 20000 characters).
         pattern: A regular expression pattern (up to 500 characters). Back-references and groups
             that repeat while holding a quantifier or an alternation are refused.
+        offset: How many matches to skip; the footer gives the next offset.
 
     Raises:
         ToolFailure: validation_error when the text or the pattern is too long, the pattern is
             not a valid regex, or its shape can backtrack exponentially.
+    """
+    matches = list(_compiled(text, pattern).finditer(text))
+    if not matches:
+        return ToolResult.success(f"No matches for {pattern!r}.")
+    lines = _page(matches, offset)
+    end = offset + len(lines)
+    window = list_window(
+        lines,
+        first=offset + 1,
+        total=len(matches),
+        next_call={"offset": end} if end < len(matches) else None,
+    )
+    return window.result(heading=f"{len(matches)} match(es) for {pattern!r}:")
+
+
+def _page(matches: Sequence[re.Match[str]], offset: int) -> list[str]:
+    """The lines of the matches from ``offset``: up to ``_PAGE_MATCHES``, within ``_PAGE_CHARS``
+    characters (the first one whatever its length)."""
+    lines: list[str] = []
+    used = 0
+    for match in matches[offset : offset + _PAGE_MATCHES]:
+        groups = match.groups()
+        line = f"  [{match.start()}:{match.end()}] {match.group()!r}"
+        line += f" groups={groups}" if groups else ""
+        if lines and used + len(line) > _PAGE_CHARS:
+            break
+        lines.append(line)
+        used += len(line) + 1
+    return lines
+
+
+def _compiled(text: str, pattern: str) -> re.Pattern[str]:
+    """``pattern``, compiled, once the guards let it run on ``text``.
+
+    Raises:
+        ToolFailure: validation_error when either is too long, the pattern is not a valid regex,
+            or its shape can backtrack exponentially.
     """
     if len(text) > _MAX_TEXT_CHARS:
         raise ToolFailure(
@@ -53,12 +97,16 @@ def regex_search(text: str, pattern: str) -> str:
     if len(pattern) > _MAX_PATTERN_CHARS:
         raise ToolFailure(
             "validation_error",
-            f"pattern refused: {len(pattern)} characters, longer than {_MAX_PATTERN_CHARS}.",
+            f"pattern refused: {len(pattern)} characters, longer than {_MAX_PATTERN_CHARS}; "
+            "shorten it.",
         )
     try:
         compiled = re.compile(pattern)
     except (re.error, OverflowError, RecursionError) as e:  # a{4294967296}, deep nesting
-        raise ToolFailure("validation_error", f"invalid regex {pattern!r}: {e}.") from e
+        raise ToolFailure(
+            "validation_error",
+            f"invalid regex {pattern!r}: {e}; write it in Python's re syntax.",
+        ) from e
     risk = _backtracking_risk(pattern)
     if risk:
         raise ToolFailure(
@@ -66,17 +114,7 @@ def regex_search(text: str, pattern: str) -> str:
             f"pattern refused: {risk}, which can backtrack exponentially; rewrite it without "
             "nested repetition or back-references.",
         )
-
-    lines: list[str] = []
-    for m in compiled.finditer(text):
-        if len(lines) == _MAX_MATCHES:
-            return f"{_MAX_MATCHES} match(es) shown; more not shown:\n" + "\n".join(lines)
-        groups = m.groups()
-        suffix = f" groups={groups}" if groups else ""
-        lines.append(f"  [{m.start()}:{m.end()}] {m.group()!r}{suffix}")
-    if not lines:
-        return "No matches found."
-    return f"{len(lines)} match(es):\n" + "\n".join(lines)
+    return compiled
 
 
 def _backtracking_risk(pattern: str) -> str:

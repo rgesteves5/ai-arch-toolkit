@@ -106,6 +106,31 @@ class TestUnitConvert:
         assert "0.621371" in r1
         assert "0.621371" in r2
 
+    def test_the_answer_states_the_precision_it_rounds_to(self):
+        assert unit_convert(1, "km", "miles") == (
+            "1 km = 0.621371 miles (rounded to 6 significant digits)"
+        )
+
+    def test_temperatures_round_to_the_same_precision(self):
+        assert unit_convert(36.6, "celsius", "fahrenheit") == (
+            "36.6 celsius = 97.88 fahrenheit (rounded to 6 significant digits)"
+        )
+        assert unit_convert(1, "c", "k").startswith("1 c = 274.15 k")
+
+    def test_numbers_are_never_in_scientific_notation(self):
+        assert unit_convert(1e9, "km", "mm").startswith("1000000000.0 km = 1000000000000000 mm")
+        assert unit_convert(1e-7, "m", "km").startswith("0.0000001 m = 0.0000000001 km")
+
+    def test_the_factors_are_the_exact_definitions(self):
+        # A tablespoon is three teaspoons; the old six-digit factors made it 3.00001.
+        assert unit_convert(1, "tbsp", "tsp").startswith("1 tbsp = 3 tsp")
+        assert unit_convert(1_000_000, "lb", "g").startswith("1000000 lb = 453592000 g")
+        assert unit_convert(1, "gal", "fl_oz").startswith("1 gal = 128 fl_oz")
+
+    def test_a_result_beyond_a_float_is_a_validation_error(self):
+        assert "beyond" in _refused(unit_convert, 1e308, "km", "mm")
+        assert "finite" in _refused(unit_convert, float("nan"), "km", "mi")
+
 
 class TestMathGuards:
     def test_a_long_expression_is_refused(self):

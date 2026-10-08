@@ -10,9 +10,9 @@ adds its cases here and deletes its lines from the debt.
 - A window's next call carries everything the tool needs to number the following page: a source
   that pages by cursor gets the position too (``next: cursor="…", offset=20``), so the second page
   says ``[results 21-40 …]``.
-- ``KINDS``, ``WHOLE`` and ``UNBOUNDED`` decide which points apply, so a change to them is reviewed
-  like a change to the debt: a tool that stops cutting moves to ``WHOLE`` only when nothing it
-  returns is cut any more.
+- ``KINDS``, ``WHOLE``, ``ONCE`` and ``UNBOUNDED`` decide which points apply and how, so a change
+  to them is reviewed like a change to the debt: a tool that stops cutting moves to ``WHOLE`` only
+  when nothing it returns is cut any more.
 - The ``youtube_*`` tools reach their source through ``youtube-transcript-api``, not ``_http``:
   their cases put a stand-in for the library at the module's one seam (``patches``,
   ``youtube_fakes.LOADER``; T09).
@@ -122,12 +122,20 @@ _WHOLE = """
     date_add date_diff date_format datetime_now distance_between earthquake_count
     earthquake_event eonet_categories foodon_term gbif_species gbif_species_match get_forecast
     get_forecast_by_coords get_weather get_weather_by_coords ip_lookup json_extract math_eval
-    openfda_food_recall pdb_chemical_component pdb_entry pdb_ligands python_repl
+    openfda_food_recall pdb_chemical_component pdb_entry pdb_ligands
     reverse_geocode rxnorm_concept tavily_search text_stats timezone_convert timezone_lookup
     unit_convert uniprot_sequence weather_units who_indicator
     open_food_facts_compare open_food_facts_product
 """
 WHOLE = frozenset(_WHOLE.split())
+
+# Tools whose output exists only for the call that made it, and why: reading on would run it
+# again, with its effects. Point 1 is a footer that says what was shown, the size and how to
+# narrow the output, in place of a next call (``Window.rest``); their window case proves it.
+ONCE: dict[str, str] = {
+    "run_command": "a shell command's output: reading on would run the command again",
+    "python_repl": "a program's output: reading on would run the program again",
+}
 
 # Network modules whose errors no source documents, and why: point 2, the source's errors, does
 # not apply to their tools. Every other network tool owes it until its source's answers prove it.
@@ -365,6 +373,27 @@ WINDOW_CASES: dict[str, Case] = {
             ("gbif_occurrence_search", "occurrences"),
         )
     },
+    # Local tools: their files are written in the working directory first.
+    "read_file": Case(
+        args={"path": "long.txt", "max_lines": 40},
+        files={"long.txt": "".join(f"line {number}\n" for number in range(200))},
+    ),
+    "list_directory": Case(
+        args={"path": "many"},
+        files={f"many/{number:04d}.txt": "x" for number in range(1001)},
+    ),
+    "search_files": Case(
+        args={"pattern": "needle", "max_results": 3},
+        files={"hay.txt": "".join(f"needle {number}\n" for number in range(10))},
+    ),
+    "csv_read": Case(
+        args={"path": "rows.csv", "max_rows": 20},
+        files={"rows.csv": "id,value\n" + "".join(f"{n},{n * 7}\n" for n in range(100))},
+    ),
+    "regex_search": Case(args={"text": "a" * 3000, "pattern": "a"}),
+    # A fixed command, as in test_shell.py: the contract never builds arguments for it.
+    "run_command": Case(args={"command": "seq 1 3000", "max_output": 1000}),
+    "python_repl": Case(args={"code": "for number in range(6000):\n    print(number)"}),
 }
 
 
@@ -441,6 +470,7 @@ NOT_FOUND_CASES: dict[str, Case] = {
     # T07a, health: a 404 for a label or a product; OLS answers an unknown ID with no terms.
     **_missing_by_404("dailymed_label_text", "open_food_facts_product", "open_food_facts_compare"),
     "foodon_term": Case(args={}, answers=(Answer(body=health.terms(0, total=0)),)),
+    "json_extract": Case(args={"json_string": '{"a": [1, 2]}', "path": "missing"}),
 }
 
 
@@ -541,4 +571,6 @@ ZERO_CASES: dict[str, ZeroCase] = {
         answers=(Answer(body={"count": 0, "endOfRecords": True, "results": []}),),
         says="2435099",
     ),
+    "search_files": ZeroCase(args={"pattern": "zzqq"}, says="zzqq"),
+    "regex_search": ZeroCase(args={"pattern": "zzqq"}, says="zzqq"),
 }

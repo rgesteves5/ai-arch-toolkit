@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
+from ai_arch_toolkit.core import ToolCall, ToolGroup, ToolResult
 from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._text import (
     base64_decode,
@@ -21,26 +24,75 @@ def _invalid(call, *args) -> str:
     return caught.value.error.message
 
 
+def _text(result: ToolResult) -> str:
+    assert result.ok and isinstance(result.value, str), result
+    return result.value
+
+
+def _window(result: ToolResult) -> dict[str, Any]:
+    return result.metadata["window"]
+
+
 class TestRegexSearch:
     def test_basic_match(self):
         result = regex_search("foo123bar", r"\d+")
-        assert "1 match" in result
-        assert "'123'" in result
+        assert _text(result) == "1 match(es) for '\\\\d+':\n  [3:6] '123'"
 
     def test_multiple_matches(self):
-        result = regex_search("a1 b2 c3", r"\d")
+        result = _text(regex_search("a1 b2 c3", r"\d"))
         assert "3 match" in result
 
-    def test_no_matches(self):
+    def test_no_matches_say_the_pattern(self):
         result = regex_search("hello", r"\d+")
-        assert "No matches" in result
+        assert _text(result) == "No matches for '\\\\d+'."
 
     def test_groups(self):
-        result = regex_search("2026-02-27", r"(\d{4})-(\d{2})-(\d{2})")
+        result = _text(regex_search("2026-02-27", r"(\d{4})-(\d{2})-(\d{2})"))
         assert "groups=" in result
 
     def test_invalid_regex(self):
         assert "invalid regex" in _invalid(regex_search, "text", r"[invalid")
+
+    def test_a_page_holds_a_thousand_matches_with_the_total_and_the_next_offset(self):
+        result = regex_search("a" * 5000, "a")
+
+        lines = _text(result).splitlines()
+        assert lines[0] == "5000 match(es) for 'a':"
+        assert lines[1] == "  [0:1] 'a'" and lines[1000] == "  [999:1000] 'a'"
+        assert lines[-1] == "[results 1-1000 of 5000 | next: offset=1000]"
+
+    def test_following_the_footers_reaches_every_match_once(self):
+        text = "ab" * 2500
+        starts: list[int] = []
+        call: dict[str, Any] | None = {"offset": 0}
+        while call is not None:
+            result = regex_search(text, "b", **call)
+            starts += [
+                int(line[3:].split(":")[0])
+                for line in _text(result).splitlines()[1:]
+                if line.startswith("  [")
+            ]
+            call = _window(result)["next_call"]
+
+        assert starts == list(range(1, 5000, 2))
+
+    def test_a_page_stays_within_its_characters_however_long_the_matches(self):
+        text = ("x" * 1000 + "\n") * 19  # each match is shown twice: whole, and as its group
+
+        result = regex_search(text, "(x+)")
+
+        assert len(_text(result)) < 22_000
+        assert _window(result)["next_call"] is not None
+        assert _window(result)["total"] == 19
+
+    def test_the_executor_refuses_a_negative_offset(self):
+        call = ToolCall(
+            id="c", name="regex_search", input={"text": "a", "pattern": "a", "offset": -1}
+        )
+
+        result = ToolGroup(regex_search).execute(call)
+
+        assert result.error is not None and result.error.type == "validation_error"
 
 
 class TestTextStats:
@@ -112,17 +164,11 @@ class TestRegexGuards:
         ],
     )
     def test_ordinary_patterns_still_match(self, pattern, text, expected):
-        assert expected in regex_search(text, pattern)
+        assert expected in _text(regex_search(text, pattern))
 
     def test_a_long_pattern_or_text_is_refused(self):
         assert _invalid(regex_search, "a", "a" * 501).startswith("pattern refused:")
         assert _invalid(regex_search, "a" * 20_001, "a").startswith("text refused:")
-
-    def test_matches_stop_at_a_thousand(self):
-        result = regex_search("a" * 5000, "a")
-
-        assert result.startswith("1000 match(es) shown")
-        assert result.count("\n") == 1000  # the header, then one line a match
 
 
 @pytest.mark.parametrize("pattern", ["a{4294967296}", "(" * 2000 + ")" * 2000])

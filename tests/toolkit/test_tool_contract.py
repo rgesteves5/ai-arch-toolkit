@@ -4,7 +4,9 @@ Per tool, five points, each proven by a case (``contract_cases.py``, ``error_bod
 read from the tool itself:
 
 - ``window``: a tool that cuts ends its text with the window's footer (T03), and the call the
-  footer names returns the next part, numbered from where the first one ended;
+  footer names returns the next part, numbered from where the first one ended; a tool whose output
+  exists only for its call (``ONCE``: a command's, a program's) names no call, and says the size
+  and how to narrow the output instead;
 - ``errors``: each error answer its source documents gives a typed ``ToolFailure`` that carries
   the source's words;
 - ``not_found``: a lookup of a resource that does not exist is ``not_found``;
@@ -42,10 +44,11 @@ import pytest
 from ai_arch_toolkit.core import Range, ToolFailure, tool
 from ai_arch_toolkit.toolkit.tools import _http
 from ai_arch_toolkit.toolkit.tools._http import Api
-from ai_arch_toolkit.toolkit.tools._window import find_window, page_window, text_window
+from ai_arch_toolkit.toolkit.tools._window import Window, find_window, page_window, text_window
 from tests.toolkit.contract_cases import (
     KINDS,
     NOT_FOUND_CASES,
+    ONCE,
     SOURCELESS,
     UNBOUNDED,
     WHOLE,
@@ -149,7 +152,7 @@ def _run(fn: Tool, case: Case, monkeypatch: pytest.MonkeyPatch) -> str | ToolFai
 # --- Point 1: the window ---------------------------------------------------------------------
 
 _FOOTER = re.compile(
-    r"\[(?P<unit>chars|results|matches) (?P<first>\d+)-(?P<last>\d+)(?: of \d+)?"
+    r"\[(?P<unit>chars|results|matches) (?P<first>\d+)-(?P<last>\d+)(?: of (?P<total>\d+))?"
     r'(?: for ".*?")? \| (?P<onward>.*)\]\s*\Z'
 )
 
@@ -192,6 +195,27 @@ def window_kept(fn: Tool, case: Case | None, monkeypatch: pytest.MonkeyPatch) ->
         return False
     step = 0 if first[0]["unit"] == "chars" else 1
     return int(second[0]["first"]) == int(first[0]["last"]) + step
+
+
+_DEAD_ENDS = ("end", "the rest cannot be read here")
+
+
+def once_kept(fn: Tool, case: Case | None, monkeypatch: pytest.MonkeyPatch) -> bool:
+    """The output that does not fit ends with the window's footer: what was shown, the size, and
+    how to narrow the output, where other tools name the call that reads on."""
+    if case is None:
+        return False
+    found = _window(_run(fn, case, monkeypatch))
+    if found is None:
+        return False
+    footer = found[0]
+    onward = footer["onward"]
+    return (
+        footer["unit"] == "chars"
+        and footer["total"] is not None
+        and _next_call(onward) is None
+        and onward not in _DEAD_ENDS
+    )
 
 
 # --- Point 2: the source's errors --------------------------------------------------------------
@@ -384,7 +408,8 @@ def unmet(name: str, monkeypatch: pytest.MonkeyPatch) -> set[str]:
         if isinstance(api, Api) and api.key_env:  # a key the tool needs is there
             monkeypatch.setenv(api.key_env, "test-key")
     owed: set[str] = set()
-    if name not in WHOLE and not window_kept(fn, WINDOW_CASES.get(name), monkeypatch):
+    window = once_kept if name in ONCE else window_kept
+    if name not in WHOLE and not window(fn, WINDOW_CASES.get(name), monkeypatch):
         owed.add("window")
     if _has_source(name) and not errors_kept(fn, _error_bodies(name), monkeypatch):
         owed.add("errors")
@@ -422,6 +447,7 @@ def test_the_debt_names_only_tools_and_points() -> None:
 def test_every_tool_says_what_it_does_and_every_case_can_run() -> None:
     assert set(KINDS) == set(TOOLS)
     assert set(TOOLS) >= WHOLE
+    assert set(ONCE) <= set(TOOLS) - WHOLE
     assert {name for name, _param in UNBOUNDED} <= set(TOOLS)
     assert set(WINDOW_CASES) <= set(TOOLS) - WHOLE
     assert {name for name in NOT_FOUND_CASES if KINDS.get(name) != "lookup"} == set()
@@ -498,6 +524,30 @@ def stuck(offset: Annotated[int, Range(0)] = 0) -> str:
         offset: Ignored.
     """
     return text_window(_LINES, offset=0, limit=300).text()
+
+
+def _start_of_output(rest: str) -> Window:
+    return Window(body=_LINES[:300], unit="chars", first=0, last=300, total=len(_LINES), rest=rest)
+
+
+@tool(capability="compute")
+def narrowed(code: str = "") -> str:
+    """Run something whose output cannot be read again.
+
+    Args:
+        code: Ignored.
+    """
+    return _start_of_output("the rest is not kept: run it again printing less").text()
+
+
+@tool(capability="compute")
+def dead_end(code: str = "") -> str:
+    """Run something, and leave the rest of its output out of reach.
+
+    Args:
+        code: Ignored.
+    """
+    return _start_of_output("").text()
 
 
 @tool(capability="compute")
@@ -619,6 +669,15 @@ class TestTheChecks:
         assert not window_kept(silent, Case(args={}), monkeypatch)
         assert not window_kept(stuck, Case(args={}), monkeypatch)
         assert not window_kept(windowed, None, monkeypatch)
+
+    def test_an_output_that_says_its_size_and_how_to_narrow_it_is_kept_once(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        assert once_kept(narrowed, Case(args={}), monkeypatch)
+        assert not once_kept(dead_end, Case(args={}), monkeypatch)  # no way to the rest
+        assert not once_kept(windowed, Case(args={}), monkeypatch)  # it names a next call
+        assert not once_kept(silent, Case(args={}), monkeypatch)
+        assert not once_kept(narrowed, None, monkeypatch)
 
     def test_limits_in_the_signature_are_kept(self) -> None:
         assert limits_kept(bounded, {})

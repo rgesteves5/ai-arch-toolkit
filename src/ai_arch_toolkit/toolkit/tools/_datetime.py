@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Annotated
 from zoneinfo import ZoneInfo, available_timezones
 
-from ai_arch_toolkit.core import tool
+from ai_arch_toolkit.core import Range, tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
 
 _DATE_FORMATS = ("%Y-%m-%d %H:%M", "%Y-%m-%d")
+# The calendar's span, years 1 to 9999: no shift longer than it lands on a date.
+_SPAN = datetime.max - datetime.min
+_DAYS = _SPAN.days
+_HOURS = _SPAN // timedelta(hours=1)
+_MINUTES = _SPAN // timedelta(minutes=1)
 
 
 @tool(capability="compute")
@@ -71,12 +77,17 @@ def timezone_convert(time_str: str, from_tz: str, to_tz: str) -> str:
 
 
 @tool(capability="compute")
-def date_add(date_str: str, days: int = 0, hours: int = 0, minutes: int = 0) -> str:
+def date_add(
+    date_str: str,
+    days: Annotated[int, Range(-_DAYS, _DAYS)] = 0,
+    hours: Annotated[int, Range(-_HOURS, _HOURS)] = 0,
+    minutes: Annotated[int, Range(-_MINUTES, _MINUTES)] = 0,
+) -> str:
     """Add days, hours, and minutes to a date/time string.
 
     Args:
         date_str: Date/time in "YYYY-MM-DD" or "YYYY-MM-DD HH:MM" format.
-        days: Number of days to add. Defaults to 0.
+        days: Number of days to add (negative to subtract). Defaults to 0.
         hours: Number of hours to add. Defaults to 0.
         minutes: Number of minutes to add. Defaults to 0.
 

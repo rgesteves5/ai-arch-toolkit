@@ -6,6 +6,7 @@ import re
 
 import pytest
 
+from ai_arch_toolkit.core import ToolCall, ToolGroup
 from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._datetime import (
     date_add,
@@ -14,6 +15,36 @@ from ai_arch_toolkit.toolkit.tools._datetime import (
     datetime_now,
     timezone_convert,
 )
+
+
+class TestDateAddLimits:
+    """The shifts ``date_add`` takes are bounded by the calendar's span, years 1 to 9999."""
+
+    def test_the_schema_bounds_each_shift_by_the_calendars_span(self):
+        properties = date_add.__tool_definition__.schema.input_schema["properties"]
+
+        bounds = {
+            name: (properties[name]["minimum"], properties[name]["maximum"])
+            for name in ("days", "hours", "minutes")
+        }
+
+        assert bounds == {
+            "days": (-3_652_058, 3_652_058),
+            "hours": (-87_649_415, 87_649_415),
+            "minutes": (-5_258_964_959, 5_258_964_959),
+        }
+
+    def test_the_whole_span_is_reachable(self):
+        assert date_add("0001-01-01", days=3_652_058) == "9999-12-31"
+        assert date_add("9999-12-31 23:59", minutes=-5_258_964_959) == "0001-01-01 00:00"
+
+    def test_the_executor_refuses_a_shift_past_the_span(self):
+        call = ToolCall(id="c", name="date_add", input={"date_str": "2024-01-01", "days": 10**9})
+
+        result = ToolGroup(date_add).execute(call)
+
+        assert result.error is not None and result.error.type == "validation_error"
+        assert "from -3652058 to 3652058" in result.error.message
 
 
 class TestDatetimeNow:

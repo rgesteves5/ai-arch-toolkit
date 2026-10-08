@@ -41,6 +41,8 @@ class Window:
         next_call: The arguments of the call that reads on, as JSON values, or ``None`` when
             nothing is left.
         label: The term a search looked for.
+        rest: What the footer says in place of a next call when no call can read the rest (the
+            output of a command, which reading on would run again): how to narrow it instead.
     """
 
     body: str
@@ -50,6 +52,7 @@ class Window:
     total: int | None
     next_call: Mapping[str, object] | None = None
     label: str = ""
+    rest: str = ""
 
     def footer(self) -> str:
         """The line that says what was shown and how to read on; empty when nothing is missing."""
@@ -257,7 +260,7 @@ def _onward(window: Window) -> str:
         arguments = (f"{name}={_json(value)}" for name, value in window.next_call.items())
         return "next: " + ", ".join(arguments)
     if window.total is not None and window.last < window.total:
-        return "the rest cannot be read here"
+        return window.rest or "the rest cannot be read here"
     return "end"
 
 

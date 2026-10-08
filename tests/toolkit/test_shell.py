@@ -8,8 +8,11 @@ from unittest.mock import patch
 
 import pytest
 
+from ai_arch_toolkit.core import ApprovalDecision, ToolCall, ToolGroup
 from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._shell import run_command
+
+_SEQ_10000 = sum(len(f"{n}\n") for n in range(1, 10_001))
 
 
 class TestRunCommand:
@@ -30,13 +33,40 @@ class TestRunCommand:
         result = run_command("sleep 10", timeout=1)
         assert "timed out" in result.lower()
 
-    def test_output_truncation(self):
-        result = run_command("seq 10000", max_output=100)
-        assert "Truncated" in result
-
     def test_no_output(self):
         result = run_command("true")
         assert "[no output]" in result
+
+
+class TestLongOutput:
+    """A command's output cannot be read again: the footer says its size and how to narrow it."""
+
+    def test_the_start_shows_ending_on_a_line_with_the_size_and_how_to_narrow(self):
+        result = run_command("seq 10000", max_output=100)
+
+        shown, footer = result.rsplit("\n[", 1)
+        numbers = shown.splitlines()
+        assert numbers == [str(n) for n in range(1, len(numbers) + 1)] and len(shown) < 100
+        assert footer.startswith(
+            f"chars 0-{len(shown) + 1} of {_SEQ_10000} | the rest is not kept"
+        )
+        assert "| grep" in footer and "| tail -n" in footer and "sed -n" in footer
+
+    def test_stderr_and_the_exit_code_survive_a_long_stdout(self):
+        result = run_command("seq 10000; echo boom >&2; exit 3", max_output=200)
+
+        assert "\n[stderr]\nboom\n" in result
+        assert result.endswith("\n[exit code: 3]")
+        assert f"of {_SEQ_10000} |" in result
+
+    def test_the_size_counts_everything_the_command_printed(self):
+        result = run_command("yes | head -c 30000000", max_output=50)
+
+        assert "of 30000000 |" in result
+        assert len(result) < 400
+
+    def test_output_that_is_not_utf8_is_read_with_replacement_characters(self):
+        assert run_command("printf 'a\\377b'") == "a�b"
 
 
 class TestArguments:
@@ -49,7 +79,7 @@ class TestArguments:
 
     def test_a_shell_that_cannot_start_is_an_upstream_failure(self):
         with (
-            patch.object(subprocess, "run", side_effect=OSError("no /bin/sh")),
+            patch.object(subprocess, "Popen", side_effect=OSError("no /bin/sh")),
             pytest.raises(ToolFailure) as caught,
         ):
             run_command("true")
@@ -57,9 +87,21 @@ class TestArguments:
         assert caught.value.error.type == "upstream"
         assert "no /bin/sh" in caught.value.error.message
 
-    def test_timeout_and_max_output_are_clamped(self):
-        assert run_command("echo hello", timeout=-1) == "hello\n"
-        assert run_command("echo hello", max_output=-1).startswith("h\n\n[Truncated")
+    @pytest.mark.parametrize(
+        "arguments",
+        [{"timeout": 0}, {"timeout": 601}, {"max_output": 0}, {"max_output": 100_001}],
+    )
+    def test_the_executor_refuses_limits_past_the_schema(self, arguments):
+        group = ToolGroup(run_command, approval_handler=lambda _r: ApprovalDecision.approve())
+
+        result = group.execute(
+            ToolCall(id="c", name="run_command", input={"command": "true", **arguments})
+        )
+
+        assert result.error is not None and result.error.type == "validation_error"
+
+    def test_a_process_left_holding_the_output_ends_at_the_timeout(self):
+        assert "timed out" in run_command("sleep 3 & echo started", timeout=1)
 
 
 class TestWorkingDirectory:

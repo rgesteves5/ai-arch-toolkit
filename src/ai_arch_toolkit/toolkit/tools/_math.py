@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import math
 import operator
+from decimal import Decimal
 from typing import Any
 
 from ai_arch_toolkit.core import tool
@@ -165,6 +166,15 @@ def math_eval(expression: str) -> str:
 # Unit converter
 # ---------------------------------------------------------------------------
 
+# The exact definitions (NIST Handbook 44, appendix C; NIST SP 811, appendix B), so the six
+# significant digits a conversion shows are right: the international pound and foot, the US
+# gallon (231 cubic inches) and its parts, the international acre.
+_POUND = 453.59237
+_FOOT = 0.3048
+_MILE = 1609.344
+_GALLON = 3.785411784
+_ACRE = 4046.8564224
+
 # All conversions go through a base unit per category.
 # Format: {(category, unit_name): factor_to_base}
 # Base units: meter, gram, second, kelvin, liter, m², m/s
@@ -209,18 +219,18 @@ _MASS: dict[str, float] = {
     "mg": 0.001,
     "milligram": 0.001,
     "milligrams": 0.001,
-    "lb": 453.592,
-    "lbs": 453.592,
-    "pound": 453.592,
-    "pounds": 453.592,
-    "oz": 28.3495,
-    "ounce": 28.3495,
-    "ounces": 28.3495,
+    "lb": _POUND,
+    "lbs": _POUND,
+    "pound": _POUND,
+    "pounds": _POUND,
+    "oz": _POUND / 16,
+    "ounce": _POUND / 16,
+    "ounces": _POUND / 16,
     "ton": 1_000_000.0,
     "tonne": 1_000_000.0,
     "tonnes": 1_000_000.0,
-    "st": 6350.29,
-    "stone": 6350.29,
+    "st": _POUND * 14,
+    "stone": _POUND * 14,
 }
 
 _VOLUME: dict[str, float] = {
@@ -232,35 +242,35 @@ _VOLUME: dict[str, float] = {
     "ml": 0.001,
     "milliliter": 0.001,
     "milliliters": 0.001,
-    "gal": 3.78541,
-    "gallon": 3.78541,
-    "gallons": 3.78541,
-    "qt": 0.946353,
-    "quart": 0.946353,
-    "quarts": 0.946353,
-    "pt": 0.473176,
-    "pint": 0.473176,
-    "pints": 0.473176,
-    "cup": 0.236588,
-    "cups": 0.236588,
-    "fl_oz": 0.0295735,
-    "fluid_ounce": 0.0295735,
-    "tbsp": 0.0147868,
-    "tablespoon": 0.0147868,
-    "tsp": 0.00492892,
-    "teaspoon": 0.00492892,
+    "gal": _GALLON,
+    "gallon": _GALLON,
+    "gallons": _GALLON,
+    "qt": _GALLON / 4,
+    "quart": _GALLON / 4,
+    "quarts": _GALLON / 4,
+    "pt": _GALLON / 8,
+    "pint": _GALLON / 8,
+    "pints": _GALLON / 8,
+    "cup": _GALLON / 16,
+    "cups": _GALLON / 16,
+    "fl_oz": _GALLON / 128,
+    "fluid_ounce": _GALLON / 128,
+    "tbsp": _GALLON / 256,
+    "tablespoon": _GALLON / 256,
+    "tsp": _GALLON / 768,
+    "teaspoon": _GALLON / 768,
 }
 
 _SPEED: dict[str, float] = {
     "m/s": 1.0,
     "mps": 1.0,
-    "km/h": 0.277778,
-    "kmh": 0.277778,
-    "kph": 0.277778,
-    "mph": 0.44704,
-    "knot": 0.514444,
-    "knots": 0.514444,
-    "kn": 0.514444,
+    "km/h": 1000 / 3600,
+    "kmh": 1000 / 3600,
+    "kph": 1000 / 3600,
+    "mph": _MILE / 3600,
+    "knot": 1852 / 3600,
+    "knots": 1852 / 3600,
+    "kn": 1852 / 3600,
     "ft/s": 0.3048,
     "fps": 0.3048,
 }
@@ -274,13 +284,13 @@ _AREA: dict[str, float] = {
     "ha": 10_000.0,
     "hectare": 10_000.0,
     "hectares": 10_000.0,
-    "acre": 4046.86,
-    "acres": 4046.86,
-    "ft2": 0.092903,
-    "sq_ft": 0.092903,
-    "square_foot": 0.092903,
-    "mi2": 2_589_988.0,
-    "sq_mi": 2_589_988.0,
+    "acre": _ACRE,
+    "acres": _ACRE,
+    "ft2": _FOOT**2,
+    "sq_ft": _FOOT**2,
+    "square_foot": _FOOT**2,
+    "mi2": _MILE**2,
+    "sq_mi": _MILE**2,
 }
 
 _TIME: dict[str, float] = {
@@ -340,11 +350,17 @@ def _convert_temperature(value: float, from_u: str, to_u: str) -> float | None:
     return c + 273.15
 
 
+# A conversion shows this many significant digits, and says so: the factors are exact, but a
+# float is not (T09).
+_DIGITS = 6
+
+
 @tool(capability="compute")
 def unit_convert(value: float, from_unit: str, to_unit: str) -> str:
     """Convert a value between units.
 
-    Supports length, mass, volume, speed, area, time, and temperature.
+    Supports length, mass, volume, speed, area, time, and temperature. The answer is rounded to
+    6 significant digits, and says so; numbers are never in scientific notation.
 
     Args:
         value: The numeric value to convert.
@@ -352,25 +368,43 @@ def unit_convert(value: float, from_unit: str, to_unit: str) -> str:
         to_unit: Target unit, e.g. "miles", "kg", "fahrenheit", "liters".
 
     Raises:
-        ToolFailure: validation_error when a unit is unknown or the two are not in the same
-            category.
+        ToolFailure: validation_error when a unit is unknown, the two are not in the same
+            category, or the value or the result is not a finite number.
     """
-    from_u = from_unit.lower().strip()
-    to_u = to_unit.lower().strip()
-
-    # Temperature (special case)
-    temp = _convert_temperature(value, from_u, to_u)
-    if temp is not None:
-        return f"{value} {from_unit} = {temp:.4g} {to_unit}"
-
-    # Ratio-based categories
-    for cat in _CATEGORIES:
-        if from_u in cat and to_u in cat:
-            result = value * cat[from_u] / cat[to_u]
-            return f"{value} {from_unit} = {result:.6g} {to_unit}"
-
-    raise ToolFailure(
-        "validation_error",
-        f"cannot convert from {from_unit!r} to {to_unit!r}; both units must be known and in the "
-        "same category (length, mass, volume, speed, area, time or temperature)",
+    if not math.isfinite(value):
+        raise ToolFailure("validation_error", f"value {value!r} is not a finite number; give one")
+    result = _converted(value, from_unit.lower().strip(), to_unit.lower().strip())
+    if result is None:
+        raise ToolFailure(
+            "validation_error",
+            f"cannot convert from {from_unit!r} to {to_unit!r}; both units must be known and in "
+            "the same category (length, mass, volume, speed, area, time or temperature)",
+        )
+    if not math.isfinite(result):
+        raise ToolFailure(
+            "validation_error",
+            f"{_plain(value)} {from_unit} in {to_unit} is beyond a float's range; convert a "
+            "smaller value",
+        )
+    return (
+        f"{_plain(value)} {from_unit} = {_plain(result, _DIGITS)} {to_unit} "
+        f"(rounded to {_DIGITS} significant digits)"
     )
+
+
+def _converted(value: float, from_u: str, to_u: str) -> float | None:
+    """``value`` in ``to_u``, or ``None`` when the two units are not in one category."""
+    temperature = _convert_temperature(value, from_u, to_u)
+    if temperature is not None:
+        return temperature
+    for category in _CATEGORIES:
+        if from_u in category and to_u in category:
+            return value * category[from_u] / category[to_u]
+    return None
+
+
+def _plain(number: float, digits: int | None = None) -> str:
+    """``number`` in positional notation, never scientific: as given, or rounded to ``digits``
+    significant digits."""
+    written = repr(number) if digits is None else f"{number:.{digits}g}"
+    return format(Decimal(written), "f")

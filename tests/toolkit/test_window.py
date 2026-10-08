@@ -77,6 +77,15 @@ class TestTextWindow:
 
         assert window.text() == "x" * 20 + "\n[chars 0-20 of 50 | next: offset=20]"
 
+    def test_a_rest_no_call_reaches_says_how_to_narrow_instead(self) -> None:
+        # A command's output: reading on would run it again (run_command, python_repl).
+        cut = Window(body="a\n", unit="chars", first=0, last=2, total=40, rest="run it narrowed")
+        dead_end = Window(body="a\n", unit="chars", first=0, last=2, total=40)
+
+        assert cut.text() == "a\n[chars 0-2 of 40 | run it narrowed]"
+        assert dead_end.footer() == "[chars 0-2 of 40 | the rest cannot be read here]"
+        assert cut.result().metadata["window"]["next_call"] is None
+
 
 class TestFindWindow:
     def test_a_match_comes_with_the_whole_lines_around_it(self) -> None:

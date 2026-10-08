@@ -4,11 +4,22 @@ from __future__ import annotations
 
 import errno
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from ai_arch_toolkit.core import ApprovalDecision, ToolCall, ToolGroup, ToolResult
 from ai_arch_toolkit.core._tools._result import ToolFailure
 from ai_arch_toolkit.toolkit.tools._json import csv_read, json_extract
+
+
+def _text(result: ToolResult) -> str:
+    assert result.ok and isinstance(result.value, str), result
+    return result.value
+
+
+def _window(result: ToolResult) -> dict[str, Any]:
+    return result.metadata["window"]
 
 
 class TestJsonExtract:
@@ -39,16 +50,30 @@ class TestJsonExtract:
         assert caught.value.error.type == "validation_error"
         assert "invalid JSON" in caught.value.error.message
 
-    def test_missing_key(self):
+    def test_a_missing_key_is_not_found_and_names_the_keys_there(self):
         with pytest.raises(ToolFailure) as caught:
-            json_extract('{"a": 1}', "b")
+            json_extract('{"user": {"name": "a", "id": 1}}', "user.email")
         assert caught.value.error.type == "not_found"
-        assert "'b'" in caught.value.error.message
+        assert "'email'" in caught.value.error.message
+        assert "keys 'name', 'id'" in caught.value.error.message
 
-    def test_index_out_of_range(self):
+    def test_many_keys_are_named_with_how_many_more(self):
+        many = "{" + ", ".join(f'"k{n}": {n}' for n in range(30)) + "}"
+        with pytest.raises(ToolFailure) as caught:
+            json_extract(many, "missing")
+        assert "'k19' and 10 more" in caught.value.error.message
+
+    def test_an_index_out_of_range_is_not_found_and_gives_the_length(self):
         with pytest.raises(ToolFailure) as caught:
             json_extract("[1, 2]", "[5]")
         assert caught.value.error.type == "not_found"
+        assert "2 items (indexes 0 to 1)" in caught.value.error.message
+
+    def test_an_empty_list_or_object_says_it_is_empty(self):
+        for document, path, kind in (("[]", "[0]", "list"), ('{"a": {}}', "a.b", "object")):
+            with pytest.raises(ToolFailure) as caught:
+                json_extract(document, path)
+            assert caught.value.error.message.endswith(f"the {kind} there is empty")
 
     def test_indexing_a_scalar(self):
         with pytest.raises(ToolFailure) as caught:
@@ -61,19 +86,47 @@ class TestCsvRead:
     def test_basic_csv(self, tmp_path):
         f = tmp_path / "data.csv"
         f.write_text("name,age\nAlice,30\nBob,25\n")
-        result = csv_read(str(f))
-        assert "name" in result
-        assert "Alice" in result
-        assert "Bob" in result
-        assert " | " in result  # table separator
-        assert "---" in result  # header separator
+        result = _text(csv_read(str(f)))
+        assert result == (f"{f} (2 rows):\nname  | age\n------+----\nAlice | 30 \nBob   | 25 ")
 
-    def test_truncation(self, tmp_path):
+    def test_a_page_has_the_header_and_the_next_offset(self, tmp_path):
         f = tmp_path / "big.csv"
-        lines = ["id,value"] + [f"{i},{i * 10}" for i in range(200)]
-        f.write_text("\n".join(lines))
-        result = csv_read(str(f), max_rows=5)
-        assert "Showing 5" in result
+        f.write_text("id,value\n" + "".join(f"{i},{i * 10}\n" for i in range(200)))
+
+        first = csv_read(str(f), max_rows=5)
+        later = csv_read(str(f), offset=195, max_rows=5)
+
+        assert _text(first).splitlines()[1:3] == ["id | value", "---+------"]
+        assert _text(first).endswith("4  | 40   \n[results 1-5 of 200 | next: offset=5]")
+        assert _text(later).splitlines()[1] == "id  | value"
+        assert _text(later).endswith("199 | 1990 \n[results 196-200 of 200 | end]")
+
+    def test_the_total_is_the_whole_files_past_the_old_read_limit(self, tmp_path):
+        f = tmp_path / "long.csv"
+        f.write_text("id,text\n" + "".join(f"{i},{'x' * 30}\n" for i in range(60_000)))
+
+        assert _window(csv_read(str(f), max_rows=10))["total"] == 60_000
+
+    def test_a_quoted_field_over_several_lines_is_one_row(self, tmp_path):
+        f = tmp_path / "notes.csv"
+        f.write_text('id,note\n1,"first\nsecond\nthird"\n2,plain\n')
+
+        result = csv_read(str(f), max_rows=1)
+
+        assert _window(result)["total"] == 2
+        assert _window(result)["next_call"] == {"offset": 1}
+
+    def test_following_the_footers_reads_every_row_once(self, tmp_path):
+        f = tmp_path / "rows.csv"
+        f.write_text("n\n" + "".join(f"{i}\n" for i in range(250)))
+
+        rows, call = [], {"offset": 0}
+        while call is not None:
+            result = csv_read(str(f), max_rows=100, **call)
+            rows += [line.strip() for line in _text(result).splitlines()[3:] if line[0] != "["]
+            call = _window(result)["next_call"]
+
+        assert rows == [str(i) for i in range(250)]
 
     def test_file_not_found(self):
         with pytest.raises(ToolFailure) as caught:
@@ -90,8 +143,12 @@ class TestCsvRead:
     def test_empty_csv(self, tmp_path):
         f = tmp_path / "empty.csv"
         f.write_text("")
-        result = csv_read(str(f))
-        assert "Empty" in result
+        assert _text(csv_read(str(f))) == "Empty CSV file."
+
+    def test_a_header_without_rows(self, tmp_path):
+        f = tmp_path / "header.csv"
+        f.write_text("a,b\n")
+        assert _text(csv_read(str(f))) == f"{f} (0 rows):\na | b\n--+--"
 
 
 class TestBounds:
@@ -100,12 +157,17 @@ class TestBounds:
             json_extract("[" * 100_000, "a")
         assert caught.value.error.type == "validation_error"
 
-    def test_csv_rows_are_clamped_and_os_errors_are_failures(self, tmp_path, monkeypatch):
+    def test_the_executor_refuses_rows_past_the_limits(self, tmp_path):
         f = tmp_path / "data.csv"
-        f.write_text("a,b\n1,2\n3,4\n")
+        f.write_text("a,b\n1,2\n")
+        group = ToolGroup(csv_read, approval_handler=lambda _r: ApprovalDecision.approve())
 
-        assert "[Showing 1 of" in csv_read(str(f), max_rows=-1)
+        for arguments in ({"max_rows": 0}, {"max_rows": 10_001}, {"offset": -1}):
+            call = ToolCall(id="c", name="csv_read", input={"path": str(f), **arguments})
+            result = group.execute(call)
+            assert result.error is not None and result.error.type == "validation_error"
 
+    def test_os_errors_are_failures(self, monkeypatch):
         def fail_stat(*args, **kwargs):
             raise OSError(errno.ENAMETOOLONG, "File name too long")
 
@@ -119,10 +181,11 @@ class TestBounds:
 
 def test_a_file_that_is_not_readable_csv_is_a_validation_error(tmp_path: Path) -> None:
     path = tmp_path / "huge.csv"
-    path.write_text('"' + "x" * 200_000 + '"\n')
+    path.write_text("a\n" + '"' + "x" * 200_000 + '"\n')
 
     with pytest.raises(ToolFailure) as caught:
         csv_read(str(path))
 
     assert caught.value.error.type == "validation_error"
     assert "not readable CSV" in caught.value.error.message
+    assert "row 2" in caught.value.error.message

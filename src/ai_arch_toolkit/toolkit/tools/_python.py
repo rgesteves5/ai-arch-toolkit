@@ -57,6 +57,7 @@ from typing import Any
 
 from ai_arch_toolkit.core import tool
 from ai_arch_toolkit.core._tools._result import ToolFailure
+from ai_arch_toolkit.toolkit.tools._output import Head, fit
 
 # ---------------------------------------------------------------------------
 # Whitelisted operations
@@ -283,6 +284,12 @@ _MAX_COLLECTION = 10_000
 _MAX_POWER = 1000
 _MAX_STATEMENTS = 100
 _MAX_FOR_ITERATIONS = 10_000
+# What a cell shows at most: what it printed, then its value or its error (T09).
+_MAX_OUTPUT = 20_000
+_PRINT_LESS = (
+    "the rest is not kept: run the code again printing less, e.g. a slice (print(rows[:50])) "
+    "or a filter"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -345,28 +352,28 @@ class _SafeEvaluator:
             "None": None,
             "print": self._print_function,
         }
-        self._output: list[str] = []
+        # What the program prints: its start, and how much it printed in all.
+        self.printed = Head(_MAX_OUTPUT + 1)
         self._last_expr_value: Any = None
 
     def _print(self, *args: Any, sep: str = " ", end: str = "\n") -> None:
         """Capture print output into buffer instead of real stdout."""
-        text = sep.join(str(a) for a in args) + end
-        self._output.append(text)
+        self.printed.add(sep.join(str(a) for a in args) + end)
 
-    def get_result(self) -> str:
-        """Compose return value from captured prints and last expression."""
-        captured = "".join(self._output).rstrip("\n")
-        last = self._last_expr_value
-        has_output = bool(captured)
-        has_value = last is not None
+    def get_result(self, error: str | None = None) -> str:
+        """What the cell shows: what it printed, then its last value or ``error``, within
+        ``_MAX_OUTPUT`` characters."""
+        after = Head(_MAX_OUTPUT + 1)
+        if error is not None:
+            after.add(f"Error: {error}")
+        elif self._last_expr_value is not None:
+            after.add(str(self._last_expr_value))
+        shown = fit((self.printed, after), limit=_MAX_OUTPUT, rest=_PRINT_LESS)
+        return "\n\n".join(part for part in (shown[0].rstrip("\n"), shown[1]) if part) or "None"
 
-        if has_output and has_value:
-            return f"{captured}\n\n{last}"
-        if has_output:
-            return captured
-        if has_value:
-            return str(last)
-        return "None"
+    def shown_output(self) -> str:
+        """What the program printed, within ``_MAX_OUTPUT`` characters."""
+        return fit((self.printed,), limit=_MAX_OUTPUT, rest=_PRINT_LESS)[0].rstrip("\n")
 
     def eval_node(self, node: ast.AST) -> Any:
         """Evaluate a parsed program: a module of statements, or one expression."""
@@ -713,7 +720,8 @@ def python_repl(code: str) -> str:
     methods, regex (re), and math. No imports, no file access, no while loops.
 
     An error of the program (``1/0``, a syntax error, an unknown name) is its output:
-    ``"Error: ..."``, after what it printed.
+    ``"Error: ..."``, after what it printed. An output over 20,000 characters shows its start and
+    its size: print less (a slice, a filter) to see another part.
 
     Args:
         code: Python code to execute. Last expression value is the result.
@@ -734,7 +742,7 @@ def python_repl(code: str) -> str:
             evaluator.eval_node(tree)
         return evaluator.get_result()
     except _Refused as refused:
-        captured = "".join(evaluator._output).rstrip("\n")
+        captured = evaluator.shown_output()
         raise ToolFailure(
             "validation_error",
             f"{refused}; {_SUBSET}.",
@@ -751,7 +759,4 @@ def python_repl(code: str) -> str:
         AttributeError,
         RuntimeError,
     ) as e:
-        captured = "".join(evaluator._output).rstrip("\n")
-        if captured:
-            return f"{captured}\n\nError: {e}"
-        return f"Error: {e}"
+        return evaluator.get_result(error=str(e))
