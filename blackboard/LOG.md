@@ -878,3 +878,15 @@ R01 publicada em `main` (`b3dae3f`); a R02 começa com a leitura obrigatória da
   verde, e as correcções das revisões no último).
 - **A seguir:** o dono corre os comandos ao vivo das fichas; depois, a C07 (vaga 1 da
   frente C) e as decisões das vagas 2 e 3.
+
+## 2026-10-09 · C07 feita: tools de escrita e `FilesystemPolicy` (Claude, a pedido do dono)
+
+- O dono pediu a C07 e, perguntado, quis a C07c (o hook de preview) já, em vez de na vaga 2.
+- Um agente fez a C07a, b, d, e, f numa worktree; outro, a C07c no checkout; um revisor
+  independente atacou a fronteira (nada saiu das raízes; três médios, cinco baixos); um terceiro
+  agente corrigiu tudo. Um reinício da sessão a meio apagou as notas temporárias; a ficha
+  regista o que se reconstruiu.
+- O Python mínimo passa a 3.13.4 (D64, C07.4).
+- Publicado: `30a1191` (C07), `a195ec6` (C07c), `e79df1f` (as correcções e o `CHANGELOG`).
+- Gate: 8425 passed, 118 skipped; ruff, formatação, pyright e `uv lock --check` limpos.
+- A seguir: a C06e (depois do C01 e do C05) e as decisões das vagas 2 e 3 da frente C.

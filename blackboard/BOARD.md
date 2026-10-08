@@ -75,8 +75,8 @@
   pelo dono a 2026-10-08 (D62 a D65, todas na opção recomendada). Feitas a 2026-10-08, com a
   frente T, e publicadas: a C02 (`85fdb88`; C02b a C02f, a C02a já vinha da F24), a C06 (`3819abf`;
   C06a a C06d e C06f, a C06e espera pelo C01 e pelo C05) e a C08 (`5fe6cd8`); as correcções das
-  revisões em `4609eb7`. A C07 é a seguinte: as suas tools de escrita assentam no
-  `_filesystem.py` da T09.
+  revisões em `4609eb7`. A C07 está feita e publicada a 2026-10-09 (C07a a C07f, a C07c antecipada a pedido do
+  dono; `30a1191`, `a195ec6` e as correcções em `e79df1f`), com a D64; a vaga 1 da frente C fica completa, salvo a C06e.
 - **Antes de codificar:** o dono fixa as "Decisões a fixar" de cada ficha. Cada decisão tomada entra
   em `DECISIONS.md` a partir de D67 (as D15 a D42 foram para as frentes R e T, as D43 a D45
   para a frente O, as D46 e D47 para a frente I, as D48 a D61 para a frente A e as D62 a D65 para a vaga 1 desta; a D66 foi para a T09), com o número dado pelo coordenador.
@@ -96,7 +96,7 @@
 | C04 | Checkpoint e retoma de runs | — | todo | nada; aplicar depois do C01 |
 | C05 | Server tools: config no fio e `server_tools=` nas estratégias | — | todo | nada; aplicar depois do C01 |
 | C06 | Catálogo técnico de modelos no core | Claude (um agente: C06a–d, f) | done (falta a C06e) | nada; C06e depois do C01 e do C05 |
-| C07 | Tools de escrita tipadas e `FilesystemPolicy` | — | todo | nada; C07c depois do C02 |
+| C07 | Tools de escrita tipadas e `FilesystemPolicy` | Claude (agentes: C07a–f) | done | nada; C07c depois do C02 |
 | C08 | Pesquisa web local (Brave e Tavily): o que falta (D65) | Claude (um agente) | done | T05 |
 | C09 | `FlowSpec` e máquinas de estados | — | blocked | C04a, C04b; formas validadas na app |
 
