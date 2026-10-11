@@ -409,8 +409,9 @@ que ficou aberto está em "Por fazer".
 - **Modelos novos ao vivo:** o Grok 4.7 e o Opus 5.5 ainda não correram ao vivo
   (`docs/model-compatibility.md`). Os 13 modelos OpenAI do inventário, com o Astra e o 6.1 Sol,
   correram a 2026-10-02 (77 de 77, O04).
-- **Frente C, decisões:** as da vaga 1 estão fixadas (D62 a D65); falta, quando chegar a vez,
-  fixar as das vagas 2 e 3 (C01, C03, C04, C05, C09).
+- **Frente C, decisões:** as da vaga 1 estão fixadas (D62 a D65). As das vagas 2 e 3, revistas
+  contra o código de 2026-10-09 (49 abertas, 9 já decididas), estão na página
+  https://claude.ai/artifact/8rgFxyBi5zy94jtGXCJMtg para o dono escolher; falta fixar as das vagas 2 e 3 (C01, C03, C04, C05, C09).
 - **Decidir, achado de 2026-09-18 sem tarefa (`FINDINGS.md`):** o xAI larga os documentos de um
   pedido (o SDK tem `file(...)`). As imagens passaram a ir na A13, e o `LLM("grok-…")` depois de
   um `asyncio.run` já não levanta desde a A03 (G-17). (O `thinking_effort` do OpenAI e o preço do
