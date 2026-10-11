@@ -1031,3 +1031,470 @@ Por decidir ou por confirmar, sem tarefa:
 - **O custo de ler um ficheiro enorme às janelas:** cada janela do `read_file` descodifica desde o
   início até ao `offset`, por isso ler um ficheiro de centenas de MB inteiro custa O(N²). Fica
   documentado na docstring; um salto por bytes em UTF-8 puro resolvia-o.
+
+## 2026-10-11 · revisão completa do código (Claude, a pedido do dono)
+
+Três agentes leram por inteiro cada ficheiro de `src/ai_arch_toolkit` (fora o `nanope`) — núcleo e
+fornecedores; executor de tools, agentes, flow, budget, memória, prompts, recursos e CLI; as tools
+do toolkit — e o coordenador reviu a estrutura, o empacotamento, os testes, o CI, os docs, os
+exemplos e os scripts. Cada achado foi provado com uma sonda offline (FakeProvider, servidor de
+loopback, `_http._open` simulado, sem rede nem `live_api`); os altos e os médios o coordenador
+reproduziu-os de novo. As sondas estão em `blackboard/prototypes/2026-10-review/`, com um README
+que diz que achado cada uma prova. Estado à data: 8 425 testes passam (59 saltados, todos do `nanope`), ruff e
+pyright limpos, cada módulo real com 86 % ou mais de cobertura. Todos sem tarefa; os IDs `RC` são
+para os discutirmos um a um. A gravidade é a do revisor: alto, médio, baixo.
+
+Resolvidos, de entradas anteriores: o `step_end` em falta quando `max_wall_s` é excedido e a flag
+`--allow-dangerous-tools` que o `DangerousToolGate` mandava usar. Os outros achados que os revisores
+encontraram já registados continuam presentes e não se repetem aqui; estão na secção
+"Achados anteriores confirmados", no fim.
+
+### Agentes e flows
+
+- **RC01 [alto] · Dois agentes em `Flow(a.as_step(), b.as_step())`: o segundo não faz nada.** As
+  estratégias guardam as flags do ciclo (`needs_llm_call`, `has_tool_calls`, `turn`;
+  `search_done` na ToT e na LATS) no estado operacional partilhado, e o `as_step()` devolve ao flow
+  de fora cada chave que mudou sem nunca correr o `init_state` do agente
+  (`toolkit/agents/flows/_react.py:58,89-98,183-187`, `toolkit/flow/_flow.py:346-381`). Reprodução:
+  dois `Agent(ReasoningSpec(strategy="react"))` sobre `fake_llm`, em
+  `Flow(replace(a.as_step(), name="researcher"), replace(b.as_step(), name="writer"))` → o
+  primeiro faz 1 chamada, o segundo 0, `answer == "research notes"` e o step do segundo dá
+  sucesso. O mesmo com ToT seguida de LATS, e com qualquer agente que corra duas vezes num flow
+  cíclico. Sem o `replace`, dois agentes da mesma estratégia nem se compõem: o step tem o nome do
+  flow (`ValueError: Duplicate step name: 'react'`) e o `as_step()` não aceita `name=`. Direcção:
+  um `as_step(name=...)` que construa um estado novo com `_make_state` e devolva só
+  `answer`/`response`, ou flags com espaço de nomes por run.
+- **RC02 [médio] · LLM Compiler deixa subtarefas a correr depois de o run acabar.**
+  `asyncio.gather(*[_run_one(t) ...])` sem `TaskGroup` nem `return_exceptions`
+  (`toolkit/agents/flows/_llm_compiler.py:166`): quando uma subtarefa levanta `AdmissionDenied`, as
+  irmãs ficam soltas. Reprodução: `BudgetPolicy(max_llm_calls=2)` e um plano de 2 tarefas → o
+  `flow.run()` devolve `budget_exceeded` com uma chamada do executor ainda em curso (`live == 1`),
+  que acaba depois de o meter fechar; as tools seguintes dessa subtarefa correriam depois de o
+  chamador achar que o run acabou. O `execute_tools` do ReAct já se protege disto.
+- **RC03 [médio-baixo] · O resultado de um flow DAG aninhado depende de qual irmão acaba por
+  último.** O `as_step` reporta `final_result`, o último step não saltado por ordem de conclusão
+  (`toolkit/flow/_flow.py:82-88,361-376`). Reprodução: DAG interno `[fetch (falha), other (ok),
+  use (after fetch)]` → se o `fetch` falhar primeiro, o flow de fora continua sem erro; se falhar
+  por último, pára com `'fetch failed'`. Pede uma regra explícita (qualquer falha não tratada, ou
+  os steps terminais declarados).
+- **RC04 [médio-baixo] · O ReAct corre tools no último turno, e ninguém lê o resultado.** Quando o
+  modelo ignora o aviso de turno final, o `execute_tools` corre na última passagem
+  (`toolkit/agents/flows/_react.py:59,75,189-195`). Reprodução: `max_iterations=2` com um modelo
+  que chama sempre `send_email` → 2 chamadas ao LLM, 2 envios, `answer == ''`. O segundo envio é um
+  efeito que nenhum modelo vê.
+- **RC05 [baixo] · `parse_score` lê respostas comuns como 1.0** (`toolkit/agents/flows/_common.py:50-57`):
+  `"Score: 0.7/1.0"`, `"0.4 on a scale from 0 to 1"` e `"0.3 (1 = best)"` dão 1.0, acima do limiar
+  0.9, e a ToT e a LATS param com uma resposta medíocre; `"-0.5"` dá 0.5.
+- **RC06 [baixo] · A LATS altera a árvore do estado no sítio** (`toolkit/agents/flows/_lats.py:130,168-176`):
+  o `mcts_root` recebe o filho novo e a retropropagação antes das chamadas de reflexão e solução;
+  se estas falharem sob `Policy(retry=...)`, a nova tentativa junta outro filho e retropropaga de
+  novo pela mesma simulação.
+- **RC07 [baixo, por confirmar] · Os callables `when` e `Scope` correm fora do meter.** Um scope
+  próprio só se liga dentro de `_execute` (`toolkit/flow/_executor.py:655-674`), por isso uma
+  chamada ao LLM feita num `Scope.transform` (um resumidor, por exemplo) não é medida nem limitada.
+- **RC08 [baixo] · Manifestos de agente: `null` nem sempre quer dizer "não definido".**
+  `model.temperature`, `strategy.knobs`, `strategy.llm_kwargs` e `metadata` não estão em `Maybe`
+  (`toolkit/agents/_manifest_shape.py:55,68-69,113`): `temperature: null` e `knobs: null` são
+  recusados, `max_tokens: null` é aceite. O JSON Schema publicado tem a mesma falha; o
+  `docs/agents.md` diz que `null` é "não definido".
+- **RC09 [baixo] · Um `system_file` com `://` escapa ao `allowed_roots` e à impressão digital.** Os
+  valores com `://` saltam a verificação de raízes e o hash, mas `_read_phase_prompt` lê-os como
+  caminhos locais (`toolkit/agents/_manifest.py:513-521,557-566,146-149`). Reprodução (precisa de
+  uma pasta chamada `x:`): `system_file: "<fora>/x://secret.txt"` carrega, `planner_system` fica
+  com o segredo e `referenced_fingerprints == {}`.
+
+### Núcleo, metering, budget e fornecedores
+
+- **RC10 [alto] · O pior caso reserva os tokens de saída errados.** `_max_output_tokens`
+  (`core/_attempts.py:162-168`) lê `request.kwargs["max_tokens"]`, não o que o adaptador manda.
+  Reprodução: `LLM("gpt-5.5").complete(..., max_completion_tokens=100_000)` manda
+  `max_output_tokens=100000` (`_responses.py:493`; o compatível igual, `_openai_compatible.py:581`)
+  e reserva 4096; o `grok-4.20-multi-agent` tira o `max_tokens` (`_xai.py:630`) e vai sem tecto
+  com 4096 reservados; a Anthropic 4.5 com `thinking=True` manda 14096 contra 4096 (esta parte já
+  estava em "Estimativa do `reserve="strict"`", 2026-09-30). Ficam curtos o `reserve="strict"`, o
+  limite de falhas (D49) e a reserva partilhada (D57): runs paralelos podem passar o `max_cost` de
+  um `SharedMeter`. Direcção: um gancho puro do adaptador, `output_token_bound(prepared)`, como o
+  `image_token_bound`; o multi-agent, sem limite, recusado sob strict/partilhado.
+- **RC11 [médio] · Uma chamada bem-sucedida sem usage fica com custo ilimitado.**
+  `_settlement_cost` (`core/_attempts.py:197-198`) liquida-a como `Cost.unknown(...)` sem
+  `at_most`; a D49 só deixa ilimitados as tools do fornecedor e os pricers que falham. Reprodução:
+  um modelo local a `ModelPricing()` ($0) cujo servidor não manda usage no stream →
+  `unknown_cost_count=1`, e a chamada seguinte sob `BudgetPolicy(max_cost=5)` dá
+  `BudgetExceeded("a prior call could not be priced")`; um 500 no mesmo modelo fica limitado e não
+  bloqueia. Também nos prompts bloqueados do Gemini sem `usage_metadata` (RC25). Direcção: o mesmo
+  limite do pior caso que as falhas já têm.
+- **RC12 [médio] · Um `*_sync` dentro de um loop a correr usa o client do primeiro loop.** O
+  `_run_sync` corre a chamada num segundo loop vivo (`core/_sync.py:141-175`), e o
+  `LoopAwareClientCache` só reconstrói o client quando o loop antigo fecha
+  (`core/_providers/_base.py:156-176`), cuja docstring diz que dois loops vivos não são suportados.
+  Reprodução (servidor de loopback): `await llm.complete()` e depois `llm.complete_sync()` no mesmo
+  loop → o servidor recebe o pedido e a chamada levanta `ResponseError: ... RuntimeError('<Event>
+  is bound to a different event loop')`; indeterminada, talvez cobrada, sem retry. É o caso que o
+  `_run_sync` anuncia (Jupyter, FastAPI). Direcção: um client por loop vivo.
+- **RC13 [médio] · Documentos dados por URL ou `data:` URL vão mal codificados.** Anthropic
+  (`_anthropic.py:203-212`): `document("https://…/doc.pdf")` vai como
+  `{"type": "base64", "data": "https://…"}`, e um `data:` URL leva o prefixo dentro de `data` (o SDK
+  tem `URLPDFSourceParam`). Compatível (`_openai_compatible.py:141-143`):
+  `file_data: "data:application/pdf;base64,https://…"`, e o prefixo duplicado num `data:` URL.
+  Gemini (`_gemini.py:229-235`): o URL é descodificado de base64 para 18 bytes de lixo mandados
+  como PDF, sem erro; um base64 inválido levanta `binascii.Error` cru. Por confirmar: no Responses
+  (`_responses.py:210-214`) um `data:` URL vai em `file_url` e o OpenAI espera-o em `file_data`; na
+  Anthropic uma imagem em `data:` URL vai como fonte `url`. A normalização das fontes está copiada
+  em 7 sítios (`_content`, `_base.image_bytes`, `_responses._media_url`, o `_part` do compatível,
+  o `_block` da Anthropic, o `_part` do Gemini, o `_image_url` do xAI).
+- **RC14 [médio] · A cadeia de fallbacks pára no primeiro candidato que recusa no `prepare`**
+  (`core/_attempts.py:464-483`, `can_recover` em `:525-530`). Reprodução: o primário dá 503, o
+  fallback b recusa (`thinking_effort="max"`, que não aceita), o c nunca é tentado e o chamador
+  recebe o `RequestError` de b em vez do 503. O `docs/llm.md:162` diz que um `RequestError` é
+  terminal porque repetir o mesmo pedido não adianta, o que não vale para outro modelo.
+- **RC15 [médio] · Middleware que reconstrói o `Request` à mão perde a geração de imagem.**
+  `TracingMiddleware.before` (`core/_telemetry.py:39-45`) e `MemoryMiddleware.abefore`
+  (`toolkit/memory/_middleware.py:69-75`) constroem `Request(...)` campo a campo sem `image=`, e o
+  `_attempts.prepare` encaminha para `prepare()` em vez de `prepare_image()`. Reprodução:
+  `generate_image()` com qualquer dos dois → o fornecedor recebe `image=None` (com `_otel_*` nos
+  kwargs, ou `system="Relevant memories: …"`); um modelo de imagem do OpenAI responde "is an image
+  model: call generate_image()". Direcção: `dataclasses.replace(request, …)`; o middleware de
+  memória salta pedidos de imagem.
+- **RC16 [médio] · `StreamResponse` é O(n²) e bloqueia o loop.** Em cada chunk junta todos os
+  anteriores e corre `json.loads` (`core/_response.py:290-301`), mesmo num stream de texto.
+  Medido: 40 000 chunks (200 KB de prosa) → 4,5 s; um stream JSON de 40 000 chunks → 33,6 s de CPU
+  no loop. Direcção: um buffer corrente e o parse só no `partial_parsed`, ou só quando se pediu
+  JSON.
+- **RC17 [médio-baixo] · Um `ProviderTimeout` dentro de um step passa por timeout do step.** O
+  `ProviderTimeout` é um `TimeoutError`, e o `except TimeoutError: return None` de `_attempt`
+  (`core/_step_engine.py:147-152`, também `:267-268`) apanha-o. Reprodução:
+  `Policy(retry=RetryConfig(max_retries=2))` e um step que levanta `ProviderTimeout` →
+  `attempts=1`, decisões `('timeout',)`, `error="Step timed out"`, aplica-se o `on_timeout`; um 503
+  no mesmo sítio é repetido (`attempts=2`). Atinge as estratégias que não apanham erros do LLM:
+  plan_execute, rewoo, o reflect da reflexion, self_discovery, tot, lats, llm_compiler e
+  generate_review sem tools. Direcção: `asyncio.timeout(...)` e `cm.expired()`.
+- **RC18 [médio-baixo] · Budget strict ignora o `RunConfig.pricer`.** `BudgetController(policy)`
+  usa por omissão um `HeuristicEstimator()` que preça pela tabela global
+  (`toolkit/budget/_controller.py:27,36`, `_estimator.py:36-39`); só o `budget_scope` liga o
+  pricer. Reprodução: `RunConfig(controller=BudgetController(BudgetPolicy(max_cost=1,
+  reserve="strict")), pricer=AppPricer())` para um modelo que só o `AppPricer` preça → "cannot
+  price this operation under a strict budget" e 0 chamadas; para um modelo nas duas tabelas, a
+  reserva usa os preços errados.
+- **RC19 [médio-baixo] · Gemini: o `max_output_tokens` explícito é trocado pelo `max_tokens` do
+  `LLM`** (`_gemini.py:644-646`): pedir 20000 manda 4096. Nos adaptadores OpenAI o nome nativo
+  ganha.
+- **RC20 [médio-baixo] · A anotação de `tools=` do `LLM` não aceita `ServerTool`.**
+  `complete`/`complete_sync` anotam `list[dict[str, Any]] | ToolGroup | Callable[..., Any] | None`
+  (`core/_llm.py:274`, `:560`), mas o uso documentado é `tools=[web_search()]`:
+  `uv run pyright examples` dá erro em `examples/25_server_tools.py:20` e
+  `examples/48_generate_image.py:41`. Em execução funciona.
+- **RC21 [baixo] · `parse_tool_args` devolve JSON que não é objecto tal como vem**
+  (`core/_providers/_base.py:751-761`): `"null"`, `"[1,2]"` ou `"5"` passam, e o
+  `Response.to_message()` (`core/_response.py:228-231`) levanta `TypeError`/`ValueError` a meio de
+  um ciclo de tools. Um servidor compatível que mande `"null"` é plausível.
+- **RC22 [baixo] · Um stream largado sem ser iterado guarda a reserva até o scope fechar**
+  (`core/_attempts.py:512`, sem finalizador). Reprodução: `max_llm_calls=1`, um `llm.stream()`
+  largado → o `complete()` seguinte dá `BudgetExceeded` com 0 chamadas. O `docs/llm.md:246` diz que
+  esse stream "releases its reservation".
+- **RC23 [baixo] · O `prepare()` deixa sair excepções cruas em vez de `RequestError`:** uma
+  mensagem de sistema com imagem dá `TypeError` (`_base.py:669-678`), base64 inválido no Gemini dá
+  `binascii.Error` (`_gemini.py:232`), um `data:` sem vírgula dá `IndexError` (`_base.py:727`).
+  Escapam ao tratamento de `RequestError` e à família dos fallbacks.
+- **RC24 [baixo] · `close()` fecha o client do SDK e deixa-o em cache** (`_base.py:184-197`):
+  depois de `await llm.close()`, a chamada seguinte dá `RequestError(... client has been closed)`
+  em vez de o reconstruir.
+- **RC25 [baixo] · Gemini: um prompt bloqueado (sem candidatos) vira um `Response` vazio** com
+  `stop_reason=""` (`_gemini.py:419-420`), e perde-se o `prompt_feedback.block_reason`; com a RC11,
+  fica também com custo ilimitado.
+- **RC26 [baixo] · Gemini repete o `_raw` sem verificar que ainda corresponde à mensagem.** O
+  `_model_turn` não tem a verificação que a Anthropic e o Responses fazem: um histórico editado é
+  reenviado como estava.
+- **RC27 [baixo] · O pedido prepara-se uma vez antes do middleware** (`core/_attempts.py:510`): um
+  pedido que só o middleware tornaria válido é recusado, e com middleware cada chamada prepara
+  duas vezes.
+- **RC28 [baixo] · Preços que falham em silêncio para baixo:** tokens em cache num modelo sem
+  tarifa `cache_read` custam $0 (`core/_pricing.py:343-346`; 7 modelos hoje, o `gpt-5-pro` entre
+  eles), e o leitor do TOML de preços ignora chaves desconhecidas (`_pricing.py:127-137`), por isso
+  uma tarifa com gralha vale $0.
+- **RC29 [baixo, por confirmar] · Anthropic: `thinking=True` com `tool_choice` forçado não é
+  recusado antes de enviar** (`_anthropic.py:717-740`); a documentação do thinking diz que dá 400.
+- **RC30 [baixo] · `MeterOperation.abandoned` nunca é lido** (`core/_metering/_operation.py:76-86`):
+  a docstring diz que um finalizador o lê; a guarda real é `_PhysicalAttempt.phase`.
+
+### Executor e definição de tools
+
+- **RC31 [médio] · Parâmetros Pydantic, dataclass ou Enum nunca são convertidos.** O schema
+  anuncia-os (`core/_tools/_schema.py:113-155`) e o `docs/tools.md:19` documenta os Pydantic, mas o
+  executor passa à função o JSON cru (`core/_tools/_executor.py:233-240,412-419`). Reprodução:
+  `def ship(to: Address)` (Pydantic) → `runtime_error: 'dict' object has no attribute 'city'`;
+  `def paint(color: Color, at: Point)` → `'str' object has no attribute 'name'`. Direcção: depois
+  da validação, converter cada argumento pela anotação, e uma conversão falhada é
+  `validation_error`.
+- **RC32 [médio] · Uma tool que devolve um valor não serializável rebenta o executor depois do
+  efeito.** O `_bounded()` chama `to_model_text()` → `json.dumps(value)` fora do `try`, depois de a
+  operação estar liquidada como sucesso (`core/_tools/_result.py:135-139`, via
+  `_executor.py:546,577`; `toolkit/_runner.py:96,140`). Reprodução: uma tool que devolve um
+  `datetime` ou um `set` → `ToolGroup.execute` e `run_tools_sync` levantam `TypeError`, contra a
+  docstring do `run_tools` ("A tool that raises is returned as an error result (never
+  propagated)"); dentro do ReAct o modelo recebe um `runtime_error` enganador.
+- **RC33 [baixo] · A conta tardia de uma tool paga não é cobrada.** No timeout, a operação liquida
+  "unbilled" (custo 0) e a thread daemon ainda acrescenta à lista de cobrança mais tarde
+  (`core/_tools/_executor.py:499-518`, `_billing.py`). Reprodução: uma tool com preço de
+  `brave_search` que acaba depois do `timeout_s` → custo medido 0.0 e incerto 0.0. Direcção:
+  falhar como indeterminada, limitada pela reserva de uma unidade.
+- **RC34 [baixo] · `run_tools`/`execute_tool` não vêem dentro de um grupo numa lista**
+  (`core/_tools/_executor.py:55-86`; docstring de `core/_tools/__init__.py:125-130`;
+  `toolkit/_runner.py:39-52`). O `prepare_tools([grupo, web_search()])` manda as tools do grupo
+  (o padrão dos docs), mas `run_tools_sync(resp, [grupo, web_search()])` dá
+  `KeyError: Unknown tool: 'ping'` e o `execute_tool` devolve `unknown_tool`.
+- **RC35 [baixo] · `Literal` com valores que não são strings dá um schema contraditório**
+  (`core/_tools/_schema.py:167-177`): `Literal[0.5, 1.5]` → `{"type": "string", "enum": [0.5,
+  1.5]}`; um modelo que obedeça ao `type` e mande `"0.5"` recebe erro de validação.
+- **RC36 [baixo] · `OpenAIModerator` deixa sair excepções do SDK.** Só mapeia `RateLimitError` e
+  `APIStatusError` (`toolkit/moderation/_openai.py:48-53`); `APIConnectionError` e
+  `APITimeoutError` atravessam o middleware cruas, contra a D24.
+- **RC37 [baixo, desenho] · `ToolGroup(max_calls=...)` conta todas as runs de um agente**: nada
+  chama `reset()`. Está documentado, mas é uma armadilha num agente de longa vida.
+
+### Memória, grafo, prompts, recursos e conhecimento
+
+- **RC38 [médio] · A pesquisa vectorial filtrada por tipo devolve vazio quando outros tipos
+  dominam.** O índice devolve os `k*2` primeiros de qualquer tipo e o filtro vem depois
+  (`toolkit/memory/graph/_store.py:163-175`). Reprodução: 20 nós `fact` e 1 `rule` →
+  `SimilarityView(store, node_type="rule").find("cat", k=3)` devolve `[]`. Atinge as vistas
+  semântica e procedimental do preset `cognitive()`.
+- **RC39 [médio, segurança de desenho] · O `MemoryMiddleware` promove texto do utilizador a
+  sistema.** Grava as perguntas do utilizador e injecta-as mais tarde no prompt de **sistema**: um
+  caminho de prompt injection persistente. As tools `remember` e `forget_memory` de
+  `memory_tools` não têm gate (risco "low").
+- **RC40 [baixo] · `NetworkXBackend.pagerank` perde massa com arestas paralelas**
+  (`core/graph/_networkx.py:308-318`): o `out_degree` conta as paralelas e cada predecessor
+  contribui uma vez; as ordens somam 0,508 em vez de 1.
+- **RC41 [baixo] · O selector de cabeçalho Markdown pára num `#` dentro de um bloco de código**
+  (`toolkit/resources/_selectors.py:129-159`): `MarkdownHeading("Install")` devolve
+  ``'Run:\n\n```bash'``, cortado em `# create venv`. O prompt fica truncado em silêncio.
+- **RC42 [baixo] · `package://` importa módulos instalados quaisquer, seja qual for a política.**
+  O `importlib.resources.files(pkg)` importa o módulo (`toolkit/resources/_loaders.py:60`,
+  `toolkit/prompts/_manifest.py:130`). Reprodução: `load_resource("package://this/x.txt",
+  policy=ResourcePolicy(allowed_roots=(...)))` imprime o Zen of Python; o `allowed_roots` nunca se
+  aplica a `package://`.
+- **RC43 [baixo, por confirmar] · Templates Jinja sem limites de recursos.** O
+  `SandboxedEnvironment` não intercepta operadores (`toolkit/prompts/_template_engines.py:67`):
+  `{{ 'x' * 10**9 }}` ou `{{ 9**9**9 }}` num template de manifesto podem esgotar memória ou CPU.
+  Confirma-se renderizando um com timeout.
+- **RC44 [baixo] · `KnowledgeRegistry.from_directory` rebenta com um symlink para fora da pasta**
+  (`toolkit/knowledge/_registry.py:238-241`): `relative_to(root)` no caminho resolvido levanta um
+  `ValueError` cru.
+- **RC45 [baixo] · `MemoryPreset[...]` devolve uma união de vistas**, e o `.find` só existe na
+  `SimilarityView`: `uv run pyright examples` dá erro em `examples/29_memory_middleware.py:118`.
+
+### Tools do toolkit
+
+A sandbox do `python_repl`, o `FilesystemPolicy` (symlinks, `..`, caminhos absolutos, padrões
+`link/*`, moves para fora da raiz) e a porta HTTP (SSRF, redireccionamentos, TLS, chaves nos URLs,
+bombas XML) resistiram às tentativas de fuga.
+
+- **RC46 [alto] · Tabelas aninhadas multiplicam o texto sem limite.** Uma tabela dentro de uma
+  célula entra no texto da célula de fora, e a célula de fora com `rowspan` repete-o em até 500
+  linhas; o `_MAX_TABLE_CELLS` conta células por tabela, não caracteres, e recomeça em cada nível
+  (`toolkit/tools/_wiki_html.py:340-346`, `toolkit/tools/_tables.py:55-87`), contra o que dizem
+  `_tables.py:5-6` e `_wiki_html.py:105`. O `wiki_read` (seguro, sem aprovação) lê páginas que
+  qualquer pessoa cria (uma sandbox de utilizador). Reprodução: `wiki_text(html)` com
+  `<table><tr><td rowspan=N>…</td></tr>` + `<tr></tr>`×(N−1) + `</table>` aninhado. Medido:
+  1 555 B (3 níveis, rowspan 50) → 12,7 MB de texto (×8 199); 9 KB (2 níveis, rowspan 500) → 25,5
+  MB; 1 nível já multiplica ×500. Pela mesma fórmula, não medido: 3 níveis com rowspan 500 e
+  células de 100 caracteres dão cerca de 12,5 GB a partir de ~14 KB. Direcção: um orçamento de
+  caracteres por página que as tabelas aninhadas também gastam; não repetir texto longo em
+  `rowspan`; não estender spans de tabelas aninhadas, como o `_spl` já faz.
+- **RC47 [médio-baixo] · `Retry-After` sem limite** (`toolkit/tools/_http.py:394-405,239-243,748-753,774-776`):
+  `float("inf")`, números enormes e datas muito no futuro são aceites como descanso. Reprodução:
+  um 429 com `Retry-After: inf` → o host descansa para sempre e cada chamada seguinte levanta um
+  `OverflowError` sem tipo (`math.ceil(inf)`), que o executor dá como `runtime_error`;
+  `Retry-After: 1e12` bloqueia a tool enquanto o processo viver. Direcção: recusar valores não
+  finitos e limitar (1 hora, por exemplo).
+- **RC48 [médio-baixo] · `http_get` e `scrape_text` rebentam com URLs com caracteres não ASCII**
+  (`toolkit/tools/_http.py:875-899`, `_fetch` em `:355-386`): `http_get("https://pt.wikipedia.org/wiki/São_Paulo")`
+  → `UnicodeEncodeError` do `http.client`, como `runtime_error`. Direcção: percent-encoding do
+  caminho e da query (IRI para URI), ou um `validation_error`.
+- **RC49 [médio-baixo] · `distance_between` rebenta em pontos antípodas** (`toolkit/tools/_geo.py:181-185`):
+  o arredondamento põe `a` ligeiramente acima de 1 e `math.sqrt(1 - a)` dá `ValueError: math
+  domain error`. Reprodução: `distance_between(-88.857, 0, 88.857, 180)`; 350 de 6 305 pares
+  antípodas numa grelha falham. Direcção: limitar `a` a [0, 1].
+- **RC50 [médio-baixo] · `scrape_text` cola palavras** (`toolkit/tools/_web.py:34-62`): só põe
+  quebra de linha na abertura de alguns elementos; nada separa `td`/`th`, as etiquetas de fecho,
+  `section`, `article`. `<td>Price</td><td>10</td>` → `Price10`; `<h1>Title</h1>Intro` →
+  `TitleIntro`. Há dois conversores de HTML para texto; este podia usar o do `_wiki_html`.
+- **RC51 [baixo] · `find_window` trabalha em proporção ao texto vezes a janela**
+  (`toolkit/tools/_window.py:129-133,202-225`): constrói passagens para todas as ocorrências, não
+  só as mostradas, e cada fusão copia o tuplo. Medido com `find="e"` e `max_chars=100000`: 4,5 s
+  por milhão de caracteres, uns 45 s numa página de 10 MB do `http_get`; a thread abandonada no
+  timeout continua a gastar CPU.
+- **RC52 [baixo] · `unit_convert` lê `"nm"` como milhas náuticas** (`toolkit/tools/_math.py:207`):
+  `unit_convert(500, "nm", "m")` → `926000 m`; para um comprimento de onda lê-se nanómetros, e as
+  unidades passam a minúsculas, por isso `"NM"` dá o mesmo.
+- **RC53 [baixo] · `python_repl`: erros sem tipo e uma docstring que promete `math`.**
+  `re.search('(', 'x')` (`re.PatternError`) e `'x'.encode('nope')` (`LookupError`) não estão na
+  lista de excepções (`toolkit/tools/_python.py:755-766`), e a docstring que o modelo lê (`:723`)
+  diz "regex (re), and math", mas `math.gcd(4, 6)` dá "Unknown name: math" (só existem `gcd` e as
+  outras soltas). Novos vectores para o achado de 2026-09-18 sobre o tamanho do resultado:
+  `list(map(range, [10**12]))[0]` e `sorted(..., key=range)` passam o `_check_range`;
+  `[0] * 10**9`, `factorial` e `comb` não têm guarda.
+- **RC54 [baixo] · `math_eval` dá erros enganadores** (`toolkit/tools/_math.py:22,151-162`): o tecto
+  de 15 000 bits passa o limite de 4 300 dígitos do `str()` (~14 284 bits), e
+  `math_eval("2**14500")` manda usar `sys.set_int_max_str_digits()`, que o modelo não pode chamar;
+  um resultado NaN (`inf - inf`) sai como "use only the operators…".
+- **RC55 [baixo] · `_human_size` trunca em cada degrau** (`toolkit/tools/_filesystem.py:327-335`):
+  `int(size / 1024)` por unidade faz 1,9 GB aparecer como "1.0 GB" e 1 536 B como "1.0 KB".
+- **RC56 [baixo] · `json_extract` devolve a grafia do Python, não a do JSON**
+  (`toolkit/tools/_json.py:75-77`): `null`, `true` e `1e-05` voltam como `None`, `True` e `1e-05`,
+  apesar do `_values.plain`.
+- **RC57 [baixo] · `timezone_convert` aceita horas impossíveis e ambíguas em silêncio**
+  (`toolkit/tools/_datetime.py:71-76`): `2026-03-08 02:30` em America/New_York, que não existe, sai
+  "02:30 EST"; o `01:30` ambíguo do dia do recuo vira EDT sem aviso.
+- **RC58 [baixo] · arXiv decide "pesquisa avançada" por substring** (`toolkit/tools/_arxiv.py:296-297`):
+  `ANDROID malware` e `FORTRAN compilers` contêm "AND"/"OR" e vão crus como `(…)`, enquanto
+  `android malware` vira a frase exacta `all:"…"`. Direcção: operadores como palavras inteiras.
+- **RC59 [baixo] · Esperas e leituras sem limite de tempo.** O `_Throttle.wait`
+  (`toolkit/tools/_http.py:219-228`) dorme sem limite antes de o prazo do pedido começar: com o
+  intervalo de 6,1 s da NVD, a 21.ª chamada paralela espera mais de 120 s, o executor desiste e a
+  thread ainda manda o pedido depois. O `_error_body` (`:295-302`) lê até 8 KB fora do prazo. O
+  `_youtube` constrói `YouTubeTranscriptApi()` com uma `requests.Session` sem timeout
+  (`toolkit/tools/_youtube.py:147,299`).
+- **RC60 [baixo, segurança de desenho] · O que as tools perigosas deixam passar.** O filho do
+  `run_command` herda todas as variáveis de ambiente, as chaves dos fornecedores incluídas. As
+  pré-visualizações de escrita mostram até 8 KB de um ficheiro de uma raiz só de escrita nos
+  pedidos de aprovação e nas auditorias de dry run (o modelo não as vê).
+- **RC61 [baixo] · `filesystem_tools(policy)` não tem `csv_read` ligado à política**, por isso o
+  `PathScopeGate` bloqueia a leitura de CSV a quem usa uma política; o `csv_read`
+  (`toolkit/tools/_json.py:148`) tem o mesmo `~utilizador` cru de 2026-10-04.
+- **RC62 [baixo, manutenção] · Helpers copiados entre módulos:** `_string` em 32 módulos,
+  `_int_or_none` em 8 (com semânticas diferentes), `_parse_date` em 7, `_labelled` em 7, `_dict`
+  em 6; cinco formatadores de números ad hoc (`_number` ×3, `_decimal`, `_plain`, `_degrees`)
+  apesar do `_values`; dois tuplos `_SHAPE_ERRORS`. O `CANDIDATE_TOOLS.md`, um documento de
+  planeamento com conteúdo desactualizado (`format` contra `output_format` no YouTube), vai dentro
+  do pacote e do wheel.
+
+### Estrutura e empacotamento
+
+- **RC63 [alto] · O `nanope` vai no wheel e está partido.** O hatch empacota
+  `src/ai_arch_toolkit` inteiro: `uv build --wheel` leva 77 ficheiros do `nanope`, 3,5 dos 5,75 MB
+  descomprimidos (61 %), entre eles `bbeh/_results/*.json` (~330 KB cada), um `bun.lock` da app
+  Reflex e relatórios. `import ai_arch_toolkit.nanope.research_center` dá `ModuleNotFoundError:
+  ai_arch_toolkit.toolkit.tools._dictionary`; o `bbeh` precisa do `inspect_evals` (extra `bench`);
+  os 59 testes saltados da suite são todos do `nanope` (`tests/nanope/pending.py`: oito tools que
+  o contrato T05–T09 substituiu). O `nanope` é do dono, que o actualiza (R00, T00); a decisão de o
+  tirar do pacote também.
+- **RC64 [médio] · A superfície pública não exporta o ponto de entrada recomendado.** `Agent` e
+  `ReasoningSpec` não estão no topo nem em `ai_arch_toolkit.toolkit` (só em
+  `ai_arch_toolkit.toolkit.agents`), nem o `SharedBudget`; o `SharedMeter` só no `core`. O topo
+  exporta 218 nomes, com os nove flow factories, o `RunState` e o `deprecated`, e cada nome tem 2
+  ou 3 caminhos de import. O `ai_arch_toolkit.Node` é o nó da memória (o `core` chama ao do grafo
+  `GraphNode`). O `generate_review_flow` em falta já estava registado (2026-09-30).
+- **RC65 [desenho] · O estado das estratégias num só espaço de nomes.** Todas as estratégias
+  escrevem as chaves privadas (`turn`, `needs_llm_call`, `search_done`, `passed`, …) no mesmo
+  estado operacional; é a causa da RC01 e de uma classe inteira de colisões.
+- **RC66 [desenho] · O `_FlowRun` tem ~590 linhas e 32 métodos** (`toolkit/flow/_executor.py:215-802`):
+  mistura ciclo de vida, escalonamento sequencial e DAG, execução das vagas, o canal de eventos da
+  D54 e o registo de traces e cortes. Separável em escalonador (vagas, `_Graph`), registo (traces,
+  resultados, eventos) e ciclo de vida (meter, prazo).
+- **RC67 [desenho] · A fronteira core/toolkit do Flow.** O `StepTrace` do `core` já leva conceitos
+  de DAG (`blocked_by`), contra "o core não sabe de Flows" dos docs. O `toolkit/flow` importa o
+  `toolkit/budget` só para o atalho `budget_policy=` e o `BudgetReport` (o `Flow` já aceita um
+  `RunConfig` com qualquer controlador).
+- **RC68 [desenho] · Repetição entre estratégias:** `task_str = task if isinstance(...) else
+  str(task)` ×8, os mesmos `_complete` na ToT, LATS e LLM Compiler, regexes de listas numeradas
+  duplicadas, a concatenação do sistema interior feita à mão em vários sítios. O `run_react` é o
+  único helper partilhado.
+- **RC69 [desenho] · Três padrões no núcleo que geram vários achados:** o `Request` reconstruído à
+  mão em vez de `dataclasses.replace` (RC15); factos que só o adaptador conhece lidos dos kwargs
+  pelo meter (RC10, RC11); a normalização das fontes copiada em 7 sítios (RC13).
+- **RC70 [desenho] · Disposição plana.** O `core` tem 29 módulos ao mesmo nível que misturam o
+  pipeline de chamada (`_llm`, `_attempts`, `_middleware`, `_retry`, `_policy`, `_rate_limit`), as
+  primitivas de execução (`_step`, `_state`, `_step_engine`, `_trace`) e modelos e preços
+  (`_pricing`, `_model_catalog`, `_model_id`, `_tokens`), com dois ciclos partidos por imports
+  dentro de funções: `_step ↔ _state` (`_state.py:197,242`) e `_pricing ↔ _metering`
+  (`_metering/_scope.py:111`). O `toolkit/tools` tem 12 módulos auxiliares, 35 de rede, 8 locais e
+  o `dangerous` na mesma pasta.
+
+### Testes, CI, docs, scripts e repositório
+
+- **RC71 [médio] · `scripts/run_examples.py` falha sempre.** Corre cada exemplo pelo
+  `scripts/_example_trace_runner.py`, cujo `_install_tracing` (`:379`) importa `Client`,
+  `AsyncClient`, `BatchClient` e `AsyncBatchClient`, que já não existem (`ImportError`). As 31
+  saídas em `scripts/output/` (último toque 2026-05-20) são da numeração antiga dos exemplos: só
+  01–05 e 07 batem com os nomes actuais. O `scripts/debug_gemini_math.py` chama
+  `_execute_sequential`, `_resolve_and_apply_scope` e `_run_step_with_scope`, que já não existem.
+  O `todo.md` fala do `AsyncBatchClient` e dessa numeração.
+- **RC72 [baixo] · Buracos no CI.** Nenhum passo verifica o pacote construído (teria apanhado a
+  RC63). O `pytest-timeout` está instalado sem timeout global (46 testes marcam-no à mão): um teste
+  async pendurado espera pelo limite de 6 h do GitHub. O pyright não corre nos exemplos
+  (`uv run pyright examples` encontra a RC20 e a RC45, e 35 acessos a `Optional`). As actions não
+  estão fixadas por SHA e o workflow não tem bloco `permissions:`.
+- **RC73 [baixo] · Testes.**
+  - A maior parte dos testes do `core` está na raiz de `tests/`, contra "the test tree mirrors the
+    package" do `AGENTS.md` (`tests/metering` e `tests/graph` espelham-no).
+  - O `MockResponse` e o fixture `mock_post` do `tests/conftest.py` imitam o `requests`, que o
+    pacote não usa, e ninguém os chama.
+  - O comentário das tools no mesmo ficheiro ainda diz "the tool returns its error string" (as
+    tools levantam `ToolFailure` desde a D37).
+  - Asserções de tempo real que podem falhar num runner lento: `tests/test_rate_limit.py:53`
+    (`< 0.1` s) e `:59`, `tests/test_tools_group.py:848`, `tests/test_sync.py:132`,
+    `tests/toolkit/test_shell.py:207`.
+  - O `tests/wire_contract.py` depende de internos privados dos SDKs
+    (`types._GenerateContentParameters`, `models._GenerateContentParameters_to_mldev`,
+    `xai_sdk.image._make_generate_request`).
+  - `tests/integration/test_provider_transport.py` usa o `claude-sonnet-4-5`, que acaba a
+    2026-11-30 (`DeprecationWarning` na suite).
+- **RC74 [baixo] · Docs e metadados.**
+  - O `docs/tools.md:65` diz que nenhuma tool pré-feita usa a janela, o que contradiz o
+    `docs/tools.md:259` e o código (39 módulos importam `_window`).
+  - O `docs/llm.md:246` está errado (RC22).
+  - A `description` do `pyproject.toml` ("…OpenAI, Anthropic, xAI, and Gemini") está
+    desactualizada, e faltam `readme` e `urls` nos metadados.
+  - Nunca houve release (sem tags; o `[Unreleased]` tem ~1 570 linhas).
+  - O `tmp/pdfs/` e o `brainstorm/` estão versionados.
+  - Estão certos e verificados: os imports dos blocos de código dos docs, os caminhos citados, a
+    navegação do mkdocs e as 123 tools anunciadas.
+
+### Achados anteriores confirmados, ainda presentes
+
+Os revisores voltaram a confirmar estes, já registados:
+
+- **Núcleo:**
+  - `RateLimitMiddleware` com `rpm < 1` pendura, e ele e o `inference_limit` ficam presos ao
+    primeiro loop;
+  - o `count_tokens` do Gemini manda `system_instruction`;
+  - `thinking_budget=-1` é recusado;
+  - o `Response.model` do xAI é o id pedido;
+  - o batch ignora defaults, middleware e retry, e o `parsed` da Anthropic não se preenche;
+  - o tecto brando deixa passar uma chamada a mais;
+  - um `response_format` explícito é trocado pelo `output_schema`;
+  - `str(part)` para partes desconhecidas;
+  - as docstrings do `ServerTool` e do `APIError` estão desactualizadas;
+  - os fallbacks em string não herdam o `timeout`;
+  - as chaves `_otel_*` ficam nos kwargs.
+- **Executor:**
+  - o `_failed` larga o `admitted.audit`;
+  - o `bind_arguments` corre depois das gates;
+  - a nota do `_bounded` conta mal o corte nos erros;
+  - o `max_calls` conta sem lock no caminho síncrono.
+- **Agentes e flows:**
+  - a ReWOO ignora o `system`, substitui `#E1` como substring (parte o `#E10`) e ordena as
+    evidências como strings;
+  - o `Flow.as_step()` aplica o scope duas vezes;
+  - o `best_score` da LATS começa em 0.0 com `>`;
+  - o reflect da Reflexion corre depois da última tentativa falhada;
+  - o `ReasoningSpec.from_mapping` faz de `null` a string `"None"`;
+  - as tarefas multimodais passam por `str(task)`;
+  - o `generate_review_flow` não está exportado no topo;
+  - faltam os `_sync` do `GraphStore`, das vistas, do `Agent.iter` e outros.
+- **Grafo e memória:**
+  - o índice de tipos do grafo fica desactualizado;
+  - a docstring de `Graph.copy` diz "deep copy";
+  - o `find_all_paths` repete caminhos;
+  - o `MemoryPreset.consolidate` apaga o que não é duplicado;
+  - o `_extract_text` da moderação ignora partes em lista ou string.
+- **Prompts e recursos:**
+  - o `_infer_manifest_variables` salta templates com `select`;
+  - as impressões digitais dos prompts incluem caminhos absolutos;
+  - `load_resources(extensions={"md"})` não carrega nada;
+  - o `TextSerializer` levanta `TypeError` cru numa `date`.
+- **Tools:**
+  - o `~utilizador` cru em `read_file`, `list_directory` e `search_files`;
+  - o `run_command` aceita 600 s contra os 120 s do executor (agora documentado);
+  - as guardas de tamanho do `python_repl` (vectores novos na RC53).
