@@ -379,6 +379,21 @@ def _tool_config(choice: str) -> types.ToolConfig:
 # ---------------------------------------------------------------------------
 
 
+def _reported(usage: types.GenerateContentResponseUsageMetadata | None) -> bool:
+    """Whether ``usage`` reports a counter the toolkit prices from. A metadata with none set
+    reports nothing: read as zeros, it would settle a delivered answer at a known $0 (D67)."""
+    return usage is not None and any(
+        count is not None
+        for count in (
+            usage.prompt_token_count,
+            usage.candidates_token_count,
+            usage.thoughts_token_count,
+            usage.cached_content_token_count,
+            usage.tool_use_prompt_token_count,
+        )
+    )
+
+
 def _extract_usage(usage: types.GenerateContentResponseUsageMetadata) -> Usage:
     """The toolkit's usage: tool-use prompt tokens are input, thoughts are output, and the
     candidates' image tokens are image output, billed at the image rate
@@ -518,7 +533,12 @@ def _joined(chunks: list[types.GenerateContentResponse]) -> types.GenerateConten
             )
         ],
         usage_metadata=next(
-            (chunk.usage_metadata for chunk in reversed(chunks) if chunk.usage_metadata), None
+            (
+                chunk.usage_metadata
+                for chunk in reversed(chunks)
+                if _reported(chunk.usage_metadata)
+            ),
+            None,
         ),
         model_version=last.model_version,
         response_id=last.response_id,
@@ -779,7 +799,8 @@ class GeminiProvider(
         return _parse_sdk_response(final, self._model, output_schema=prepared.output_schema)
 
     def usage(self, final: types.GenerateContentResponse) -> Usage | None:
-        return _extract_usage(final.usage_metadata) if final.usage_metadata else None
+        usage = final.usage_metadata
+        return _extract_usage(usage) if usage is not None and _reported(usage) else None
 
     def map_error(self, exc: Exception, *, sent: bool) -> ProviderError | None:
         """The one place that knows the SDK's errors.

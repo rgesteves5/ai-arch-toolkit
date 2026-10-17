@@ -421,6 +421,7 @@ report = result.meter            # BudgetReport | None (None only if unmetered)
 report.cost                      # known USD spend
 report.cost_at_most              # known + bounded uncertain USD; None if anything is unbounded
 report.cost_uncertain            # True with bounded or unbounded uncertainty
+report.unmeasured_delivery_count # replies delivered whose cost was not measured (alarm on these)
 report.over_budget, report.breached   # which caps were reached
 result.total_cost, result.usage  # convenience: meter cost / token usage
 ```
@@ -464,6 +465,18 @@ cost.
 unknowns; `unknown_cost_count` counts only unbounded unknowns. Cost checks include known spend,
 bounded uncertainty and outstanding holds. A successful retry adds its actual cost without
 pretending that the failed attempt's bound was a charge.
+
+A reply delivered without its usage (an OpenAI-compatible server that sends no usage chunk, an
+Images API answer with `usage: null`, a Gemini answer whose `usage_metadata` sets no counter) and
+without a cost the provider reported is bounded the same way as an indeterminate failure, below
+(D67): `Cost.unknown("the provider reported no usage", at_most=...)`, never a known zero. Its
+bound counts in `uncertain_cost`, so the cost checks see it and `unpriced="fail_closed"` does not
+refuse the next call. It is also counted apart, in `MeterSnapshot.unmeasured_delivery_count`
+(and `BudgetReport.unmeasured_delivery_count`): an app that bills its users from the meter raises
+an alarm on it, since the bound is not what the provider charged. In the audit stream it is a
+`UsageEvent` with `status == "settled"` and a cost that is not known. A model billed per image
+(Meta's `muse-image-`, xAI's `grok-imagine-image`) reports its usage by the images it drew, with
+or without tokens.
 
 Under `reserve="strict"`, an indeterminate failure retains its own reservation as its bound.
 Otherwise, with a soft budget or none at all, the meter bounds it by the worst case of the

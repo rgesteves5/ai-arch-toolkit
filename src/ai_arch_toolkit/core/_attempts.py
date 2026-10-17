@@ -189,13 +189,18 @@ def _unpriced(scope: MeterScope, model: str | None) -> UnpricedModelError:
     )
 
 
-def _settlement_cost(scope: MeterScope, request: OperationRequest, answer: Answer) -> Cost:
+_UNREPORTED = "the provider reported no usage"
+
+
+def _settlement_cost(scope: MeterScope, request: OperationRequest, answer: Answer) -> Cost | None:
+    """The delivered attempt's cost, or ``None`` when the provider reported neither its usage nor
+    its cost: the meter then bounds it as a failure that may have been billed (D67)."""
     pricer = scope.pricer or pricing
     response = answer.response
     if pricer is pricing and response.provider_cost is not None:
         return Cost.known(Money.from_usd(response.provider_cost))
     if not answer.usage_reported:
-        return Cost.unknown("the provider reported no usage")
+        return None
     return _priced(scope, request, response.usage)
 
 
@@ -369,8 +374,11 @@ class _PhysicalAttempt:
         with self.execution.lock:
             if self.phase != "completed":
                 return
-            if self.op is not None and cost is not None:
-                self.op.settle(usage=answer.response.usage, cost=cost)
+            if self.op is not None:
+                if cost is None:
+                    self.op.settle_unmeasured(usage=answer.response.usage, reason=_UNREPORTED)
+                else:
+                    self.op.settle(usage=answer.response.usage, cost=cost)
             self.phase = "settled"
 
     def fail(self, error: BaseException) -> None:

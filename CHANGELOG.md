@@ -28,7 +28,9 @@ flows, manifests) needs these changes; each one is detailed below.
   without a price raises `UnpricedModelError`: register one (`ModelPricing()` for a local model).
   `Response.cost` is `None`, not `0`, when the provider reported no usage.
 - **Custom meters.** `MeterOperation.fail(...)` requires a delivery disposition, and
-  `unknown_cost_count` counts only unbounded costs.
+  `unknown_cost_count` counts only unbounded costs. A reply delivered without its usage is no
+  longer one of them: it is bounded like a failure that may have been billed, and counted in
+  `unmeasured_delivery_count` (D67).
 - **Streams.** A finished stream carries the same `Response` as `complete()`, and
   `stream_events()` emits the tool-call events after the text, in the response's order. Before
   them come the calls' pieces, as `tool_call_delta` events (G-37): code that matches every
@@ -134,6 +136,13 @@ English Wikipedia is the default, where the MediaWiki tools defaulted to the Eng
 tools moved it into their own limits without a word (1 to 100,000, or 200 to 4,000).
 
 ### Added
+- **`unmeasured_delivery_count`** on `MeterSnapshot` and `BudgetReport` (and in their
+  `to_dict()`): the results delivered whose cost was not measured, because the provider reported
+  neither their usage nor their cost (D67). Each is also counted in `uncertain_cost_count`, or in
+  `unknown_cost_count` when nothing bounds it: an app that bills its users raises an alarm on it
+  instead of charging the bound or reading the result as free. `UsageEvent` shows the same case
+  as `status == "settled"` with a cost that is not known. A custom charge site settles such a
+  result with `MeterOperation.settle_unmeasured(usage=..., reason=...)`.
 - Claude Sonnet 5.5 (`claude-sonnet-5-5`) and Claude Haiku 5.5 (`claude-haiku-5-5`), from
   Anthropic's pages on 2026-10-17: prices, catalog seed entries (1M context, 128K output; text,
   images and PDF in, text out), and probe inventory entries, not yet run live. A metered call to
@@ -497,6 +506,12 @@ tools moved it into their own limits without a word (1 to 100,000, or 200 to 4,0
   [docs/agents.md](docs/agents.md#file-backed-agent-manifests).
 
 ### Changed
+- Under a meter, a reply delivered without its usage (and without a cost the provider reported)
+  is settled as a failure that may have been billed is (D49, D67): an unknown cost, at most the
+  call's strict hold, or else the worst case of its request's facts at the run's prices. It was an
+  unknown cost with no bound. Its bound enters `uncertain_cost`, `report.cost_at_most` and
+  `max_cost`, and a cost cap with `unpriced="fail_closed"`, or a `SharedBudget`, no longer refuses
+  the calls after it.
 - **Breaking:** the minimum Python is 3.13.4 (`requires-python = ">=3.13.4"`, D64).
 - `ai_arch_toolkit.toolkit.tools.dangerous.__all__` also lists `FilesystemAction`,
   `FilesystemPolicy`, `FilesystemPolicyError`, `PathScopeGate` and `filesystem_tools`: code that
@@ -1108,6 +1123,12 @@ tools moved it into their own limits without a word (1 to 100,000, or 200 to 4,0
   key failed the run with "got multiple values for keyword argument 'tools'". `messages`,
   `system` and `tools` are now refused where `llm_kwargs` is given, and the published manifest
   schema says so (C05.4).
+- An Images API answer with `usage: null` from a model billed by tokens (OpenAI's GPT Image
+  models) settled at a known $0: its usage is now unreported, and the meter bounds it (D67). Meta's
+  `muse-image-` models are billed per image, so the images drawn stay their usage.
+- A Gemini answer whose `usage_metadata` sets no token counter (or only the total) settled at a
+  known $0: its usage is now unreported. In a stream, an empty usage on the last chunk no longer
+  hides the usage an earlier chunk reported (D67).
 - Inlining a schema's `$ref` references (a Pydantic parameter's, or a `tool_from_schema`
   schema's) is bounded at about 100,000 characters and 100 levels, a reference followed counting
   as one: a schema whose references multiply (1.9 KB that became 17.5 MB in 1.4 s), or a chain of

@@ -645,6 +645,37 @@ class TestCalls:
         assert not items[-1].usage_reported
         assert items[-1].response.cost is None
 
+    async def test_a_usage_metadata_with_no_counter_is_no_usage(self):
+        # Read as zeros it would settle a delivered answer at a known $0 (D67).
+        final = _response(
+            usage=types.GenerateContentResponseUsageMetadata(traffic_type="ON_DEMAND")
+        )
+        provider = _mocked(generate_content=AsyncMock(return_value=final))
+        answer = await provider.complete(prepare(provider, HI))
+        assert answer.response.text == "Hello"
+        assert not answer.usage_reported
+        assert answer.response.cost is None
+
+    async def test_a_usage_metadata_with_only_a_total_is_no_usage(self):
+        # The total alone cannot be split into input and output, so nothing can be priced.
+        final = _response(usage=types.GenerateContentResponseUsageMetadata(total_token_count=9))
+        provider = _mocked(generate_content=AsyncMock(return_value=final))
+        assert not (await provider.complete(prepare(provider, HI))).usage_reported
+
+    async def test_an_empty_last_usage_does_not_hide_the_reported_one(self):
+        provider = _streaming(
+            _chunk(types.Part(text="Hello "), usage=_usage(prompt=10, candidates=5)),
+            _chunk(
+                types.Part(text="world"),
+                finish="STOP",
+                usage=types.GenerateContentResponseUsageMetadata(),
+            ),
+        )
+        items = [item async for item in provider.stream(prepare(provider, HI))]
+        assert items[-1].usage_reported
+        assert items[-1].response.usage.input_tokens == 10
+        assert items[-1].response.usage.output_tokens == 5
+
 
 # ---------------------------------------------------------------------------
 # Errors: the one mapper

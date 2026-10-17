@@ -33,7 +33,9 @@ class BudgetReport:
     """Known spend and its uncertainty, projected against the run's caps.
 
     ``cost_at_most`` includes bounded uncertainty; None means some cost is unbounded.
-    ``cost_uncertain`` includes both bounded and unbounded unknowns.
+    ``cost_uncertain`` includes both bounded and unbounded unknowns. ``unmeasured_delivery_count``
+    counts the results delivered whose cost was not measured (D67): their bound is in
+    ``cost_at_most``, and an app that bills raises an alarm on them rather than charge the bound.
     """
 
     llm_calls: int
@@ -49,6 +51,7 @@ class BudgetReport:
     breached: tuple[str, ...]
 
     cost_at_most: float | None = None
+    unmeasured_delivery_count: int = 0
 
     def __post_init__(self) -> None:
         if self.cost_at_most is None and not self.cost_uncertain:
@@ -74,6 +77,7 @@ class BudgetReport:
             ),
             unknown_cost_count=snapshot.unknown_cost_count,
             cost_uncertain=snapshot.unknown_cost_count + snapshot.uncertain_cost_count > 0,
+            unmeasured_delivery_count=snapshot.unmeasured_delivery_count,
             elapsed_s=snapshot.elapsed_s,
             over_budget=bool(breached),
             breached=breached,
@@ -91,6 +95,7 @@ class BudgetReport:
             "cost_at_most": self.cost_at_most,
             "unknown_cost_count": self.unknown_cost_count,
             "cost_uncertain": self.cost_uncertain,
+            "unmeasured_delivery_count": self.unmeasured_delivery_count,
             "elapsed_s": self.elapsed_s,
             "over_budget": self.over_budget,
             "breached": list(self.breached),

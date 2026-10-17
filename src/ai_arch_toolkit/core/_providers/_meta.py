@@ -99,9 +99,9 @@ _MUSE_SPARK = "muse-spark"
 # Muse Image on the Images API (https://dev.meta.ai/docs/image-generation): up to 10 images, no
 # quality, and a size that sets only the aspect ratio (live: 1024x1024 gives 1600x1600, 1024x1792
 # gives 1152x2016; I01 check 7). One input image per edit: Meta wants several as image[0],
-# image[1]…, and the SDK names them image[] (live, I03). An unlisted muse-image- id takes the same
-# rules.
-_MUSE_IMAGE = ImageModel(size="ratio", max_images=10, max_inputs=1)
+# image[1]…, and the SDK names them image[] (live, I03). It bills a flat price per image
+# (https://dev.meta.ai/docs/pricing-rate-limits). An unlisted muse-image- id takes the same rules.
+_MUSE_IMAGE = ImageModel(size="ratio", max_images=10, max_inputs=1, per_image=True)
 _IMAGE_FAMILIES = {"muse-image-": _MUSE_IMAGE}
 
 _PROFILE = ResponsesProfile(

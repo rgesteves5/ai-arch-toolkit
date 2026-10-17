@@ -4,6 +4,9 @@
 > accounting in this draft: typed delivery, bounded uncertainty, strict tool pricing and a single
 > attempt pipeline. The current contract is [Cumulative budgets](../safety.md#cumulative-budgets),
 > especially its failed-call table; the phase record is `blackboard/tasks/R01-core-calls.md`.
+> D49 bounds every failure that may have been billed; D67 settles a result delivered without its
+> usage the same way (`MeterOperation.settle_unmeasured`), counted apart in
+> `MeterSnapshot.unmeasured_delivery_count`.
 > Reference snapshot: `feat/agent-budget` @ `2af0fc7` — **never merge**.
 > This revision integrated a 7-reviewer audit (5 internal persona agents + Codex + ChatGPT).
 

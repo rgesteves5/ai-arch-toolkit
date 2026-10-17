@@ -11,6 +11,7 @@ from ai_arch_toolkit.core import (
     LLM,
     APIError,
     MeterScope,
+    Money,
     RequestError,
     Response,
     RunConfig,
@@ -192,7 +193,9 @@ async def test_a_middleware_rewrite_the_adapter_refuses_releases_the_stream_rese
 
 
 @pytest.mark.parametrize("path", ["complete", "stream", "stream_events"])
-async def test_a_response_without_usage_settles_an_unknown_cost(path: str) -> None:
+async def test_a_response_without_usage_settles_a_bounded_unknown_cost(path: str) -> None:
+    # Delivered without usage: bounded as a failure that may have been billed (D49), and
+    # counted apart so an app that bills can raise an alarm (D67).
     llm = configured(MinimalProvider(Final("hello", usage=None)))
     with MeterScope() as scope:
         if path == "complete":
@@ -204,8 +207,11 @@ async def test_a_response_without_usage_settles_an_unknown_cost(path: str) -> No
             response = stream.response
     assert response.text == "hello"
     assert response.cost is None
-    assert scope.snapshot().llm_calls == 1
-    assert scope.snapshot().unknown_cost_count == 1
+    snapshot = scope.snapshot()
+    assert snapshot.llm_calls == 1
+    assert snapshot.unknown_cost_count == 0
+    assert snapshot.uncertain_cost_count == 1 and snapshot.uncertain_cost > Money.zero()
+    assert snapshot.unmeasured_delivery_count == 1
 
 
 @pytest.mark.parametrize("path", ["stream", "stream_events"])
