@@ -9,6 +9,11 @@
   `RequestError`; qualquer config de server tool dá `RequestError` em todos os adaptadores (R02). As
   referências a ficheiros e linhas são de 2026-09-15, anteriores às frentes R e T: relê-as contra o
   `main` antes de começar.
+- **Actualização (2026-10-17):** a parte da decisão C05.4 que as decisões anteriores já fixavam
+  está feita (`1d11f9f`): o `llm_kwargs` recusa `messages`, `system` e `tools` (no
+  `ReasoningSpec`, nas nove factories, no knob `reviewer_kwargs` e no manifesto, também por
+  override). O `tools.server` da C05.2 é agora o único caminho que falta para dar server tools a um
+  agente.
 
 ## Problema
 
@@ -182,6 +187,13 @@ agent = Agent(ReasoningSpec(strategy="react", server_tools=(ws,)), llm, ToolGrou
 ## Registo do dono
 
 - Estado: todo
+- 2026-10-17, antes da ficha (Claude, a pedido do dono): a reserva de `tools` no `llm_kwargs`
+  (C05.4), com `messages` e `system`, pela mesma causa. Hoje o `completion` mandava ao fornecedor
+  as tools do `llm_kwargs` sem as governar, e um override de `strategy.llm_kwargs` passava um
+  `deny: [tools]`. Uma regra (`RESERVED_LLM_KWARGS`) e um shape (`LLM_KWARGS`) em
+  `flows/_common.py`; o JSON Schema do manifesto passa a dizê-lo. Uma revisão (xhigh) achou oito
+  pontos; sete corrigidos, e um (a regra vale também para as estratégias registadas) ficou como
+  contrato documentado. Gate: 8467 passed, 59 skipped. `1d11f9f`.
 - Ficheiros tocados:
 - Testes novos:
 - Verificações:

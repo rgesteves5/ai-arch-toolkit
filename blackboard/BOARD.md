@@ -410,8 +410,11 @@ que ficou aberto está em "Por fazer".
   (`docs/model-compatibility.md`). Os 13 modelos OpenAI do inventário, com o Astra e o 6.1 Sol,
   correram a 2026-10-02 (77 de 77, O04).
 - **Frente C, decisões:** as da vaga 1 estão fixadas (D62 a D65). As das vagas 2 e 3, revistas
-  contra o código de 2026-10-09 (49 abertas, 9 já decididas), estão na página
-  https://claude.ai/artifact/8rgFxyBi5zy94jtGXCJMtg para o dono escolher; falta fixar as das vagas 2 e 3 (C01, C03, C04, C05, C09).
+  de novo a 2026-10-14 contra o código e os achados RC01 a RC74 (47 abertas, entre elas a RC.1,
+  transversal, sobre quando corrigir os achados de que as fichas dependem; 18 já decididas), estão
+  na página https://claude.ai/artifact/8rgFxyBi5zy94jtGXCJMtg para o dono escolher; falta fixá-las
+  (C01, C03, C04, C05, C09). A parte da C05.4 que as decisões anteriores já fixavam está feita
+  (`1d11f9f`).
 - **Decidir, achado de 2026-09-18 sem tarefa (`FINDINGS.md`):** o xAI larga os documentos de um
   pedido (o SDK tem `file(...)`). As imagens passaram a ir na A13, e o `LLM("grok-…")` depois de
   um `asyncio.run` já não levanta desde a A03 (G-17). (O `thinking_effort` do OpenAI e o preço do

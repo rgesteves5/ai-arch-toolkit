@@ -890,3 +890,23 @@ R01 publicada em `main` (`b3dae3f`); a R02 começa com a leitura obrigatória da
 - Publicado: `30a1191` (C07), `a195ec6` (C07c), `e79df1f` (as correcções e o `CHANGELOG`).
 - Gate: 8425 passed, 118 skipped; ruff, formatação, pyright e `uv lock --check` limpos.
 - A seguir: a C06e (depois do C01 e do C05) e as decisões das vagas 2 e 3 da frente C.
+
+## 2026-10-14 · Segunda revisão das decisões das vagas 2 e 3 (Claude, a pedido do dono)
+
+- Cinco agentes, um por ficha, reviram as 49 decisões abertas contra o código, o lockfile novo
+  (`71824b9`) e os achados RC01 a RC74 (`22ee7a7`), com sondas offline.
+- Ficaram 47 abertas: nove passaram a decididas por decisões anteriores, entraram sete novas
+  (C03.16, C04.12 a C04.14, C05.13, C09.10 e a RC.1, transversal), e mudaram as recomendações da
+  C01.4, C01.11, C03.4, C03.14, C04.2 e C05.10.
+- A página (https://claude.ai/artifact/8rgFxyBi5zy94jtGXCJMtg) está na versão 2; o dono ainda não
+  escolheu.
+
+## 2026-10-17 · `llm_kwargs` sem tools, mensagens nem sistema (Claude, a pedido do dono)
+
+- Do que estava decidido e pronto, o dono escolheu uma coisa; a mais importante era a parte da
+  C05.4: as tools no `llm_kwargs` chegavam ao fornecedor sem passar pelas tools do agente.
+- Feito com `messages` e `system`, pela mesma causa, em todos os caminhos (spec, factories, knob
+  do revisor, manifesto e o seu JSON Schema). Uma revisão (xhigh) achou oito pontos: sete
+  corrigidos, um ficou como contrato documentado.
+- Publicado: `1d11f9f`. Gate: 8467 passed, 59 skipped; ruff, formatação, pyright e
+  `uv lock --check` limpos.
