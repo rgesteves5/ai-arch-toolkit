@@ -17,11 +17,13 @@ from ai_arch_toolkit.core._providers import create_provider
 
 SEED = Path(__file__).resolve().parents[1] / "src/ai_arch_toolkit/core/_default_catalog.toml"
 
-# The current line with an official page (C06.6): the 30 models of the probe inventory that are
+# The current line with an official page (C06.6): the 32 models of the probe inventory that are
 # still served, and the image models (C06.7).
 _CHAT = {
     "anthropic": {
         "claude-opus-5-5",
+        "claude-sonnet-5-5",
+        "claude-haiku-5-5",
         "claude-opus-4-7",
         "claude-sonnet-4-6",
         "claude-haiku-4-5",
@@ -118,7 +120,7 @@ def test_the_seed_is_the_current_line_and_the_image_models() -> None:
     seeded = {(entry.provider, entry.model) for entry in model_catalog.entries()}
 
     assert seeded == _pairs(_CHAT) | _pairs(_IMAGE)
-    assert len(_pairs(_CHAT)) == 30
+    assert len(_pairs(_CHAT)) == 32
 
 
 def test_the_inventory_ids_find_their_entries() -> None:

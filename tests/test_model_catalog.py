@@ -636,6 +636,71 @@ def test_meta_takes_only_auto_and_none() -> None:
     assert found.tool_choice_modes == frozenset({"auto", "none"})
 
 
+def test_sonnet_55_refuses_a_forced_tool_and_haiku_55_takes_one() -> None:
+    sonnet = model_catalog.get("claude-sonnet-5-5")
+    haiku = model_catalog.get("claude-haiku-5-5")
+
+    assert sonnet is not None and haiku is not None
+    assert sonnet.tool_choice_modes == frozenset({"auto", "none"})
+    assert haiku.tool_choice_modes == frozenset({"auto", "none", "required", "named"})
+    for found in (sonnet, haiku):
+        assert (found.context_window, found.output_token_limit) == (1_000_000, 128_000)
+        assert found.thinking_efforts == ("low", "medium", "high", "xhigh", "max")
+
+
+# ---------------------------------------------------------------------------
+# A model no layer names: the adapter's facts alone, for an id that routes to it
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("model", "provider"),
+    [("gpt-5.6-luna", "openai"), ("gpt-5.1", "openai"), ("claude-opus-5-2", "anthropic")],
+)
+def test_a_routed_model_no_layer_names_has_its_adapters_facts(model: str, provider: str) -> None:
+    catalog = ModelCatalog()
+
+    found = catalog.get(model)
+
+    assert found is not None and (found.provider, found.model) == (provider, model)
+    assert found.tools is True and found.thinking_efforts is not None
+    assert {source.kind for _, source in found.sources} == {"adapter"}
+    assert found.context_window is None and found.input_modalities is None  # nothing published
+    assert model not in {entry.model for entry in catalog.entries()}  # found by id, not listed
+    registered = ModelCatalog()  # the workaround an app needed, an empty entry, gives the same
+    registered.register(ModelCapabilities(provider=provider, model=model))
+    assert found == registered.get(model)
+
+
+def test_an_adapter_only_entry_needs_the_routing_the_defaults_and_the_sdk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert ModelCatalog().get("gpt-5.6-luna", provider="ollama") is None  # an app's namespace
+    assert ModelCatalog().get("llama3.1", provider="openai") is None  # a compatible server's
+    assert ModelCatalog(defaults=False).get("gpt-5.6-luna") is None
+    monkeypatch.setitem(sys.modules, "ai_arch_toolkit.core._providers._openai", None)
+    assert ModelCatalog().get("gpt-5.6-luna") is None  # without its SDK nothing is known
+
+
+def test_unregister_forgets_the_adapters_facts_too_until_named_again() -> None:
+    catalog = ModelCatalog()
+
+    catalog.unregister("gpt-5.6-luna")  # only the adapter knew it
+    catalog.unregister("grok-4.20-reasoning")  # seeded, named by its alias
+    assert catalog.get("gpt-5.6-luna") is None
+    assert catalog.get("gpt-5.6-luna-2026-11-01") is None  # its snapshots too
+    assert catalog.get("grok-4.20-reasoning") is None
+    assert catalog.get("grok-4.20-0309-reasoning") is None
+
+    catalog.register(
+        ModelCapabilities(provider="openai", model="gpt-5.6-luna", parallel_tool_calls=True)
+    )
+    found = catalog.get("gpt-5.6-luna")
+    assert found is not None and found.tools is True  # the adapter's facts join the new entry
+    catalog.reset()
+    assert catalog.get("grok-4.20-reasoning") is not None
+
+
 def test_without_the_sdk_extra_the_adapters_facts_are_unknown(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

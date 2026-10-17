@@ -96,3 +96,26 @@ async def test_an_unpriced_fallback_is_terminal() -> None:
         await primary.complete("hi")
     assert scope.snapshot().llm_calls == 1  # only the primary's attempt started
     assert backup.calls == 0
+
+
+@pytest.mark.parametrize(
+    ("model", "usage", "usd"),
+    [
+        ("claude-sonnet-5-5", Usage(input_tokens=1_000_000, output_tokens=100_000), 3.0),
+        ("claude-haiku-5-5", Usage(input_tokens=100_000, output_tokens=1_000_000), 0.51),
+        ("claude-haiku-5-5", Usage(input_tokens=100_001, output_tokens=1_000_000), 2.5500005),
+    ],
+)
+async def test_the_current_claude_models_are_priced_under_a_meter(
+    model: str, usage: Usage, usd: float
+) -> None:
+    """Sonnet 5.5 and Haiku 5.5 had no price, so a metered call to either failed closed."""
+    provider = FakeProvider(Response(text="ok", usage=usage, model=model), model=model)
+    llm = LLM(model, api_key="test", max_tokens=32)
+    llm._provider = provider
+
+    with MeterScope() as scope:
+        await llm.complete("hi")
+
+    assert provider.calls == 1
+    assert scope.snapshot().cost == Money.from_usd(usd)

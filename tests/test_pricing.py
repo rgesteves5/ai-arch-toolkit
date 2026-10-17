@@ -243,6 +243,20 @@ class TestPricingRegistryGet:
         assert (p.batch_input, p.batch_output, p.batch_cache_read) == (2.0, 10.0, 0.10)
         assert (p.fast_input, p.fast_output, p.fast_cache_read) == (8.0, 40.0, 0.40)
 
+    def test_sonnet_55_pricing(self):
+        # https://platform.claude.com/docs/en/about-claude/pricing (2026-10-17): cache reads at
+        # 0.05x input, $0.10 where Sonnet 5's are $0.20; one tier over the whole 1M context.
+        p = pricing.get("claude-sonnet-5-5")
+        assert p is not None
+        assert (p.input, p.output, p.cache_write, p.cache_read) == (2.0, 10.0, 2.50, 0.10)
+        assert (p.batch_input, p.batch_output, p.batch_cache_write, p.batch_cache_read) == (
+            1.0,
+            5.0,
+            1.25,
+            0.05,
+        )
+        assert p.long_context_threshold is None and p.fast_input is None
+
     def test_haiku_45_specific_prefix(self):
         p = pricing.get("claude-haiku-4-5-20251001")
         assert p is not None
@@ -1215,3 +1229,44 @@ class TestToolPrices:
 
         assert pricing.price(request("brave_search"), Usage()) == Cost.known(Money.from_usd(0.005))
         assert pricing.price(request("arxiv_search"), Usage()) == Cost.known(Money.zero())
+
+
+# Claude Haiku 5.5 is priced by prompt length: "a request whose prompt is over 100,000 tokens pays
+# higher prices", and "a request's prompt length counts all of its input tokens, including cache
+# reads and cache writes" (https://platform.claude.com/docs/en/about-claude/pricing, 2026-10-17).
+# Rates per million: (input, cache write, cache read, output).
+_HAIKU_55 = {
+    (False, False): (0.10, 0.125, 0.01, 0.50),
+    (False, True): (0.50, 0.625, 0.05, 2.50),
+    (True, False): (0.05, 0.0625, 0.005, 0.25),
+    (True, True): (0.25, 0.3125, 0.025, 1.25),
+}
+
+
+@pytest.mark.parametrize("batch", [False, True])
+@pytest.mark.parametrize(
+    ("input_tokens", "cache_write", "cache_read", "over"),
+    [
+        (100_000, 0, 0, False),  # "over 100,000": the threshold itself is standard
+        (100_001, 0, 0, True),
+        (1, 50_000, 49_999, False),
+        (1, 50_000, 50_000, True),  # cached tokens count toward the prompt
+    ],
+)
+def test_haiku_55_prices_a_prompt_over_100k_at_its_higher_rates(
+    batch: bool, input_tokens: int, cache_write: int, cache_read: int, over: bool
+) -> None:
+    rates = _HAIKU_55[(batch, over)]
+    tokens = (input_tokens, cache_write, cache_read, 1_000_000)
+    expected = sum(rate * count for rate, count in zip(rates, tokens, strict=True)) / 1e6
+
+    cost = pricing.estimate_cost(
+        "claude-haiku-5-5",
+        input_tokens=input_tokens,
+        output_tokens=1_000_000,
+        cache_write_tokens=cache_write,
+        cache_read_tokens=cache_read,
+        is_batch=batch,
+    )
+
+    assert cost == pytest.approx(expected)

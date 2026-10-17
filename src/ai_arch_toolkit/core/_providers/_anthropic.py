@@ -141,18 +141,23 @@ class _Profile:
     forced_tools: bool = True
 
 
-# The Claude 5 family (Opus 5, Sonnet 5, Fable 5, Mythos 5), Opus 4.8 and 4.7, and any newer
-# model: adaptive thinking with every effort level, no sampling parameters.
+# The Claude 5 family (Opus 5, Sonnet 5, Fable 5, Mythos 5), Haiku 5.5, Opus 4.8 and 4.7, and any
+# newer model: adaptive thinking with every effort level, no sampling parameters. Haiku 5.5 takes
+# a forced tool choice, answering without thinking; its temperature can only be 1, top_p only
+# 0.99 and top_k nothing (https://platform.claude.com/docs/en/models/haiku-5-5/migration-guide,
+# https://platform.claude.com/docs/en/build-with-claude/effort).
 _CURRENT = _Profile()
 _EXTENDED = _Profile(
     thinking="extended", efforts=frozenset(THINKING_EFFORT_BUDGETS), sampling=True
 )
 # The families that differ from the current rules, a closed list.
 _PROFILES: dict[str, _Profile] = {
-    # Forced tool use returns a 400 (https://platform.claude.com/docs/en/api/errors and
-    # https://platform.claude.com/docs/en/models/opus-5-5/migration-guide).
+    # Forced tool use returns a 400 (https://platform.claude.com/docs/en/api/errors,
+    # https://platform.claude.com/docs/en/models/opus-5-5/migration-guide and
+    # https://platform.claude.com/docs/en/models/sonnet-5-5/migration-guide).
     **dict.fromkeys(
-        ("claude-opus-5-5", "claude-fable-5-1", "claude-mythos-5-1"), _Profile(forced_tools=False)
+        ("claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1", "claude-mythos-5-1"),
+        _Profile(forced_tools=False),
     ),
     "claude-mythos-preview": _Profile(efforts=_EFFORTS - {"xhigh"}),
     **dict.fromkeys(

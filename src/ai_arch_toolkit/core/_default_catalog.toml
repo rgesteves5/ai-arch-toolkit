@@ -5,9 +5,10 @@
 # the day. What the adapter does with a model (tools, tool choices, reasoning, server tools)
 # comes from the adapter's own tables (`model_facts`), never from here.
 #
-# The seed is the current line with an official page (C06.6): the 30 models of the probe
+# The seed is the current line with an official page (C06.6): the 32 models of the probe
 # inventory (scripts/model_probe_models.toml) still served, and the image models (C06.7). A fact
-# a page does not state is left out (unknown, never "no"). Read on 2026-10-08.
+# a page does not state is left out (unknown, never "no"). Read on 2026-10-08; Claude Sonnet 5.5
+# and Haiku 5.5 on 2026-10-17.
 #
 # Keys are the provider's own ids; a dated snapshot finds its entry without an alias. `aliases`
 # lists other fixed ids of the same model; a `-latest` pointer, which moves, never is one.
@@ -29,6 +30,22 @@ input_modalities = ["text", "image", "pdf"]
 output_modalities = ["text"]
 source = { kind = "docs", ref = "https://platform.claude.com/docs/en/models/opus-5-5/overview", verified_at = 2026-10-08 }
 sources.input_modalities = { kind = "docs", ref = "https://platform.claude.com/docs/en/models/opus-5-5/overview, https://platform.claude.com/docs/en/build-with-claude/pdf-support", verified_at = 2026-10-08 }
+
+[anthropic."claude-sonnet-5-5"]
+context_window = 1_000_000
+output_token_limit = 128_000
+input_modalities = ["text", "image", "pdf"]
+output_modalities = ["text"]
+source = { kind = "docs", ref = "https://platform.claude.com/docs/en/models/sonnet-5-5/overview", verified_at = 2026-10-17 }
+sources.input_modalities = { kind = "docs", ref = "https://platform.claude.com/docs/en/models/sonnet-5-5/overview, https://platform.claude.com/docs/en/build-with-claude/pdf-support", verified_at = 2026-10-17 }
+
+[anthropic."claude-haiku-5-5"]
+context_window = 1_000_000
+output_token_limit = 128_000
+input_modalities = ["text", "image", "pdf"]
+output_modalities = ["text"]
+source = { kind = "docs", ref = "https://platform.claude.com/docs/en/models/haiku-5-5/overview", verified_at = 2026-10-17 }
+sources.input_modalities = { kind = "docs", ref = "https://platform.claude.com/docs/en/models/haiku-5-5/overview, https://platform.claude.com/docs/en/build-with-claude/pdf-support", verified_at = 2026-10-17 }
 
 [anthropic."claude-opus-4-7"]
 context_window = 1_000_000
