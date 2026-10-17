@@ -95,6 +95,7 @@ with require_sdk("openai"):  # the meta extra installs the same package
     from openai.types.responses.response_output_text import Logprob
 
     from ai_arch_toolkit.core._providers._openai_images import (
+        ImageModel,
         ImagesCall,
         images_response,
         images_usage,
@@ -778,6 +779,10 @@ class ResponsesProvider(LoopAwareClientCache, BaseProvider[Call, Final]):
     def _responses(self) -> AsyncResponses:
         return self._client.responses
 
+    def _image_rules(self) -> ImageModel | None:
+        """The rules of the adapter's model on the Images API; ``None`` for a chat model."""
+        return None
+
     async def send(self, prepared: Call) -> Final:
         if isinstance(prepared, ImagesCall):
             return await send_images(self._client.images, prepared)
@@ -819,7 +824,8 @@ class ResponsesProvider(LoopAwareClientCache, BaseProvider[Call, Final]):
 
     def usage(self, final: Final) -> Usage | None:
         if isinstance(final, ImagesResponse):
-            return images_usage(final)
+            rules = self._image_rules()
+            return images_usage(final, per_image=rules is not None and rules.per_image)
         if final.usage is None:
             return None
         # The images it drew, for a provider that bills per image: Meta's Responses usage holds

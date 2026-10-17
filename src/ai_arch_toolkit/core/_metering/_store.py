@@ -72,6 +72,7 @@ class _Counters:
     unknown: int = 0
     uncertain: Money = field(default_factory=Money.zero)
     uncertain_count: int = 0
+    unmeasured: int = 0  # delivered results whose cost was not measured (D67)
     o_llm: int = 0
     o_tool: int = 0
     o_input: int = 0
@@ -145,6 +146,13 @@ def _settle(c: _Counters, op: _LiveOp, usage: Usage, cost: Cost) -> None:
         c.uncertain_count += 1
 
 
+def _deliver(c: _Counters, op: _LiveOp, usage: Usage, cost: Cost) -> None:
+    """A delivered result settles; one whose cost is not known is also counted apart (D67)."""
+    _settle(c, op, usage, cost)
+    if cost.kind != "known":
+        c.unmeasured += 1
+
+
 def _abort(c: _Counters, op: _LiveOp) -> None:
     _release_holds(c, op)
     if op.request.kind == "llm":
@@ -168,6 +176,7 @@ def _snapshot(c: _Counters, elapsed_s: float) -> MeterSnapshot:
         unknown_cost_count=c.unknown,
         uncertain_cost=c.uncertain,
         uncertain_cost_count=c.uncertain_count,
+        unmeasured_delivery_count=c.unmeasured,
         out_llm_calls=c.o_llm,
         out_tool_calls=c.o_tool,
         out_input_tokens=c.o_input,
@@ -259,8 +268,15 @@ def _fail_cost(op: _LiveOp, delivery: Delivery, bound_of: FailureBound | None) -
     else the worst case of its facts (D49). Foreign pricing must never break cleanup."""
     if delivery in ("not_sent", "unbilled") or op.request.kind == "tool":
         return _ZERO_COST
+    return _bounded(op, bound_of, "operation did not settle")
+
+
+def _bounded(op: _LiveOp, bound_of: FailureBound | None, reason: str) -> Cost:
+    """An unknown cost, at most the operation's strict hold, or else the worst case of its facts
+    (D49): the cost of a failure that may have been billed, and of a result delivered without its
+    usage (D67). Computed outside the store lock."""
     if op.reservation != Reservation():
-        return Cost.unknown("operation did not settle", at_most=op.reservation.cost)
+        return Cost.unknown(reason, at_most=op.reservation.cost)
     bound = None
     if bound_of is not None:
         try:
@@ -270,7 +286,7 @@ def _fail_cost(op: _LiveOp, delivery: Delivery, bound_of: FailureBound | None) -
             bound = bound_of(request)
         except Exception:
             logger.exception("failure bound could not be estimated")
-    return Cost.unknown("operation did not settle", at_most=bound)
+    return Cost.unknown(reason, at_most=bound)
 
 
 def _payload_key(usage: Usage, cost: Cost) -> tuple[object, ...]:
@@ -537,17 +553,33 @@ class MeterStore:
         """STARTED -> SETTLED: release holds, record actual usage + cost. Idempotent on replay."""
         if cost.kind == "estimated":
             raise ValueError("settle() needs an actual cost (known|unknown), not an estimate")
+        self._settle(op_id, usage, cost, _payload_key(usage, cost))
+
+    def settle_unmeasured(self, op_id: str, *, usage: Usage, reason: str) -> None:
+        """STARTED -> SETTLED for a result delivered without its cost (D67): the provider reported
+        no usage. The cost is unknown and bounded as a failure that may have been billed is: at
+        most the strict hold, or else the worst case of the operation's facts (D49). Idempotent on
+        replay."""
+        with self._lock:
+            op = self._ops.get(op_id)
+        cost = _bounded(op, self._failure_bound, reason) if op is not None else None
+        # The bound is computed outside the lock, so a replay compares the payload without it.
+        self._settle(op_id, usage, cost, _payload_key(usage, Cost.unknown(reason)))
+
+    def _settle(
+        self, op_id: str, usage: Usage, cost: Cost | None, payload: tuple[object, ...]
+    ) -> None:
         event = None
         with self._lock:
             op = self._ops.get(op_id)
-            if op is None:
-                self._replay_terminal(op_id, "settled", _payload_key(usage, cost))
+            if op is None or cost is None:
+                self._replay_terminal(op_id, "settled", payload)
                 return
             if not op.started:
                 raise ValueError(f"cannot settle operation {op_id} before mark_started()")
-            self._apply(op.request.parent_span_id, lambda c: _settle(c, op, usage, cost))
+            self._apply(op.request.parent_span_id, lambda c: _deliver(c, op, usage, cost))
             event = self._make_event(op, "settled", usage, cost)
-            self._terminalize(op, "settled", _payload_key(usage, cost))
+            self._terminalize(op, "settled", payload)
         self._dispatch(event)
 
     def fail(

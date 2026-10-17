@@ -101,6 +101,8 @@ class ImageModel:
         max_inputs: The most input images an edit takes.
         tokens: The image output tokens one image costs, by quality and size, where the provider
             publishes them; ``None`` for a model billed per image.
+        per_image: Whether the provider bills it per image: the images drawn are then its usage,
+            even in an answer that reports no tokens.
     """
 
     size: SizeRule
@@ -108,6 +110,7 @@ class ImageModel:
     max_images: int = 10
     max_inputs: int = 16
     tokens: SizeTokens | TileTokens | None = None
+    per_image: bool = False
 
 
 def image_token_bound(options: ImageRequest, rules: ImageModel) -> int | None:
@@ -236,17 +239,19 @@ def images_response(final: ImagesResponse, model: str) -> Response:
     return Response(images=tuple(images), model=model, raw=final, stop_reason="completed")
 
 
-def images_usage(final: ImagesResponse) -> Usage:
-    """The usage of an Images API answer.
+def images_usage(final: ImagesResponse, *, per_image: bool) -> Usage | None:
+    """The usage of an Images API answer, or ``None`` when the provider reported none.
 
     The text and image tokens of each side come apart when the provider details them (OpenAI,
     I01 check 1); undetailed output tokens of an image model are its image's. ``image_count``
-    is there for a provider that bills per image (Meta).
+    is there for a provider that bills per image (Meta, ``per_image``): for such a model the
+    images drawn are the usage even when the answer has no ``usage``. On a model billed by tokens
+    an answer without it reported nothing, never a known $0 (D67).
     """
     count = sum(1 for item in final.data or [] if item.b64_json)
     usage = final.usage
     if usage is None:
-        return Usage(image_count=count)
+        return Usage(image_count=count) if per_image else None
     # Meta's answer leaves the details out (I01 check 7), although the SDK types them as required:
     # a model built from such a body has no such attribute.
     inputs = getattr(usage, "input_tokens_details", None)

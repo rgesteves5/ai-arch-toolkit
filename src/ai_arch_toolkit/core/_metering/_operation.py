@@ -56,7 +56,8 @@ class MeterOperation:
     """A thin handle to one in-flight operation; delegates to the store by ``op_id``.
 
     Lifecycle: :meth:`mark_started` commits the call count, then :meth:`settle`
-    records actuals on success or :meth:`fail` keeps the count on error.
+    records actuals on success (:meth:`settle_unmeasured` when the cost was not reported) or
+    :meth:`fail` keeps the count on error.
     :meth:`abort` fully releases an operation that never started. The only local
     state is the :attr:`abandoned` latch (a stream that quit before draining).
     """
@@ -92,6 +93,15 @@ class MeterOperation:
     def settle(self, *, usage: Usage, cost: Cost) -> None:
         """Record the actual usage and cost (idempotent; ``cost`` must not be estimated)."""
         self._store.settle(self._op_id, usage=usage, cost=cost)
+
+    def settle_unmeasured(self, *, usage: Usage, reason: str) -> None:
+        """Record a result delivered without its cost: the provider reported no usage (D67).
+
+        The meter settles it as unknown, bounded as a failure that may have been billed is (the
+        strict hold, or else the worst case of the operation's facts, D49), and counts it in
+        :attr:`MeterSnapshot.unmeasured_delivery_count`. Idempotent like :meth:`settle`.
+        """
+        self._store.settle_unmeasured(self._op_id, usage=usage, reason=reason)
 
     def fail(
         self, disposition: Delivery, *, usage: Usage | None = None, cost: Cost | None = None

@@ -22,7 +22,7 @@ def replay(events) -> MeterSnapshot:
     llm = tools = inputs = outputs = reads = writes = unknown = 0
     cost = Money.zero()
     uncertain_cost = Money.zero()
-    uncertain_count = 0
+    uncertain_count = unmeasured = 0
     for event in events:
         if event.status != "aborted":
             llm += int(event.kind == "llm")
@@ -39,6 +39,8 @@ def replay(events) -> MeterSnapshot:
                 uncertain_count += 1
         else:
             cost += event.cost.amount
+        # A delivered result whose cost was not measured (D67).
+        unmeasured += int(event.status == "settled" and not event.cost.is_known)
     return MeterSnapshot(
         llm_calls=llm,
         tool_calls=tools,
@@ -50,6 +52,7 @@ def replay(events) -> MeterSnapshot:
         unknown_cost_count=unknown,
         uncertain_cost=uncertain_cost,
         uncertain_cost_count=uncertain_count,
+        unmeasured_delivery_count=unmeasured,
     )
 
 
@@ -65,7 +68,7 @@ def test_terminal_sequences_conserve_meter_and_replay(seed: int) -> None:
                     kind=kind, parent_span_id="run", count=0 if kind == "custom" else 1
                 )
             )
-            action = rng.choice(("abort", "pending", "settle", "fail", "incomplete"))
+            action = rng.choice(("abort", "pending", "settle", "unmeasured", "fail", "incomplete"))
             if action == "abort":
                 op.abort()
             elif action != "pending":
@@ -82,6 +85,9 @@ def test_terminal_sequences_conserve_meter_and_replay(seed: int) -> None:
                     )
                     op.settle(usage=usage, cost=cost)
                     op.settle(usage=usage, cost=cost)  # terminal replay cannot double-charge
+                elif action == "unmeasured":
+                    op.settle_unmeasured(usage=Usage(), reason="no usage")
+                    op.settle_unmeasured(usage=Usage(), reason="no usage")
                 elif action == "fail":
                     op.fail("indeterminate")
                     op.fail("indeterminate")

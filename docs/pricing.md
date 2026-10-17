@@ -15,7 +15,11 @@ and some models reached through an OpenAI-compatible `base_url`: DeepSeek (`deep
 Poolside's `poolside/laguna-s-2.1` on OpenRouter.
 When the provider reports the call's cost itself (xAI does), `response.cost` is that amount. It is
 `None` when the model has no price, or when the provider reported no usage (an
-OpenAI-compatible server that sends no usage chunk, for example): an unknown cost is never zero.
+OpenAI-compatible server that sends no usage chunk, an Images API answer with `usage: null`, a
+Gemini answer whose `usage_metadata` sets no counter): an unknown cost is never zero. Under a meter
+such a reply is bounded at its worst case and counted in `unmeasured_delivery_count`
+([Cost Control & Budgets](cost-control.md)). A model billed per image reports its usage by the
+images it drew, with or without tokens.
 
 Image models are priced too. Their image tokens take `image_input` and `image_output` (USD per
 1M, with `batch_image_input` and `batch_image_output`; each falls back to the text rate when left
@@ -181,7 +185,9 @@ for st in result.trace.steps:
 `Agent` results expose the same via `agent_result.report` / `.cost` / `.usage`.
 
 `report.cost` is known spend. `report.cost_at_most` adds the retained bounds of indeterminate failed
-attempts; it is `None` if any cost is unbounded. `report.cost_uncertain` is true for either kind of
+attempts, and of replies delivered without their usage; it is `None` if any cost is unbounded.
+`report.unmeasured_delivery_count` counts those replies: they were delivered, but their cost was
+not measured, so a bill made from the meter raises an alarm on them (D67). `report.cost_uncertain` is true for either kind of
 uncertainty. Retries and fallback calls each consume a call count. An unbilled 429 contributes zero
 cost; a failed response, transport timeout or abandoned stream can consume a bounded allowance
 without becoming reported spend. A failed response that reports its usage (Meta's

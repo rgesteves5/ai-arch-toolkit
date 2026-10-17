@@ -16,7 +16,16 @@ from openai.types.responses import Response as SDKResponse
 from xai_sdk.proto import usage_pb2
 
 from ai_arch_toolkit import LLM
-from ai_arch_toolkit.core import GeneratedImage, RequestError, ResponseError, Usage, image, user
+from ai_arch_toolkit.core import (
+    GeneratedImage,
+    Money,
+    RequestError,
+    ResponseError,
+    RunConfig,
+    Usage,
+    image,
+    user,
+)
 from ai_arch_toolkit.core._images import ImageRequest
 from ai_arch_toolkit.core._metering._scope import MeterScope
 from ai_arch_toolkit.core._pricing import pricing
@@ -198,6 +207,30 @@ class TestOpenAI:
         provider._client.images.edit.assert_awaited_once()
         provider._client.images.generate.assert_not_awaited()
 
+    @pytest.mark.parametrize("model", ["gpt-image-1", "gpt-image-2.5-flare"])
+    async def test_an_answer_without_usage_reports_none(self, model: str) -> None:
+        # Billed by tokens: no usage is not a known $0, it is no usage at all (D67).
+        provider = _openai(model, generate=_images_response(PNG))
+        answer = await provider.complete(prepare_image(provider, "a lighthouse"))
+        assert answer.response.images[0].data == PNG
+        assert not answer.usage_reported
+        assert answer.response.cost is None
+
+    async def test_an_answer_without_usage_is_metered_at_its_worst_case(self) -> None:
+        llm = LLM("gpt-image-1", api_key="test-key")
+        llm._provider = _openai("gpt-image-1", generate=_images_response(PNG))
+        with MeterScope(RunConfig(retain_meter_events=True)) as scope:
+            out = await llm.generate_image("a lighthouse", quality="high", aspect_ratio="1:1")
+        assert out.images[0].data == PNG
+        snapshot = scope.snapshot()
+        assert snapshot.cost == Money.zero()
+        assert snapshot.unmeasured_delivery_count == 1
+        (event,) = scope.events()
+        assert event.status == "settled" and not event.cost.is_known
+        # At most the 4160 tokens of a high 1024x1024 image at $40 per 1M, beside the prompt.
+        assert event.cost.at_most is not None
+        assert event.cost.at_most.to_float() >= 4160 * 40.0 / 1e6
+
     async def test_llm_generate_image_is_metered_end_to_end(self) -> None:
         answer = _images_response(PNG, usage=_openai_usage(21, 0, 196))
         llm = LLM("gpt-image-2.5-flare", api_key="test-key")
@@ -325,6 +358,15 @@ class TestMeta:
         assert response.images[0].media_type == "image/webp"
         assert response.usage.image_count == 1
         assert response.cost == pytest.approx(0.01)
+
+    async def test_an_answer_without_usage_is_its_images(self) -> None:
+        # Billed per image: the images drawn are the bill, with or without tokens (D67).
+        answer = _images_response(WEBP, WEBP, output_format="webp")
+        provider = self.provider(answer=answer)
+        reply = await provider.complete(prepare_image(provider, "a lighthouse", n=2))
+        assert reply.usage_reported
+        assert reply.response.usage == Usage(image_count=2)
+        assert reply.response.cost == pytest.approx(0.02)
 
 
 # ── Gemini ───────────────────────────────────────────────────────────────────

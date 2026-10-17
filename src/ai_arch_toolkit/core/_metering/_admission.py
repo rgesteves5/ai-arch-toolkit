@@ -103,7 +103,11 @@ class MeterSnapshot:
     Committed counts are *started physical attempts*; usage/cost are *settled
     actuals*; ``out_*`` are *reserved but not yet started/settled*. Caps are
     checked against committed + outstanding, never committed alone. ``cost`` is known spend;
-    ``uncertain_cost`` bounds failed spend; ``unknown_cost_count`` counts only unbounded costs.
+    ``uncertain_cost`` bounds the spend of failures and of results delivered without their usage;
+    ``unknown_cost_count`` counts only unbounded costs. ``unmeasured_delivery_count`` counts the
+    results that were delivered although their cost was not measured (D67), bounded or not: each
+    is also in ``uncertain_cost_count`` or ``unknown_cost_count``. An app that bills raises its
+    alarm on it, since a bounded cost is still no measured one.
     """
 
     llm_calls: int = 0
@@ -116,6 +120,7 @@ class MeterSnapshot:
     unknown_cost_count: int = 0
     uncertain_cost: Money = field(default_factory=Money.zero)
     uncertain_cost_count: int = 0
+    unmeasured_delivery_count: int = 0
     out_llm_calls: int = 0
     out_tool_calls: int = 0
     out_input_tokens: int = 0

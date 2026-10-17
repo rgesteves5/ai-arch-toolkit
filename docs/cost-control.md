@@ -81,8 +81,10 @@ as shortcuts. Always read spend from the meter. `Result(cost=...)` annotations a
 `trace.total_cost` only add up what steps reported about themselves.
 
 `report.cost` is known spend. `report.cost_at_most` adds the bounds of failed calls that may have
-been billed, and is `None` when some cost has no bound. `report.cost_uncertain` tells you whether
-either kind of uncertainty is present. To measure a block of code that is not a flow step, open a
+been billed, and of replies delivered without their usage, and is `None` when some cost has no
+bound. `report.cost_uncertain` tells you whether either kind of uncertainty is present.
+`report.unmeasured_delivery_count` counts the replies whose cost was not measured: an app that
+bills its users from the meter raises an alarm on them rather than charge the bound (D67). To measure a block of code that is not a flow step, open a
 span of your own ([Flow Architecture → Trace](flow-architecture.md#trace)).
 
 ## Cap a run
@@ -210,7 +212,9 @@ provider's documentation:
 
 An indeterminate failure does not add to `report.cost`, because nothing is known to have been
 charged. Its bound goes into `report.cost_at_most` and counts against `max_cost`. A response that
-fails but reports its usage (Meta's `response.failed`) is charged at that usage. The full matrix is
+fails but reports its usage (Meta's `response.failed`) is charged at that usage. A reply that
+arrives without its usage is bounded the same way, and counted in
+`report.unmeasured_delivery_count` too. The full matrix is
 in [Failed LLM calls](safety.md#failed-llm-calls).
 
 ## Paid tools
