@@ -1,6 +1,6 @@
 # Model Compatibility
 
-This page lists the 35 model IDs tracked by the live probe inventory
+This page lists the 37 model IDs tracked by the live probe inventory
 (`scripts/model_probe_models.toml`), what framework features were verified against them, and
 which of them read images, by their providers' pages.
 
@@ -34,10 +34,11 @@ Responses API:
 - Failed: 0
 - Report artifact: `scripts/output/model-probes/20261002T041947Z.md`
 
-Of the seven models added since 2026-04-28, `muse-spark-1.3` (2026-09-13), `gpt-6-sol`,
+Of the nine models added since 2026-04-28, `muse-spark-1.3` (2026-09-13), `gpt-6-sol`,
 `gpt-6-luna` (2026-09-25), `gpt-6-astra`, and `gpt-6.1-sol` (2026-10-02) passed runs of their
 own. `grok-4.7` and `claude-opus-5-5` have no live result: the 2026-09-25 run stopped at their
-accounts' credit limits.
+accounts' credit limits. `claude-sonnet-5-5` and `claude-haiku-5-5` (2026-10-17) have not been
+run.
 
 Generated probe artifacts are local diagnostic files and are ignored by git.
 
@@ -280,6 +281,23 @@ room for it. Its effort defaults to `medium`, one level below Opus 5: pass `thin
 the 2026-09-25 run stopped when the account ran out of credit.
 See the [migration guide](https://platform.claude.com/docs/en/models/opus-5-5/migration-guide).
 
+### Claude Sonnet 5.5 and Haiku 5.5 (added 2026-10-17)
+
+Both have a 1M-token context window and 128K output tokens, read text, images, and PDF, think
+adaptively by default, take the five efforts (`low` to `max`), and take no sampling parameters.
+Their probes are in the inventory, with **no live result** yet.
+
+- `claude-sonnet-5-5` costs $2 input and $10 output per million tokens, as Sonnet 5 does, but
+  its cache reads cost $0.10 (5% of input, where Sonnet 5's cost $0.20). Its effort defaults to
+  `high`. It refuses a forced `tool_choice` (`"required"` or a name) with `RequestError`, since
+  the API answers one with a 400
+  ([migration guide](https://platform.claude.com/docs/en/models/sonnet-5-5/migration-guide)).
+- `claude-haiku-5-5` costs $0.10 input and $0.50 output per million tokens for a prompt up to
+  100,000 tokens, and five times that, on every rate, for a prompt over it; the prompt counts
+  its cache reads and writes, and 100,000 itself is priced at the lower rates. Its effort
+  defaults to `medium`. It takes a forced `tool_choice`, and then answers without thinking
+  ([migration guide](https://platform.claude.com/docs/en/models/haiku-5-5/migration-guide)).
+
 ### Recorded live baseline
 
 Anthropic models use top-level `system`, `input_schema` for tools, and native
@@ -296,8 +314,8 @@ models before them) take a budget: an effort or a `thinking_budget` (at least 1,
 thinking on, and the budget is added to `max_tokens`. The newer models take no sampling
 parameters: their `temperature` is dropped (the `LLM` always sends one) and `top_p` or `top_k`
 raise `RequestError`; the 4.6 and older models accept them. `claude-opus-5-5`,
-`claude-fable-5-1`, and `claude-mythos-5-1` refuse a forced `tool_choice` (`"required"` or a name)
-with `RequestError`.
+`claude-sonnet-5-5`, `claude-fable-5-1`, and `claude-mythos-5-1` refuse a forced `tool_choice`
+(`"required"` or a name) with `RequestError`.
 The `web_search` and `code_execution` server tools are sent as `web_search_20250305` and
 `code_execution_20250825`. A turn's tool results go back in one `user` message, and an assistant
 turn is replayed as Claude sent it, thinking signatures included.
@@ -369,7 +387,8 @@ pricing entries of their own but were not probed.
 ## Image Input
 
 Whether a model reads an image sent in a request (`user(["...", image(...)])`), from each
-model's own page at its provider, read on 2026-10-05. These come from the documentation, not
+model's own page at its provider, read on 2026-10-05 (Claude Sonnet 5.5 and Haiku 5.5 on
+2026-10-17). These come from the documentation, not
 from a probe: the inventory lists the `vision` scenario for these models
 (`scripts/probe_models.py --suite full --scenario vision`), which has not run yet.
 
@@ -381,7 +400,7 @@ from a probe: the inventory lists the `vision` scenario for these models
 | Gemini | `gemini-3.1-pro-preview`, `gemini-3-flash-preview`, `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite` | yes (images among the inputs, with video, audio and PDF) | `https://ai.google.dev/gemini-api/docs/models/<id>` |
 | Gemini | `gemini-3.1-flash-lite-preview` | shut down on 2026-05-25 (`gemini-3.1-flash-lite` replaces it) | its model page |
 | Gemini | `gemini-3.1-flash-live-preview` | through the Live API only, which no adapter drives | its model page |
-| Anthropic | `claude-opus-5-5`, `claude-opus-4-7`, `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-haiku-4-5`, `claude-sonnet-4-5` (retires 2026-11-30), `claude-opus-4-5`; also `claude-fable-5-1` and `claude-sonnet-5-5`, outside the inventory | yes ("Text and images → text") | `https://platform.claude.com/docs/en/models/<name>/overview` |
+| Anthropic | `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`, `claude-opus-4-7`, `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-haiku-4-5`, `claude-sonnet-4-5` (retires 2026-11-30), `claude-opus-4-5`; also `claude-fable-5-1`, outside the inventory | yes ("Text and images → text") | `https://platform.claude.com/docs/en/models/<name>/overview` |
 | Anthropic | `claude-sonnet-4-0` | retired on 2026-06-15: requests fail | [model deprecations](https://platform.claude.com/docs/en/about-claude/model-deprecations) |
 | Meta | `muse-spark-1.3` | yes ("Text, image, video, audio*, PDF"; up to 50 images a request) | [models](https://dev.meta.ai/docs/models), [image understanding](https://dev.meta.ai/docs/image-understanding) |
 

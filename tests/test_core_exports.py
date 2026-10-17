@@ -39,7 +39,9 @@ def test_the_model_catalog_is_exported(module: ModuleType, name: str) -> None:
 def test_the_model_catalog_is_apart_from_pricing() -> None:
     caps = core.model_catalog.get("claude-haiku-4-5-20251001")  # a dated snapshot
     assert caps is not None and caps.model == "claude-haiku-4-5"
-    assert core.model_catalog.get("claude-haiku-4-5-turbo") is None  # a variant is another model
+    variant = core.model_catalog.get("claude-haiku-4-5-turbo")  # a variant is another model:
+    assert variant is not None and variant.model == "claude-haiku-4-5-turbo"
+    assert variant.context_window is None  # its adapter's facts, never Haiku 4.5's entry
     assert core.pricing.get("claude-haiku-4-5") is not None
 
 

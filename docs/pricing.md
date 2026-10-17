@@ -141,8 +141,12 @@ same options per entry: `aliases = [...]` for other ids billed at the entry's ra
 `ModelPricing` also supports cache, batch, long-context, and fast-mode rates. Mode-specific
 cache and long-context fields (`batch_cache_*`, `batch_long_context_*`, `fast_cache_*`, and
 `fast_long_context_*`) allow these tariffs to combine correctly; omitted fields fall back to
-the selected mode's base rates, then standard rates. `long_context_inclusive=True` selects the
-premium tier at the threshold itself, as required by xAI.
+the selected mode's base rates, then standard rates. The prompt measured against
+`long_context_threshold` is the input with its cache writes and reads. By default a prompt pays
+the long-context rates only over the threshold, as Claude Haiku 5.5 does (a prompt over 100,000
+tokens pays five times every rate, batch included; 100,000 itself pays the standard ones);
+`long_context_inclusive=True` selects the premium tier at the threshold itself, as required by
+xAI.
 
 ## Unpriced models under a meter
 

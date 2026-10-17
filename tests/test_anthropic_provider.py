@@ -1109,6 +1109,8 @@ class TestContentToSdk:
 HI = [{"role": "user", "content": "Hi"}]
 ADAPTIVE = (
     "claude-opus-5-5",
+    "claude-sonnet-5-5",
+    "claude-haiku-5-5",
     "claude-fable-5-1",
     "claude-fable-5",
     "claude-opus-5",
@@ -1129,6 +1131,8 @@ EXTENDED = (
 )
 NO_SAMPLING = (
     "claude-opus-5-5",
+    "claude-sonnet-5-5",
+    "claude-haiku-5-5",  # temperature only 1, top_p only its default 0.99, no top_k
     "claude-fable-5-1",
     "claude-opus-5",
     "claude-sonnet-5",
@@ -1160,7 +1164,15 @@ class TestThinkingByModel:
         assert "thinking" not in _params(model)
 
     @pytest.mark.parametrize(
-        "model", ["claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5"]
+        "model",
+        [
+            "claude-opus-5-5",
+            "claude-sonnet-5-5",
+            "claude-haiku-5-5",  # all five efforts (the effort page, read 2026-10-17)
+            "claude-opus-5",
+            "claude-fable-5-1",
+            "claude-sonnet-5",
+        ],
     )
     def test_the_effort_applies_on_its_own_and_merges_with_the_format(self, model):
         assert _params(model, thinking_effort="xhigh")["output_config"] == {"effort": "xhigh"}
@@ -1251,21 +1263,27 @@ WEATHER_TOOL = {"name": "get_weather", "description": "d", "input_schema": {"typ
 class TestToolChoiceAndServerTools:
     TOOLS = (WEATHER_TOOL,)
 
-    @pytest.mark.parametrize("model", ["claude-opus-5-5", "claude-fable-5-1", "claude-mythos-5-1"])
+    @pytest.mark.parametrize(
+        "model", ["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1", "claude-mythos-5-1"]
+    )
     @pytest.mark.parametrize("choice", ["required", "get_weather"])
     def test_forced_tool_use_is_refused_where_the_api_refuses_it(self, model, choice):
         # https://platform.claude.com/docs/en/api/errors#forced-tool-use-not-supported
         assert "tool_choice" in _refused(model, tools=list(self.TOOLS), tool_choice=choice)
 
-    @pytest.mark.parametrize("model", ["claude-opus-5-5", "claude-fable-5-1"])
+    @pytest.mark.parametrize("model", ["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1"])
     @pytest.mark.parametrize("choice", ["auto", "none"])
     def test_auto_and_none_stay_open_where_forcing_is_refused(self, model, choice):
         params = _params(model, tools=list(self.TOOLS), tool_choice=choice)
         assert params["tool_choice"] == {"type": choice}
 
-    def test_other_models_take_a_forced_tool(self):
-        params = _params("claude-opus-5", tools=list(self.TOOLS), tool_choice="get_weather")
+    # Haiku 5.5 takes a forced tool, and answers it without thinking
+    # (https://platform.claude.com/docs/en/models/haiku-5-5/migration-guide).
+    @pytest.mark.parametrize("model", ["claude-opus-5", "claude-haiku-5-5"])
+    def test_other_models_take_a_forced_tool(self, model):
+        params = _params(model, tools=list(self.TOOLS), tool_choice="get_weather")
         assert params["tool_choice"] == {"type": "tool", "name": "get_weather"}
+        _sdk_accepts("create", params)
 
     def test_server_tools_carry_their_name(self):
         tools = [
