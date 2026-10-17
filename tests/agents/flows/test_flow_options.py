@@ -33,7 +33,7 @@ from ai_arch_toolkit.toolkit.agents.flows import (
     tot_flow,
     tot_initial_state,
 )
-from ai_arch_toolkit.toolkit.agents.flows._common import nested
+from ai_arch_toolkit.toolkit.agents.flows._common import RESERVED_LLM_KWARGS, nested
 from ai_arch_toolkit.toolkit.budget import BudgetPolicy
 from ai_arch_toolkit.toolkit.flow._flow import Flow
 
@@ -145,6 +145,39 @@ def test_an_unknown_option_is_refused(name: str) -> None:
 
     with pytest.raises(TypeError, match="deadline"):
         factory(_llm(), deadline=3.0)
+
+
+@pytest.mark.parametrize("key", sorted(RESERVED_LLM_KWARGS))
+@pytest.mark.parametrize("name", sorted(set(_FACTORIES) - {"generate_review"}))
+def test_llm_kwargs_cannot_set_what_the_strategy_sends_itself(name: str, key: str) -> None:
+    factory, _ = _FACTORIES[name]
+
+    with pytest.raises(ValueError, match=rf"llm_kwargs\.{key} is reserved"):
+        factory(_llm(), llm_kwargs={key: []})
+
+
+@pytest.mark.parametrize("argument", ["gen_kwargs", "review_kwargs"])
+def test_the_kwargs_of_each_generate_review_phase_cannot_set_the_tools(argument: str) -> None:
+    with pytest.raises(ValueError, match=rf"{argument}\.tools is reserved"):
+        generate_review_flow(_llm(), _llm(), **{argument: {"tools": []}})
+
+
+@pytest.mark.parametrize("name", _WITH_INNER_REACT)
+async def test_every_phase_runs_with_the_llm_kwargs_the_flow_was_built_with(name: str) -> None:
+    factory, initial_state = _FACTORIES[name]
+    llm = _llm()
+    llm_kwargs = {"temperature": 0.1}
+    argument = "gen_kwargs" if name == "generate_review" else "llm_kwargs"
+    flow = factory(llm, **{argument: llm_kwargs})
+    llm_kwargs["temperature"] = 0.9  # after the build: no phase, inner ReAct included, sees it
+
+    await flow.run(State(operational=initial_state("task")))
+
+    calls = llm.complete.call_args_list
+    assert calls
+    temperatures = {call.kwargs.get("temperature") for call in calls}
+    expected = {0.1, None} if name == "generate_review" else {0.1}  # the reviewer has its own
+    assert temperatures == expected
 
 
 @pytest.mark.parametrize("capture", ["full", "none"])

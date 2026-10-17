@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from ai_arch_toolkit.core import web_search
 from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._policy import Policy
 from ai_arch_toolkit.core._response import OutputSchema, Response, ToolCall, Usage
@@ -80,6 +81,26 @@ class TestReasoningSpec:
         with pytest.raises(TypeError):
             spec.knobs["a"] = 2
         assert spec == ReasoningSpec(knobs={"a": 1}, llm_kwargs={"b": 2})
+
+    @pytest.mark.parametrize("key", ["messages", "system", "tools"])
+    def test_llm_kwargs_cannot_set_what_the_strategy_sends_itself(self, key: str) -> None:
+        with pytest.raises(ValueError, match=rf"llm_kwargs\.{key} is reserved"):
+            ReasoningSpec(llm_kwargs={key: []})
+        with pytest.raises(ValueError, match=rf"llm_kwargs\.{key} is reserved"):
+            ReasoningSpec.from_mapping({"llm_kwargs": {"temperature": 0.2, key: []}})
+
+    def test_completion_takes_no_tools_through_llm_kwargs(self) -> None:
+        # Before, completion sent these to the provider, past the tools the agent declares.
+        with pytest.raises(ValueError, match=r"llm_kwargs\.tools is reserved"):
+            ReasoningSpec(strategy="completion", llm_kwargs={"tools": [web_search()]})
+
+    def test_the_reviewer_kwargs_knob_cannot_set_the_tools(self) -> None:
+        spec = ReasoningSpec(
+            strategy="generate_review", knobs={"reviewer_kwargs": {"tools": [web_search()]}}
+        )
+
+        with pytest.raises(ValueError, match=r"knobs\.reviewer_kwargs\.tools is reserved"):
+            Agent(spec, _metered_llm())
 
     def test_from_mapping_parses_fields(self) -> None:
         spec = ReasoningSpec.from_mapping(

@@ -2,17 +2,50 @@
 
 from __future__ import annotations
 
+import inspect
 import re
-from typing import TypedDict
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import Any, TypedDict
 
+from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._policy import Policy
 from ai_arch_toolkit.core._tools._group import ToolGroup
 from ai_arch_toolkit.core._trace import TraceCapture
+from ai_arch_toolkit.toolkit._shape import Free
 from ai_arch_toolkit.toolkit.budget import BudgetPolicy
 
-__all__ = ["TOOLS_PLACEHOLDER", "FlowOptions", "nested", "parse_score", "substitute_tools"]
+__all__ = [
+    "LLM_KWARGS",
+    "RESERVED_LLM_KWARGS",
+    "TOOLS_PLACEHOLDER",
+    "FlowOptions",
+    "check_llm_kwargs",
+    "nested",
+    "parse_score",
+    "substitute_tools",
+]
 
 TOOLS_PLACEHOLDER = "{tools}"
+
+# The conversation, ``llm.complete``'s one positional parameter, named as its signature names it.
+_CONVERSATION = next(name for name in inspect.signature(LLM.complete).parameters if name != "self")
+
+# The arguments every strategy gives ``llm.complete`` itself, each with where its value comes from.
+# In ``llm_kwargs`` one would clash with the strategy's own, or, for ``tools`` in a call that sends
+# none (``completion``, a planner, a solver), reach the provider past the tools the agent declares.
+# The rule holds for every strategy, a registered one too: the spec has its own ``system``, and the
+# agent its own tools.
+RESERVED_LLM_KWARGS: Mapping[str, str] = MappingProxyType(
+    {
+        _CONVERSATION: "the strategy builds the messages from the task",
+        "system": "the strategy sends its own system prompt; set system, or the phase's own",
+        "tools": "the strategy sends the tools it was given, and only to the calls that run them",
+    }
+)
+
+LLM_KWARGS = Free(reserved=RESERVED_LLM_KWARGS)
+"""The shape of a strategy's extra ``llm.complete`` arguments: any, but ``RESERVED_LLM_KWARGS``."""
 
 _NUMBER_RE = re.compile(r"\d*\.?\d+")
 
@@ -35,6 +68,20 @@ class FlowOptions(TypedDict, total=False):
     trace_capture: TraceCapture
     policy: Policy | None
     budget_policy: BudgetPolicy | None
+
+
+def check_llm_kwargs(
+    kwargs: Mapping[str, Any] | None, where: str = "llm_kwargs"
+) -> dict[str, Any]:
+    """Return a copy of ``kwargs`` (empty for ``None``) once it has the ``LLM_KWARGS`` shape.
+
+    Raises:
+        ShapeError: ``kwargs`` is not a mapping, or holds a reserved key; the message names it
+            and says why. It is a ``ValueError``.
+    """
+    given = {} if kwargs is None else kwargs
+    LLM_KWARGS.check(given, where)
+    return dict(given)
 
 
 def nested(options: FlowOptions) -> FlowOptions:

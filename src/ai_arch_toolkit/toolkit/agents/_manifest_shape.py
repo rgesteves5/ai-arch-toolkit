@@ -28,6 +28,7 @@ from ai_arch_toolkit.toolkit._shape import (
     Whole,
     json_schema,
 )
+from ai_arch_toolkit.toolkit.agents.flows._common import LLM_KWARGS
 from ai_arch_toolkit.toolkit.budget._policy import Reserve, Unpriced
 
 __all__ = ["AGENT_MANIFEST", "REACT_KNOBS", "schema"]
@@ -66,7 +67,7 @@ _STRATEGY = Ref("strategy").bind(
             "timeout": Maybe(Number(above=0)),
             "trace_capture": Maybe(Choice.of(TraceCapture)),
             "knobs": Free(),
-            "llm_kwargs": Free(),
+            "llm_kwargs": LLM_KWARGS,
             "phases": Maybe(
                 Names(Fields({"system": _TEXT, "system_file": _TEXT, "model": Maybe(_MODEL)}))
             ),

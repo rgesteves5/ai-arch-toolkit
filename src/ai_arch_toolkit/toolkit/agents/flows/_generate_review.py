@@ -10,7 +10,7 @@ from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._state import StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
-from ai_arch_toolkit.toolkit.agents.flows._common import FlowOptions
+from ai_arch_toolkit.toolkit.agents.flows._common import FlowOptions, check_llm_kwargs
 from ai_arch_toolkit.toolkit.agents.flows._keys import ANSWER, RESPONSE, TASK
 from ai_arch_toolkit.toolkit.agents.flows._react import run_react
 from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowStep
@@ -50,15 +50,17 @@ def generate_review_flow(
         review_tools: Optional tools for the reviewer (triggers inner ReAct).
         gen_system: System prompt for the generator.
         review_system: System prompt for the reviewer.
-        gen_kwargs: Additional kwargs passed to gen_llm.complete() (e.g. temperature).
-        review_kwargs: Additional kwargs passed to review_llm.complete() (e.g. temperature).
+        gen_kwargs: Additional kwargs passed to gen_llm.complete() (e.g. temperature), but
+            not ``messages``, ``system`` or ``tools``, which the flow sends itself.
+        review_kwargs: Additional kwargs passed to review_llm.complete(), with the same
+            exceptions.
         max_cycles: Maximum generate-review cycles.
         max_gen_iterations: Max iterations for inner ReAct during generation.
         max_review_iterations: Max iterations for inner ReAct during review.
         **options: The options of the ``Flow`` it builds (``FlowOptions``).
     """
-    gen_extra = gen_kwargs or {}
-    review_extra = review_kwargs or {}
+    gen_extra = check_llm_kwargs(gen_kwargs, "gen_kwargs")
+    review_extra = check_llm_kwargs(review_kwargs, "review_kwargs")
 
     async def generate(snap: StateSnapshot) -> Result:
         """Generate an answer, optionally using tools via inner ReAct."""

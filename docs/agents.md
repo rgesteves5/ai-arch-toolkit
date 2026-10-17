@@ -65,7 +65,7 @@ own cannot be written to. The copy is shallow — a nested value is still yours.
 | `policy` | `Policy \| None` | `None` | Default retry/timeout/confidence for each step of the compiled flow ([Flow Architecture](flow-architecture.md#policy-on-a-flow)) |
 | `timeout` | `float \| None` | `None` | Wall-clock limit for the whole run, in seconds |
 | `trace_capture` | `"keys" \| "full" \| "none"` | `"keys"` | What each step's trace records ([Flow Architecture](flow-architecture.md#what-a-trace-captures)) |
-| `llm_kwargs` | `Mapping[str, Any]` | `{}` | Extra kwargs forwarded to the LLM (e.g. `temperature`) |
+| `llm_kwargs` | `Mapping[str, Any]` | `{}` | Extra kwargs forwarded to the LLM (e.g. `temperature`); not `messages`, `system` or `tools`, which the strategy sends itself (a registered strategy too: it has the spec's `system` and the agent's tools) |
 | `output_schema` | `OutputSchema \| type \| None` | `None` | Structured output; accepts a schema or supported model class (see table) |
 
 `policy` applies to the steps of the strategy's own flow (listed per strategy in
@@ -209,7 +209,9 @@ Notes:
   with its alias is an error.
 - The spec-level `llm_kwargs` apply to **every** phase's LLM calls; a phase
   override changes who is called, not what is passed. `reviewer_kwargs` merges
-  on top of the global `llm_kwargs`, winning per key.
+  on top of the global `llm_kwargs`, winning per key. Neither may set `messages`,
+  `system` or `tools` (`ValueError`): the tools come with the agent, and each
+  strategy sends them only to the calls that run them.
 - `react` and `completion` have no phases and reject any `deps`.
 
 ## AgentResult

@@ -30,6 +30,7 @@ from ai_arch_toolkit.toolkit._safe_data import (
 from ai_arch_toolkit.toolkit._shape import ShapeError
 from ai_arch_toolkit.toolkit.agents._manifest_shape import AGENT_MANIFEST, REACT_KNOBS
 from ai_arch_toolkit.toolkit.agents._spec import ReasoningSpec
+from ai_arch_toolkit.toolkit.agents.flows._common import LLM_KWARGS
 from ai_arch_toolkit.toolkit.budget import BudgetPolicy
 
 __all__ = [
@@ -401,9 +402,12 @@ def _validate_manifest(data: Mapping[str, Any], path: Path, *, resolved: bool) -
         raise AgentManifestError(f"agent manifest {path}: {exc}") from exc
     if resolved and "extends" in data:
         raise AgentManifestError(f"resolved agent manifest {path} still contains extends")
-    _check_phases(_section(data, "strategy"), "strategy")
+    strategies = {"strategy": _section(data, "strategy")}
     for name, profile in _section(data, "profiles").items():
-        _check_phases(_section(profile, "strategy"), f"profiles.{name}.strategy")
+        strategies[f"profiles.{name}.strategy"] = _section(profile, "strategy")
+    for where, strategy in strategies.items():
+        _check_phases(strategy, where)
+        _check_kwargs_knobs(strategy, where, path)
 
 
 def _check_phases(strategy: Mapping[str, Any], where: str) -> None:
@@ -425,6 +429,21 @@ def _check_phases(strategy: Mapping[str, Any], where: str) -> None:
                 f"{context} and {where}.knobs.{name}_system are both set; "
                 "declare the phase prompt in one place"
             )
+
+
+# Knobs a strategy passes to ``llm.complete`` as keyword arguments: held to ``llm_kwargs``'s shape.
+_KWARGS_KNOBS = ("reviewer_kwargs",)
+
+
+def _check_kwargs_knobs(strategy: Mapping[str, Any], where: str, path: Path) -> None:
+    """A knob of extra ``llm.complete`` arguments sets no argument the strategy sends itself."""
+    knobs = _section(strategy, "knobs")
+    for name in _KWARGS_KNOBS:
+        if _given(knobs, name) is not None:
+            try:
+                LLM_KWARGS.check(knobs[name], f"{where}.knobs.{name}")
+            except ShapeError as exc:
+                raise AgentManifestError(f"agent manifest {path}: {exc}") from exc
 
 
 def _apply_overrides(data: dict[str, Any], overrides: Mapping[str, Any]) -> None:

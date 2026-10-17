@@ -45,6 +45,7 @@ from ai_arch_toolkit.toolkit.agents.flows import (
     tot_flow,
     tot_initial_state,
 )
+from ai_arch_toolkit.toolkit.agents.flows._common import check_llm_kwargs
 from ai_arch_toolkit.toolkit.agents.flows._keys import ANSWER, MESSAGES, RESPONSE
 from ai_arch_toolkit.toolkit.flow._flow import Flow
 
@@ -353,7 +354,8 @@ def _build_generate_review(ctx: BuildContext) -> Flow:
     if s.output_schema is not None:
         gen_kwargs.setdefault("output_schema", s.output_schema)
     # Global llm_kwargs apply to every phase; reviewer_kwargs wins per key.
-    review_kwargs = {**dict(s.llm_kwargs), **dict(s.knobs.get("reviewer_kwargs") or {})}
+    reviewer_kwargs = check_llm_kwargs(s.knobs.get("reviewer_kwargs"), "knobs.reviewer_kwargs")
+    review_kwargs = {**s.llm_kwargs, **reviewer_kwargs}
     return generate_review_flow(
         gen_llm=ctx.deps.get("generator_llm", ctx.llm),
         review_llm=review_llm,

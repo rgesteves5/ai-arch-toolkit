@@ -12,7 +12,7 @@ from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._state import StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
-from ai_arch_toolkit.toolkit.agents.flows._common import FlowOptions, parse_score
+from ai_arch_toolkit.toolkit.agents.flows._common import FlowOptions, check_llm_kwargs, parse_score
 from ai_arch_toolkit.toolkit.agents.flows._keys import ANSWER, RESPONSE, TASK
 from ai_arch_toolkit.toolkit.agents.flows._react import run_react
 from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowStep
@@ -109,7 +109,8 @@ def lats_flow(
         evaluator_fn: Optional external evaluator(task, answer) → score.
         evaluator_system: System prompt for LLM-based evaluation.
         reflect_system: System prompt for reflection on low scores.
-        llm_kwargs: Additional kwargs passed to every phase's LLM call.
+        llm_kwargs: Additional kwargs passed to every phase's LLM call, but not
+            ``messages``, ``system`` or ``tools``, which the strategy sends itself.
         rollout_llm: Override LLM for rollouts.
         rollout_tools: Override tools for rollouts.
         eval_llm: Override LLM for evaluation.
@@ -122,7 +123,7 @@ def lats_flow(
     evaluator_llm = eval_llm or llm
     solve_llm = solver_llm or llm
     reflect_llm = reflector_llm or llm
-    extra = llm_kwargs or {}
+    extra = check_llm_kwargs(llm_kwargs)
 
     async def mcts_rollout(snap: StateSnapshot) -> Result:
         """One MCTS rollout: select a node, expand it by one ReAct attempt, evaluate, backprop."""
@@ -147,7 +148,7 @@ def lats_flow(
             node.state,
             system=inner_system,
             max_iterations=max_react_iterations,
-            llm_kwargs=llm_kwargs,
+            llm_kwargs=extra or None,
             **options,
         )
         answer = run.answer

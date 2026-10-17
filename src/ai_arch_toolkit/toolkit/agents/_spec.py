@@ -11,6 +11,7 @@ from ai_arch_toolkit.core._policy import Policy
 from ai_arch_toolkit.core._response import OutputSchema
 from ai_arch_toolkit.core._retry import RetryConfig
 from ai_arch_toolkit.core._trace import TRACE_CAPTURE_MODES, TraceCapture
+from ai_arch_toolkit.toolkit.agents.flows._common import check_llm_kwargs
 
 __all__ = ["ReasoningSpec"]
 
@@ -26,7 +27,9 @@ class ReasoningSpec:
 
     ``knobs`` and ``llm_kwargs`` are copied and frozen at construction (read-only mappings): the
     caller's dicts stay theirs, and a built spec cannot change under a running agent. The copy is
-    shallow; a nested value is still the caller's.
+    shallow; a nested value is still the caller's. ``llm_kwargs`` may not set what the strategy
+    gives every call itself (``messages``, ``system``, ``tools``), whatever the strategy, a
+    registered one too: the spec has its own ``system``, and the agent its own tools.
     """
 
     strategy: str = "react"
@@ -44,7 +47,7 @@ class ReasoningSpec:
             msg = f"trace_capture must be 'keys', 'full' or 'none', got {self.trace_capture!r}"
             raise ValueError(msg)
         object.__setattr__(self, "knobs", MappingProxyType(dict(self.knobs)))
-        object.__setattr__(self, "llm_kwargs", MappingProxyType(dict(self.llm_kwargs)))
+        object.__setattr__(self, "llm_kwargs", MappingProxyType(check_llm_kwargs(self.llm_kwargs)))
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> ReasoningSpec:

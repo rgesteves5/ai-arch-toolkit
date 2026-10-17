@@ -154,8 +154,9 @@ Full phase map:
 | | reflector | `reflector_llm` | `reflector_system` |
 
 The spec-level `llm_kwargs` reach **every** phase's LLM calls; a phase override
-changes *who* is called, not what is passed. `react` and `completion` have no
-phases and reject any `deps`.
+changes *who* is called, not what is passed. They may not set `messages`, `system`
+or `tools`, which each strategy sends itself (`ValueError`; in a manifest,
+`AgentManifestError`). `react` and `completion` have no phases and reject any `deps`.
 
 ---
 

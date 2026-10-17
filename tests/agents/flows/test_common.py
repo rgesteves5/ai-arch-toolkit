@@ -2,9 +2,19 @@
 
 from __future__ import annotations
 
+import inspect
+
 import pytest
 
-from ai_arch_toolkit.toolkit.agents.flows._common import parse_score
+from ai_arch_toolkit.core._llm import LLM
+from ai_arch_toolkit.toolkit.agents.flows._common import RESERVED_LLM_KWARGS, parse_score
+
+
+def test_the_reserved_llm_kwargs_are_parameters_of_llm_complete() -> None:
+    parameters = inspect.signature(LLM.complete).parameters
+
+    assert set(RESERVED_LLM_KWARGS) == {"messages", "system", "tools"}
+    assert set(RESERVED_LLM_KWARGS) <= set(parameters)
 
 
 @pytest.mark.parametrize(

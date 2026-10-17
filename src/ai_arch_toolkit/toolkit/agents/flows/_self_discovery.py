@@ -9,7 +9,7 @@ from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._state import StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
-from ai_arch_toolkit.toolkit.agents.flows._common import FlowOptions
+from ai_arch_toolkit.toolkit.agents.flows._common import FlowOptions, check_llm_kwargs
 from ai_arch_toolkit.toolkit.agents.flows._keys import ANSWER, RESPONSE, TASK
 from ai_arch_toolkit.toolkit.agents.flows._react import run_react
 from ai_arch_toolkit.toolkit.flow._flow import Flow
@@ -67,7 +67,8 @@ def self_discovery_flow(
         adapt_system: System prompt for module adaptation.
         plan_system: System prompt for operationalization.
         solve_system: System prompt for the solve phase.
-        llm_kwargs: Additional kwargs passed to every phase's LLM call.
+        llm_kwargs: Additional kwargs passed to every phase's LLM call, but not
+            ``messages``, ``system`` or ``tools``, which the strategy sends itself.
         reasoning_llm: Override LLM for select/adapt/plan phases.
         solver_llm: Override LLM for the solve phase.
         solver_tools: Override tools for the solve phase.
@@ -76,7 +77,7 @@ def self_discovery_flow(
     reason_llm = reasoning_llm or llm
     solve_llm = solver_llm or llm
     solve_tools = solver_tools if solver_tools is not None else tools
-    extra = llm_kwargs or {}
+    extra = check_llm_kwargs(llm_kwargs)
 
     modules_text = "\n".join(f"- {m}" for m in modules)
 
@@ -142,7 +143,7 @@ def self_discovery_flow(
             task,
             system=inner_system,
             max_iterations=max_react_iterations,
-            llm_kwargs=llm_kwargs,
+            llm_kwargs=extra or None,
             **options,
         )
         return Result(value=run.answer, artifacts={ANSWER: run.answer, RESPONSE: run.response})

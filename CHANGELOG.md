@@ -100,6 +100,10 @@ flows, manifests) needs these changes; each one is detailed below.
   - a boolean `order`;
   - a `metadata_attributes` that is not a list;
   - `select` or `serialize_as` on an inline template.
+- **`llm_kwargs`.** A spec's `llm_kwargs`, a flow factory's (`gen_kwargs` and `review_kwargs` in
+  `generate_review_flow`), the `reviewer_kwargs` knob and a manifest's `strategy.llm_kwargs` refuse
+  `messages`, `system` and `tools` with `ValueError` (in a manifest, `AgentManifestError`): give
+  the agent its tools and its system prompt where they belong.
 
 #### Renamed and removed tools
 
@@ -1070,6 +1074,13 @@ tools moved it into their own limits without a word (1 to 100,000, or 200 to 4,0
   - `select` or `serialize_as` on an inline template (they were ignored).
 
 ### Fixed
+- Tools no longer reach a model past the ones an agent declares. Through `llm_kwargs`,
+  `completion` (and every phase that sends no tools: planners, solvers, reviewers without tools)
+  sent them to the provider, a provider-side `web_search()` or `code_execution()` included, and a
+  manifest override of `strategy.llm_kwargs` passed a `deny: [tools]` policy. In `react` the same
+  key failed the run with "got multiple values for keyword argument 'tools'". `messages`,
+  `system` and `tools` are now refused where `llm_kwargs` is given, and the published manifest
+  schema says so (C05.4).
 - Inlining a schema's `$ref` references (a Pydantic parameter's, or a `tool_from_schema`
   schema's) is bounded at about 100,000 characters and 100 levels, a reference followed counting
   as one: a schema whose references multiply (1.9 KB that became 17.5 MB in 1.4 s), or a chain of

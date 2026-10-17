@@ -12,7 +12,11 @@ from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._state import StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
-from ai_arch_toolkit.toolkit.agents.flows._common import FlowOptions, substitute_tools
+from ai_arch_toolkit.toolkit.agents.flows._common import (
+    FlowOptions,
+    check_llm_kwargs,
+    substitute_tools,
+)
 from ai_arch_toolkit.toolkit.agents.flows._keys import ANSWER, RESPONSE, TASK
 from ai_arch_toolkit.toolkit.agents.flows._react import run_react
 from ai_arch_toolkit.toolkit.flow._flow import Flow
@@ -94,7 +98,7 @@ def llm_compiler_flow(
     inner_llm = exec_llm or llm
     inner_tools = exec_tools if exec_tools is not None else tools
     join_llm = joiner_llm or llm
-    extra = llm_kwargs or {}
+    extra = check_llm_kwargs(llm_kwargs)
     plan_system = substitute_tools(planner_system, inner_tools)
 
     async def compile(snap: StateSnapshot) -> Result:
@@ -156,7 +160,7 @@ def llm_compiler_flow(
                         task,
                         system=inner_system,
                         max_iterations=max_react_iterations,
-                        llm_kwargs=llm_kwargs,
+                        llm_kwargs=extra or None,
                         **options,
                     )
                     t.result = run.answer

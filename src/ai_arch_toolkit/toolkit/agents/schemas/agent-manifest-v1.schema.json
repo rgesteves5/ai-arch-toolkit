@@ -344,7 +344,16 @@
           "type": "object"
         },
         "llm_kwargs": {
-          "type": "object"
+          "type": "object",
+          "propertyNames": {
+            "not": {
+              "enum": [
+                "messages",
+                "system",
+                "tools"
+              ]
+            }
+          }
         },
         "phases": {
           "type": [

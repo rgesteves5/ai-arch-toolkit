@@ -11,7 +11,7 @@ from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._state import StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
-from ai_arch_toolkit.toolkit.agents.flows._common import FlowOptions, parse_score
+from ai_arch_toolkit.toolkit.agents.flows._common import FlowOptions, check_llm_kwargs, parse_score
 from ai_arch_toolkit.toolkit.agents.flows._keys import ANSWER, RESPONSE, TASK
 from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowStep
 
@@ -56,7 +56,8 @@ def tot_flow(
         max_iterations: Maximum search iterations, each taking one state from the frontier.
         strategy: Search strategy — 'dfs' or 'bfs'.
         evaluator_system: System prompt for scoring thoughts.
-        llm_kwargs: Additional kwargs passed to every phase's LLM call.
+        llm_kwargs: Additional kwargs passed to every phase's LLM call, but not
+            ``messages``, ``system`` or ``tools``, which the strategy sends itself.
         gen_llm: Override LLM for generating candidate thoughts.
         eval_llm: Override LLM for evaluating thoughts.
         solver_llm: Override LLM for final solution.
@@ -65,7 +66,7 @@ def tot_flow(
     generator_llm = gen_llm or llm
     evaluator_llm = eval_llm or llm
     solve_llm = solver_llm or llm
-    extra = llm_kwargs or {}
+    extra = check_llm_kwargs(llm_kwargs)
 
     async def search_step(snap: StateSnapshot) -> Result:
         """One iteration of tree search: select, generate, evaluate, expand."""

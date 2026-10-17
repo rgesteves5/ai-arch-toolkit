@@ -289,6 +289,62 @@ def test_override_values_are_revalidated(tmp_path: Path) -> None:
         )
 
 
+def test_llm_kwargs_cannot_carry_tools_from_a_file_a_profile_or_an_override(
+    tmp_path: Path,
+) -> None:
+    def manifest(name: str, body: dict[str, object]) -> Path:
+        return _write(tmp_path / f"{name}.agent.json", json.dumps({"version": 1, **body}))
+
+    with pytest.raises(AgentManifestError, match=r"strategy\.llm_kwargs\.tools is reserved"):
+        load_agent_manifest(manifest("file", {"strategy": {"llm_kwargs": {"tools": []}}}))
+    with pytest.raises(AgentManifestError, match=r"strategy\.llm_kwargs\.system is reserved"):
+        load_agent_manifest(
+            manifest("profile", {"profiles": {"p": {"strategy": {"llm_kwargs": {"system": ""}}}}})
+        )
+    # An override the policy lets through (strategy allowed, tools denied) cannot add tools
+    # by the side door either.
+    governed = manifest(
+        "override",
+        {
+            "strategy": {"name": "completion"},
+            "override_policy": {"allow": ["strategy"], "deny": ["tools"]},
+        },
+    )
+    with pytest.raises(AgentManifestError, match=r"strategy\.llm_kwargs\.tools is reserved"):
+        load_agent_manifest(
+            governed,
+            overrides={"strategy.llm_kwargs": {"tools": [{"type": "web_search"}]}},
+        )
+    allowed = load_agent_manifest(
+        governed, overrides={"strategy.llm_kwargs": {"temperature": 0.2}}
+    )
+    assert allowed.reasoning_spec().llm_kwargs == {"temperature": 0.2}
+
+
+def test_the_reviewer_kwargs_knob_cannot_carry_tools_either(tmp_path: Path) -> None:
+    def manifest(name: str, body: dict[str, object]) -> Path:
+        return _write(tmp_path / f"{name}.agent.json", json.dumps({"version": 1, **body}))
+
+    knob = {"knobs": {"reviewer_kwargs": {"tools": []}}}
+    for path, where in (
+        (manifest("file", {"strategy": knob}), "strategy"),
+        (manifest("profile", {"profiles": {"p": {"strategy": knob}}}), "profiles.p.strategy"),
+    ):
+        with pytest.raises(AgentManifestError, match=rf"{where}\.knobs\.reviewer_kwargs\.tools"):
+            load_agent_manifest(path)
+    governed = manifest(
+        "override",
+        {
+            "strategy": {"name": "generate_review"},
+            "override_policy": {"allow": ["strategy"], "deny": ["tools"]},
+        },
+    )
+    with pytest.raises(AgentManifestError, match=r"reviewer_kwargs\.tools is reserved"):
+        load_agent_manifest(
+            governed, overrides={"strategy.knobs": {"reviewer_kwargs": {"tools": []}}}
+        )
+
+
 def test_unknown_fields_and_profiles_fail_strictly(tmp_path: Path) -> None:
     invalid = _write(
         tmp_path / "invalid.agent.yaml",

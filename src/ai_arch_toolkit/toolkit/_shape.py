@@ -316,11 +316,19 @@ class Anything:
 
 @dataclass(frozen=True, slots=True)
 class Free:
-    """An object whose content is free-form here (metadata, keyword arguments)."""
+    """An object whose content is free-form here (metadata, keyword arguments).
+
+    ``reserved`` maps the keys it may not hold to the reason, which the error gives.
+    """
+
+    reserved: Mapping[str, str] = field(default_factory=dict, hash=False)
 
     def check(self, value: object, where: str = "") -> None:
         if not isinstance(value, Mapping):
             raise _fail(where, self)
+        taken = sorted(str(key) for key in value if key in self.reserved)
+        if taken:
+            raise ShapeError(f"{_at(where, taken[0])} is reserved: {self.reserved[taken[0]]}")
 
     def kinds(self) -> frozenset[str]:
         return frozenset({"object"})
@@ -329,7 +337,9 @@ class Free:
         return "an object"
 
     def schema(self, defs: dict[str, JsonSchema]) -> JsonSchema:
-        return {"type": "object"}
+        if not self.reserved:
+            return {"type": "object"}
+        return {"type": "object", "propertyNames": {"not": {"enum": sorted(self.reserved)}}}
 
 
 @dataclass(frozen=True, slots=True)

@@ -14,7 +14,7 @@ from ai_arch_toolkit.core._state import State, StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
 from ai_arch_toolkit.core._tools._result import ToolResult
-from ai_arch_toolkit.toolkit.agents.flows._common import FlowOptions, nested
+from ai_arch_toolkit.toolkit.agents.flows._common import FlowOptions, check_llm_kwargs, nested
 from ai_arch_toolkit.toolkit.agents.flows._keys import ANSWER, MESSAGES, RESPONSE
 from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowStep
 
@@ -40,7 +40,8 @@ def react_flow(
         system: System prompt.
         max_iterations: Maximum reasoning iterations.
         parallel_tool_calls: Whether to execute tool calls in parallel.
-        llm_kwargs: Additional kwargs passed to llm.complete().
+        llm_kwargs: Additional kwargs passed to llm.complete(), but not ``messages``,
+            ``system`` or ``tools``, which the strategy sends itself.
         final_answer_hint: On the last turn, inject a message asking the model
             to provide a final text answer without calling tools. Fixes models
             that always emit tool calls and never produce a text response.
@@ -50,7 +51,7 @@ def react_flow(
             debugging and transparency.
         **options: The options of the ``Flow`` it builds (``FlowOptions``).
     """
-    extra_kwargs = llm_kwargs or {}
+    extra_kwargs = check_llm_kwargs(llm_kwargs)
 
     async def llm_call(snap: StateSnapshot) -> Result:
         """Call LLM with current messages and tools."""

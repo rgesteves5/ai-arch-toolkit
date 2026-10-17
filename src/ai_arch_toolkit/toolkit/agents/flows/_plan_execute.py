@@ -10,7 +10,11 @@ from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._state import StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
-from ai_arch_toolkit.toolkit.agents.flows._common import FlowOptions, substitute_tools
+from ai_arch_toolkit.toolkit.agents.flows._common import (
+    FlowOptions,
+    check_llm_kwargs,
+    substitute_tools,
+)
 from ai_arch_toolkit.toolkit.agents.flows._keys import ANSWER, RESPONSE, TASK
 from ai_arch_toolkit.toolkit.agents.flows._react import run_react
 from ai_arch_toolkit.toolkit.flow._flow import Flow
@@ -56,7 +60,7 @@ def plan_execute_flow(
     inner_llm = exec_llm or llm
     inner_tools = exec_tools if exec_tools is not None else tools
     solve_llm = solver_llm or llm
-    extra = llm_kwargs or {}
+    extra = check_llm_kwargs(llm_kwargs)
     # "{tools}" resolves against the executor's tools, so the plan matches what
     # the execution phase can actually call.
     plan_system = substitute_tools(planner_system, inner_tools)
@@ -93,7 +97,7 @@ def plan_execute_flow(
                     step_desc,
                     system=inner_system,
                     max_iterations=max_iterations_per_step,
-                    llm_kwargs=llm_kwargs,
+                    llm_kwargs=extra or None,
                     **options,
                 )
                 step_results.append(run.answer)

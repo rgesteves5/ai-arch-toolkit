@@ -12,7 +12,11 @@ from ai_arch_toolkit.core._response import ToolCall
 from ai_arch_toolkit.core._state import StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
-from ai_arch_toolkit.toolkit.agents.flows._common import FlowOptions, substitute_tools
+from ai_arch_toolkit.toolkit.agents.flows._common import (
+    FlowOptions,
+    check_llm_kwargs,
+    substitute_tools,
+)
 from ai_arch_toolkit.toolkit.agents.flows._keys import ANSWER, RESPONSE, TASK
 from ai_arch_toolkit.toolkit.flow._flow import Flow
 
@@ -50,14 +54,15 @@ def rewoo_flow(
             is replaced with the rendered tool catalog (a prompt without the
             token is never modified).
         solver_system: System prompt for the solver phase.
-        llm_kwargs: Additional kwargs passed to every phase's LLM call.
+        llm_kwargs: Additional kwargs passed to every phase's LLM call, but not
+            ``messages``, ``system`` or ``tools``, which the strategy sends itself.
         planner_llm: Override LLM for planning.
         solver_llm: Override LLM for solving.
         **options: The options of the ``Flow`` it builds (``FlowOptions``).
     """
     plan_llm = planner_llm or llm
     solve_llm = solver_llm or llm
-    extra = llm_kwargs or {}
+    extra = check_llm_kwargs(llm_kwargs)
 
     # Tool schemas drive execution-time argument mapping; the planner prompt's
     # "{tools}" token resolves against the same group.

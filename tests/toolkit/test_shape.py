@@ -109,6 +109,17 @@ def test_each_kind_takes_its_values_and_names_the_rest(
         assert message in _message(shape, value)
 
 
+def test_a_free_object_refuses_its_reserved_keys_with_the_reason() -> None:
+    shape = Free(reserved={"tools": "declared elsewhere", "system": "set apart"})
+
+    shape.check({"temperature": 0.2})
+    assert _message(shape, {"tools": [], "system": ""}, "strategy.llm_kwargs") == (
+        "strategy.llm_kwargs.system is reserved: set apart"
+    )
+    assert _message(shape, {"tools": []}, "") == "tools is reserved: declared elsewhere"
+    assert hash(shape) == hash(Free())  # a shape stays hashable, whatever it reserves
+
+
 def test_a_list_names_the_item_that_is_wrong() -> None:
     shape = Items(Text())
 
@@ -243,6 +254,7 @@ _SAMPLES: dict[str, Shape] = {
     "choice": Choice("keys", "full", "none"),
     "const": Const(1),
     "free": Free(),
+    "free_reserved": Free(reserved={"a": "reserved", "name": "reserved"}),
     "anything": Anything(),
     "maybe": Maybe(Text()),
     "items": Items(Text()),

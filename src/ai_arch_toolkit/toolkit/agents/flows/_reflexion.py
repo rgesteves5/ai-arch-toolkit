@@ -10,7 +10,7 @@ from ai_arch_toolkit.core._llm import LLM
 from ai_arch_toolkit.core._state import StateSnapshot
 from ai_arch_toolkit.core._step import Result, Step
 from ai_arch_toolkit.core._tools._group import ToolGroup
-from ai_arch_toolkit.toolkit.agents.flows._common import FlowOptions
+from ai_arch_toolkit.toolkit.agents.flows._common import FlowOptions, check_llm_kwargs
 from ai_arch_toolkit.toolkit.agents.flows._keys import ANSWER, RESPONSE, TASK
 from ai_arch_toolkit.toolkit.agents.flows._react import run_react
 from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowStep
@@ -46,7 +46,8 @@ def reflexion_flow(
         system: Base system prompt for the inner ReAct.
         max_iterations: Max iterations for the inner ReAct per attempt.
         reflect_system: System prompt for the reflector LLM.
-        llm_kwargs: Additional kwargs passed to every phase's LLM call.
+        llm_kwargs: Additional kwargs passed to every phase's LLM call, but not
+            ``messages``, ``system`` or ``tools``, which the strategy sends itself.
         exec_llm: Override LLM for the executor (inner ReAct).
         exec_tools: Override tools for the executor.
         reflect_llm: Override LLM for the reflector.
@@ -55,7 +56,7 @@ def reflexion_flow(
     inner_llm = exec_llm or llm
     inner_tools = exec_tools if exec_tools is not None else tools
     reflector_llm = reflect_llm or llm
-    extra = llm_kwargs or {}
+    extra = check_llm_kwargs(llm_kwargs)
 
     async def attempt(snap: StateSnapshot) -> Result:
         """Run inner ReAct and return the answer."""
@@ -72,7 +73,7 @@ def reflexion_flow(
             task,
             system=inner_system,
             max_iterations=max_iterations,
-            llm_kwargs=llm_kwargs,
+            llm_kwargs=extra or None,
             **options,
         )
         return Result(
