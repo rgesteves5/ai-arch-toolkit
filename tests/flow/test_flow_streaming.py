@@ -46,6 +46,15 @@ def _open_streams(provider: FakeProvider) -> list[int]:
     return opened
 
 
+def _texts(streamed: list[FlowEvent]) -> list[str]:
+    return [event.llm_event.text for event in streamed if event.llm_event]
+
+
+def _told(events: list[FlowEvent]) -> str:
+    """The stream as a failure message: each event's type, step and error."""
+    return "\n".join(f"{event.type} {event.step_name!r} {event.error or ''}" for event in events)
+
+
 async def _drain(flow: Flow) -> list[FlowEvent]:
     events: list[FlowEvent] = []
     async with flow.iter(State()) as execution:
@@ -147,9 +156,27 @@ class TestTokensInAFlow:
         events = await _drain(Flow(Step(name="threaded", fn=in_thread), name="t"))
 
         streamed = [event for event in events if event.type == "llm_event"]
-        assert [event.llm_event.text for event in streamed if event.llm_event] == ["Hel", "lo"]
+        assert _texts(streamed) == ["Hel", "lo"], _told(events)
         assert {event.step_name for event in streamed} == {"threaded"}
         steps_story(events[1:-1])  # the thread's events came inside the step
+
+    async def test_a_threads_events_reach_the_step_that_resumes_without_a_loop_turn(
+        self,
+    ) -> None:
+        # A step can have its thread's answer before the loop runs what the thread sent it: here
+        # ``complete_sync`` blocks the loop's thread while the call streams from a thread of its
+        # own. CPython 3.13.12+ resolves an ``asyncio.to_thread`` whose thread finished before
+        # the await the same way (gh-105836), which made the test above fail now and then.
+        llm, _ = _streaming_llm()
+
+        async def blocking(snap: StateSnapshot) -> Result:
+            return Result(value=llm.complete_sync("hi").text)
+
+        events = await _drain(Flow(Step(name="blocking", fn=blocking), name="t"))
+
+        streamed = [event for event in events if event.type == "llm_event"]
+        assert _texts(streamed) == ["Hel", "lo"], _told(events)
+        steps_story(events[1:-1])
 
 
 class TestEveryStepThatStartsEnds:

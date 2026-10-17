@@ -1075,6 +1075,12 @@ tools moved it into their own limits without a word (1 to 100,000, or 200 to 4,0
   - `select` or `serialize_as` on an inline template (they were ignored).
 
 ### Fixed
+- In an iterated flow, the `llm_event`s of an LLM call made in another thread (a
+  `complete_sync` in `asyncio.to_thread`, or one that blocks the step) are no longer lost when the
+  step has the call's answer before the loop turns again: CPython 3.13.12+ resolves a
+  `to_thread` whose thread finished before it was awaited that way (gh-105836), so on Linux the
+  step sometimes ended with no events. An event belongs to the step when the call hands it over
+  before the step ends.
 - `date_add`, `date_format`, `timezone_convert` and `datetime_now` write a year before 1000 with
   four digits on every platform: on Linux under Python 3.13, glibc's `strftime` wrote year 1 as
   `1-01-01` where macOS wrote `0001-01-01`. `%Y` and `%G` are now padded by the tool, as Python
