@@ -7,6 +7,7 @@ import subprocess
 import sys
 import threading
 import time
+from itertools import pairwise
 from typing import Any
 
 import pytest
@@ -223,12 +224,16 @@ class TestPolynomialBacktracking:
         try:
             message = _invalid(regex_search, "a" * 3000, "a*a*b")  # about 4 s in the engine
         finally:
+            ended = time.monotonic()
             stop.set()
             ticker.join()
 
-        assert time.monotonic() - started < 2
+        assert ended - started < 2
         assert message.startswith("pattern refused:")
-        assert sum(1 for at in ticks if at >= started) >= 10
+        # An engine holding the GIL stops the ticker for the whole wait; a loaded runner only
+        # sleeps longer than asked. So the check is the longest stall, not a tick rate.
+        points = [started, *(at for at in ticks if started <= at <= ended), ended]
+        assert max(b - a for a, b in pairwise(points)) < text_tools._MATCH_S / 2
 
     @pytest.mark.parametrize(
         ("pattern", "text"),
