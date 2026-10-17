@@ -89,6 +89,11 @@ class TestTimezoneConvert:
         assert "2026-01-15" in result
         assert "18:00" in result  # UTC+9
 
+    def test_a_year_before_1000_has_four_digits(self):
+        result = timezone_convert("0001-01-01 00:00", "UTC", "UTC")
+
+        assert result == "0001-01-01 00:00 UTC → 0001-01-01 00:00 UTC"
+
     def test_invalid_timezone(self):
         with pytest.raises(ToolFailure) as caught:
             timezone_convert("12:00", "Fake/Zone", "UTC")
@@ -166,6 +171,9 @@ class TestDateFormat:
     def test_reformats_datetime(self):
         result = date_format("2026-01-15 09:30", "%H:%M on %A")
         assert result.startswith("09:30 on ")
+
+    def test_a_year_before_1000_has_four_digits_on_every_platform(self):
+        assert date_format("0099-01-04", "%Y %G, %%Y %%%Y") == "0099 0099, %Y %0099"
 
     def test_invalid_input(self):
         with pytest.raises(ToolFailure) as caught:

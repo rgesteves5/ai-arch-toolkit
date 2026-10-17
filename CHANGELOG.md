@@ -1074,6 +1074,10 @@ tools moved it into their own limits without a word (1 to 100,000, or 200 to 4,0
   - `select` or `serialize_as` on an inline template (they were ignored).
 
 ### Fixed
+- `date_add`, `date_format`, `timezone_convert` and `datetime_now` write a year before 1000 with
+  four digits on every platform: on Linux under Python 3.13, glibc's `strftime` wrote year 1 as
+  `1-01-01` where macOS wrote `0001-01-01`. `%Y` and `%G` are now padded by the tool, as Python
+  3.14 does everywhere.
 - Tools no longer reach a model past the ones an agent declares. Through `llm_kwargs`,
   `completion` (and every phase that sends no tools: planners, solvers, reviewers without tools)
   sent them to the provider, a provider-side `web_search()` or `code_execution()` included, and a
