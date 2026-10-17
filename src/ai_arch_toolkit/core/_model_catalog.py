@@ -5,7 +5,8 @@ Apart from ``pricing``, which knows rates only. A fact is ``None`` when unknown,
 modalities, each with its page and the day it was read. What the adapter does with a model
 (tools, tool choices, reasoning, server tools) comes from the adapter's own tables, through its
 pure ``model_facts`` classmethod; no adapter reads the catalog. An app overrides any fact:
-``load()`` over the seed and the adapter, ``register()`` over everything, field by field.
+``load()`` over the seed and the adapter, ``register()`` over everything, field by field. A model
+no layer names, whose id routes to an adapter, has the adapter's facts alone.
 
 Ids match as everywhere in ``core`` (``_model_id.lookup``): an entry's id, an alias, or a dated
 snapshot of either; never a family prefix, since a variant is another model. ``register``,
@@ -488,6 +489,7 @@ class _State:
     registered: Mapping[_Key, ModelCapabilities]
     replaced: frozenset[_Key]
     names: _Names
+    forgotten: _Names  # the ids unregister forgot, the adapter's facts included
     built: dict[_Key, ModelCapabilities] = field(default_factory=dict)
 
 
@@ -496,6 +498,7 @@ def _state(
     loaded: Mapping[_Key, ModelCapabilities],
     registered: Mapping[_Key, ModelCapabilities],
     replaced: frozenset[_Key] = frozenset(),
+    forgotten: _Names | None = None,
 ) -> _State:
     """The version with these layers, and the index of every id and alias they name."""
     names: dict[str, dict[str, str]] = {}
@@ -503,7 +506,12 @@ def _state(
         for (provider, model), entry in layer.items():
             names.setdefault(provider, {}).update(dict.fromkeys((model, *entry.aliases), model))
     return _State(
-        seeded=seeded, loaded=loaded, registered=registered, replaced=replaced, names=names
+        seeded=seeded,
+        loaded=loaded,
+        registered=registered,
+        replaced=replaced,
+        names=names,
+        forgotten=forgotten or {},
     )
 
 
@@ -540,8 +548,9 @@ class ModelCatalog:
 
     It ships with the seed and the adapters' facts (``defaults=False`` starts empty, with
     neither). Layers, field by field: the seed and the adapters, then what ``load()`` read, then
-    what ``register()`` said. Nothing in the toolkit reads the catalog: the adapters keep their
-    own rules, and the catalog only tells them (D63). It is safe to share between threads.
+    what ``register()`` said; a model no layer names, whose id routes to an adapter, has the
+    adapter's facts alone. Nothing in the toolkit reads the catalog: the adapters keep their own
+    rules, and the catalog only tells them (D63). It is safe to share between threads.
 
     Usage::
 
@@ -564,16 +573,26 @@ class ModelCatalog:
     def get(self, model: str, *, provider: str | None = None) -> ModelCapabilities | None:
         """The entry of ``model``, by its id, an alias or a dated snapshot of either; ``None``
         when unknown. ``provider`` defaults to the one the model id routes to, so an app's
-        namespace is asked by name (``provider="ollama"``)."""
+        namespace is asked by name (``provider="ollama"``).
+
+        A model no layer names, whose id routes to ``provider``'s adapter (``claude-`` to
+        Anthropic's), gets the adapter's facts alone, since the adapter runs it by its rules
+        (D68); what a provider publishes (limits, modalities) stays ``None``. Without the
+        adapter's SDK, in a catalog without defaults, or once :meth:`unregister` forgot it, it is
+        ``None``."""
         provider = provider or _match_provider(model)
         if provider is None:
             return None
         state = self._state
         found = lookup(model, state.names.get(provider, {}))
-        return self._resolve(state, (provider, found.value)) if found is not None else None
+        if found is not None:
+            return self._resolve(state, (provider, found.value))
+        return self._adapter_only(state, provider, model)
 
     def entries(self, provider: str | None = None) -> list[ModelCapabilities]:
-        """Every entry, or ``provider``'s, sorted by provider and id."""
+        """Every entry a layer names (the seed, ``load()``, ``register()``), or ``provider``'s,
+        sorted by provider and id. A model only its adapter knows is not listed: an adapter has
+        rules, not a list of models, so :meth:`get` finds such a model by its id."""
         state = self._state
         keys = {*state.seeded, *state.loaded, *state.registered}
         return [
@@ -607,7 +626,7 @@ class ModelCatalog:
                 replaced = replaced | {key}
             else:
                 registered[key] = _merged(current, entry) if current else entry
-            self._state = _state(state.seeded, state.loaded, registered, replaced)
+            self._state = _state(state.seeded, state.loaded, registered, replaced, state.forgotten)
 
     def load(self, path: str | Path) -> None:
         """Read a catalog file over the seed and the adapters, field by field. An entry may be
@@ -626,25 +645,33 @@ class ModelCatalog:
                 key = (entry.provider, entry.model)
                 current = loaded.get(key)
                 loaded[key] = _merged(current, entry) if current else entry
-            self._state = _state(state.seeded, loaded, state.registered, state.replaced)
+            self._state = _state(
+                state.seeded, loaded, state.registered, state.replaced, state.forgotten
+            )
 
     def unregister(self, model: str, *, provider: str | None = None) -> None:
-        """Forget ``model`` (its id, an alias or a dated snapshot of either) in every layer,
-        until :meth:`reset`."""
+        """Forget ``model`` (its id, an alias or a dated snapshot of either) in every layer, the
+        adapter's included, so :meth:`get` gives ``None`` until :meth:`reset`, or until
+        ``register()`` or ``load()`` names it again."""
         provider = provider or _match_provider(model)
         if provider is None:
             return
         with self._writing:
             state = self._state
-            found = lookup(model, state.names.get(provider, {}))
-            if found is None:
-                return
-            key = (provider, found.value)
+            own = state.names.get(provider, {})
+            found = lookup(model, own)
+            if found is None and _match_provider(model) != provider:
+                return  # no layer names it, and no adapter knows it
+            canonical = found.value if found is not None else model
+            ids = [name for name, owner in own.items() if owner == canonical] or [canonical]
+            forgotten = {name: dict(known) for name, known in state.forgotten.items()}
+            forgotten.setdefault(provider, {}).update(dict.fromkeys(ids, canonical))
+            key = (provider, canonical)
             seeded, loaded, registered = (
                 {k: entry for k, entry in layer.items() if k != key}
                 for layer in (state.seeded, state.loaded, state.registered)
             )
-            self._state = _state(seeded, loaded, registered, state.replaced - {key})
+            self._state = _state(seeded, loaded, registered, state.replaced - {key}, forgotten)
 
     def reset(self) -> None:
         """Back to the shipped seed and the adapters, discarding what was loaded or said."""
@@ -661,6 +688,23 @@ class ModelCatalog:
         found = state.built.get(key)
         if found is None:
             found = state.built.setdefault(key, self._build(state, key))
+        return found
+
+    def _adapter_only(self, state: _State, provider: str, model: str) -> ModelCapabilities | None:
+        """``model``, which no layer names, as its adapter takes it: only for an id that routes
+        to ``provider``, never for an app's namespace, and never once unregistered."""
+        if not self._defaults or _match_provider(model) != provider:
+            return None
+        if lookup(model, state.forgotten.get(provider, {})) is not None:
+            return None
+        key = (provider, model)  # no layer names it, so no entry of this version has this key
+        found = state.built.get(key)
+        if found is None:
+            adapter = _adapter_of(provider)
+            if adapter is None:  # without its SDK nothing is known of it
+                return None
+            entry = _with_adapter(ModelCapabilities(provider=provider, model=model), adapter)
+            found = state.built.setdefault(key, entry)
         return found
 
     def _build(self, state: _State, key: _Key) -> ModelCapabilities:

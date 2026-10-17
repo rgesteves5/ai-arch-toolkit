@@ -204,6 +204,25 @@ allow_transient = true
 tool_choice = "auto"
 kwargs = { max_tokens = 4096, thinking_effort = "low" }
 
+# Sonnet 5.5 thinks by default and refuses a forced tool_choice. Added 2026-10-17, not yet run
+# live.
+[[models]]
+id = "claude-sonnet-5-5"
+provider = "anthropic"
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking", "vision"]
+allow_transient = true
+tool_choice = "auto"
+kwargs = { max_tokens = 4096, thinking_effort = "low" }
+
+# Haiku 5.5 thinks by default (effort "medium"); it takes a forced tool_choice, answering it
+# without thinking. Added 2026-10-17, not yet run live.
+[[models]]
+id = "claude-haiku-5-5"
+provider = "anthropic"
+scenarios = ["plain", "tools_loop", "structured", "json_mode", "stream", "thinking", "vision"]
+allow_transient = true
+kwargs = { max_tokens = 4096, thinking_effort = "low" }
+
 [[models]]
 id = "claude-opus-4-7"
 provider = "anthropic"

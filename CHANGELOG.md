@@ -134,6 +134,15 @@ English Wikipedia is the default, where the MediaWiki tools defaulted to the Eng
 tools moved it into their own limits without a word (1 to 100,000, or 200 to 4,000).
 
 ### Added
+- Claude Sonnet 5.5 (`claude-sonnet-5-5`) and Claude Haiku 5.5 (`claude-haiku-5-5`), from
+  Anthropic's pages on 2026-10-17: prices, catalog seed entries (1M context, 128K output; text,
+  images and PDF in, text out), and probe inventory entries, not yet run live. A metered call to
+  either no longer raises `UnpricedModelError`. Sonnet 5.5 costs $2 in and $10 out, with cache
+  reads at $0.10 (0.05x input, half of Sonnet 5's). Haiku 5.5 costs $0.10 in and $0.50 out for a
+  prompt up to 100,000 tokens and $0.50 and $2.50 for one over it, counting cache reads and
+  writes, on every rate, batch included. Sonnet 5.5 refuses a forced `tool_choice` with
+  `RequestError`, as Opus 5.5 does; Haiku 5.5 takes one. Neither takes sampling parameters;
+  both take the five efforts.
 - **Typed filesystem writes bound to a `FilesystemPolicy`** (C07, D64):
   `filesystem_tools(policy)` in `ai_arch_toolkit.toolkit.tools.dangerous` gives `read_file`,
   `list_directory` and `search_files` bound to the policy's `read_roots` (same names, schemas and
@@ -199,13 +208,16 @@ tools moved it into their own limits without a word (1 to 100,000, or 200 to 4,0
   modalities, tools and tool choices, structured output, JSON mode, streaming, reasoning mode
   and efforts, thinking budget, server tools. Each fact carries its source (`docs`, `probe`,
   `api`, `adapter`, `override`) and the day it was read, and is `None` when unknown, never "no".
-  The shipped seed covers the current line (30 chat models still served) and the image models,
-  read from the providers' pages on 2026-10-08; the rest comes from each adapter's own rules,
-  through a pure `model_facts` classmethod, which also narrows a published modality list to what
-  the adapter carries. Override with `load()` (a strict TOML loader) and `register()`, which
-  checks its facts as `load()` does, field by field; both, and `unregister()`, name a model by its
-  id, an alias or a dated snapshot, as `get()` does. `ModelCatalog(defaults=False)` starts empty,
-  and a catalog is safe to share between threads. Nothing in the toolkit reads the catalog: the
+  The shipped seed covers the current line (32 chat models still served) and the image models,
+  read from the providers' pages on 2026-10-08 and 2026-10-17; the rest comes from each adapter's
+  own rules, through a pure `model_facts` classmethod, which also narrows a published modality
+  list to what the adapter carries. `get()` gives a model no layer names, whose id routes to an
+  adapter (`gpt-5.6-luna`, `gpt-5.1`), its adapter's facts alone, with what the provider
+  publishes left `None` (D68); `entries()` lists only the models a layer names. Override with
+  `load()` (a strict TOML loader) and `register()`, which checks its facts as `load()` does, field
+  by field; both, and `unregister()`, name a model by its id, an alias or a dated snapshot, as
+  `get()` does, and `unregister()` hides the adapter's facts too, until `reset()` or a new entry.
+  `ModelCatalog(defaults=False)` starts empty, and a catalog is safe to share between threads. Nothing in the toolkit reads the catalog: the
   adapters keep their rules. See [Model catalog](docs/model-catalog.md).
 - `scripts/probe_models.py` writes `<run_id>.catalog.toml` next to each report: what the run
   proved, as `kind = "probe"` catalog facts, for review or `model_catalog.load()` (C06d). A fact

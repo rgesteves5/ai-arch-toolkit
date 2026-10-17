@@ -104,12 +104,25 @@ so by default.
 ## Which models
 
 The shipped seed (`core/_default_catalog.toml`) is the current line with an official page: the
-30 models of the live probe inventory still served, and the image models (GPT Image, Gemini
+32 models of the live probe inventory still served, and the image models (GPT Image, Gemini
 image, Grok Imagine, Muse Image). It holds only what the providers publish, limits and
 modalities, each with its page and the day it was read; the rest comes from the adapters.
 
-A model the catalog does not know gives `None`, also when the adapter would run it with its
-provider's current rules. Add it with `register()` or `load()`; the adapter's facts join it.
+A model the seed does not hold, whose id routes to an adapter (`gpt-5.6-luna`, `gpt-5.1`, a
+Claude model newer than the toolkit), gets its adapter's facts alone from `get()` (D68): the
+adapter runs any id it routes, by its table or by its provider's current rules, and the facts say
+what it does. What the provider publishes (limits, modalities) stays `None`; add it with
+`register()` or `load()`, and the adapter's facts join it. `get()` gives `None` for a model
+whose id routes nowhere (ask an app's namespace by name, below), and without the adapter's SDK
+extra. `entries()` lists only the models a layer names: an adapter has rules, not a list of
+models, so a filter over `entries()` never sees a model only its adapter knows.
+
+```python
+caps = model_catalog.get("gpt-5.6-luna")      # no seed entry: the OpenAI adapter's facts
+caps.thinking_efforts                         # its row in the adapter's table
+caps.context_window                           # None: not published here
+caps.provenance("tools").kind                 # "adapter"
+```
 
 ## Matching ids
 
@@ -160,7 +173,8 @@ model_catalog.register(
 
 A fact registered without a source gets `Provenance(kind="override", ref=
 "ModelCatalog.register")`. `register(..., replace=True)` makes the entry the whole of what is
-known: nothing below it shows through. `unregister(model)` forgets a model in every layer and
+known: nothing below it shows through. `unregister(model)` forgets a model in every layer, the
+adapter's included, so `get()` gives `None` until `register()` or `load()` names it again, and
 `reset()` returns to the seed. `ModelCatalog(defaults=False)` starts empty, with no seed and no
 adapter facts. An alias that already names another model of the provider raises `ValueError`.
 `ModelCapabilities` and `Provenance` check their facts as `load()` does: a wrong type or a word
