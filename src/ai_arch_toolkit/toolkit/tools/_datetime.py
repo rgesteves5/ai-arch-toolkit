@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 from zoneinfo import ZoneInfo, available_timezones
@@ -15,6 +16,8 @@ _SPAN = datetime.max - datetime.min
 _DAYS = _SPAN.days
 _HOURS = _SPAN // timedelta(hours=1)
 _MINUTES = _SPAN // timedelta(minutes=1)
+# The year directives, and the escaped percent that must not start one.
+_YEAR_DIRECTIVES = re.compile(r"%[YG%]")
 
 
 @tool(capability="compute")
@@ -38,7 +41,7 @@ def datetime_now(tz: str = "UTC") -> str:
         zone = ZoneInfo(matches[0])
 
     now = datetime.now(zone)
-    return f"{now.strftime('%Y-%m-%d %H:%M:%S %Z')} ({now.strftime('%A')})"
+    return _strftime(now, "%Y-%m-%d %H:%M:%S %Z (%A)")
 
 
 @tool(capability="compute")
@@ -73,7 +76,8 @@ def timezone_convert(time_str: str, from_tz: str, to_tz: str) -> str:
         converted = localized.astimezone(to_zone)
     except OverflowError as e:
         raise _out_of_range(e) from e
-    return f"{localized.strftime('%Y-%m-%d %H:%M %Z')} → {converted.strftime('%Y-%m-%d %H:%M %Z')}"
+    stamp = "%Y-%m-%d %H:%M %Z"
+    return f"{_strftime(localized, stamp)} → {_strftime(converted, stamp)}"
 
 
 @tool(capability="compute")
@@ -147,7 +151,7 @@ def date_format(date_str: str, format_out: str) -> str:
         ToolFailure: validation_error when the date is malformed.
     """
     dt, _ = _parse_datetime(date_str)
-    return dt.strftime(format_out)
+    return _strftime(dt, format_out)
 
 
 def _zone(name: str, value: str) -> ZoneInfo:
@@ -186,5 +190,24 @@ def _parse_datetime(value: str, which: str = "") -> tuple[datetime, str]:
 def _format_datetime(dt: datetime, input_format: str, force_datetime: bool = False) -> str:
     """Format a datetime while preserving date-only inputs when possible."""
     if input_format == "%Y-%m-%d" and not force_datetime and dt.time() == datetime.min.time():
-        return dt.strftime("%Y-%m-%d")
-    return dt.strftime("%Y-%m-%d %H:%M")
+        return _strftime(dt, "%Y-%m-%d")
+    return _strftime(dt, "%Y-%m-%d %H:%M")
+
+
+def _strftime(dt: datetime, fmt: str) -> str:
+    """``dt.strftime(fmt)`` with ``%Y`` and ``%G`` written as four digits on every platform.
+
+    Python 3.13 hands both to the C library, and glibc writes year 1 as ``1`` where macOS writes
+    ``0001``; Python 3.14 pads them everywhere (gh-120713), as this does.
+    """
+
+    def padded(directive: re.Match[str]) -> str:
+        match directive.group():
+            case "%Y":
+                return f"{dt.year:04d}"
+            case "%G":
+                return f"{dt.isocalendar().year:04d}"
+            case _:
+                return "%%"
+
+    return dt.strftime(_YEAR_DIRECTIVES.sub(padded, fmt))

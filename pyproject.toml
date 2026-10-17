@@ -22,9 +22,9 @@ ai-arch = "ai_arch_toolkit._cli:main"
 anthropic = ["anthropic>=1.0,<2"]
 gemini = ["google-genai>=2.0,<3"]
 # Meta ships no SDK: its Model API is driven through the openai SDK's Responses API.
-meta = ["openai>=3.0,<4"]
-openai = ["openai>=3.0,<4"]
-xai = ["xai-sdk>=1.18,<2"]
+meta = ["openai>=3.12,<4"]
+openai = ["openai>=3.12,<4"]
+xai = ["xai-sdk>=1.19,<2"]
 
 # Optional features.
 graph = ["networkx>=3.0"]

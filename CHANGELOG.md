@@ -925,9 +925,10 @@ tools moved it into their own limits without a word (1 to 100,000, or 200 to 4,0
 - MediaWiki tools accept only HTTPS Wikimedia domains and subdomains, without credentials or ports.
 - **Breaking:** `csv_read` moves to `toolkit.tools.dangerous` and requires approval in governed execution.
 - **Breaking: provider SDK majors and dependency floors.** The extras now require the current SDK
-  majors, each capped at the next one: `anthropic>=1.0,<2`, `openai>=3.0,<4` (the `openai` and
-  `meta` extras), `google-genai>=2.0,<3`, `xai-sdk>=1.18,<2` (was 1.7; 1.18 is the first release
-  that takes the `xhigh` effort). `anthropic` 1.x and `openai` 3.x moved
+  majors, each capped at the next one: `anthropic>=1.0,<2`, `openai>=3.12,<4` (the `openai` and
+  `meta` extras; 3.12 is the first release whose image generation calls carry `output_format`),
+  `google-genai>=2.0,<3`, `xai-sdk>=1.19,<2` (was 1.7; 1.19 is the first release with the image
+  types the adapter imports, `ImageQuality` among them). `anthropic` 1.x and `openai` 3.x moved
   their HTTP transport to `httpx2`. `anthropic` 1.x also removed `temperature`, `top_p` and `top_k`
   from its signatures; the adapter now sends them in the request body, so they keep working on the
   Claude models that accept them (4.6 and earlier) and are still dropped where the API rejects
@@ -1089,6 +1090,14 @@ tools moved it into their own limits without a word (1 to 100,000, or 200 to 4,0
   - `select` or `serialize_as` on an inline template (they were ignored).
 
 ### Fixed
+- `date_add`, `date_format`, `timezone_convert` and `datetime_now` write a year before 1000 with
+  four digits on every platform: on Linux under Python 3.13, glibc's `strftime` wrote year 1 as
+  `1-01-01` where macOS wrote `0001-01-01`. `%Y` and `%G` are now padded by the tool, as Python
+  3.14 does everywhere.
+- The `xai` extra requires `xai-sdk>=1.19` and the `openai` and `meta` extras `openai>=3.12`: with
+  `xai-sdk` 1.18 importing the xAI adapter failed ("Install the xai extra"), and with `openai`
+  3.0 to 3.11 an image drawn in a Responses chat raised `ResponseError`. The CI job that installs
+  the lowest version of every direct dependency passes again.
 - Tools no longer reach a model past the ones an agent declares. Through `llm_kwargs`,
   `completion` (and every phase that sends no tools: planners, solvers, reviewers without tools)
   sent them to the provider, a provider-side `web_search()` or `code_execution()` included, and a
