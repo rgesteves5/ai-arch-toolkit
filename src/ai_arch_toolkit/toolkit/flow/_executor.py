@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import functools
+import threading
 import time
 from collections import deque
 from collections.abc import AsyncGenerator, Callable, Iterator
@@ -260,6 +261,8 @@ class _FlowRun:
         self.owned = False
         self.span_id: str | None = None
         self.deadline: float | None = None
+        # What the consumer has not heard yet. A step's LLM calls in other threads append to it
+        # too (``_llm_events``); a deque's append and popleft are atomic.
         self._events: deque[FlowEvent] = deque()
         self._signal: asyncio.Event | None = None
         self._running: dict[_StepTask, str] = {}
@@ -573,40 +576,55 @@ class _FlowRun:
         tool's thread the executor stopped waiting for, a task nobody awaits) keeps the channel
         but is heard no more once the step has ended, and never fails because the run's loop has
         closed.
+
+        An event is the step's when its call hands it over before the step ends: the sink queues
+        it in the caller's thread, under the lock the step's end takes, and only the consumer's
+        wake-up goes through the loop. A step can have a thread's answer before the loop runs
+        what that thread scheduled on it (a ``complete_sync`` that blocks the loop's thread, or
+        an ``asyncio.to_thread`` whose thread finished before it was awaited, which CPython
+        3.13.12+ resolves without a loop turn), so queueing the event on the loop would lose it.
         """
         if not self.tokens:
             yield
             return
         loop = asyncio.get_running_loop()
         flow_name = self.flow.name
+        ending = threading.Lock()
         live = True
 
-        def deliver(streamed: FlowEvent) -> None:
-            if live:  # checked on the run's loop, where the step's end is made
-                self._emit(streamed)
-
         def sink(event: StreamEvent, call: str) -> None:
-            if not live:
-                return
-            streamed = FlowEvent(
-                type="llm_event",
-                flow_name=flow_name,
-                step_name=name,
-                llm_event=event,
-                llm_call=call,
-            )
-            if _running_loop() is loop:
-                deliver(streamed)
-                return
-            # A call made in another thread (a sync tool's ``complete_sync``).
-            with contextlib.suppress(RuntimeError):  # the run's loop has closed: nobody listens
-                loop.call_soon_threadsafe(deliver, streamed)
+            with ending:
+                if not live:
+                    return
+                self._events.append(
+                    FlowEvent(
+                        type="llm_event",
+                        flow_name=flow_name,
+                        step_name=name,
+                        llm_event=event,
+                        llm_call=call,
+                    )
+                )
+            self._wake(loop)
 
         with llm_events_to(sink):
             try:
                 yield
             finally:
-                live = False
+                with ending:
+                    live = False
+
+    def _wake(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Wake the run's consumer, waiting on ``loop``, from any thread: an event is queued."""
+        signal = self._signal
+        if signal is None:
+            return
+        if _running_loop() is loop:
+            signal.set()
+            return
+        # A call made in another thread (a sync tool's ``complete_sync``).
+        with contextlib.suppress(RuntimeError):  # the run's loop has closed: nobody listens
+            loop.call_soon_threadsafe(signal.set)
 
     def _emit(self, event: FlowEvent) -> None:
         self._events.append(event)
