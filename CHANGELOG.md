@@ -136,6 +136,10 @@ English Wikipedia is the default, where the MediaWiki tools defaulted to the Eng
 tools moved it into their own limits without a word (1 to 100,000, or 200 to 4,000).
 
 ### Added
+- **`Agent.iter_sync()`**, returning a `SyncAgentExecution` (exported from
+  `ai_arch_toolkit.toolkit.agents`): an agent's events, the LLM calls' tokens included, from
+  synchronous code, then the same `AgentResult` as `run_sync()`. `with`, or `close()`, stops the
+  run early. `Flow` had it; `Agent` had only the async `iter()`.
 - **`unmeasured_delivery_count`** on `MeterSnapshot` and `BudgetReport` (and in their
   `to_dict()`): the results delivered whose cost was not measured, because the provider reported
   neither their usage nor their cost (D67). Each is also counted in `uncertain_cost_count`, or in

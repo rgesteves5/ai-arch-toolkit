@@ -59,7 +59,8 @@ print(result.text)                    # final answer
 print(result.cost, result.usage)      # meter-derived spend (single source of truth)
 ```
 
-`agent.run(...)` is the async form; `agent.iter(...)` streams `FlowEvent`s;
+`agent.run(...)` is the async form; `agent.iter(...)` streams `FlowEvent`s (`agent.iter_sync(...)`
+from synchronous code);
 `agent.as_step()` embeds the agent inside a larger `Flow`.
 
 ### Strategies

@@ -247,6 +247,20 @@ print(execution.result.text)
 Use `async with` (or `await execution.aclose()`) when you may stop early: a `break`
 alone leaves the step in flight running while you still hold the execution.
 
+From synchronous code, `Agent.iter_sync(task)` does the same on a background loop, and stops
+early with `with` (or `execution.close()`):
+
+```python
+with agent.iter_sync("Summarise the latest news on X.") as execution:
+    for event in execution:
+        print(event.type, event.step_name)
+if execution.result is not None:  # None when the loop stopped early
+    print(execution.result.text)
+```
+
+In code that already runs an event loop (a notebook, an async app), use `iter()`: a `_sync`
+wrapper runs on a second loop, and an `LLM` already used on the first one fails there.
+
 Events come from the steps of the strategy's flow ([Flow Architecture](flow-architecture.md#streaming)).
 An inner ReAct loop that runs inside one step reports through that step's
 `step_start`/`step_end`, and each inner run appears in the trace among that step's

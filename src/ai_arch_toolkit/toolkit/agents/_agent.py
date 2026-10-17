@@ -18,10 +18,10 @@ from ai_arch_toolkit.toolkit.agents._compile import build_flow, initial_state, r
 from ai_arch_toolkit.toolkit.agents._spec import ReasoningSpec
 from ai_arch_toolkit.toolkit.agents.flows._keys import MESSAGES
 from ai_arch_toolkit.toolkit.budget import BudgetPolicy, BudgetReport
-from ai_arch_toolkit.toolkit.flow._executor import FlowExecution
+from ai_arch_toolkit.toolkit.flow._executor import FlowExecution, SyncFlowExecution
 from ai_arch_toolkit.toolkit.flow._flow import Flow, FlowEvent, FlowResult
 
-__all__ = ["Agent", "AgentExecution", "AgentResult"]
+__all__ = ["Agent", "AgentExecution", "AgentResult", "SyncAgentExecution"]
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -132,6 +132,19 @@ class Agent:
         state = State(operational=self._make_state(task))
         return AgentExecution(self._flow.iter(state, budget_policy=budget_policy, config=config))
 
+    def iter_sync(
+        self,
+        task: Content,
+        *,
+        budget_policy: BudgetPolicy | None = None,
+        config: RunConfig | None = None,
+    ) -> SyncAgentExecution:
+        """Synchronous wrapper for :meth:`iter`; ``.result`` is set once iteration ends."""
+        state = State(operational=self._make_state(task))
+        return SyncAgentExecution(
+            self._flow.iter_sync(state, budget_policy=budget_policy, config=config)
+        )
+
     def as_step(self) -> Step:
         """Wrap this agent's Flow as a Step for composition into a larger Flow."""
         return self._flow.as_step()
@@ -166,6 +179,44 @@ class AgentExecution:
 
     async def __aexit__(self, *exc_info: object) -> None:
         await self.aclose()
+
+    @property
+    def result(self) -> AgentResult | None:
+        """The finished run's result, or ``None`` while it is running or if it was abandoned."""
+        if self._result is None and self._execution.result is not None:
+            self._result = _agent_result(self._execution.result)
+        return self._result
+
+
+class SyncAgentExecution:
+    """Synchronous counterpart of :class:`AgentExecution`; the run happens on a background loop.
+
+    Behaves like :class:`~ai_arch_toolkit.toolkit.flow.SyncFlowExecution`: nothing runs until the
+    first event is requested, ``result`` is ``None`` until the run has finished, and a ``break``
+    does not stop a run that is still referenced — :meth:`close` or ``with`` does.
+    """
+
+    __slots__ = ("_execution", "_result")
+
+    def __init__(self, execution: SyncFlowExecution) -> None:
+        self._execution = execution
+        self._result: AgentResult | None = None
+
+    def __iter__(self) -> SyncAgentExecution:
+        return self
+
+    def __next__(self) -> FlowEvent:
+        return next(self._execution)
+
+    def close(self) -> None:
+        """Stop the run: the background run is cancelled and its meter closed."""
+        self._execution.close()
+
+    def __enter__(self) -> SyncAgentExecution:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
 
     @property
     def result(self) -> AgentResult | None:

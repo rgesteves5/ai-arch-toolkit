@@ -122,7 +122,7 @@ re-exported from `ai_arch_toolkit` or `ai_arch_toolkit.toolkit`. See
 
 | Symbol | Description |
 |--------|-------------|
-| `Agent` | Binds a `ReasoningSpec` to an `LLM`, a `ToolGroup`, and per-phase `deps`, and compiles the `Flow` once: `run()` / `run_sync()`, `iter()`, `as_step()`, `Agent.from_flow()` |
+| `Agent` | Binds a `ReasoningSpec` to an `LLM`, a `ToolGroup`, and per-phase `deps`, and compiles the `Flow` once: `run()` / `run_sync()`, `iter()` / `iter_sync()` (an `AgentExecution` / `SyncAgentExecution`), `as_step()`, `Agent.from_flow()` |
 | `ReasoningSpec` | Frozen, declarative description of how an agent reasons (`from_mapping()` builds one from plain config data): `strategy`, `system`, `max_iterations`, `knobs`, `policy`, `timeout`, `trace_capture`, `llm_kwargs`, `output_schema` |
 | `AgentResult` | Outcome of a run: `text`, `response`, `flow_result`, `usage`, `cost`, `report`, `errors` |
 | `load_agent_manifest()`, `agent_from_manifest()` | Load a file-backed agent manifest, then assemble it into an `Agent` |
