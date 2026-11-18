@@ -160,7 +160,7 @@ _MULTI_AGENT = _Profile(multi_agent=True)
 # (https://docs.x.ai/developers/models/grok-4.3 and the others); the ids retired on 2026-05-15
 # are served by grok-4.3, the reasoning ones at low effort and the others at none, and
 # grok-code-fast-1 by grok-build-0.1 (https://docs.x.ai/developers/migration/may-15-retirement).
-# xAI's image models (grok-imagine-image, -2.0, -quality): image generation, not chat.
+# xAI's image models (grok-imagine-image, -2.0): image generation, not chat.
 _IMAGE_FAMILIES = {"grok-imagine-image": True}
 
 _PROFILES: dict[str, _Profile] = {

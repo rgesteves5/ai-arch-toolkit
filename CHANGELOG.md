@@ -136,6 +136,26 @@ English Wikipedia is the default, where the MediaWiki tools defaulted to the Eng
 tools moved it into their own limits without a word (1 to 100,000, or 200 to 4,000).
 
 ### Added
+- **Models released up to 2026-11-17**, each with its price, catalog seed entry and probe
+  inventory entry (none run live yet), from the providers' pages read that day:
+  - Anthropic: Claude Fable 5.2 (`claude-fable-5-2`) and Mythos 5.2 (`claude-mythos-5-2`, priced
+    and ruled only, not in the inventory): $8 in and $40 out, cache reads $0.20, batch at half,
+    fast mode $16 and $80. Both refuse a forced `tool_choice` and sampling parameters, and take
+    the five efforts.
+  - OpenAI: GPT-6.1 Terra (`gpt-6.1-terra`): $1 and $5, long-context over 272K, batch and fast
+    rates; Sol and Luna's rules (`none` to `max`, `medium` by default, sampling only at `none`).
+    GPT-6 Cyber and GPT-6 Rosalind are priced. GPT Image 2.6 (`gpt-image-2.6-sunburst`,
+    `gpt-image-2.6-flare`), at the 2.5 models' rates and rules; the hosted `image_generation`
+    tool refuses them with `RequestError`, as OpenAI's tool guide does.
+  - Gemini: Gemini 4 Carbon, Argon and Hydrogen (`gemini-4-carbon`, `gemini-4-argon`,
+    `gemini-4-hydrogen`): thinking at `low`, `medium` or `high`, and `xhigh` on Hydrogen; Carbon
+    and Argon cost $2 and $10 through 2026-11-30, then $4 and $20. Nano Banana 2.1
+    (`gemini-nano-banana-2.1`), the image model that replaces 3.1 Flash Image: 1K, 2K and 4K
+    images (3,780 tokens at 4K), the 3.1 Flash Image ratios.
+  - Meta: Muse Wonder (`muse-wonder-1.0`, preview) and Muse Ember (`muse-ember-1.0`, with a
+    long-context price over 200K input tokens). `create_provider()` routes the `muse-wonder-` and
+    `muse-ember-` prefixes to Meta; both reason at `"max"` when no effort is sent, and a turn's
+    reasoning is replayed only within its family.
 - **`Agent.iter_sync()`**, returning a `SyncAgentExecution` (exported from
   `ai_arch_toolkit.toolkit.agents`): an agent's events, the LLM calls' tokens included, from
   synchronous code, then the same `AgentResult` as `run_sync()`. `with`, or `close()`, stops the
@@ -510,6 +530,31 @@ tools moved it into their own limits without a word (1 to 100,000, or 200 to 4,0
   [docs/agents.md](docs/agents.md#file-backed-agent-manifests).
 
 ### Changed
+- Dependencies upgraded within their majors (`uv lock --upgrade`, 2026-11-17): `openai` 3.52,
+  `anthropic` 1.17, `google-genai` 2.34, `xai-sdk` 1.21, `protobuf` 7.36. The `openai` and
+  `meta` extras now require `openai>=3.41`, the first release that types a response's
+  `tool_usage`; the `gemini` extra requires `google-genai>=2.30.1`, the first that continues a
+  Gemini 4 answer stopped at a request's output cap (`finish_reason` `CONTINUATION`).
+- **Breaking: `anthropic` 2 and `google-genai` 3.** The `anthropic` extra requires
+  `anthropic>=2.0,<3` and the `gemini` extra `google-genai>=3.3,<4` (3.3 types the `xhigh`
+  thinking level). `httpx` is no longer installed: both SDKs send through `httpx2`.
+  - Claude requests go on API version 2026-10-21
+    ([migration guide](https://platform.claude.com/docs/en/api/migration-2026-10-21)), which
+    refuses `temperature`, `top_p` and `top_k` on every model. A request that sends them to a
+    model that samples (Claude 4.6 and older; the `LLM` sends `temperature=0.0` by default) stays
+    on `2023-06-01`, the version that takes them, and so does a batch with such a line, so their
+    output does not change. Every other request goes on 2026-10-21.
+  - The API key goes in `Authorization: Bearer` instead of `X-Api-Key`: a proxy or gateway behind
+    a custom `base_url` that reads `X-Api-Key` must read `Authorization`.
+  - A `DocumentPart` in an assistant message raises `RequestError`: 2026-10-21 refuses it, and a
+    document belongs in a user message.
+  - Gemini requests go on API version `v1`, google-genai 3's default and Google's stable version,
+    set in code so `GOOGLE_GENAI_API_VERSION` cannot change it; `gemini-3.1-pro-preview`,
+    `gemini-3-flash-preview` and `gemini-3.1-flash-lite-preview`, served on `v1beta` only, go
+    there ([API versions](https://aistudio.google.com/docs/api-versions)).
+- `gpt-5.6-sol`'s promotional price runs through 2026-11-30, as OpenAI's pages now say (it ended
+  on 2026-11-21 in the table). From 2026-12-01, `gemini-2.5-pro` is priced at `gemini-3.8-flash`'s
+  rates and `gemini-2.5-flash` at `gemini-3.5-flash-lite`'s, since Google routes and bills them so.
 - Under a meter, a reply delivered without its usage (and without a cost the provider reported)
   is settled as a failure that may have been billed is (D49, D67): an unknown cost, at most the
   call's strict hold, or else the worst case of its request's facts at the run's prices. It was an
@@ -1106,6 +1151,12 @@ tools moved it into their own limits without a word (1 to 100,000, or 200 to 4,0
   - `select` or `serialize_as` on an inline template (they were ignored).
 
 ### Fixed
+- With `openai` 3.41 or later, a turn that drew with the hosted `image_generation` tool lost the
+  image's tokens and cost: the SDK now types `tool_usage`, which the adapter read from the
+  response's untyped extras. It reads the typed field; output details left out count as image
+  tokens.
+- Gemini batch cache reads are priced at the standard rate, as Google bills them, on 2.5 Pro,
+  2.5 Flash, 2.5 Flash-Lite, 3.1 Pro Preview and 3 Flash Preview; the table halved them.
 - In an iterated flow, the `llm_event`s of an LLM call made in another thread (a
   `complete_sync` in `asyncio.to_thread`, or one that blocks the step) are no longer lost when the
   step has the call's answer before the loop turns again: CPython 3.13.12+ resolves a
@@ -1632,6 +1683,11 @@ tools moved it into their own limits without a word (1 to 100,000, or 200 to 4,0
   docstring now warns that rollouts re-run their tools, so tool side effects repeat.
 
 ### Removed
+- The prices, rules and catalog entries of the models shut down by 2026-11-17: `gpt-4o-2024-05-13`
+  (now priced as `gpt-4o`) and `gpt-image-1` (2026-10-23), `o4-mini-deep-research`
+  (2026-07-23), and `grok-imagine-image-quality` (2026-11-02; xAI serves it with
+  `grok-imagine-image-2.0` at quality `low`, and reports its cost). Under a `MeterScope` the
+  unpriced ones raise `UnpricedModelError`.
 - The prices and per-model rules of the OpenAI models shut down by 2026-10-23
   (https://developers.openai.com/api/docs/deprecations): `gpt-3.5-turbo`, `gpt-4`, `gpt-4-turbo`,
   `gpt-4.1-nano`, `o1`, `o1-pro`, `o3-mini` and `o4-mini`, with their snapshots, and

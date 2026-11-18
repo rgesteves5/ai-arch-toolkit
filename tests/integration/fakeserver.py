@@ -20,6 +20,16 @@ class Stats:
 
     requests: int = 0
     bodies: list[bytes] = field(default_factory=list)
+    heads: list[Head] = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
+class Head:
+    """A request's line and headers, the header names lowercased."""
+
+    method: str
+    path: str
+    headers: dict[str, str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,17 +54,17 @@ def closed_port() -> int:
         return probe.getsockname()[1]
 
 
-async def _read_body(reader: asyncio.StreamReader) -> bytes:
-    head = (await reader.readuntil(b"\r\n\r\n")).decode("latin-1")
-    length = next(
-        (
-            int(line.split(":", 1)[1])
-            for line in head.split("\r\n")
-            if line.lower().startswith("content-length:")
-        ),
-        0,
-    )
-    return await reader.readexactly(length) if length else b""
+async def _read(reader: asyncio.StreamReader, stats: Stats) -> None:
+    """Read one request into ``stats``: its head, then its body."""
+    lines = (await reader.readuntil(b"\r\n\r\n")).decode("latin-1").split("\r\n")
+    method, path, _ = lines[0].split(" ", 2)
+    headers = {
+        name.strip().lower(): value.strip()
+        for name, value in (line.split(":", 1) for line in lines[1:] if ":" in line)
+    }
+    stats.heads.append(Head(method, path, headers))
+    length = int(headers.get("content-length", 0))
+    stats.bodies.append(await reader.readexactly(length) if length else b"")
 
 
 def _reset(writer: asyncio.StreamWriter) -> None:
@@ -132,7 +142,7 @@ async def start(
 
     async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
-            stats.bodies.append(await _read_body(reader))
+            await _read(reader, stats)
             stats.requests += 1
             if behaviour == "hang":
                 await asyncio.sleep(seconds)
@@ -197,7 +207,7 @@ class KeepAlive:
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
             while True:
-                self.stats.bodies.append(await _read_body(reader))
+                await _read(reader, self.stats)
                 self.stats.requests += 1
                 payload = json.dumps(self.body).encode()
                 head = (

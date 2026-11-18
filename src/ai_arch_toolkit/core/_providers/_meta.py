@@ -61,9 +61,10 @@ _FORWARDED = frozenset(
     }
 )
 
-# Muse Spark's reasoning efforts (https://dev.meta.ai/docs/reasoning): "max" only on the standard
-# tier of muse-spark-1.3, not on contributor-tier or older models; a newer model gets them all.
-# "none" is not among them: Muse Spark always reasons and answers it with a 400.
+# The Muse models' reasoning efforts (https://dev.meta.ai/docs/reasoning): "max" only on the
+# standard tier of muse-spark-1.3, not on contributor-tier or older models; a newer model gets them
+# all, as muse-wonder-1.0 and muse-ember-1.0 do (they default to "max", Muse Spark to "high").
+# "none" is not among them: every Muse model always reasons and answers it with a 400.
 _EFFORTS = frozenset({"minimal", "low", "medium", "high", "xhigh", "max"})
 _MODEL_EFFORTS: dict[str, frozenset[str]] = dict.fromkeys(
     (
@@ -93,7 +94,9 @@ _CODE_STATUS: dict[str, int] = {
     "gateway_timeout": 504,
 }
 
-# Meta serves one family of reasoning models, Muse Spark (D14), and an image model (D46).
+# Meta serves three families of reasoning models, Muse Spark (D14), Muse Wonder and Muse Ember
+# (https://dev.meta.ai/docs/muse-wonder, https://dev.meta.ai/docs/muse-ember), and an image
+# model (D46). A turn's reasoning is replayed only within its family.
 _MUSE_SPARK = "muse-spark"
 
 # Muse Image on the Images API (https://dev.meta.ai/docs/image-generation): up to 10 images, no
@@ -106,7 +109,12 @@ _IMAGE_FAMILIES = {"muse-image-": _MUSE_IMAGE}
 
 _PROFILE = ResponsesProfile(
     provider="Meta",
-    families={"muse-spark-": _MUSE_SPARK, "muse-image-": "muse-image"},
+    families={
+        "muse-spark-": _MUSE_SPARK,
+        "muse-wonder-": "muse-wonder",
+        "muse-ember-": "muse-ember",
+        "muse-image-": "muse-image",
+    },
     # Stateless requests get the encrypted reasoning back only when they ask for it (D12).
     include=("reasoning.encrypted_content",),
     # Only "auto" exists: "none" is sent as no tools, a forced choice is refused (D13).

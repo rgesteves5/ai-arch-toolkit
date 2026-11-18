@@ -142,6 +142,29 @@ always sends one); a GPT-6 model that reasons takes no sampling parameter or log
 `thinking_effort` applies on its own: to keep a model that reasons by default from reasoning,
 pass `thinking_effort="none"` where it takes `"none"`.
 
+### GPT-6.1 Terra, GPT-6 Cyber and GPT-6 Rosalind (added 2026-11-17)
+
+`gpt-6.1-terra` (released 2026-10-26) costs $1 input and $5 output per million tokens, cached
+input $0.05, with batch, long-context (a request over 272K input tokens, priced wholly at $2 and
+$7.50), and fast pricing. It follows Sol and Luna's rules: efforts `none` to `max` (no
+`minimal`), `medium` when none is sent, sampling parameters only at `none`. Its context window is
+1,050,000 tokens (922,000 in, 128,000 out), text and images in. It is in the probe inventory with
+**no live result** yet; OpenAI's guide says its tool calls need the Responses API, which is the
+one the adapter uses. See the [model page](https://developers.openai.com/api/docs/models/gpt-6.1-terra).
+
+`gpt-6-cyber` (Daybreak Red access, no batch) and `gpt-6-rosalind` (approved life-sciences
+organizations, no model page) are priced only, at $20 and $100, and $15 and $75, per million
+tokens, with long-context rates over 272K; their efforts are not published, so they get the
+current generation's rules.
+
+Shutdowns ([deprecations](https://developers.openai.com/api/docs/deprecations)): `gpt-4o-2024-05-13`
+and `gpt-image-1` shut down on 2026-10-23 and are no longer priced; `gpt-image-1.5`,
+`chatgpt-image-latest` and `gpt-image-1-mini` shut down on 2026-12-01; `gpt-5`, `gpt-5-mini`,
+`gpt-5-nano`, `gpt-5-pro` and `o3` on 2026-12-11; the GPT-4o and GPT-4.1 snapshots
+(`gpt-4o-2024-08-06`, `gpt-4o-2024-11-20`, `gpt-4o-mini-2024-07-18`, `gpt-4.1-2025-04-14`,
+`gpt-4.1-mini-2025-04-14`) on 2027-01-14; `gpt-image-2` on 2027-02-10. `gpt-5.6-sol`'s
+promotional price now runs through 2026-11-30.
+
 ### GPT-6 Astra (added 2026-09-04)
 
 `gpt-6-astra` is registered with standard, cached, batch, long-context, and fast pricing. It
@@ -162,7 +185,8 @@ and calls tools at any effort. Every probe passed live on 2026-10-02. See the
 
 ### GPT-6 Sol and Luna (added 2026-09-25)
 
-The GPT-6 family is Astra, Sol, and Luna; Terra is a GPT-5.6 tier (`gpt-5.6-terra`). `gpt-6-sol`
+The GPT-6 family is Astra, Sol, and Luna, with GPT-6.1 Sol and Terra (`gpt-5.6-terra` is the
+GPT-5.6 tier). `gpt-6-sol`
 and `gpt-6-luna` are registered with standard, cached, batch, long-context (above 272K input
 tokens), and fast pricing. They take efforts `none` to `max` (no `minimal`) and reason at
 `medium` when no effort is sent. They take sampling parameters (`temperature`, `top_p`,
@@ -246,6 +270,28 @@ need separate provider support.
 > (`pytest tests/integration/test_provider_hardening_live.py -m live_api -k gemini`), so prefer
 > another provider for multi-tool agents.
 
+### Gemini 4 (added 2026-11-17)
+
+`gemini-4-carbon` and `gemini-4-argon` (paid tier) cost $2 input and $10 output per million
+tokens through 2026-11-30, then $4 and $20; `gemini-4-hydrogen` costs $1.50 and $7.50. All three
+have one 1,048,576-token window for input and output, read text, images, video, audio, and PDF,
+always think (`low`, `medium`, `high`, the default being `medium` on Carbon and Argon and `high`
+on Hydrogen, which also takes `xhigh`; none takes `minimal`), ignore sampling parameters, and
+cache only implicitly. An answer stops at 65,536 tokens a request (32,768 on a plain REST call to
+Carbon or Argon) with `finish_reason` `CONTINUATION`: the SDK resends it with its continuation
+token until it ends, from google-genai 2.30.1, the `gemini` extra's floor, so `max_tokens` can go
+up to the window. Each request of such a chain reads the prompt again and is billed for it. They
+are in the probe inventory with **no live result** yet
+([thinking](https://aistudio.google.com/docs/thinking),
+[long decode](https://aistudio.google.com/docs/long-decode)).
+
+Google moved these pages to `https://aistudio.google.com/docs/` in 2026-11; the old
+`ai.google.dev` addresses redirect. From 2026-12-01, `gemini-2.5-pro` is routed to
+`gemini-3.8-flash` and `gemini-2.5-flash` to `gemini-3.5-flash-lite`, each billed at its new
+model's rates (the price table follows the date); the changelog lists breaking changes for both
+(a `thinking_level` in place of the budget, no sampling parameters), which the adapter does not
+model yet.
+
 Thinking follows each model's documented controls. On Gemini 3, `thinking_effort` is the
 thinking level and applies without `thinking=True`: `low`, `medium`, and `high` on the 3.8 and
 3.7 Flash, 3.1 Pro, and newer models; also `minimal` on the 3.6 and 3.5 Flash, 3.5 and 3.1
@@ -256,7 +302,10 @@ and, without an effort, thinks at `high`; a `thinking_budget` is ignored with a 
 on 2.5 Flash, and 0 or 512 to 24,576 on 2.5 Flash-Lite (Gemini's dynamic `-1` raises
 `RequestError`: the `LLM` takes no negative budget). The `web_search` and `code_execution`
 server tools are sent as `google_search` and `code_execution`; a server tool with a config raises
-`RequestError`. The SDK always sends through `httpx`, so it never re-sends a request on its own.
+`RequestError`. The SDK always sends through `httpx2`, so it never re-sends a request on its own,
+and on API version `v1`, Google's stable one; `gemini-3.1-pro-preview`, `gemini-3-flash-preview`
+and `gemini-3.1-flash-lite-preview` are served on `v1beta` only and go there. The version is set
+in code, so `GOOGLE_GENAI_API_VERSION` changes nothing.
 
 | Model | Plain | Tools | Structured | JSON Mode | Stream | Thinking | Notes |
 |---|---|---|---|---|---|---|---|
@@ -269,6 +318,22 @@ server tools are sent as `google_search` and `code_execution`; a server tool wit
 | `gemini-2.5-flash-lite` | Pass | Pass | Pass | Pass | Pass | Pass | Requires `thinking_budget >= 512`. |
 
 ## Anthropic
+
+### Claude Fable 5.2 and Mythos 5.2 (added 2026-11-17)
+
+`claude-fable-5-2` (released 2026-11-09, open to every API account) and `claude-mythos-5-2`
+(the same model, for organizations verified through Anthropic's programs) cost $8 input and
+$40 output per million tokens, cache reads $0.20 (0.025x input, as on the 5.1 models), batch at
+half, and fast mode $16 and $80. Both have a 1M-token context window and 128K output tokens, and
+read text, images, and PDF. They always think adaptively (`thinking=False` sends nothing; the
+API refuses `disabled`), take the five efforts (`low` to `max`, `high` by default), take no
+sampling parameters, and refuse a forced `tool_choice` with `RequestError`. Three API rules the
+adapter does not change: the account needs 30-day data retention (otherwise a 400), a thinking
+block is bound to the conversation before it (replay the turns unchanged: an edited `system`,
+tool list, or earlier message makes the next request a 400), and only these two models read
+their thinking blocks (other models drop them). Fable 5.2 is in the probe inventory, with **no
+live result** yet. See the
+[migration guide](https://platform.claude.com/docs/en/models/fable-5-2/migration-guide).
 
 ### Claude Opus 5.5 (added 2026-09-25)
 
@@ -314,7 +379,8 @@ models before them) take a budget: an effort or a `thinking_budget` (at least 1,
 thinking on, and the budget is added to `max_tokens`. The newer models take no sampling
 parameters: their `temperature` is dropped (the `LLM` always sends one) and `top_p` or `top_k`
 raise `RequestError`; the 4.6 and older models accept them. `claude-opus-5-5`,
-`claude-sonnet-5-5`, `claude-fable-5-1`, and `claude-mythos-5-1` refuse a forced `tool_choice`
+`claude-sonnet-5-5`, `claude-fable-5-2`, `claude-mythos-5-2`, `claude-fable-5-1`, and
+`claude-mythos-5-1` refuse a forced `tool_choice`
 (`"required"` or a name) with `RequestError`.
 The `web_search` and `code_execution` server tools are sent as `web_search_20250305` and
 `code_execution_20250825`. A turn's tool results go back in one `user` message, and an assistant
@@ -336,7 +402,7 @@ with only `{"a": 2}` where the schema required both `a` and `b`.
 
 ## Meta
 
-`muse-spark-*` models run on the Meta Model API (`https://api.meta.ai/v1`, key from
+The `muse-spark-*`, `muse-wonder-*` and `muse-ember-*` models run on the Meta Model API (`https://api.meta.ai/v1`, key from
 `MODEL_API_KEY`). Meta ships no SDK, so the adapter drives the `openai` SDK's Responses
 API — install the `meta` extra. It is the surface Meta recommends for agents: each response
 carries the model's reasoning encrypted, and appending `response.to_message()` to the
@@ -345,7 +411,14 @@ Requests are stateless (`store: false`); nothing is kept on Meta's side.
 
 What differs from other providers:
 
-- Muse Spark always reasons. `thinking_effort` (`"minimal"`, `"low"`, `"medium"`, `"high"`,
+- Muse Wonder (`muse-wonder-1.0`, preview, $4 and $20 per million tokens) and Muse Ember
+  (`muse-ember-1.0`, $0.10 and $0.50, three times that for a request over 200K input tokens),
+  added 2026-11-17, follow Muse Spark's rules with every effort, and reason at `"max"` when no
+  effort is sent ([Wonder](https://dev.meta.ai/docs/muse-wonder),
+  [Ember](https://dev.meta.ai/docs/muse-ember)): pass a `thinking_effort` to spend less. A turn's
+  reasoning is replayed only to a model of its own family. Both are in the probe inventory with
+  **no live result** yet.
+- Every Muse model always reasons. `thinking_effort` (`"minimal"`, `"low"`, `"medium"`, `"high"`,
   `"xhigh"`, and `"max"` on standard `muse-spark-1.3`) applies without `thinking=True`;
   `"none"` raises `RequestError`, since Meta answers it with a 400. `thinking=True` asks for
   reasoning summaries, which Meta does not produce on every call.
@@ -394,15 +467,15 @@ from a probe: the inventory lists the `vision` scenario for these models
 
 | Provider | Models | Image input | Source |
 |---|---|---|---|
-| OpenAI | every inventory model: `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-sol`, `gpt-6-luna`, `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-4.1`, `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `o3`; also `gpt-5.6`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, outside the inventory | yes ("Input modalities: text, image") | `https://developers.openai.com/api/docs/models/<id>` |
+| OpenAI | every inventory model: `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-4.1`, `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `o3`; also `gpt-5.6`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, outside the inventory | yes ("Input modalities: text, image") | `https://developers.openai.com/api/docs/models/<id>` |
 | xAI | `grok-4.7`, `grok-4.20-reasoning`, `grok-4.20-non-reasoning`, `grok-4.20-multi-agent`; also `grok-4.6` and `grok-4.5`, outside the inventory | yes ("text, image → text"; JPEG and PNG, up to 20 MiB) | `https://docs.x.ai/developers/models/<id>` (the `grok-4.20` ids are aliases of the `-0309` models) |
 | xAI | `grok-4-1-fast-reasoning`, `grok-4-1-fast-non-reasoning` | retired on 2026-05-15; xAI routes them to `grok-4.3`, which reads images | [retirement notice](https://docs.x.ai/developers/migration/may-15-retirement) |
-| Gemini | `gemini-3.1-pro-preview`, `gemini-3-flash-preview`, `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite` | yes (images among the inputs, with video, audio and PDF) | `https://ai.google.dev/gemini-api/docs/models/<id>` |
+| Gemini | `gemini-4-carbon`, `gemini-4-argon`, `gemini-4-hydrogen`, `gemini-3.1-pro-preview`, `gemini-3-flash-preview`, `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite` | yes (images among the inputs, with video, audio and PDF) | `https://ai.google.dev/gemini-api/docs/models/<id>` |
 | Gemini | `gemini-3.1-flash-lite-preview` | shut down on 2026-05-25 (`gemini-3.1-flash-lite` replaces it) | its model page |
 | Gemini | `gemini-3.1-flash-live-preview` | through the Live API only, which no adapter drives | its model page |
-| Anthropic | `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`, `claude-opus-4-7`, `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-haiku-4-5`, `claude-sonnet-4-5` (retires 2026-11-30), `claude-opus-4-5`; also `claude-fable-5-1`, outside the inventory | yes ("Text and images → text") | `https://platform.claude.com/docs/en/models/<name>/overview` |
+| Anthropic | `claude-fable-5-2`, `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`, `claude-opus-4-7`, `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-haiku-4-5`, `claude-sonnet-4-5` (retires 2026-11-30), `claude-opus-4-5`; also `claude-fable-5-1`, outside the inventory | yes ("Text and images → text") | `https://platform.claude.com/docs/en/models/<name>/overview` |
 | Anthropic | `claude-sonnet-4-0` | retired on 2026-06-15: requests fail | [model deprecations](https://platform.claude.com/docs/en/about-claude/model-deprecations) |
-| Meta | `muse-spark-1.3` | yes ("Text, image, video, audio*, PDF"; up to 50 images a request) | [models](https://dev.meta.ai/docs/models), [image understanding](https://dev.meta.ai/docs/image-understanding) |
+| Meta | `muse-spark-1.3`, `muse-wonder-1.0`, `muse-ember-1.0` | yes ("Text, image, video, audio*, PDF"; up to 50 images a request) | [models](https://dev.meta.ai/docs/models), [image understanding](https://dev.meta.ai/docs/image-understanding) |
 
 Every adapter sends a user turn's images to its provider. The xAI adapter takes JPEG and PNG, the
 types Grok reads: an image given inline (bytes, base64, a `data:` URL) of any other type, by its

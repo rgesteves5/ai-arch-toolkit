@@ -114,7 +114,9 @@ async def test_gemini_asks_for_image_output_and_reads_the_inline_image() -> None
     async with server:
         provider = GeminiProvider("gemini-3.1-flash-image", "local-test", timeout=2.0)
         await provider.close()  # its client for Google never connected
-        options = _http_options(2.0).model_copy(update={"base_url": f"http://127.0.0.1:{port}"})
+        options = _http_options("gemini-3.1-flash-image", 2.0).model_copy(
+            update={"base_url": f"http://127.0.0.1:{port}"}
+        )
         provider._install_client(lambda: genai.Client(api_key="local-test", http_options=options))
         response = await generate_image(provider, "a lighthouse", aspect_ratio="16:9")
         await provider.close()

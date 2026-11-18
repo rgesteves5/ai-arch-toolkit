@@ -16,14 +16,15 @@ ai-arch = "ai_arch_toolkit._cli:main"
 [project.optional-dependencies]
 # Floors are the lowest versions CI installs and tests (the "floors" job in ci.yml), so they stay
 # true. Each provider SDK is capped at its next major: a new major can change the wire contract the
-# adapters are written for (anthropic 1.x and openai 3.x both moved their transport to httpx2).
+# adapters are written for (anthropic 2.x moved to API version 2026-10-21, google-genai 3.x to the
+# Gemini API's v1 and to httpx2).
 
 # Provider SDKs — install the one matching the model you plan to call.
-anthropic = ["anthropic>=1.0,<2"]
-gemini = ["google-genai>=2.0,<3"]
+anthropic = ["anthropic>=2.0,<3"]
+gemini = ["google-genai>=3.3,<4"]
 # Meta ships no SDK: its Model API is driven through the openai SDK's Responses API.
-meta = ["openai>=3.12,<4"]
-openai = ["openai>=3.12,<4"]
+meta = ["openai>=3.41,<4"]
+openai = ["openai>=3.41,<4"]
 xai = ["xai-sdk>=1.19,<2"]
 
 # Optional features.
@@ -92,6 +93,7 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 markers = [
     "integration: cross-component system tests (offline unless also marked live_api)",
     "live_api: calls external provider APIs and may incur cost",

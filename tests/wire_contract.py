@@ -215,21 +215,33 @@ def _chat_completions(params: Mapping[str, Any]) -> list[str]:
 
 
 class _Sampling(TypedDict, total=False):
-    """The sampling fields of the Messages API (https://platform.claude.com/docs/en/api/messages),
-    sent in the body since ``anthropic`` 1.x took them out of its params."""
+    """The sampling fields of the Messages API on API version 2023-06-01, sent in the body: the
+    SDK has none, and 2026-10-21 refuses them
+    (https://platform.claude.com/docs/en/api/migration-2026-10-21#sampling-parameters-are-removed)."""
 
     temperature: float
     top_p: float
     top_k: int
 
 
+_SAMPLING_VERSION = {"anthropic-version": "2023-06-01"}
+
+
 def _anthropic(params: Mapping[str, Any]) -> list[str]:
     from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
 
     payload = dict(params)
-    body = payload.pop("extra_body", {})  # a request option of the SDK, not a params field
-    return _check(_Sampling, body, "extra_body.") + _check(
-        MessageCreateParamsNonStreaming, payload
+    body = payload.pop("extra_body", {})  # request options of the SDK, not params fields
+    headers = payload.pop("extra_headers", {})
+    problems = (
+        []
+        if not body or headers == _SAMPLING_VERSION
+        else [f"extra_body {sorted(body)} | sent on the SDK's API version, which refuses sampling"]
+    )
+    return (
+        problems
+        + _check(_Sampling, body, "extra_body.")
+        + _check(MessageCreateParamsNonStreaming, payload)
     )
 
 

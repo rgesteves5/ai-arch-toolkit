@@ -16,7 +16,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2
 import openai
 import pytest
 from openai.types.responses import Response as SDKResponse
@@ -162,8 +162,8 @@ def _params(model: str = "gpt-6-luna", messages: Any = None, **kwargs: Any) -> d
 
 
 def _status_error(cls: type[openai.APIStatusError], status: int, **headers: str) -> Exception:
-    request = httpx.Request("POST", "https://api.openai.com/v1/responses")
-    response = httpx.Response(status, headers=headers, request=request)
+    request = httpx2.Request("POST", "https://api.openai.com/v1/responses")
+    response = httpx2.Response(status, headers=headers, request=request)
     return cls("error", response=response, body={"message": "boom"})
 
 
@@ -392,6 +392,7 @@ MEASURED_EFFORTS = {
     "o3": ({"low", "medium", "high"}, "medium"),
     "gpt-6-astra": ({"low", "medium", "high", "xhigh", "max"}, "medium"),
     "gpt-6.1-sol": ({"low", "medium", "high", "xhigh", "max"}, "medium"),
+    "gpt-6.1-terra": ({"none", "low", "medium", "high", "xhigh", "max"}, "medium"),
     "gpt-6-sol": ({"none", "low", "medium", "high", "xhigh", "max"}, "medium"),
     "gpt-6-luna": ({"none", "low", "medium", "high", "xhigh", "max"}, "medium"),
     "gpt-5.6": ({"none", "low", "medium", "high", "xhigh", "max"}, "medium"),
@@ -471,10 +472,10 @@ class TestAlwaysReasoning:
         assert params["reasoning"]["effort"] == "low"
 
 
-@pytest.mark.parametrize("model", ["gpt-6-sol", "gpt-6-luna"])
+@pytest.mark.parametrize("model", ["gpt-6-sol", "gpt-6-luna", "gpt-6.1-terra"])
 class TestSolAndLuna:
-    """GPT-6 Sol and Luna reason at "medium" unless sent "none", and take sampling only at "none"
-    (https://developers.openai.com/api/docs/models/gpt-6-sol,
+    """GPT-6 Sol and Luna, and GPT-6.1 Terra, reason at "medium" unless sent "none", and take
+    sampling only at "none" (https://developers.openai.com/api/docs/models/gpt-6-sol,
     https://developers.openai.com/api/docs/guides/latest-model)."""
 
     def test_by_default_they_reason_so_sampling_is_dropped(self, model):
@@ -595,6 +596,7 @@ class TestComplete:
             ("gpt-5.6-terra", "gpt-5.5", False),  # "does not carry between" 5.6 and 5.5
             ("gpt-5.4-2026-03-05", "gpt-5.4-mini", True),
             ("gpt-6-luna", "gpt-6.1-sol", False),
+            ("gpt-6.1-terra", "gpt-6.1-sol", True),  # one GPT-6.1 family
             ("o3", "o3-2025-04-16", True),
             ("o3", "gpt-5", False),
         ],
@@ -651,7 +653,7 @@ class TestComplete:
         [(openai.APIConnectionError, ConnectionError), (openai.APITimeoutError, TimeoutError)],
     )
     async def test_network_failures_become_builtin_errors(self, sdk_error, expected):
-        error = sdk_error(request=httpx.Request("POST", "https://api.openai.com/v1/responses"))
+        error = sdk_error(request=httpx2.Request("POST", "https://api.openai.com/v1/responses"))
         client = AsyncMock()
         client.responses.create.side_effect = error
         provider = _provider(client=client)
@@ -661,7 +663,7 @@ class TestComplete:
             await stream(provider, HI)
 
     async def test_a_dropped_connection_is_retried_by_llm(self):
-        request = httpx.Request("POST", "https://api.openai.com/v1/responses")
+        request = httpx2.Request("POST", "https://api.openai.com/v1/responses")
         client = AsyncMock()
         client.responses.create.side_effect = [
             openai.APIConnectionError(request=request),

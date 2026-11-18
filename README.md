@@ -34,11 +34,11 @@ Extras:
 
 | Extra       | Pulls in                                              |
 | ----------- | ----------------------------------------------------- |
-| `anthropic` | `anthropic>=1.0,<2`                                   |
-| `openai`    | `openai>=3.12,<4`                                     |
-| `gemini`    | `google-genai>=2.0,<3`                                |
+| `anthropic` | `anthropic>=2.0,<3`                                   |
+| `openai`    | `openai>=3.41,<4`                                     |
+| `gemini`    | `google-genai>=3.3,<4`                                |
 | `xai`       | `xai-sdk>=1.19,<2`                                    |
-| `meta`      | `openai>=3.12,<4` (Meta ships no SDK of its own)      |
+| `meta`      | `openai>=3.41,<4` (Meta ships no SDK of its own)      |
 | `graph`     | `networkx>=3.0` (required by graph + memory backends) |
 | `tokens`    | `tiktoken>=0.11` (local token counting)               |
 | `yaml`      | `pyyaml>=6.0.2` (YAML knowledge/config loaders)       |

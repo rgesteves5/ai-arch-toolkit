@@ -260,7 +260,7 @@ async def test_xai_a_request_the_sdk_refuses_is_never_sent() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Gemini: the real google-genai SDK over its httpx stack, against the loopback HTTP server.
+# Gemini: the real google-genai SDK over its httpx2 stack, against the loopback HTTP server.
 # ---------------------------------------------------------------------------
 
 GEMINI_ERROR = {"error": {"code": 500, "message": "busy", "status": "INTERNAL"}}
@@ -282,7 +282,9 @@ async def _gemini(port: int, timeout: float = 2.0) -> GeminiProvider:
     """The adapter, with its own HTTP options pointed at 127.0.0.1."""
     provider = GeminiProvider("gemini-3.8-flash", "local-test", timeout=timeout)
     await provider.close()  # its client for Google never connected
-    options = _http_options(timeout).model_copy(update={"base_url": f"http://127.0.0.1:{port}"})
+    options = _http_options("gemini-3.8-flash", timeout).model_copy(
+        update={"base_url": f"http://127.0.0.1:{port}"}
+    )
     provider._install_client(lambda: genai.Client(api_key="local-test", http_options=options))
     return provider
 
@@ -376,6 +378,29 @@ async def test_gemini_success_through_the_real_sdk() -> None:
     sent = json.loads(stats.bodies[0])
     # The SDK passes the thinking config with its proto field names, which proto3 JSON accepts.
     assert sent["generationConfig"]["thinkingConfig"] == {"thinking_level": "LOW"}
+    # API version v1, set in code: google-genai 3 reads GOOGLE_GENAI_API_VERSION otherwise.
+    assert stats.heads[0].path == "/v1/models/gemini-3.8-flash:generateContent"
+
+
+@pytest.mark.parametrize(
+    ("model", "version"),
+    [("gemini-4-carbon", "v1"), ("gemini-3.1-pro-preview", "v1beta")],
+)
+async def test_gemini_calls_each_model_on_the_api_version_that_serves_it(
+    model: str, version: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GOOGLE_GENAI_API_VERSION", "v1alpha")  # never read
+    server, port, stats = await fakeserver.start("status", body=GEMINI_OK)
+    async with server:
+        options = _http_options(model, 2.0).model_copy(
+            update={"base_url": f"http://127.0.0.1:{port}"}
+        )
+        provider = GeminiProvider(model, "local-test")
+        await provider.close()
+        provider._install_client(lambda: genai.Client(api_key="local-test", http_options=options))
+        await complete(provider, HI)
+        await provider.close()
+    assert stats.heads[0].path == f"/{version}/models/{model}:generateContent"
 
 
 # ---------------------------------------------------------------------------
@@ -961,3 +986,26 @@ async def test_claude_success_through_the_real_sdk() -> None:
     assert response.usage.input_tokens == 3
     sent = json.loads(stats.bodies[0])
     assert sent["thinking"] == {"type": "adaptive", "display": "summarized"}
+    # anthropic 2.x: API version 2026-10-21, the key as a bearer token.
+    head = stats.heads[0].headers
+    assert head["anthropic-version"] == "2026-10-21"
+    assert head["authorization"] == "Bearer local-test"
+    assert "x-api-key" not in head
+
+
+async def test_claude_a_request_that_samples_stays_on_api_version_2023_06_01() -> None:
+    # 2026-10-21 refuses temperature, top_p and top_k on every model; a model that samples keeps
+    # them on 2023-06-01. Thinking drops the temperature, so that request needs no old version.
+    server, port, stats = await fakeserver.start("status", body=CLAUDE_OK)
+    async with server:
+        provider = AnthropicProvider(
+            "claude-sonnet-4-6", "local-test", base_url=f"http://127.0.0.1:{port}"
+        )
+        await complete(provider, HI, max_tokens=64, temperature=0.2)
+        await complete(provider, HI, max_tokens=64, temperature=0.2, thinking=True)
+        await provider.close()
+    sampled, thought = (json.loads(body) for body in stats.bodies)
+    assert stats.heads[0].headers["anthropic-version"] == "2023-06-01"
+    assert sampled["temperature"] == 0.2
+    assert stats.heads[1].headers["anthropic-version"] == "2026-10-21"
+    assert "temperature" not in thought
