@@ -160,12 +160,17 @@ class SyncFlowExecution:
 
     As with the async execution, a ``break`` leaves the run going on its thread while the object
     is referenced; :meth:`close`, or leaving a ``with`` block, cancels it.
+
+    The thread runs ahead of the consumer by up to the bridge's buffer of events, so the run can
+    be over while its last events still wait to be read. ``result`` follows what the consumer has
+    received, as with the async execution: it shows with the run's ``flow_end``.
     """
 
-    __slots__ = ("_events", "_execution")
+    __slots__ = ("_ended", "_events", "_execution")
 
     def __init__(self, start: Callable[[], FlowExecution]) -> None:
         self._execution: FlowExecution | None = None
+        self._ended = False
 
         def begin() -> FlowExecution:
             self._execution = start()
@@ -177,7 +182,11 @@ class SyncFlowExecution:
         return self
 
     def __next__(self) -> FlowEvent:
-        return next(self._events)
+        event = next(self._events)
+        # A nested flow runs as a step (``run()``), so the one ``flow_end`` here is this run's.
+        if event.type == "flow_end":
+            self._ended = True
+        return event
 
     def close(self) -> None:
         """Stop consuming; the background run is cancelled."""
@@ -193,8 +202,10 @@ class SyncFlowExecution:
 
     @property
     def result(self) -> FlowResult | None:
-        """The finished run's result, or ``None`` while it is running."""
-        return self._execution.result if self._execution is not None else None
+        """The finished run's result once its ``flow_end`` has been received, else ``None``."""
+        if not self._ended or self._execution is None:
+            return None
+        return self._execution.result
 
 
 # --------------------------------------------------------------------------------------------

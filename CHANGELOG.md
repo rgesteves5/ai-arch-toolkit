@@ -1151,6 +1151,10 @@ tools moved it into their own limits without a word (1 to 100,000, or 200 to 4,0
   - `select` or `serialize_as` on an inline template (they were ignored).
 
 ### Fixed
+- `SyncFlowExecution.result` and `SyncAgentExecution.result` show the run's result once the
+  consumer has received its `flow_end`, as the async executions do. The sync bridge runs ahead
+  of its consumer, so the result could show while the run's last events were still unread,
+  depending on how the threads were scheduled (it did on Linux).
 - With `openai` 3.41 or later, a turn that drew with the hosted `image_generation` tool lost the
   image's tokens and cost: the SDK now types `tool_usage`, which the adapter read from the
   response's untyped extras. It reads the typed field; output details left out count as image

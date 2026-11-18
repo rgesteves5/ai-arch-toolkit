@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import threading
+import time
 from typing import Any
 
 import pytest
@@ -357,3 +358,24 @@ class TestWhatTheReviewFound:
             await _drain(flow)
 
         assert provider.peak == 1
+
+
+class TestTheSyncResult:
+    """The sync bridge runs ahead of its consumer; ``result`` follows what was received."""
+
+    def test_the_result_waits_for_flow_end_although_the_run_is_already_over(self) -> None:
+        execution = Flow(
+            Step(name="one", fn=lambda snap: asyncio.sleep(0, Result(value=1)))
+        ).iter_sync(State())
+
+        assert next(execution).type == "flow_start"
+        # What a busy consumer meets: the run's thread has finished while events wait unread.
+        deadline = time.monotonic() + 5
+        while execution._execution is None or execution._execution.result is None:
+            assert time.monotonic() < deadline, "the run did not finish on its thread"
+            time.sleep(0.001)
+
+        assert execution.result is None
+        for event in execution:
+            assert (execution.result is not None) == (event.type == "flow_end"), event.type
+        assert execution.result is not None
