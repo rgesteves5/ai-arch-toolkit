@@ -767,19 +767,21 @@ class TestAnthropicProviderComplete:
             top_k=40,
         )
         call_kwargs = mock_client.messages.create.call_args[1]
-        # anthropic 1.x removed sampling from its signatures; the API still takes it in the body.
+        # The SDK has no sampling fields, and its API version (2026-10-21) refuses them: they go
+        # in the body, on 2023-06-01.
         assert call_kwargs["extra_body"] == {"temperature": 0.2, "top_p": 0.9, "top_k": 40}
+        assert call_kwargs["extra_headers"] == {"anthropic-version": "2023-06-01"}
         _sdk_accepts("create", call_kwargs)
 
 
 class TestAnthropicProviderErrors:
     async def test_rate_limit_error(self):
         import anthropic as anthropic_sdk
-        import httpx
+        import httpx2
 
         mock_client = AsyncMock()
-        request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
-        resp = httpx.Response(429, headers={"retry-after": "5.0"}, request=request)
+        request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+        resp = httpx2.Response(429, headers={"retry-after": "5.0"}, request=request)
         mock_client.messages.create.side_effect = anthropic_sdk.RateLimitError(
             "rate limited", response=resp, body={"error": "too many requests"}
         )
@@ -793,11 +795,11 @@ class TestAnthropicProviderErrors:
 
     async def test_api_status_error(self):
         import anthropic as anthropic_sdk
-        import httpx
+        import httpx2
 
         mock_client = AsyncMock()
-        request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
-        resp = httpx.Response(500, request=request)
+        request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+        resp = httpx2.Response(500, request=request)
         mock_client.messages.create.side_effect = anthropic_sdk.APIStatusError(
             "server error", response=resp, body="internal"
         )
@@ -816,10 +818,10 @@ class TestAnthropicProviderNetworkErrors:
     )
     async def test_network_failures_become_builtin_errors(self, sdk_error, expected):
         import anthropic as anthropic_sdk
-        import httpx
+        import httpx2
 
         error = getattr(anthropic_sdk, sdk_error)(
-            request=httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+            request=httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
         )
         mock_client = MagicMock()
         mock_client.messages.create = AsyncMock(side_effect=error)
@@ -1108,6 +1110,8 @@ class TestContentToSdk:
 
 HI = [{"role": "user", "content": "Hi"}]
 ADAPTIVE = (
+    "claude-fable-5-2",
+    "claude-mythos-5-2",
     "claude-opus-5-5",
     "claude-sonnet-5-5",
     "claude-haiku-5-5",
@@ -1130,6 +1134,7 @@ EXTENDED = (
     "claude-sonnet-4-20250514",
 )
 NO_SAMPLING = (
+    "claude-fable-5-2",  # any non-default value is a 400 (its migration guide)
     "claude-opus-5-5",
     "claude-sonnet-5-5",
     "claude-haiku-5-5",  # temperature only 1, top_p only its default 0.99, no top_k
@@ -1166,6 +1171,7 @@ class TestThinkingByModel:
     @pytest.mark.parametrize(
         "model",
         [
+            "claude-fable-5-2",  # all five efforts, high by default (read 2026-11-17)
             "claude-opus-5-5",
             "claude-sonnet-5-5",
             "claude-haiku-5-5",  # all five efforts (the effort page, read 2026-10-17)
@@ -1246,11 +1252,26 @@ class TestSamplingByModel:
 
     @pytest.mark.parametrize("model", NO_SAMPLING)
     def test_models_without_sampling_drop_the_llm_default_temperature(self, model):
-        assert "extra_body" not in _params(model, temperature=0.0)
+        params = _params(model, temperature=0.0)
+        assert "extra_body" not in params
+        assert "extra_headers" not in params  # the SDK's own API version
 
     def test_thinking_drops_the_temperature_on_a_model_that_samples(self):
         params = _params("claude-haiku-4-5", thinking=True, temperature=0.2, top_p=0.9)
         assert params["extra_body"] == {"top_p": 0.9}
+        assert params["extra_headers"] == {"anthropic-version": "2023-06-01"}
+
+    def test_thinking_alone_needs_no_older_api_version(self):
+        params = _params("claude-sonnet-4-6", thinking=True, temperature=0.0)
+        assert "extra_body" not in params
+        assert "extra_headers" not in params
+
+    def test_a_document_in_an_assistant_turn_is_refused(self):
+        # API version 2026-10-21 refuses one: it belongs in a user turn.
+        document = DocumentPart(source="b64data", media_type="application/pdf")
+        messages = [*HI, {"role": "assistant", "content": [document, "read"]}, *HI]
+        with pytest.raises(RequestError, match="user message"):
+            _params("claude-opus-5", messages)
 
     def test_max_tokens_is_required(self):
         with pytest.raises(RequestError, match="max_tokens"):
@@ -1264,14 +1285,24 @@ class TestToolChoiceAndServerTools:
     TOOLS = (WEATHER_TOOL,)
 
     @pytest.mark.parametrize(
-        "model", ["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1", "claude-mythos-5-1"]
+        "model",
+        [
+            "claude-fable-5-2",
+            "claude-mythos-5-2",
+            "claude-opus-5-5",
+            "claude-sonnet-5-5",
+            "claude-fable-5-1",
+            "claude-mythos-5-1",
+        ],
     )
     @pytest.mark.parametrize("choice", ["required", "get_weather"])
     def test_forced_tool_use_is_refused_where_the_api_refuses_it(self, model, choice):
         # https://platform.claude.com/docs/en/api/errors#forced-tool-use-not-supported
         assert "tool_choice" in _refused(model, tools=list(self.TOOLS), tool_choice=choice)
 
-    @pytest.mark.parametrize("model", ["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1"])
+    @pytest.mark.parametrize(
+        "model", ["claude-fable-5-2", "claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1"]
+    )
     @pytest.mark.parametrize("choice", ["auto", "none"])
     def test_auto_and_none_stay_open_where_forcing_is_refused(self, model, choice):
         params = _params(model, tools=list(self.TOOLS), tool_choice=choice)
@@ -1311,11 +1342,11 @@ class TestErrorsR02:
     @staticmethod
     def _status(code: int, body: object = None):
         import anthropic as anthropic_sdk
-        import httpx
+        import httpx2
 
-        request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
         return anthropic_sdk.APIStatusError(
-            "error", response=httpx.Response(code, request=request), body=body
+            "error", response=httpx2.Response(code, request=request), body=body
         )
 
     @pytest.mark.parametrize("code", [400, 404, 500, 529])
@@ -1348,11 +1379,10 @@ class TestErrorsR02:
 
     def test_a_connection_that_never_opened_was_not_sent(self):
         import anthropic as anthropic_sdk
-        import httpx
         import httpx2
 
         refused = anthropic_sdk.APIConnectionError(
-            request=httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+            request=httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
         )
         refused.__cause__ = httpx2.ConnectError("refused")
         error = AnthropicProvider("claude-opus-5", "k").map_error(refused, sent=True)
@@ -1360,11 +1390,11 @@ class TestErrorsR02:
 
     async def test_count_tokens_and_batch_map_a_rate_limit(self):
         import anthropic as anthropic_sdk
-        import httpx
+        import httpx2
 
-        request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
         limited = anthropic_sdk.RateLimitError(
-            "slow down", response=httpx.Response(429, request=request), body=None
+            "slow down", response=httpx2.Response(429, request=request), body=None
         )
         client = MagicMock()
         client.messages.count_tokens = AsyncMock(side_effect=limited)
@@ -1375,6 +1405,24 @@ class TestErrorsR02:
             await provider.count_tokens(HI)
         with pytest.raises(RateLimitError):
             await provider.batch_submit([{"custom_id": "a", "messages": HI}])
+
+    @pytest.mark.parametrize(
+        ("model", "headers"),
+        [("claude-sonnet-4-6", {"anthropic-version": "2023-06-01"}), ("claude-opus-5", None)],
+    )
+    async def test_a_batch_whose_lines_sample_is_created_on_2023_06_01(self, model, headers):
+        # A batch runs on the API version it was created with; its lines carry no headers.
+        client = MagicMock()
+        client.messages.batches.create = AsyncMock(return_value=SimpleNamespace(id="b1"))
+        provider = AnthropicProvider(model, "k")
+        provider._client = client
+        line = {"custom_id": "a", "messages": HI, "kwargs": {"temperature": 0.2}}
+        assert await provider.batch_submit([line]) == "b1"
+        kwargs = client.messages.batches.create.call_args.kwargs
+        assert kwargs["extra_headers"] == headers
+        params = kwargs["requests"][0]["params"]
+        assert "extra_headers" not in params
+        assert params.get("temperature") == (0.2 if headers else None)
 
     async def test_batch_results_are_priced_at_the_batch_rates(self):
         # Message Batches cost half the standard rates (batch_input/batch_output in the table);

@@ -136,7 +136,7 @@ class LoopAwareClientCache:
     property builds the client when it is first read, which in a call is inside the loop.
 
     The sync wrappers drive every call through a fresh ``asyncio.run()`` loop that is closed
-    afterwards. An async SDK client binds its connection pool (httpx, gRPC aio) to the loop that
+    afterwards. An async SDK client binds its connection pool (httpx2, gRPC aio) to the loop that
     served its first request, so the next call, on a new loop, would fail with a connection error:
     ``_client`` rebuilds it from the factory once the loop it served is closed. A client assigned
     directly (``provider._client = mock`` in tests) has no factory and is never replaced. Using

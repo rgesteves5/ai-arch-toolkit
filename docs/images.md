@@ -26,9 +26,9 @@ wrapper exists, as for every coroutine.
 
 | Provider | Models | Edits | Billing |
 |---|---|---|---|
-| OpenAI (Images API) | `gpt-image-2.5-sunburst`, `gpt-image-2.5-flare`, `gpt-image-2`, `gpt-image-1.5`, `chatgpt-image-latest`, `gpt-image-1`, `gpt-image-1-mini` | up to 16 input images | image tokens at their own rates |
-| Gemini | `gemini-3.1-flash-image`, `gemini-3.1-flash-lite-image`, `gemini-3-pro-image` | input images in the prompt | image output tokens at their own rate |
-| xAI | `grok-imagine-image-2.0`, `grok-imagine-image`, `grok-imagine-image-quality` | up to 5 input images | the cost xAI reports |
+| OpenAI (Images API) | `gpt-image-2.6-sunburst`, `gpt-image-2.6-flare`, `gpt-image-2.5-sunburst`, `gpt-image-2.5-flare`, `gpt-image-2`, `gpt-image-1.5`, `chatgpt-image-latest`, `gpt-image-1-mini` | up to 16 input images | image tokens at their own rates |
+| Gemini | `gemini-nano-banana-2.1`, `gemini-3.1-flash-image`, `gemini-3.1-flash-lite-image`, `gemini-3-pro-image` | input images in the prompt | image output tokens at their own rate |
+| xAI | `grok-imagine-image-2.0`, `grok-imagine-image` (`grok-imagine-image-quality` retired on 2026-11-02; xAI serves it with `grok-imagine-image-2.0` at quality `low`) | up to 5 input images | the cost xAI reports |
 | Meta | `muse-image-1.0` | one input image | $0.01 per image |
 
 Anthropic's models do not generate images. An OpenAI-compatible server raises `RequestError`.
@@ -94,7 +94,8 @@ response.images  # the drawn image(s), next to response.text
 ```
 
 - `model` is required: it names the image model that draws, since OpenAI's own default is an old
-  one. The other options are `generate_image()`'s.
+  one. The other options are `generate_image()`'s. The GPT Image 2.6 models draw only through
+  the Images API: naming one here raises `RequestError`.
 - OpenAI reports the tool's tokens apart from the turn's. `Response.cost` and the meter add
   them, priced at the image model's rates.
 - The hosted tool needs OpenAI's host. Meta, xAI and the compatible servers refuse it.

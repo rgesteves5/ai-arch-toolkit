@@ -35,9 +35,11 @@ _MODEL_PREFIXES: dict[str, str] = {
     "o4-": "openai",
     "grok-": "xai",
     "gemini-": "gemini",
-    # Only the hosted Muse Spark family: self-hosted Muse Glimmer runs on local OpenAI-compatible
-    # servers and must keep reaching the base_url fallback.
+    # Only the hosted Muse families (Spark, Wonder, Ember): self-hosted Muse Glimmer runs on local
+    # OpenAI-compatible servers and must keep reaching the base_url fallback.
     "muse-spark-": "meta",
+    "muse-wonder-": "meta",
+    "muse-ember-": "meta",
     "muse-image-": "meta",  # Meta's image model, on its Images API (D46)
 }
 
@@ -219,7 +221,8 @@ def create_provider(
 
     Routing precedence: an explicit ``provider`` wins; otherwise the model
     prefix is matched (``claude-`` → Anthropic, ``gpt-``/``chat-``/``o1-`` →
-    OpenAI, ``grok-`` → xAI, ``gemini-`` → Gemini, ``muse-spark-`` → Meta);
+    OpenAI, ``grok-`` → xAI, ``gemini-`` → Gemini, ``muse-spark-``/``muse-wonder-``/
+    ``muse-ember-``/``muse-image-`` → Meta);
     otherwise an unknown model with ``base_url`` set falls back to the
     OpenAI-compatible adapter (Ollama, LM Studio, vLLM). Within ``openai``, the
     host decides the API: OpenAI's own (no ``base_url``, or ``api.openai.com``)

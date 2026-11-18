@@ -17,6 +17,7 @@ def test_every_prefix_routes_to_its_provider() -> None:
 
 def test_the_table_has_every_family_the_registry_routes() -> None:
     assert MODEL_PREFIXES["muse-spark-"] == "meta"
+    assert MODEL_PREFIXES["muse-wonder-"] == MODEL_PREFIXES["muse-ember-"] == "meta"
     assert MODEL_PREFIXES["claude-"] == "anthropic"
     assert set(MODEL_PREFIXES.values()) == {"anthropic", "openai", "xai", "gemini", "meta"}
 

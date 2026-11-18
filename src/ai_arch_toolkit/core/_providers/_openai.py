@@ -164,8 +164,8 @@ _GPT_5_PRO = _Model(efforts=frozenset({"high"}), default_effort="high")
 # pages, and the Responses API takes it (Chat Completions refused it, O01 check 8).
 _ASTRA = _Model(efforts=_REASONING, default_effort="medium", sampling_while_reasoning=False)
 _SOL_6_1 = _ASTRA
-# Sol and Luna take "none" and reason at "medium" when the request sends no effort
-# (https://developers.openai.com/api/docs/models/gpt-6-sol and .../gpt-6-luna).
+# Sol, Luna and GPT-6.1 Terra take "none" and reason at "medium" when the request sends no effort
+# (https://developers.openai.com/api/docs/models/gpt-6-sol, .../gpt-6-luna and .../gpt-6.1-terra).
 _SOL_LUNA = _Model(
     efforts=_REASONING | {"none"}, default_effort="medium", sampling_while_reasoning=False
 )
@@ -175,7 +175,7 @@ _SOL_LUNA = _Model(
 _MODELS: dict[str, _Model] = {
     "gpt-6-astra": _ASTRA,
     "gpt-6.1-sol": _SOL_6_1,
-    **dict.fromkeys(("gpt-6-sol", "gpt-6-luna"), _SOL_LUNA),
+    **dict.fromkeys(("gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"), _SOL_LUNA),
     **dict.fromkeys(("gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"), _GPT_5_6),
     "gpt-5.5": _GPT_5_5,
     **dict.fromkeys(("gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.2"), _GPT_5_2),
@@ -210,14 +210,17 @@ _GENERATIONS = (
 
 # The GPT Image models, on the Images API (https://developers.openai.com/api/reference/resources/
 # images). gpt-image-2 and later take any size within limits, the earlier ones three fixed sizes
-# (live, I01 check 5); "xhigh" and "max" only the 2.5 models. A dated snapshot takes its model's
-# rules, and an unlisted gpt-image- id the newest ones.
+# (live, I01 check 5); "xhigh" and "max" only the 2.5 and 2.6 models. A dated snapshot takes its
+# model's rules, and an unlisted gpt-image- id the newest ones. gpt-image-1 shut down on
+# 2026-10-23 (https://developers.openai.com/api/docs/deprecations).
 #
 # Each model's image output tokens per image (G-40), from the same guide: the 2.5 models and
-# gpt-image-2 by its calculator's tiles per quality; the older ones by its table of "models prior
-# to gpt-image-2" (1024x1024, 1024x1536, 1536x1024). gpt-image-1-mini has no table of its own: its
-# counts are its per-image prices (https://developers.openai.com/api/docs/models/gpt-image-1-mini)
-# at its $8 per 1M image output tokens, rounded up within the prices' precision.
+# gpt-image-2 by its calculator's tiles per quality (the 2.6 models, billed at the 2.5 rates, take
+# the 2.5 counts: OpenAI publishes none of their own, read 2026-11-17); the older ones by its
+# table of "models prior to gpt-image-2" (1024x1024, 1024x1536, 1536x1024). gpt-image-1-mini has
+# no table of its own: its counts are its per-image prices
+# (https://developers.openai.com/api/docs/models/gpt-image-1-mini) at its $8 per 1M image output
+# tokens, rounded up within the prices' precision.
 _GPT_IMAGE_QUALITIES = frozenset({"low", "medium", "high", "auto"})
 _SQUARE, _PORTRAIT, _LANDSCAPE = "1024x1024", "1024x1536", "1536x1024"
 
@@ -243,14 +246,22 @@ _GPT_IMAGE_2_5 = ImageModel(
     tokens=TileTokens({"low": 16, "medium": 24, "high": 48, "xhigh": 64, "max": 96}),
 )
 _IMAGE_MODELS: dict[str, ImageModel] = {
-    **dict.fromkeys(("gpt-image-2.5-sunburst", "gpt-image-2.5-flare"), _GPT_IMAGE_2_5),
+    **dict.fromkeys(
+        (
+            "gpt-image-2.6-sunburst",
+            "gpt-image-2.6-flare",
+            "gpt-image-2.5-sunburst",
+            "gpt-image-2.5-flare",
+        ),
+        _GPT_IMAGE_2_5,
+    ),
     "gpt-image-2": ImageModel(
         size="free",
         qualities=_GPT_IMAGE_QUALITIES,
         tokens=TileTokens({"low": 16, "medium": 48, "high": 96}),
     ),
     **dict.fromkeys(
-        ("gpt-image-1.5", "chatgpt-image-latest", "gpt-image-1"),
+        ("gpt-image-1.5", "chatgpt-image-latest"),
         ImageModel(size="fixed", qualities=_GPT_IMAGE_QUALITIES, tokens=_GPT_IMAGE_1_TOKENS),
     ),
     "gpt-image-1-mini": ImageModel(
@@ -258,6 +269,13 @@ _IMAGE_MODELS: dict[str, ImageModel] = {
     ),
 }
 _IMAGE_FAMILIES = {"gpt-image-": _GPT_IMAGE_2_5}
+# The GPT Image models the hosted image_generation tool does not take: its model is one of
+# gpt-image-2.5-sunburst, -flare, gpt-image-2, gpt-image-1.5 and gpt-image-1-mini
+# (https://developers.openai.com/api/docs/guides/tools-image-generation, read 2026-11-17); the 2.6
+# models draw only through the Images API.
+_IMAGES_API_ONLY: dict[str, bool] = dict.fromkeys(
+    ("gpt-image-2.6-sunburst", "gpt-image-2.6-flare"), True
+)
 
 # The statuses of the codes a failure inside a response or a stream carries (ResponseError.code
 # in the SDK): the two the error guide names, "429 Rate limit reached" and "500 Server error"
@@ -283,6 +301,11 @@ def _image_tool(config: Mapping[str, Any]) -> ImageGeneration:
     rules = _image_rules(model)
     if rules is None:
         raise RequestError(f"image_generation: {model!r} is not a GPT Image model")
+    if lookup(model, _IMAGES_API_ONLY) is not None:
+        raise RequestError(
+            f"image_generation: {model} draws only through the Images API (generate_image); "
+            "in a turn, use gpt-image-2.5-sunburst or gpt-image-2.5-flare"
+        )
     options = ImageRequest(
         aspect_ratio=config.get("aspect_ratio"),
         resolution=config.get("resolution"),
@@ -325,12 +348,12 @@ def _hosted_image(final: SDKResponse) -> tuple[str, Usage] | None:
     """The image model and the usage of the hosted image tool, when the turn drew.
 
     OpenAI reports the tool's tokens in a top-level ``tool_usage.image_gen``, with the Images
-    API's usage shape, apart from the turn's ``usage`` (live, I01 check 2); the SDK does not type
-    it. The image model is the one the request's tool named, echoed in ``tools``.
+    API's usage shape, apart from the turn's ``usage`` (live, I01 check 2); the SDK types it from
+    3.41.0, the floor. Its output details may be left out, and then every output token is an
+    image token. The image model is the one the request's tool named, echoed in ``tools``.
     """
-    reported = (final.model_extra or {}).get("tool_usage")
-    image_gen = reported.get("image_gen") if isinstance(reported, dict) else None
-    if not isinstance(image_gen, dict) or not image_gen.get("output_tokens"):
+    image_gen = final.tool_usage.image_gen if final.tool_usage is not None else None
+    if image_gen is None or not image_gen.output_tokens:
         return None
     model = next(
         (tool.model for tool in final.tools if tool.type == "image_generation" and tool.model),
@@ -338,13 +361,15 @@ def _hosted_image(final: SDKResponse) -> tuple[str, Usage] | None:
     )
     if model is None:
         return None
-    inputs = image_gen.get("input_tokens_details") or {}
-    outputs = image_gen.get("output_tokens_details") or {}
+    inputs = image_gen.input_tokens_details
+    outputs = image_gen.output_tokens_details
     usage = Usage(
-        input_tokens=int(inputs.get("text_tokens", image_gen.get("input_tokens", 0))),
-        image_input_tokens=int(inputs.get("image_tokens", 0)),
-        output_tokens=int(outputs.get("text_tokens", 0)),
-        image_output_tokens=int(outputs.get("image_tokens", image_gen.get("output_tokens", 0))),
+        input_tokens=inputs.text_tokens,
+        image_input_tokens=inputs.image_tokens,
+        output_tokens=outputs.text_tokens if outputs is not None else 0,
+        image_output_tokens=(
+            outputs.image_tokens if outputs is not None else image_gen.output_tokens
+        ),
     )
     return model, usage
 

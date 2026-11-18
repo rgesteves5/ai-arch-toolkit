@@ -91,14 +91,20 @@ class Params(MessageCreateParamsBase, total=False):
     """``messages.create``/``messages.stream`` arguments: the SDK's own, and the body fields its
     signature lacks."""
 
-    # anthropic 1.x removed temperature, top_p and top_k from its signatures (passing one is a
-    # TypeError), but the API still takes them on the models that sample.
+    # The SDK has no temperature, top_p or top_k: they travel in the body, on _SAMPLING_VERSION.
     extra_body: dict[str, object]
+    extra_headers: dict[str, str]
 
 
 # SDK arguments and body fields forwarded as the caller gave them.
 _FORWARDED = frozenset({"max_tokens", "stop_sequences", "temperature", "top_p", "top_k"})
 _SAMPLING = ("temperature", "top_p", "top_k")
+# anthropic 2.x sends API version 2026-10-21, where a request with temperature, top_p or top_k
+# is a 400 on every model, whatever the value. A request that keeps one on a model that samples
+# stays on 2023-06-01, as the migration guide offers
+# (https://platform.claude.com/docs/en/api/migration-2026-10-21#sampling-parameters-are-removed);
+# the LLM's own temperature is 0, not the API's default of 1.
+_SAMPLING_VERSION = {"anthropic-version": "2023-06-01"}
 _EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
 _MIN_BUDGET = 1024  # https://platform.claude.com/docs/en/build-with-claude/extended-thinking
 
@@ -131,7 +137,8 @@ class _Profile:
 
     ``thinking``: ``adaptive`` models take ``{type: "adaptive"}`` and an ``output_config.effort``
     in ``efforts``; ``extended`` models take a ``budget_tokens`` budget. ``sampling``: the model
-    takes ``temperature``, ``top_p`` and ``top_k``. ``forced_tools``: it takes ``tool_choice``
+    takes ``temperature``, ``top_p`` and ``top_k`` (on API version 2023-06-01 only).
+    ``forced_tools``: it takes ``tool_choice``
     ``any`` and ``tool``.
     """
 
@@ -153,10 +160,19 @@ _EXTENDED = _Profile(
 # The families that differ from the current rules, a closed list.
 _PROFILES: dict[str, _Profile] = {
     # Forced tool use returns a 400 (https://platform.claude.com/docs/en/api/errors,
-    # https://platform.claude.com/docs/en/models/opus-5-5/migration-guide and
-    # https://platform.claude.com/docs/en/models/sonnet-5-5/migration-guide).
+    # https://platform.claude.com/docs/en/models/opus-5-5/migration-guide,
+    # https://platform.claude.com/docs/en/models/sonnet-5-5/migration-guide and
+    # https://platform.claude.com/docs/en/models/fable-5-2/migration-guide, which covers Mythos
+    # 5.2 too).
     **dict.fromkeys(
-        ("claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1", "claude-mythos-5-1"),
+        (
+            "claude-fable-5-2",
+            "claude-mythos-5-2",
+            "claude-opus-5-5",
+            "claude-sonnet-5-5",
+            "claude-fable-5-1",
+            "claude-mythos-5-1",
+        ),
         _Profile(forced_tools=False),
     ),
     "claude-mythos-preview": _Profile(efforts=_EFFORTS - {"xhigh"}),
@@ -345,12 +361,17 @@ def _tool_use(call: dict[str, Any]) -> ToolUseBlockParam:
 
 
 def _assistant(msg: dict[str, Any]) -> MessageParam:
-    """An assistant turn: as Claude sent it, else rebuilt from its text and calls."""
+    """An assistant turn: as Claude sent it, else rebuilt from its text and calls. A document
+    goes in a user turn: API version 2026-10-21 refuses one directly in an assistant message
+    (https://platform.claude.com/docs/en/api/migration-2026-10-21)."""
     if (replay := _replayable(msg)) is not None:
         return {"role": "assistant", "content": replay}
     calls = msg.get("tool_calls") or []
     if not calls:
-        return {"role": "assistant", "content": _content_to_sdk(msg.get("content", ""))}
+        content = msg.get("content", "")
+        if isinstance(content, list) and any(isinstance(part, DocumentPart) for part in content):
+            raise RequestError("a document goes in a user message, not an assistant message")
+        return {"role": "assistant", "content": _content_to_sdk(content)}
     text = msg.get("content") or ""
     blocks: list[ContentBlockParam] = [{"type": "text", "text": text}] if text else []
     blocks.extend(_tool_use(call) for call in calls)
@@ -689,9 +710,10 @@ class AnthropicProvider(LoopAwareClientCache, BaseProvider[Prepared[Params], Mes
     def _sampling(
         self, params: Params, options: Options, profile: _Profile, *, thinking: bool
     ) -> None:
-        """``temperature``, ``top_p`` and ``top_k`` travel in the request body. A model without
-        sampling refuses them; its ``temperature`` is dropped, since the ``LLM`` always sends one.
-        Thinking needs the default temperature."""
+        """``temperature``, ``top_p`` and ``top_k`` travel in the request body, on API version
+        2023-06-01 (``_SAMPLING_VERSION``). A model without sampling refuses them; its
+        ``temperature`` is dropped, since the ``LLM`` always sends one. Thinking needs the default
+        temperature."""
         given = {name: options.params[name] for name in _SAMPLING if name in options.params}
         if not profile.sampling:
             if explicit := sorted(set(given) - {"temperature"}):
@@ -701,6 +723,7 @@ class AnthropicProvider(LoopAwareClientCache, BaseProvider[Prepared[Params], Mes
             given.pop("temperature", None)
         if given:
             params["extra_body"] = dict(given)
+            params["extra_headers"] = dict(_SAMPLING_VERSION)
 
     def _output(self, params: Params, options: Options, profile: _Profile) -> None:
         """``output_config``: the structured output format and, on adaptive models, the effort
@@ -811,18 +834,28 @@ class AnthropicProvider(LoopAwareClientCache, BaseProvider[Prepared[Params], Mes
         requests: list[dict[str, Any]],
         **kwargs: Any,
     ) -> str:
-        """Submit a batch via the Message Batches API; each body is what ``prepare`` builds."""
-        batch = [
-            BatchRequest(custom_id=req.get("custom_id", ""), params=self._batch_params(req))
-            for req in requests
-        ]
+        """Submit a batch via the Message Batches API; each body is what ``prepare`` builds.
+
+        Every line of a batch runs on the API version the batch was created with
+        (https://platform.claude.com/docs/en/api/migration-2026-10-21), so a batch with a line
+        that samples is created on ``_SAMPLING_VERSION``, which takes the other lines too."""
+        batch: list[BatchRequest] = []
+        headers: dict[str, str] = {}
+        for req in requests:
+            params, line_headers = self._batch_params(req)
+            headers.update(line_headers)
+            batch.append(BatchRequest(custom_id=req.get("custom_id", ""), params=params))
         with self._mapped():
-            result = await self._messages().batches.create(requests=batch)
+            result = await self._messages().batches.create(
+                requests=batch, extra_headers=headers or None
+            )
         return result.id
 
-    def _batch_params(self, req: dict[str, Any]) -> MessageCreateParamsNonStreaming:
+    def _batch_params(
+        self, req: dict[str, Any]
+    ) -> tuple[MessageCreateParamsNonStreaming, dict[str, str]]:
         """A batch line's body: the same request a call sends (4096 tokens by default), with
-        the sampling fields in the body itself."""
+        the sampling fields in the body itself, and the headers the request is sent with."""
         request = Request(
             messages=req.get("messages", []),
             system=req.get("system"),
@@ -832,7 +865,8 @@ class AnthropicProvider(LoopAwareClientCache, BaseProvider[Prepared[Params], Mes
         )
         params = dict(self.prepare(request).params)
         body = cast("dict[str, object]", params.pop("extra_body", {}))
-        return cast("MessageCreateParamsNonStreaming", {**params, **body})
+        headers = cast("dict[str, str]", params.pop("extra_headers", {}))
+        return cast("MessageCreateParamsNonStreaming", {**params, **body}), headers
 
     async def batch_status(self, batch_id: str) -> str:
         """Check batch status."""

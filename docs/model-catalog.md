@@ -104,7 +104,7 @@ so by default.
 ## Which models
 
 The shipped seed (`core/_default_catalog.toml`) is the current line with an official page: the
-32 models of the live probe inventory still served, and the image models (GPT Image, Gemini
+39 models of the live probe inventory still served, and the image models (GPT Image, Gemini
 image, Grok Imagine, Muse Image). It holds only what the providers publish, limits and
 modalities, each with its page and the day it was read; the rest comes from the adapters.
 

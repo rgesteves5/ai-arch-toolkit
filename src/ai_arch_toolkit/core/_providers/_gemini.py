@@ -56,7 +56,7 @@ from ai_arch_toolkit.core._response import (
 )
 
 with require_sdk("gemini"):
-    import httpx  # a google-genai dependency
+    import httpx2  # google-genai's HTTP client from 3.0
     from google import genai
     from google.genai import errors as genai_errors
     from google.genai import types
@@ -89,7 +89,7 @@ _SERVER_TOOLS = {
 }
 
 # Failures before the request reached the server; any other transport failure may be billed.
-_NOT_SENT = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
+_NOT_SENT = (httpx2.ConnectError, httpx2.ConnectTimeout, httpx2.PoolTimeout)
 # Billing: "If your request fails with a 400 or 500 error, you won't be charged for the tokens
 # used" (https://ai.google.dev/gemini-api/docs/billing); a 429 never is (D20).
 _UNBILLED_STATUSES = frozenset({400, 500})
@@ -134,10 +134,13 @@ class _Profile:
 
 
 # Thinking controls per model (https://ai.google.dev/gemini-api/docs/generate-content/thinking);
-# the Gemini 3 levels also in https://ai.google.dev/gemini-api/docs/thinking.
-_CURRENT = _Profile()  # gemini-3.8-flash, gemini-3.7-flash, gemini-3.1-pro, and newer models
+# the Gemini 3 levels also in https://ai.google.dev/gemini-api/docs/thinking. The Gemini 4 models
+# think at low, medium or high and cannot stop; Hydrogen also at xhigh, and none takes minimal
+# (https://aistudio.google.com/docs/thinking, read 2026-11-17).
+_CURRENT = _Profile()  # gemini-4-carbon, gemini-4-argon, gemini-3.8-flash, and newer models
 _MINIMAL = _Profile(levels=frozenset({"minimal", "low", "medium", "high"}))
 _PROFILES: dict[str, _Profile] = {
+    "gemini-4-hydrogen": _Profile(levels=frozenset({"low", "medium", "high", "xhigh"})),
     **dict.fromkeys(
         (
             "gemini-3.6-flash",
@@ -179,6 +182,14 @@ class _ImageProfile:
 
 _RATIOS = frozenset({"1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"})
 _IMAGE_MODELS: dict[str, _ImageProfile] = {
+    # Nano Banana 2.1 (https://aistudio.google.com/docs/models/gemini-nano-banana-2.1, read
+    # 2026-11-17): no 512. Its 4K image is 3,780 tokens on the pricing page ($0.113 an image) and
+    # 2,520 in the image generation guide; the bound takes the larger.
+    "gemini-nano-banana-2.1": _ImageProfile(
+        ratios=_RATIOS | {"1:4", "4:1", "1:8", "8:1"},
+        sizes={"1K": 1120, "2K": 1680, "4K": 3780},
+        output_limit=32_768,
+    ),
     "gemini-3.1-flash-image": _ImageProfile(
         ratios=_RATIOS | {"1:4", "4:1", "1:8", "8:1"},
         sizes={"512": 747, "1K": 1120, "2K": 1680, "4K": 2520},
@@ -545,21 +556,35 @@ def _joined(chunks: list[types.GenerateContentResponse]) -> types.GenerateConten
     )
 
 
-def _http_options(timeout: float | None) -> types.HttpOptions:
+# The API version a model is served on. v1, the stable version and google-genai's default from
+# 3.0, takes every field this adapter sends; a few preview models are served on v1beta alone
+# (https://aistudio.google.com/docs/api-versions; ListModels on each version, 2026-11-17).
+_V1BETA_ONLY: dict[str, bool] = dict.fromkeys(
+    ("gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-3.1-flash-lite-preview"), True
+)
+
+
+def _api_version(model: str) -> str:
+    return "v1beta" if lookup(model, _V1BETA_ONLY) is not None else "v1"
+
+
+def _http_options(model: str, timeout: float | None) -> types.HttpOptions:
     """One physical attempt (``LLM(RetryConfig(...))`` owns retries, so each is metered), the
     timeout in milliseconds, and an HTTP transport of the adapter's own.
 
-    Given a transport, the SDK sends through ``httpx`` instead of ``aiohttp``, whose path re-sends
-    a request after a connection error outside any retry option; the event hook marks a request
-    as handed to the transport. The SDK builds and closes the client. The endpoint is always
-    given: left out, the SDK reads ``GOOGLE_GEMINI_BASE_URL`` from the environment (D48).
+    Given a transport, the SDK sends through ``httpx2`` instead of ``aiohttp``, whose path
+    re-sends a request after a connection error outside any retry option; the event hook marks a
+    request as handed to the transport. The SDK builds and closes the client. The endpoint and
+    the API version are always given: left out, the SDK reads ``GOOGLE_GEMINI_BASE_URL`` and
+    ``GOOGLE_GENAI_API_VERSION`` from the environment (D48).
     """
     return types.HttpOptions(
         base_url=OWN_BASE_URLS["gemini"],
+        api_version=_api_version(model),
         retry_options=types.HttpRetryOptions(attempts=1),
         timeout=None if timeout is None else int(timeout * 1000),
         async_client_args={
-            "transport": httpx.AsyncHTTPTransport(),
+            "transport": httpx2.AsyncHTTPTransport(),
             "event_hooks": {"request": [on_request]},
         },
     )
@@ -586,7 +611,7 @@ class GeminiProvider(
         self._install_client(
             # The Gemini Developer API, whatever GOOGLE_GENAI_USE_VERTEXAI says (D48).
             lambda: genai.Client(
-                api_key=api_key, vertexai=False, http_options=_http_options(timeout)
+                api_key=api_key, vertexai=False, http_options=_http_options(model, timeout)
             )
         )
 
@@ -779,6 +804,10 @@ class GeminiProvider(
         return DEFAULT_THINKING_BUDGET if options.thinking else None
 
     async def send(self, prepared: Prepared[_Generate]) -> types.GenerateContentResponse:
+        """One answer. The SDK resends an answer that stops at a request's output cap
+        (``finish_reason`` ``CONTINUATION``, Gemini 4's long decode) with its continuation token
+        until it ends, and sums the hops' usage (google-genai 2.30.1 and later,
+        https://aistudio.google.com/docs/long-decode); a stream continues the same way."""
         return await self._models().generate_content(**prepared.params)
 
     async def open_stream(
@@ -808,10 +837,10 @@ class GeminiProvider(
         Gemini does not bill a request that fails with a 400 or a 500
         (https://ai.google.dev/gemini-api/docs/billing) and never a 429 (D20); other statuses stay
         indeterminate. The SDK raises the same errors for an error object inside a 200 stream,
-        whose reply is then not the ``httpx`` response: tokens may already be billed there.
+        whose reply is then not the ``httpx2`` response: tokens may already be billed there.
         """
         if isinstance(exc, genai_errors.APIError):
-            reply = exc.response if isinstance(exc.response, httpx.Response) else None
+            reply = exc.response if isinstance(exc.response, httpx2.Response) else None
             if exc.code == 429:
                 retry_after = reply.headers.get("retry-after") if reply is not None else None
                 return RateLimitError(429, str(exc), retry_after=_parse_retry_after(retry_after))
@@ -819,6 +848,6 @@ class GeminiProvider(
             return APIError(
                 exc.code, str(exc), delivery="unbilled" if unbilled else "indeterminate"
             )
-        if isinstance(exc, httpx.TransportError):
-            return transport_error(exc, not_sent=_NOT_SENT, timeouts=(httpx.TimeoutException,))
+        if isinstance(exc, httpx2.TransportError):
+            return transport_error(exc, not_sent=_NOT_SENT, timeouts=(httpx2.TimeoutException,))
         return refused_or_unread(exc, sent=sent)

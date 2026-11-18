@@ -133,7 +133,7 @@ each request the service accepts is charged at the `[tools.my_search]` price.
 
 A model id is priced by its own entry, or as a dated snapshot of an entry:
 `claude-haiku-4-5-20251001`, `gpt-4o-2024-08-06`, `grok-4-0709`, and `-latest` ids take the price of
-the id they snapshot, unless they have an entry of their own (`gpt-4o-2024-05-13` does). A variant
+the id they snapshot, unless they have an entry of their own (as `gpt-4o-2024-05-13` had). A variant
 never inherits the entry its name starts with: `o3-pro`, `gpt-4o-audio-preview`, and
 `gemini-2.5-flash-image` have no price from `o3`, `gpt-4o`, or `gemini-2.5-flash`.
 `register()` is exact by default and also covers the model's dated snapshots;

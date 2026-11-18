@@ -207,7 +207,7 @@ class TestOpenAI:
         provider._client.images.edit.assert_awaited_once()
         provider._client.images.generate.assert_not_awaited()
 
-    @pytest.mark.parametrize("model", ["gpt-image-1", "gpt-image-2.5-flare"])
+    @pytest.mark.parametrize("model", ["gpt-image-1.5", "gpt-image-2.5-flare"])
     async def test_an_answer_without_usage_reports_none(self, model: str) -> None:
         # Billed by tokens: no usage is not a known $0, it is no usage at all (D67).
         provider = _openai(model, generate=_images_response(PNG))
@@ -217,8 +217,8 @@ class TestOpenAI:
         assert answer.response.cost is None
 
     async def test_an_answer_without_usage_is_metered_at_its_worst_case(self) -> None:
-        llm = LLM("gpt-image-1", api_key="test-key")
-        llm._provider = _openai("gpt-image-1", generate=_images_response(PNG))
+        llm = LLM("gpt-image-1.5", api_key="test-key")
+        llm._provider = _openai("gpt-image-1.5", generate=_images_response(PNG))
         with MeterScope(RunConfig(retain_meter_events=True)) as scope:
             out = await llm.generate_image("a lighthouse", quality="high", aspect_ratio="1:1")
         assert out.images[0].data == PNG
@@ -227,9 +227,9 @@ class TestOpenAI:
         assert snapshot.unmeasured_delivery_count == 1
         (event,) = scope.events()
         assert event.status == "settled" and not event.cost.is_known
-        # At most the 4160 tokens of a high 1024x1024 image at $40 per 1M, beside the prompt.
+        # At most the 4160 tokens of a high 1024x1024 image at $32 per 1M, beside the prompt.
         assert event.cost.at_most is not None
-        assert event.cost.at_most.to_float() >= 4160 * 40.0 / 1e6
+        assert event.cost.at_most.to_float() >= 4160 * 32.0 / 1e6
 
     async def test_llm_generate_image_is_metered_end_to_end(self) -> None:
         answer = _images_response(PNG, usage=_openai_usage(21, 0, 196))
@@ -396,6 +396,8 @@ class TestGemini:
             ("gemini-3.1-flash-image", {"output_format": "png"}, "takes no output_format"),
             ("gemini-3.1-flash-lite-image", {"aspect_ratio": "4:1"}, "aspect_ratio in"),
             ("gemini-3-pro-image", {"resolution": "512"}, "resolution in"),
+            ("gemini-nano-banana-2.1", {"resolution": "512"}, "resolution in"),
+            ("gemini-4-carbon", {}, "not an image model"),
             ("gemini-3.8-flash", {}, "not an image model"),
         ],
     )
@@ -547,19 +549,20 @@ class TestXAI:
 
 def test_every_image_model_has_a_price() -> None:
     for model in (
+        "gpt-image-2.6-sunburst",
+        "gpt-image-2.6-flare",
         "gpt-image-2.5-sunburst",
         "gpt-image-2.5-flare",
         "gpt-image-2",
         "gpt-image-1.5",
         "chatgpt-image-latest",
-        "gpt-image-1",
         "gpt-image-1-mini",
+        "gemini-nano-banana-2.1",
         "gemini-3.1-flash-image",
         "gemini-3.1-flash-lite-image",
         "gemini-3-pro-image",
         "grok-imagine-image-2.0",
         "grok-imagine-image",
-        "grok-imagine-image-quality",
         "muse-image-1.0",
     ):
         assert pricing.get(model) is not None, model

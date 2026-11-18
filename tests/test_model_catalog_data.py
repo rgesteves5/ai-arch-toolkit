@@ -17,10 +17,11 @@ from ai_arch_toolkit.core._providers import create_provider
 
 SEED = Path(__file__).resolve().parents[1] / "src/ai_arch_toolkit/core/_default_catalog.toml"
 
-# The current line with an official page (C06.6): the 32 models of the probe inventory that are
+# The current line with an official page (C06.6): the 39 models of the probe inventory that are
 # still served, and the image models (C06.7).
 _CHAT = {
     "anthropic": {
+        "claude-fable-5-2",
         "claude-opus-5-5",
         "claude-sonnet-5-5",
         "claude-haiku-5-5",
@@ -34,6 +35,7 @@ _CHAT = {
     "openai": {
         "gpt-6-astra",
         "gpt-6.1-sol",
+        "gpt-6.1-terra",
         "gpt-6-sol",
         "gpt-6-luna",
         "gpt-5.5",
@@ -47,6 +49,9 @@ _CHAT = {
         "o3",
     },
     "gemini": {
+        "gemini-4-carbon",
+        "gemini-4-argon",
+        "gemini-4-hydrogen",
         "gemini-3.1-pro-preview",
         "gemini-3-flash-preview",
         "gemini-2.5-pro",
@@ -60,19 +65,25 @@ _CHAT = {
         "grok-4.20-0309-non-reasoning",
         "grok-4.20-multi-agent-0309",
     },
-    "meta": {"muse-spark-1.3"},
+    "meta": {"muse-spark-1.3", "muse-wonder-1.0", "muse-ember-1.0"},
 }
 _IMAGE = {
     "openai": {
+        "gpt-image-2.6-sunburst",
+        "gpt-image-2.6-flare",
         "gpt-image-2.5-sunburst",
         "gpt-image-2.5-flare",
         "gpt-image-2",
         "gpt-image-1.5",
-        "gpt-image-1",
         "gpt-image-1-mini",
     },
-    "gemini": {"gemini-3.1-flash-image", "gemini-3.1-flash-lite-image", "gemini-3-pro-image"},
-    "xai": {"grok-imagine-image-2.0", "grok-imagine-image", "grok-imagine-image-quality"},
+    "gemini": {
+        "gemini-nano-banana-2.1",
+        "gemini-3.1-flash-image",
+        "gemini-3.1-flash-lite-image",
+        "gemini-3-pro-image",
+    },
+    "xai": {"grok-imagine-image-2.0", "grok-imagine-image"},
     "meta": {"muse-image-1.0"},
 }
 _INVENTORY_ALIASES = {
@@ -82,11 +93,12 @@ _INVENTORY_ALIASES = {
 }
 # Each provider's documentation, the only place a seed fact comes from.
 _DOCS_HOSTS = {
-    "anthropic": "platform.claude.com",
-    "openai": "developers.openai.com",
-    "gemini": "ai.google.dev",
-    "xai": "docs.x.ai",
-    "meta": "dev.meta.ai",
+    "anthropic": {"platform.claude.com"},
+    "openai": {"developers.openai.com"},
+    # Google's pages moved to aistudio.google.com in 2026-11; the old addresses redirect.
+    "gemini": {"ai.google.dev", "aistudio.google.com"},
+    "xai": {"docs.x.ai"},
+    "meta": {"dev.meta.ai"},
 }
 # What the seed may say (C06.4): the published limits and modalities, nothing the adapter knows.
 _PUBLISHED = {
@@ -120,7 +132,7 @@ def test_the_seed_is_the_current_line_and_the_image_models() -> None:
     seeded = {(entry.provider, entry.model) for entry in model_catalog.entries()}
 
     assert seeded == _pairs(_CHAT) | _pairs(_IMAGE)
-    assert len(_pairs(_CHAT)) == 32
+    assert len(_pairs(_CHAT)) == 39
 
 
 def test_the_inventory_ids_find_their_entries() -> None:
@@ -160,7 +172,7 @@ def test_every_seed_fact_comes_from_its_providers_docs_on_a_past_day() -> None:
             for url in source.ref.split(", "):
                 parts = urlsplit(url)
                 assert parts.scheme == "https", (entry.model, name, url)
-                assert parts.hostname == _DOCS_HOSTS[entry.provider], (entry.model, name, url)
+                assert parts.hostname in _DOCS_HOSTS[entry.provider], (entry.model, name, url)
 
 
 def test_every_entry_says_what_it_outputs() -> None:

@@ -13,7 +13,6 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
-import httpx
 import httpx2
 import openai
 import pytest
@@ -165,8 +164,8 @@ def _failed(code: str | None, message: str = "boom") -> SDKResponse:
 
 
 def _status_error(cls: type[openai.APIStatusError], status: int, **headers: str) -> Exception:
-    request = httpx.Request("POST", f"{DEFAULT_BASE_URL}/responses")
-    response = httpx.Response(status, headers=headers, request=request)
+    request = httpx2.Request("POST", f"{DEFAULT_BASE_URL}/responses")
+    response = httpx2.Response(status, headers=headers, request=request)
     return cls("error", response=response, body={"message": "boom"})
 
 
@@ -384,6 +383,17 @@ class TestReplayGuard:
             "function_call",
         ]
 
+    @pytest.mark.parametrize("other", ["muse-wonder-1.0", "muse-ember-1.0"])
+    def test_a_turn_from_another_muse_family_is_not_replayed(self, other):
+        # Wonder and Ember are families of their own: their encrypted reasoning stays with them.
+        turn = _tool_turn()
+        turn.model = other
+        message = _parse_sdk_response(turn, MODEL).to_message()
+
+        items = _input_items([USER, message])
+
+        assert "reasoning" not in [item.get("type", "user") for item in items]
+
     def test_replayed_items_carry_the_wire_names(self):
         # The SDK names the "async" field async_; the request takes it as "async".
         call = {**_function_call("call_1", "get_weather", {"city": "Lisbon"}), "async": False}
@@ -450,6 +460,9 @@ class TestBuildRequest:
         [
             ("muse-spark-1.3", "max", True),
             ("muse-spark-1.4", "max", True),  # a newer model gets every effort
+            ("muse-wonder-1.0", "max", True),
+            ("muse-ember-1.0", "minimal", True),
+            ("muse-ember-1.0", "none", False),
             ("muse-spark-1.3-contributor", "max", False),
             ("muse-spark-1.2", "max", False),
             ("muse-spark-1.1", "minimal", True),
@@ -883,7 +896,7 @@ class TestStream:
             yield SimpleNamespace(type="response.created")
             raise openai.APIError(
                 "The backend is temporarily overloaded.",
-                request=httpx.Request("POST", f"{DEFAULT_BASE_URL}/responses"),
+                request=httpx2.Request("POST", f"{DEFAULT_BASE_URL}/responses"),
                 body={"code": "service_overloaded", "message": "overloaded"},
             )
 
@@ -903,7 +916,7 @@ class TestStream:
 
 class TestNetworkErrors:
     def test_a_connection_that_never_opened_was_not_sent(self):
-        request = httpx.Request("POST", f"{DEFAULT_BASE_URL}/responses")
+        request = httpx2.Request("POST", f"{DEFAULT_BASE_URL}/responses")
         refused = openai.APIConnectionError(request=request)
         refused.__cause__ = httpx2.ConnectError("refused")
         error = _provider().map_error(refused, sent=True)
@@ -916,7 +929,7 @@ class TestNetworkErrors:
         [(openai.APIConnectionError, ConnectionError), (openai.APITimeoutError, TimeoutError)],
     )
     async def test_network_failures_become_builtin_errors(self, sdk_error, expected):
-        error = sdk_error(request=httpx.Request("POST", f"{DEFAULT_BASE_URL}/responses"))
+        error = sdk_error(request=httpx2.Request("POST", f"{DEFAULT_BASE_URL}/responses"))
         client = AsyncMock()
         client.responses.create.side_effect = error
         client.responses.input_tokens.count = AsyncMock(side_effect=error)
@@ -968,8 +981,8 @@ class TestClient:
         assert client.auth_headers == {"Authorization": "Bearer test-key"}
 
     def test_the_client_marks_the_dispatch_and_takes_a_plain_timeout(self, monkeypatch):
-        # The meta extra installs openai, whose transport is httpx2: httpx may be absent.
-        monkeypatch.setitem(sys.modules, "httpx", None)
+        # The meta extra installs openai, whose transport is httpx2: httpx2 may be absent.
+        monkeypatch.setitem(sys.modules, "httpx2", None)
         client = MetaProvider(MODEL, "test-key", timeout=5.0)._client
         assert client.timeout == 5.0
         assert client._client.event_hooks["request"] == [on_request]

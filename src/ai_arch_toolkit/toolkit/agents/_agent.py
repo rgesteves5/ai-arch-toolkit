@@ -192,8 +192,9 @@ class SyncAgentExecution:
     """Synchronous counterpart of :class:`AgentExecution`; the run happens on a background loop.
 
     Behaves like :class:`~ai_arch_toolkit.toolkit.flow.SyncFlowExecution`: nothing runs until the
-    first event is requested, ``result`` is ``None`` until the run has finished, and a ``break``
-    does not stop a run that is still referenced — :meth:`close` or ``with`` does.
+    first event is requested, ``result`` is ``None`` until the run's ``flow_end`` has been
+    received, and a ``break`` does not stop a run that is still referenced — :meth:`close` or
+    ``with`` does.
     """
 
     __slots__ = ("_execution", "_result")

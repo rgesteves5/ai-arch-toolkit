@@ -5,10 +5,11 @@
 # the day. What the adapter does with a model (tools, tool choices, reasoning, server tools)
 # comes from the adapter's own tables (`model_facts`), never from here.
 #
-# The seed is the current line with an official page (C06.6): the 32 models of the probe
+# The seed is the current line with an official page (C06.6): the 39 models of the probe
 # inventory (scripts/model_probe_models.toml) still served, and the image models (C06.7). A fact
 # a page does not state is left out (unknown, never "no"). Read on 2026-10-08; Claude Sonnet 5.5
-# and Haiku 5.5 on 2026-10-17.
+# and Haiku 5.5 on 2026-10-17; Claude Fable 5.2, GPT-6.1 Terra, GPT Image 2.6, the Gemini 4
+# models, Nano Banana 2.1, Muse Wonder and Muse Ember on 2026-11-17.
 #
 # Keys are the provider's own ids; a dated snapshot finds its entry without an alias. `aliases`
 # lists other fixed ids of the same model; a `-latest` pointer, which moves, never is one.
@@ -22,6 +23,14 @@ catalog_version = 1
 # processing"). Max output is the synchronous Messages API limit; a beta header raises it on
 # batches, which the catalog does not model.
 # ═══════════════════════════════════════════════════════════════════
+
+[anthropic."claude-fable-5-2"]
+context_window = 1_000_000
+output_token_limit = 128_000
+input_modalities = ["text", "image", "pdf"]
+output_modalities = ["text"]
+source = { kind = "docs", ref = "https://platform.claude.com/docs/en/models/fable-5-2/overview", verified_at = 2026-11-17 }
+sources.input_modalities = { kind = "docs", ref = "https://platform.claude.com/docs/en/models/fable-5-2/overview, https://platform.claude.com/docs/en/build-with-claude/pdf-support", verified_at = 2026-11-17 }
 
 [anthropic."claude-opus-5-5"]
 context_window = 1_000_000
@@ -121,6 +130,14 @@ input_modalities = ["text", "image"]
 output_modalities = ["text"]
 source = { kind = "docs", ref = "https://developers.openai.com/api/docs/models/gpt-6.1-sol", verified_at = 2026-10-08 }
 
+[openai."gpt-6.1-terra"]
+context_window = 1_050_000
+input_token_limit = 922_000
+output_token_limit = 128_000
+input_modalities = ["text", "image"]
+output_modalities = ["text"]
+source = { kind = "docs", ref = "https://developers.openai.com/api/docs/models/gpt-6.1-terra", verified_at = 2026-11-17 }
+
 [openai."gpt-6-sol"]
 context_window = 1_050_000
 input_token_limit = 922_000
@@ -209,9 +226,19 @@ output_modalities = ["text"]
 source = { kind = "docs", ref = "https://developers.openai.com/api/docs/models/o3", verified_at = 2026-10-08 }
 
 # ── GPT Image (the Images API; the pages publish no token limits) ──
-# gpt-image-1 shuts down on 2026-10-23; gpt-image-1.5 and gpt-image-1-mini on 2026-12-01
-# (https://developers.openai.com/api/docs/deprecations). chatgpt-image-latest is a pointer, left
-# out.
+# gpt-image-1 shut down on 2026-10-23; gpt-image-1.5 and gpt-image-1-mini shut down on 2026-12-01,
+# gpt-image-2 on 2027-02-10 (https://developers.openai.com/api/docs/deprecations).
+# chatgpt-image-latest is a pointer, left out.
+
+[openai."gpt-image-2.6-sunburst"]
+input_modalities = ["text", "image"]
+output_modalities = ["image"]
+source = { kind = "docs", ref = "https://developers.openai.com/api/docs/models/gpt-image-2.6-sunburst", verified_at = 2026-11-17 }
+
+[openai."gpt-image-2.6-flare"]
+input_modalities = ["text", "image"]
+output_modalities = ["image"]
+source = { kind = "docs", ref = "https://developers.openai.com/api/docs/models/gpt-image-2.6-flare", verified_at = 2026-11-17 }
 
 [openai."gpt-image-2.5-sunburst"]
 input_modalities = ["text", "image"]
@@ -233,11 +260,6 @@ input_modalities = ["text", "image"]
 output_modalities = ["image", "text"]
 source = { kind = "docs", ref = "https://developers.openai.com/api/docs/models/gpt-image-1.5", verified_at = 2026-10-08 }
 
-[openai."gpt-image-1"]
-input_modalities = ["text", "image"]
-output_modalities = ["image"]
-source = { kind = "docs", ref = "https://developers.openai.com/api/docs/models/gpt-image-1", verified_at = 2026-10-08 }
-
 [openai."gpt-image-1-mini"]
 input_modalities = ["text", "image"]
 output_modalities = ["image"]
@@ -246,9 +268,33 @@ source = { kind = "docs", ref = "https://developers.openai.com/api/docs/models/g
 # ═══════════════════════════════════════════════════════════════════
 # Google Gemini
 # Each model's page: "Input token limit", "Output token limit", "Inputs", "Output". No page gives
-# a context window apart from the input limit. The 3.1 Pro and 3 Flash ids are previews with no
-# shutdown date; no stable id exists (https://ai.google.dev/gemini-api/docs/deprecations).
+# a context window apart from the input limit, but the Gemini 4 pages. The 3.1 Pro and 3 Flash ids
+# are previews with no shutdown date; no stable id exists
+# (https://ai.google.dev/gemini-api/docs/deprecations). Since 2026-11 the pages are served at
+# https://aistudio.google.com/docs/ (the old addresses redirect).
 # ═══════════════════════════════════════════════════════════════════
+
+# The Gemini 4 models: one window of 1,048,576 tokens for input and output; an answer takes
+# 65,536 tokens a request, up to the window across a long decode's requests, which the SDK chains,
+# so the catalog gives no output limit (https://aistudio.google.com/docs/models/gemini-4-carbon,
+# read 2026-11-17, and its Argon and Hydrogen pages).
+[gemini."gemini-4-carbon"]
+context_window = 1_048_576
+input_modalities = ["text", "image", "video", "audio", "pdf"]
+output_modalities = ["text"]
+source = { kind = "docs", ref = "https://aistudio.google.com/docs/models/gemini-4-carbon", verified_at = 2026-11-17 }
+
+[gemini."gemini-4-argon"]
+context_window = 1_048_576
+input_modalities = ["text", "image", "video", "audio", "pdf"]
+output_modalities = ["text"]
+source = { kind = "docs", ref = "https://aistudio.google.com/docs/models/gemini-4-argon", verified_at = 2026-11-17 }
+
+[gemini."gemini-4-hydrogen"]
+context_window = 1_048_576
+input_modalities = ["text", "image", "video", "audio", "pdf"]
+output_modalities = ["text"]
+source = { kind = "docs", ref = "https://aistudio.google.com/docs/models/gemini-4-hydrogen", verified_at = 2026-11-17 }
 
 [gemini."gemini-3.1-pro-preview"]
 input_token_limit = 1_048_576
@@ -288,6 +334,14 @@ source = { kind = "docs", ref = "https://ai.google.dev/gemini-api/docs/models/ge
 
 # ── Image models ("Nano Banana"). The output limit is also the adapter's bound on an image's
 # thinking (D61, `_ImageProfile.output_limit`); a test keeps the two equal. ──
+
+# Nano Banana 2.1 replaces 3.1 Flash Image, deprecated on 2026-10-06 with no shutdown date.
+[gemini."gemini-nano-banana-2.1"]
+input_token_limit = 131_072
+output_token_limit = 32_768
+input_modalities = ["text", "image", "video", "pdf"]
+output_modalities = ["image", "text"]
+source = { kind = "docs", ref = "https://aistudio.google.com/docs/models/gemini-nano-banana-2.1", verified_at = 2026-11-17 }
 
 [gemini."gemini-3.1-flash-image"]
 input_token_limit = 131_072
@@ -345,7 +399,8 @@ input_modalities = ["text", "image"]
 output_modalities = ["text"]
 source = { kind = "docs", ref = "https://docs.x.ai/developers/models/grok-4.20-multi-agent", verified_at = 2026-10-08 }
 
-# ── Grok Imagine ("text, image → image"). grok-imagine-image-quality retires on 2026-11-02
+# ── Grok Imagine ("text, image → image"). grok-imagine-image-quality retired on 2026-11-02:
+# xAI serves it with grok-imagine-image-2.0 at quality low
 # (https://docs.x.ai/developers/migration/imagine-image-quality-nov-2). ──
 
 [xai."grok-imagine-image-2.0"]
@@ -358,11 +413,6 @@ input_modalities = ["text", "image"]
 output_modalities = ["image"]
 source = { kind = "docs", ref = "https://docs.x.ai/developers/models/grok-imagine-image", verified_at = 2026-10-08 }
 
-[xai."grok-imagine-image-quality"]
-input_modalities = ["text", "image"]
-output_modalities = ["image"]
-source = { kind = "docs", ref = "https://docs.x.ai/developers/models/grok-imagine-image-quality", verified_at = 2026-10-08 }
-
 # ═══════════════════════════════════════════════════════════════════
 # Meta (Meta Model API)
 # The models page: "Context window", "Input modalities", "Output modalities". No max output is
@@ -374,6 +424,19 @@ context_window = 1_048_576
 input_modalities = ["text", "image", "video", "audio", "pdf"]
 output_modalities = ["text"]
 source = { kind = "docs", ref = "https://dev.meta.ai/docs/models", verified_at = 2026-10-08 }
+
+[meta."muse-wonder-1.0"]
+context_window = 1_048_576
+input_modalities = ["text", "image", "video", "audio", "pdf"]
+output_modalities = ["text"]
+source = { kind = "docs", ref = "https://dev.meta.ai/docs/muse-wonder", verified_at = 2026-11-17 }
+
+[meta."muse-ember-1.0"]
+context_window = 1_048_576
+output_token_limit = 524_288
+input_modalities = ["text", "image", "video", "audio", "pdf"]
+output_modalities = ["text"]
+source = { kind = "docs", ref = "https://dev.meta.ai/docs/muse-ember", verified_at = 2026-11-17 }
 
 [meta."muse-image-1.0"]
 input_modalities = ["text", "image"]

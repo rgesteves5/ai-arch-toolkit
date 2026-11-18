@@ -67,7 +67,7 @@ class TestPricingRegistryDefaults:
 
     def test_has_o_series_models(self):
         assert pricing.has("o3")
-        assert pricing.has("o4-mini-deep-research")
+        assert not pricing.has("o4-mini-deep-research")  # shut down on 2026-07-23
         assert pricing.has("grok-3")
 
     def test_has_grok4_models(self):
@@ -390,12 +390,15 @@ class TestIdGrammar:
         assert pricing.get(model) is None
 
     def test_a_snapshot_with_its_own_tariff_keeps_it(self):
-        # https://developers.openai.com/api/docs/pricing (2026-09-18): the May 2024 gpt-4o
-        # snapshot costs more than the id it is a snapshot of; the other snapshots do not.
-        dated = pricing.get("gpt-4o-2024-05-13")
+        # As gpt-4o-2024-05-13 had until it shut down (2026-10-23): a snapshot that costs more
+        # than the id it is a snapshot of keeps its own entry; the other snapshots take the id's.
+        reg = PricingRegistry()
+        reg.register("my-model", ModelPricing(input=2.5, output=10.0))
+        reg.register("my-model-2024-05-13", ModelPricing(input=5.0, output=15.0))
+        dated = reg.get("my-model-2024-05-13")
         assert dated is not None
         assert (dated.input, dated.output) == (5.0, 15.0)
-        assert pricing.get("gpt-4o-2024-08-06") == pricing.get("gpt-4o")
+        assert reg.get("my-model-2024-08-06") == reg.get("my-model")
 
     @pytest.mark.parametrize(
         "model",
@@ -991,6 +994,41 @@ def test_claude_51_prices_cache_at_its_own_rate(model, batch, expected):
     assert model in pricing.list_models()
 
 
+@pytest.mark.parametrize("model", ["claude-fable-5-2", "claude-mythos-5-2"])
+@pytest.mark.parametrize(
+    "batch,fast,expected",
+    [(False, False, 48.2), (True, False, 24.1), (False, True, 96.4)],
+)
+def test_claude_52_prices_cache_at_its_own_rate_and_fast_mode(model, batch, fast, expected):
+    # $8 / $40, cache reads 0.025x input; batch at half; fast mode $16 / $80, caching on top
+    # (https://platform.claude.com/docs/en/about-claude/pricing, read 2026-11-17).
+    cost = pricing.estimate_cost(
+        model,
+        input_tokens=1_000_000,
+        output_tokens=1_000_000,
+        cache_read_tokens=1_000_000,
+        is_batch=batch,
+        is_fast=fast,
+    )
+    assert cost == pytest.approx(expected)
+    assert model in pricing.list_models()
+
+
+@pytest.mark.parametrize(
+    "model,input_tokens,expected",
+    [
+        ("muse-wonder-1.0", 1_000_000, 4.0 + 20.0),
+        # Muse Ember: the whole request at the long-context rates over 200K input tokens
+        # (https://dev.meta.ai/docs/pricing-rate-limits, read 2026-11-17).
+        ("muse-ember-1.0", 200_000, 0.2 * 0.10 + 0.50),
+        ("muse-ember-1.0", 200_001, 0.200001 * 0.30 + 1.50),
+    ],
+)
+def test_muse_wonder_and_ember_prices(model, input_tokens, expected):
+    cost = pricing.estimate_cost(model, input_tokens=input_tokens, output_tokens=1_000_000)
+    assert cost == pytest.approx(expected)
+
+
 @pytest.mark.parametrize("batch,expected", [(False, 4.575), (True, 2.2875)])
 def test_gemini_38_has_its_own_promotional_price(batch, expected):
     cost = pricing.estimate_cost(
@@ -1133,8 +1171,8 @@ class TestTablePromotionsAndVendors:
     @pytest.mark.parametrize(
         ("model", "last_day", "now", "after"),
         [
-            ("gpt-5.6-sol", date(2026, 11, 21), (4.0, 20.0, 0.40), (5.0, 30.0, 0.50)),
-            ("gpt-5.6", date(2026, 11, 21), (4.0, 20.0, 0.40), (5.0, 30.0, 0.50)),
+            ("gpt-5.6-sol", date(2026, 11, 30), (4.0, 20.0, 0.40), (5.0, 30.0, 0.50)),
+            ("gpt-5.6", date(2026, 11, 30), (4.0, 20.0, 0.40), (5.0, 30.0, 0.50)),
             ("gemini-3.8-flash", date(2026, 12, 31), (0.75, 3.75, 0.075), (1.50, 7.50, 0.15)),
             ("gemini-3.7-flash", date(2026, 12, 31), (0.75, 3.75, 0.075), (1.50, 7.50, 0.15)),
             ("gemini-3.6-flash", date(2026, 12, 31), (0.75, 3.75, 0.075), (1.50, 7.50, 0.15)),
@@ -1149,7 +1187,7 @@ class TestTablePromotionsAndVendors:
         assert (on_next_day.input, on_next_day.output, on_next_day.cache_read) == after
 
     def test_gpt_5_6_sol_long_context_and_batch_follow_the_promotion(self) -> None:
-        after = pricing.get("gpt-5.6-sol", on=date(2026, 11, 22))
+        after = pricing.get("gpt-5.6-sol", on=date(2026, 12, 1))
         assert after is not None
         assert (after.long_context_input, after.long_context_output) == (10.0, 45.0)
         assert (after.batch_input, after.batch_output) == (2.50, 15.0)

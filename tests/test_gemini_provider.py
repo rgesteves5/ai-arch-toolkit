@@ -11,7 +11,7 @@ import warnings
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-import httpx
+import httpx2
 import pytest
 from google.genai import errors as genai_errors
 from google.genai import types
@@ -402,12 +402,17 @@ class TestRequest:
         assert options.timeout == 45_000
         args = options.async_client_args or {}
         # A transport of its own keeps the SDK off aiohttp, which re-sends on connection errors.
-        assert isinstance(args["transport"], httpx.AsyncHTTPTransport)
+        assert isinstance(args["transport"], httpx2.AsyncHTTPTransport)
         assert args["event_hooks"] == {"request": [on_request]}
 
 
 # Documented thinking controls (https://ai.google.dev/gemini-api/docs/generate-content/thinking).
 LEVELS = {
+    # Gemini 4: no minimal, thinking never off; xhigh on Hydrogen only
+    # (https://aistudio.google.com/docs/thinking, read 2026-11-17).
+    "gemini-4-carbon": {"low", "medium", "high"},
+    "gemini-4-argon": {"low", "medium", "high"},
+    "gemini-4-hydrogen": {"low", "medium", "high", "xhigh"},
     "gemini-3.8-flash": {"low", "medium", "high"},
     "gemini-3.1-pro-preview": {"low", "medium", "high"},
     "gemini-3.9-flash": {"low", "medium", "high"},  # a model newer than the table
@@ -425,8 +430,17 @@ class TestThinking:
             assert effort in _refusal(model, thinking_effort=effort)
             return
         config = _config(model, thinking_effort=effort)
-        assert config.thinking_config.thinking_level == types.ThinkingLevel(effort.upper())
+        assert config.thinking_config.thinking_level.value == effort.upper()
         assert config.thinking_config.thinking_budget is None
+
+    def test_xhigh_goes_without_the_sdk_warning(self):
+        # google-genai 2.x has no XHIGH member: it sends the value with a warning, kept quiet.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            config = _config("gemini-4-hydrogen", thinking_effort="xhigh")
+        assert config.model_dump(mode="json", exclude_none=True)["thinking_config"] == {
+            "thinking_level": "XHIGH"
+        }
 
     def test_thinking_asks_for_thoughts_and_defaults_to_high(self):
         thinking = _config("gemini-3.8-flash", thinking=True).thinking_config
@@ -683,9 +697,9 @@ class TestCalls:
 
 
 def _http_error(code: int) -> genai_errors.APIError:
-    """What the SDK raises for an HTTP error status (the reply is an ``httpx.Response``)."""
+    """What the SDK raises for an HTTP error status (the reply is an ``httpx2.Response``)."""
     body = {"error": {"code": code, "message": "scripted", "status": "X"}}
-    reply = httpx.Response(code, json=body, request=httpx.Request("POST", "http://gemini"))
+    reply = httpx2.Response(code, json=body, request=httpx2.Request("POST", "http://gemini"))
     error = genai_errors.ClientError if code < 500 else genai_errors.ServerError
     return error(code, body, reply)
 
@@ -722,10 +736,10 @@ class TestErrors:
     @pytest.mark.parametrize(
         ("exc", "expected", "delivery"),
         [
-            (httpx.ConnectError("refused"), TransportError, "not_sent"),
-            (httpx.ConnectTimeout("slow"), ProviderTimeout, "not_sent"),
-            (httpx.ReadTimeout("slow"), ProviderTimeout, "indeterminate"),
-            (httpx.RemoteProtocolError("cut"), TransportError, "indeterminate"),
+            (httpx2.ConnectError("refused"), TransportError, "not_sent"),
+            (httpx2.ConnectTimeout("slow"), ProviderTimeout, "not_sent"),
+            (httpx2.ReadTimeout("slow"), ProviderTimeout, "indeterminate"),
+            (httpx2.RemoteProtocolError("cut"), TransportError, "indeterminate"),
             (genai_errors.UnknownApiResponseError("not JSON"), ResponseError, "indeterminate"),
         ],
     )

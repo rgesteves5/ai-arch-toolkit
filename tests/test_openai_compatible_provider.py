@@ -633,10 +633,10 @@ class TestComplete:
 class TestErrors:
     @staticmethod
     def _status_error(cls: type[Exception], status: int, **headers: str) -> Exception:
-        import httpx
+        import httpx2
 
-        request = httpx.Request("POST", f"{LOCAL}/chat/completions")
-        response = httpx.Response(status, headers=headers, request=request)
+        request = httpx2.Request("POST", f"{LOCAL}/chat/completions")
+        response = httpx2.Response(status, headers=headers, request=request)
         return cls("error", response=response, body={"error": "boom"})
 
     async def test_rate_limit_error(self):
@@ -666,10 +666,10 @@ class TestErrors:
         [("APIConnectionError", ConnectionError), ("APITimeoutError", TimeoutError)],
     )
     async def test_network_failures_become_builtin_errors(self, sdk_error, expected):
-        import httpx
+        import httpx2
         import openai as openai_sdk
 
-        request = httpx.Request("POST", f"{LOCAL}/chat/completions")
+        request = httpx2.Request("POST", f"{LOCAL}/chat/completions")
         client = AsyncMock()
         client.chat.completions.create.side_effect = getattr(openai_sdk, sdk_error)(
             request=request

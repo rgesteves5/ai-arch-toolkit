@@ -25,7 +25,7 @@ def openai(model: str, **options: object) -> int | None:
     return OpenAIProvider(model, "test-key").image_token_bound(ImageRequest(**options))  # type: ignore[arg-type]
 
 
-@pytest.mark.parametrize("model", ["gpt-image-1", "gpt-image-1.5", "chatgpt-image-latest"])
+@pytest.mark.parametrize("model", ["gpt-image-1.5", "chatgpt-image-latest"])
 @pytest.mark.parametrize(
     ("options", "tokens"),
     [
@@ -88,6 +88,9 @@ def test_the_largest_published_image_fits_the_allowance() -> None:
 @pytest.mark.parametrize(
     ("model", "resolution", "tokens"),
     [
+        ("gemini-nano-banana-2.1", "1K", 1120),
+        ("gemini-nano-banana-2.1", "4K", 3780),  # the pricing page's count, the larger
+        ("gemini-nano-banana-2.1", None, 3780),
         ("gemini-3.1-flash-image", "512", 747),
         ("gemini-3.1-flash-image", "4K", 2520),
         ("gemini-3.1-flash-image", None, 2520),

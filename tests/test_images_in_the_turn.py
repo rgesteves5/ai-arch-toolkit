@@ -135,6 +135,8 @@ def test_openai_sends_the_hosted_tool_with_the_portable_options_mapped() -> None
     ("tool", "message"),
     [
         (image_generation(model="gpt-5.5"), "not a GPT Image model"),
+        (image_generation(model="gpt-image-2.6-sunburst"), "only through the Images API"),
+        (image_generation(model="gpt-image-2.6-flare-2026-11-04"), "only through the Images API"),
         (image_generation(model="gpt-image-2", quality="max"), "quality in"),
         (image_generation(model="gpt-image-1.5", aspect_ratio="16:9"), "1:1, 2:3 and 3:2"),
     ],
@@ -179,6 +181,18 @@ def test_the_hosted_image_comes_back_priced_at_its_image_model() -> None:
     image = pricing.estimate_cost("gpt-image-2.5-flare", input_tokens=21, image_output_tokens=196)
     assert turn is not None and image is not None
     assert response.cost == pytest.approx(turn + image)
+
+
+def test_image_tokens_without_their_output_details_are_all_image_tokens() -> None:
+    # OpenAI may leave the output details out (the SDK's ToolUsage docstring).
+    image_gen = {key: value for key, value in TOOL_USAGE["image_gen"].items()}
+    del image_gen["output_tokens_details"]
+    final = _turn(
+        _drawn(), _message("Here it is."), tool_usage={**TOOL_USAGE, "image_gen": image_gen}
+    )
+    response = assembled(_openai(), final)
+    assert response.usage.image_output_tokens == 196
+    assert response.usage.output_tokens == 293
 
 
 def test_a_turn_without_the_image_tokens_keeps_its_own_cost() -> None:
